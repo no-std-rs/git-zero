@@ -9,6 +9,10 @@ This is an initial working skeleton. It serves real Git clones and fetches, with
 a deliberately small protocol surface. See [ROADMAP.md](ROADMAP.md) for the
 remaining client, protocol, storage, and performance work.
 
+Development uses protected pull requests, parallel Git interoperability tests,
+and a basic Runnerless PR policy program. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for checks and repository connection requirements.
+
 ## What works
 
 - Borrowed in-memory files become blobs, a root tree, and one deterministic
