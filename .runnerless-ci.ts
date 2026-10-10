@@ -1,3 +1,4 @@
+import { badges, BadgeSpec } from "runnerless/v1";
 import {
   ArtifactComment, ArtifactSpec, ArtifactStatus, artifacts,
   configuration, event, policies, workflow,
@@ -18,6 +19,7 @@ const program = workflow().publishArtifacts("complexity", comparison);
 // Runnerless compiles this program to Wasm using its versioned SDK.
 // Pull requests execute the trusted base revision of the program.
 export function configure(): void {
+  badges.define(new BadgeSpec("badge", "medium", "slowest-job"));
   program.configure();
   configuration.workflow("pull-request-policy", ["pull_request"]);
 }
