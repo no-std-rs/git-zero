@@ -122,6 +122,8 @@ holds all raw tree bodies plus four bytes per tree, including empty/duplicate
 trees. Tree depth is limited to 64 levels including the root; excess depth returns
 `Unsupported`. All refs alias the snapshot's single commit; ref names must be
 valid, unique, byte-sorted, include the default branch, and have no path conflicts.
+Names must fit smart discovery packets: at most 65,474 bytes per ref and 65,457
+bytes for the default branch (which also appears in the HEAD symref capability).
 Changing refs leaves object IDs and pack-cache keys stable.
 
 Git checkout does not create directories for empty trees. Git's dumb HTTP walker

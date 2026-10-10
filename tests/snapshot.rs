@@ -323,6 +323,49 @@ fn configured_refs_drive_both_http_protocols_without_changing_ids() {
 }
 
 #[test]
+fn ref_lengths_fit_smart_advertisements() {
+    // HEAD includes its symref capability; alias packets have 17 fewer bytes.
+    let head = format!("refs/heads/{}", "x".repeat(65_457 - "refs/heads/".len()));
+    let alias = format!("refs/tags/{}", "x".repeat(65_474 - "refs/tags/".len()));
+    let refs = [head.as_str(), alias.as_str()];
+    let mut trees = [0; 4];
+    let mut commit = [0; 512];
+    let repo = Snapshot::from_entries(&[], &mut trees, &mut commit)
+        .unwrap()
+        .with_refs(&head, &refs)
+        .unwrap();
+    let mut transport = Loopback {
+        repo: &repo,
+        dumb: false,
+    };
+    let mut storage = vec![0; 3 * pktline::MAX_LENGTH + 128];
+    let discovery = client::discover(&mut transport, &mut storage).unwrap();
+    let names: Vec<_> = discovery
+        .references()
+        .map(|reference| reference.unwrap().name)
+        .collect();
+    assert_eq!(names, ["HEAD", head.as_str(), alias.as_str()]);
+
+    let oversized_head = format!("{head}x");
+    let oversized_alias = format!("{alias}x");
+    for (head, refs) in [
+        (
+            oversized_head.as_str(),
+            [oversized_head.as_str(), alias.as_str()],
+        ),
+        (head.as_str(), [head.as_str(), oversized_alias.as_str()]),
+    ] {
+        let mut trees = [0; 4];
+        let mut commit = [0; 512];
+        let repo = Snapshot::from_entries(&[], &mut trees, &mut commit).unwrap();
+        assert!(matches!(
+            repo.with_refs(head, &refs),
+            Err(Error::InvalidReference)
+        ));
+    }
+}
+
+#[test]
 fn long_refs_do_not_require_a_fixed_packet_scratch_buffer() {
     let name = format!("refs/heads/{}", "x".repeat(1024));
     let refs = [name.as_str()];

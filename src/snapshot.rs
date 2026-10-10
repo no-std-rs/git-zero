@@ -263,7 +263,10 @@ impl<'a> Snapshot<'a> {
     /// the slice. Ref configuration does not change any object ID or cache key.
     pub fn with_refs(mut self, head_ref: &'a str, refs: &'a [&'a str]) -> Result<Self> {
         validate_ref_name(head_ref)?;
-        if !head_ref.starts_with("refs/heads/") || !refs.contains(&head_ref) {
+        if head_ref.len() > crate::repository::MAX_HEAD_REF_LENGTH
+            || !head_ref.starts_with("refs/heads/")
+            || !refs.contains(&head_ref)
+        {
             return Err(Error::InvalidReference);
         }
         for (index, name) in refs.iter().enumerate() {
