@@ -16,6 +16,9 @@ does not change the live settings. The checks are pinned to GitHub Actions
 (GitHub App ID `15368`). The ruleset has no administrator bypass, and it requires
 a PR without imposing a minimum number of approvals.
 
+Auto-merge is available after required checks pass. Squash and rebase merges are
+enabled, and GitHub deletes merged branches automatically.
+
 ## Runnerless
 
 [.runnerless-ci.ts](.runnerless-ci.ts) uses the versioned `runnerless/v1` SDK,
