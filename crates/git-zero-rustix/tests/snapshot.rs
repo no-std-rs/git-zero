@@ -1,7 +1,12 @@
 #[path = "../../../tests/common/mod.rs"]
 mod common;
 
-use git_zero::{ObjectId, Repository, Snapshot, client, http, io::SliceWriter};
+use git_zero::{
+    ObjectId, Repository, Snapshot,
+    client::{self, Transport},
+    http,
+    io::SliceWriter,
+};
 use git_zero_rustix::{HttpTransport, accept, listen, local_port, read_request, respond};
 use std::{
     net::{Ipv4Addr, SocketAddrV4, TcpStream},
@@ -92,6 +97,31 @@ fn real_git_clones_nested_modes_empty_trees_and_custom_refs() {
             stopped: &stopped,
             port,
         };
+        let mut wire = [0; 4096];
+        let mut response = [0; 256];
+        let mut transport = HttpTransport {
+            address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+            repository_path: "/repo.git",
+            wire_storage: &mut wire,
+        };
+        for path in [
+            "refs/heads/releases/current%23%25%C3%A9+",
+            "refs/tags/snapshot%2523",
+        ] {
+            let (status, length) = transport
+                .request(
+                    http::Request {
+                        method: "GET",
+                        path,
+                        query: None,
+                        body: &[],
+                    },
+                    &mut response,
+                )
+                .unwrap();
+            assert_eq!(status, 200, "{path}");
+            assert_eq!(&response[..length], format!("{}\n", repo.head()).as_bytes());
+        }
         for dumb in [false, true] {
             let clone = directory.join(if dumb { "dumb" } else { "smart" });
             let clone_path = clone.to_str().unwrap();

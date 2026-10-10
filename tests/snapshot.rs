@@ -283,7 +283,12 @@ fn configured_refs_drive_both_http_protocols_without_changing_ids() {
             client::read_head(&mut transport, &discovery, &mut response).unwrap(),
             id
         );
-        for path in std::iter::once("HEAD").chain(common::REFS.iter().copied()) {
+        for (path, name) in [
+            ("HEAD", "HEAD"),
+            ("refs/heads/alternate", common::REFS[0]),
+            ("refs/heads/releases/current%23%25%c3%a9+", common::HEAD_REF),
+            ("refs/tags/snapshot%2523", common::REFS[2]),
+        ] {
             let (status, length) = transport
                 .request(
                     Request {
@@ -296,25 +301,32 @@ fn configured_refs_drive_both_http_protocols_without_changing_ids() {
                 )
                 .unwrap();
             assert_eq!(status, 200);
-            let expected = if path == "HEAD" {
+            let expected = if name == "HEAD" {
                 format!("ref: {}\n", common::HEAD_REF)
             } else {
                 format!("{id}\n")
             };
             assert_eq!(&response[..length], expected.as_bytes());
         }
-        let (status, _) = transport
-            .request(
-                Request {
-                    method: "GET",
-                    path: "refs/heads/main",
-                    query: None,
-                    body: &[],
-                },
-                &mut response,
-            )
-            .unwrap();
-        assert_eq!(status, 404);
+        for path in [
+            "refs/heads/main",
+            "refs/heads/releases/current%23%25%c3%a9+%",
+            "refs/heads/releases/current%23%GG%c3%a9+",
+            "refs/tags/snapshot%23",
+        ] {
+            let (status, _) = transport
+                .request(
+                    Request {
+                        method: "GET",
+                        path,
+                        query: None,
+                        body: &[],
+                    },
+                    &mut response,
+                )
+                .unwrap();
+            assert_eq!(status, 404, "{path}");
+        }
         let mut request = [0; 128];
         let bytes = client::fetch_pack(&mut transport, id, &mut request, &mut response).unwrap();
         pack::validate(bytes).unwrap();

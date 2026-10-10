@@ -125,6 +125,8 @@ valid, unique, byte-sorted, include the default branch, and have no path conflic
 Names must fit smart discovery packets: at most 65,474 bytes per ref and 65,457
 bytes for the default branch (which also appears in the HEAD symref capability).
 Changing refs leaves object IDs and pack-cache keys stable.
+`http::Request::path` is a URL path: percent-encode reserved bytes in ref URLs.
+The server decodes escapes once when matching ref names, preserving literal `+`.
 
 Git checkout does not create directories for empty trees. Git's dumb HTTP walker
 can also omit the empty-tree object from disk (observed with Git 2.53), causing

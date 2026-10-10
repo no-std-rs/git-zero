@@ -12,6 +12,7 @@ pub const HEAD: &[u8] = b"ref: refs/heads/main\n";
 #[derive(Clone, Copy)]
 pub struct Request<'a> {
     pub method: &'a str,
+    /// Repository-relative URL path. Escape URL-reserved bytes with `%HH`.
     pub path: &'a str,
     pub query: Option<&'a str>,
     pub body: &'a [u8],
@@ -88,9 +89,11 @@ pub fn serve(
         }
         ("GET", "objects/info/packs") => {}
         ("GET", _) if path.starts_with("refs/") => {
-            if (0..repository.reference_count())
-                .any(|index| repository.reference_name(index) == Some(path))
-            {
+            if (0..repository.reference_count()).any(|index| {
+                repository
+                    .reference_name(index)
+                    .is_some_and(|name| ref_path_matches(path, name))
+            }) {
                 output.write_all(&repository.head().to_hex())?;
                 output.write_all(b"\n")?;
             } else {
@@ -121,6 +124,28 @@ pub fn serve(
         _ => response.status = 405,
     }
     Ok(response)
+}
+
+fn ref_path_matches(path: &str, name: &str) -> bool {
+    let mut bytes = path.bytes();
+    for expected in name.bytes() {
+        let Some(mut byte) = bytes.next() else {
+            return false;
+        };
+        if byte == b'%' {
+            let Some(high) = bytes.next().and_then(|byte| (byte as char).to_digit(16)) else {
+                return false;
+            };
+            let Some(low) = bytes.next().and_then(|byte| (byte as char).to_digit(16)) else {
+                return false;
+            };
+            byte = ((high << 4) | low) as u8;
+        }
+        if byte != expected {
+            return false;
+        }
+    }
+    bytes.next().is_none()
 }
 
 fn service(query: Option<&str>) -> Option<&str> {

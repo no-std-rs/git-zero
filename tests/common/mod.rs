@@ -34,5 +34,5 @@ pub const ENTRIES: &[Entry<'static>] = &[
     },
 ];
 
-pub const HEAD_REF: &str = "refs/heads/releases/current";
-pub const REFS: &[&str] = &["refs/heads/alternate", HEAD_REF, "refs/tags/snapshot-v1"];
+pub const HEAD_REF: &str = "refs/heads/releases/current#%é+";
+pub const REFS: &[&str] = &["refs/heads/alternate", HEAD_REF, "refs/tags/snapshot%23"];
