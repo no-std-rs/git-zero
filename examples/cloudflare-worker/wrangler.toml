@@ -1,0 +1,15 @@
+name = "git-zero-demo"
+main = "src/index.mjs"
+compatibility_date = "2026-10-10"
+
+[build]
+command = "npm run build"
+
+[[rules]]
+type = "CompiledWasm"
+globs = ["**/*.wasm"]
+fallthrough = true
+
+[vars]
+DEMO_NAME = "git-zero on Cloudflare Workers"
+EXPOSED_VARS = "DEMO_NAME"

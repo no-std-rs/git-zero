@@ -1,0 +1,33 @@
+[package]
+name = "git-zero"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Allocation-free Git HTTP client and server building blocks"
+license.workspace = true
+readme = "README.md"
+
+[workspace]
+members = ["crates/git-zero-rustix", "examples/cloudflare-worker/wasm"]
+default-members = [".", "crates/git-zero-rustix"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+sha1 = { version = "0.10.7", default-features = false }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = "s"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "git-zero-rustix"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Bounded rustix HTTP adapters for git-zero"
+
+[dependencies]
+git-zero = { path = "../.." }
+rustix = { version = "1.1.4", default-features = false, features = ["net"] }
+
+[[bin]]
+name = "git-zero"
+path = "src/main.rs"
+
+[lints]
+workspace = true
