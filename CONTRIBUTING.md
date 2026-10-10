@@ -27,8 +27,13 @@ enabled, and GitHub deletes merged branches automatically.
 on PR branch updates targeting any branch, and on `main` pushes to refresh the
 repository baseline. The shared Bazzite host prepares a comparison against the
 PR's actual target and schedules GPU inference only for uncached source blobs.
-`.runnerless-ci.ts` publishes the report and maintains one comparison comment
-per PR. Higher complexity scores are advisory; analysis failures are reported.
+When `Complexity comparison` succeeds, Runnerless uses
+[.runnerless-ci.ts](.runnerless-ci.ts) to validate llm-cc's `publication.json` and
+post the generated `comment.md` in the GitHub PR conversation through the
+My Toolkit bot. Branch updates refresh the same comment, including for PRs
+targeting another feature branch. Pushes to `main` publish baseline files without
+a PR comment. Higher complexity scores are advisory; analysis failures are
+reported.
 
 `.llm-cc/rules.json` classifies the core and native adapters as runtime, test
 directories as tests, and demos/scripts as tooling. Generated build output,
