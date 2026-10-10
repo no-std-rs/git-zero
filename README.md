@@ -1,5 +1,7 @@
 # git-zero
 
+[![CI](https://github.com/no-std-rs/git-zero/actions/workflows/ci.yml/badge.svg)](https://github.com/no-std-rs/git-zero/actions/workflows/ci.yml)
+
 Read-only Git HTTP **server and client** building blocks for synthetic repositories.
 The Rust core is `#![no_std]`, uses no `alloc`, and requires no allocator. Callers
 provide object data, scratch buffers, and I/O. Native networking uses `rustix`;
