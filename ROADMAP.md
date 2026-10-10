@@ -23,7 +23,7 @@ and host adapters for native `rustix`, Wasm, and Cloudflare Workers.
 ## 1. Object and repository storage
 
 - [x] Nested trees, executable files, symlinks, empty trees, and configurable refs.
-- [ ] Caller-owned object metadata/index arrays to avoid repeated scans and hashing.
+- [x] Caller-owned object metadata/index arrays to avoid repeated scans and hashing.
 - [ ] Bounded readers for large or generated objects; explicitly size scratch and
   resumable state, and avoid requiring a whole object in one borrowed slice.
 - [ ] Incremental snapshot builder with configurable commit identity/message/time.

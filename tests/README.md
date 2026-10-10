@@ -41,6 +41,9 @@ explicitly downloads that loose object through the native git-zero client and
 saves the server's bytes before the disk integrity check; smart clone needs no
 supplement. Core tests cover tree ordering, duplicate names, exact buffer limits,
 depth limits, ref validation, and unchanged object IDs for equivalent flat inputs.
+The native demo and nested clone test use caller-owned metadata indexes. Index
+tests check capacity and missing-object errors, preservation of enumeration order
+and HTTP/pack bytes, and repeated reads without reentering the source repository.
 
 ## Selective runs and CI sharding
 
