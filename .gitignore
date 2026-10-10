@@ -5,3 +5,4 @@ examples/cloudflare-worker/build/
 .dev.vars*
 .env*
 *.log
+__pycache__/
