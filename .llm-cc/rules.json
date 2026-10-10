@@ -1,0 +1,12 @@
+{
+  "exclude": [
+    "**/target/**",
+    "**/node_modules/**",
+    "**/build/**",
+    "**/dist/**",
+    "**/vendor/**"
+  ],
+  "tests": ["tests/**", "**/tests/**", "**/test/**"],
+  "tooling": ["examples/**", "scripts/**", ".github/**"],
+  "extensions": {}
+}
