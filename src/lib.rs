@@ -18,7 +18,7 @@ pub mod zlib;
 
 pub use object::{Object, ObjectId, ObjectKind};
 pub use repository::Repository;
-pub use snapshot::{File, Snapshot};
+pub use snapshot::{Entry, EntryKind, File, Snapshot};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -28,6 +28,7 @@ pub enum Error {
     InvalidRequest,
     InvalidFileName,
     UnsortedFiles,
+    InvalidReference,
     ObjectNotFound,
     Unsupported,
     Backend,

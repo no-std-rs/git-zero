@@ -3,9 +3,14 @@ use crate::{Error, Result, io::Write};
 pub const MAX_LENGTH: usize = 65520;
 
 pub fn write(output: &mut impl Write, data: &[u8]) -> Result<()> {
-    let length = data
-        .len()
-        .checked_add(4)
+    write_parts(output, &[data])
+}
+
+/// Write one packet from borrowed parts without a contiguous scratch buffer.
+pub fn write_parts(output: &mut impl Write, parts: &[&[u8]]) -> Result<()> {
+    let length = parts
+        .iter()
+        .try_fold(4_usize, |length, part| length.checked_add(part.len()))
         .filter(|&n| n <= MAX_LENGTH)
         .ok_or(Error::InvalidPacket)?;
     let digits = b"0123456789abcdef";
@@ -15,7 +20,10 @@ pub fn write(output: &mut impl Write, data: &[u8]) -> Result<()> {
         digits[(length >> 4) & 15],
         digits[length & 15],
     ])?;
-    output.write_all(data)
+    for part in parts {
+        output.write_all(part)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
