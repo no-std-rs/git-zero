@@ -1,16 +1,18 @@
 //! Routing for paths relative to the repository URL; HTTP framing belongs to the host.
 use crate::{
     Error, ObjectId, Repository, Result,
-    io::{SliceWriter, Write},
+    io::Write,
     pack,
     pktline::{self, Packet},
 };
 
+/// Default HEAD body. The server writes `Repository::head_ref` dynamically.
 pub const HEAD: &[u8] = b"ref: refs/heads/main\n";
 
 #[derive(Clone, Copy)]
 pub struct Request<'a> {
     pub method: &'a str,
+    /// Repository-relative URL path. Escape URL-reserved bytes with `%HH`.
     pub path: &'a str,
     pub query: Option<&'a str>,
     pub body: &'a [u8],
@@ -35,9 +37,9 @@ pub fn serve(
         content_type: "text/plain; charset=utf-8",
     };
     match (request.method, path) {
-        ("GET", "HEAD") => output.write_all(HEAD)?,
-        ("GET", "refs/heads/main") => {
-            output.write_all(&repository.head().to_hex())?;
+        ("GET", "HEAD") => {
+            output.write_all(b"ref: ")?;
+            output.write_all(repository.head_ref().as_bytes())?;
             output.write_all(b"\n")?;
         }
         ("GET", "info/refs") => match service(request.query) {
@@ -45,20 +47,34 @@ pub fn serve(
                 response.content_type = "application/x-git-upload-pack-advertisement";
                 pktline::write(output, b"# service=git-upload-pack\n")?;
                 output.write_all(b"0000")?;
-                let mut storage = [0; 256];
-                let mut line = SliceWriter::new(&mut storage);
-                line.write_all(&repository.head().to_hex())?;
-                line.write_all(b" HEAD\0symref=HEAD:refs/heads/main\n")?;
-                pktline::write(output, line.as_bytes())?;
-                let mut line = SliceWriter::new(&mut storage);
-                line.write_all(&repository.head().to_hex())?;
-                line.write_all(b" refs/heads/main\n")?;
-                pktline::write(output, line.as_bytes())?;
+                let head = repository.head().to_hex();
+                pktline::write_parts(
+                    output,
+                    &[
+                        &head,
+                        b" HEAD\0symref=HEAD:",
+                        repository.head_ref().as_bytes(),
+                        b"\n",
+                    ],
+                )?;
+                for index in 0..repository.reference_count() {
+                    let name = repository
+                        .reference_name(index)
+                        .ok_or(Error::InvalidReference)?;
+                    pktline::write_parts(output, &[&head, b" ", name.as_bytes(), b"\n"])?;
+                }
                 output.write_all(b"0000")?;
             }
             None => {
-                output.write_all(&repository.head().to_hex())?;
-                output.write_all(b"\trefs/heads/main\n")?;
+                for index in 0..repository.reference_count() {
+                    let name = repository
+                        .reference_name(index)
+                        .ok_or(Error::InvalidReference)?;
+                    output.write_all(&repository.head().to_hex())?;
+                    output.write_all(b"\t")?;
+                    output.write_all(name.as_bytes())?;
+                    output.write_all(b"\n")?;
+                }
             }
             _ => response.status = 403,
         },
@@ -72,6 +88,18 @@ pub fn serve(
             }
         }
         ("GET", "objects/info/packs") => {}
+        ("GET", _) if path.starts_with("refs/") => {
+            if (0..repository.reference_count()).any(|index| {
+                repository
+                    .reference_name(index)
+                    .is_some_and(|name| ref_path_matches(path, name))
+            }) {
+                output.write_all(&repository.head().to_hex())?;
+                output.write_all(b"\n")?;
+            } else {
+                response.status = 404;
+            }
+        }
         ("GET", _) if path.starts_with("objects/") => {
             let object_path = &path.as_bytes()[8..];
             if object_path.len() != 41 || object_path[2] != b'/' {
@@ -96,6 +124,28 @@ pub fn serve(
         _ => response.status = 405,
     }
     Ok(response)
+}
+
+fn ref_path_matches(path: &str, name: &str) -> bool {
+    let mut bytes = path.bytes();
+    for expected in name.bytes() {
+        let Some(mut byte) = bytes.next() else {
+            return false;
+        };
+        if byte == b'%' {
+            let Some(high) = bytes.next().and_then(|byte| (byte as char).to_digit(16)) else {
+                return false;
+            };
+            let Some(low) = bytes.next().and_then(|byte| (byte as char).to_digit(16)) else {
+                return false;
+            };
+            byte = ((high << 4) | low) as u8;
+        }
+        if byte != expected {
+            return false;
+        }
+    }
+    bytes.next().is_none()
 }
 
 fn service(query: Option<&str>) -> Option<&str> {

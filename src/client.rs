@@ -10,7 +10,8 @@ use crate::{
 };
 
 pub trait Transport {
-    /// Paths are relative to a fixed repository URL. Return status and body length.
+    /// Paths are URL paths relative to a fixed repository URL, with reserved
+    /// bytes percent-encoded. Return status and body length.
     /// Decode HTTP transfer framing before returning. Do not enable protocol v2.
     fn request(&mut self, request: Request<'_>, response: &mut [u8]) -> Result<(u16, usize)>;
 }

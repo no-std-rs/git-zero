@@ -30,6 +30,18 @@ cleaned up on success or failure. The Git fixture has two commits, another branc
 a tag, and a large compressible file; separate pack tests use empty, duplicate,
 and multi-block binary data. Git's own `index-pack --strict` checks generated packs.
 
+The native snapshot integration test also clones nested trees with executable
+files, symlinks, repeated subtrees, empty trees, and a custom default branch plus
+branch/tag aliases through both HTTP protocols. It checks modes, symlink targets,
+ref discovery, fetches, and `fsck --strict`. Git's dumb walker can consider the
+empty tree available through its built-in object cache without saving it to disk
+(observed with Git 2.53; see upstream [odb.c](https://github.com/git/git/blob/v2.53.0/odb.c)
+and [walker.c](https://github.com/git/git/blob/v2.53.0/walker.c)). The dumb test
+explicitly downloads that loose object through the native git-zero client and
+saves the server's bytes before the disk integrity check; smart clone needs no
+supplement. Core tests cover tree ordering, duplicate names, exact buffer limits,
+depth limits, ref validation, and unchanged object IDs for equivalent flat inputs.
+
 ## Selective runs and CI sharding
 
 ```sh

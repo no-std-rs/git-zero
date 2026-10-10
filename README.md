@@ -17,15 +17,16 @@ for checks and repository connection requirements.
 
 ## What works
 
-- Borrowed in-memory files become blobs, a root tree, and one deterministic
-  commit with **no parents**. `HEAD` points to `refs/heads/main`.
+- Borrowed entries become nested trees, regular/executable files, symlinks,
+  and one deterministic commit with **no parents**. Empty trees are supported.
+  `HEAD` defaults to `refs/heads/main`; callers can configure branch/tag aliases.
 - Read-only smart HTTP discovery and `git-upload-pack`, using protocol v0.
   Git clients requesting v2 can fall back to the v0 advertisement.
 - Ordinary Git HTTP, usually called **dumb HTTP**: `HEAD`, `info/refs`, branch
   refs, and zlib loose objects. No filesystem repository is needed.
 - Complete SHA-1 packs generated on demand from unpacked objects. The encoder
   streams valid zlib/DEFLATE stored blocks, so it uses bounded memory but does
-  not yet compress data or create deltas. Identical blobs are deduplicated.
+  not yet compress data or create deltas. Identical blobs and subtrees are deduplicated.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
   and checksum-validates smart packs, and fetches dumb loose objects.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
@@ -95,10 +96,46 @@ let response = http::serve(&repository, Request {
 // Host sends response.status, response.content_type, and output.as_bytes().
 ```
 
-`Snapshot` takes root-level filenames in byte-sorted order. Nested trees can be
-provided by a custom `Repository` implementation; the snapshot convenience API
-does not build them yet. A repository implementation must expose a stable,
-complete reachable object set and a commit `HEAD` for its URL.
+`Snapshot::new` takes root-level regular files in byte-sorted order.
+`Snapshot::from_entries` accepts a hierarchy of borrowed `Entry` slices:
+
+```rust
+use git_zero::{Entry, EntryKind, Snapshot};
+
+let scripts = [Entry { name: "hello", kind: EntryKind::Executable(b"#!/bin/sh\necho hello\n") }];
+let entries = [
+    Entry { name: "bin", kind: EntryKind::Tree(&scripts) },
+    Entry { name: "empty", kind: EntryKind::Tree(&[]) },
+    Entry { name: "hello", kind: EntryKind::Symlink(b"bin/hello") },
+];
+let mut trees = [0; 1024];
+let mut commit = [0; 512];
+let refs = ["refs/heads/release", "refs/tags/v1"];
+let repository = Snapshot::from_entries(&entries, &mut trees, &mut commit)?
+    .with_refs("refs/heads/release", &refs)?;
+```
+
+Sort each tree's entries using `Entry::cmp_name`: directories compare as if their
+names end in `/`, so `foo.bar` precedes the directory `foo`. Duplicate names and
+invalid path components are rejected at every level. The caller's tree buffer
+holds all raw tree bodies plus four bytes per tree, including empty/duplicate
+trees. Tree depth is limited to 64 levels including the root; excess depth returns
+`Unsupported`. All refs alias the snapshot's single commit; ref names must be
+valid, unique, byte-sorted, include the default branch, and have no path conflicts.
+Names must fit smart discovery packets: at most 65,474 bytes per ref and 65,457
+bytes for the default branch (which also appears in the HEAD symref capability).
+Changing refs leaves object IDs and pack-cache keys stable.
+`http::Request::path` is a URL path: percent-encode reserved bytes in ref URLs.
+The server decodes escapes once when matching ref names, preserving literal `+`.
+
+Git checkout does not create directories for empty trees. Git's dumb HTTP walker
+can also omit the empty-tree object from disk (observed with Git 2.53), causing
+`fsck --strict` to report it missing. The loose-object endpoint serves it; clients
+needing a complete disk object store must explicitly fetch that object or use
+smart HTTP. See [tests/README.md](tests/README.md) for the interoperability check.
+
+A custom `Repository` implementation must expose a stable, complete reachable
+object set and a commit `HEAD` for its URL. Its refs are aliases of that commit.
 
 Use `pack::write` to stream directly to any `io::Write` implementation. Use
 `cache::write` with a `PackCache` and pack-sized scratch buffer to reuse generated
