@@ -44,6 +44,12 @@ pub struct Entry<'a> {
 }
 
 impl Entry<'_> {
+    /// Initializer for unused builder slots; the empty name is not a valid entry.
+    pub const EMPTY: Self = Self {
+        name: "",
+        kind: EntryKind::File(&[]),
+    };
+
     /// Git tree order: compare bytes with a trailing '/' for trees, NUL otherwise.
     pub fn cmp_name(&self, other: &Self) -> Ordering {
         let terminator = |entry: &Self| {
@@ -57,6 +63,144 @@ impl Entry<'_> {
             .bytes()
             .chain([terminator(self)])
             .cmp(other.name.bytes().chain([terminator(other)]))
+    }
+}
+
+/// One commit identity and its recorded time. The offset does not adjust seconds.
+#[derive(Clone, Copy, Debug)]
+pub struct CommitIdentity<'a> {
+    pub name: &'a str,
+    pub email: &'a str,
+    /// Unix seconds in the range 0..=i64::MAX, serialized identically on all targets.
+    pub timestamp: u64,
+    /// A sign and four ASCII digits: hours 00..23, minutes 00..59.
+    pub timezone: &'a str,
+}
+
+impl Default for CommitIdentity<'_> {
+    fn default() -> Self {
+        Self {
+            name: "git-zero",
+            email: "git-zero@example.invalid",
+            timestamp: 0,
+            timezone: "+0000",
+        }
+    }
+}
+
+/// Metadata for one root commit. Message bytes are preserved, including newlines.
+/// Names and emails must be nonempty, with no control bytes or angle brackets;
+/// messages may contain newlines but not NUL. Invalid metadata returns InvalidObject.
+#[derive(Clone, Copy, Debug)]
+pub struct CommitOptions<'a> {
+    pub author: CommitIdentity<'a>,
+    pub committer: CommitIdentity<'a>,
+    pub message: &'a str,
+}
+
+impl Default for CommitOptions<'_> {
+    fn default() -> Self {
+        Self {
+            author: CommitIdentity::default(),
+            committer: CommitIdentity::default(),
+            message: "In-memory snapshot\n",
+        }
+    }
+}
+
+impl CommitOptions<'_> {
+    fn validate(self) -> Result<()> {
+        for identity in [self.author, self.committer] {
+            let timezone = identity.timezone.as_bytes();
+            if [identity.name, identity.email].iter().any(|value| {
+                value.trim().is_empty()
+                    || value
+                        .bytes()
+                        .any(|byte| byte.is_ascii_control() || matches!(byte, b'<' | b'>'))
+            }) || identity.timestamp > i64::MAX as u64
+                || timezone.len() != 5
+                || !matches!(timezone[0], b'+' | b'-')
+                || !timezone[1..].iter().all(u8::is_ascii_digit)
+                || (timezone[1] - b'0') * 10 + timezone[2] - b'0' > 23
+                || (timezone[3] - b'0') * 10 + timezone[4] - b'0' > 59
+            {
+                return Err(Error::InvalidObject);
+            }
+        }
+        if self.message.as_bytes().contains(&0) {
+            return Err(Error::InvalidObject);
+        }
+        Ok(())
+    }
+}
+
+/// Incrementally collect root entries in caller-owned slots, without allocation.
+/// Push accepts any arrival order; borrowed subtrees must already be assembled.
+/// Nested validation and tree/commit buffer sizing are checked when finishing.
+pub struct SnapshotBuilder<'storage, 'data> {
+    entries: &'storage mut [Entry<'data>],
+    length: usize,
+    tree_storage: &'storage mut [u8],
+    commit_storage: &'storage mut [u8],
+}
+
+impl<'storage, 'data: 'storage> SnapshotBuilder<'storage, 'data> {
+    pub fn new(
+        entries: &'storage mut [Entry<'data>],
+        tree_storage: &'storage mut [u8],
+        commit_storage: &'storage mut [u8],
+    ) -> Self {
+        Self {
+            entries,
+            length: 0,
+            tree_storage,
+            commit_storage,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+
+    /// Insert in Git tree order. Invalid names, duplicates (UnsortedFiles), and
+    /// exhausted slots (BufferTooSmall) leave every occupied slot unchanged.
+    pub fn push(&mut self, entry: Entry<'data>) -> Result<()> {
+        validate_name(entry.name)?;
+        let occupied = &self.entries[..self.length];
+        if occupied.iter().any(|previous| previous.name == entry.name) {
+            return Err(Error::UnsortedFiles);
+        }
+        if self.length == self.entries.len() {
+            return Err(Error::BufferTooSmall);
+        }
+        let position = occupied
+            .iter()
+            .position(|previous| entry.cmp_name(previous).is_lt())
+            .unwrap_or(self.length);
+        self.entries
+            .copy_within(position..self.length, position + 1);
+        self.entries[position] = entry;
+        self.length += 1;
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<Snapshot<'storage>> {
+        self.finish_with_commit(CommitOptions::default())
+    }
+
+    /// Consume the builder and serialize metadata into commit_storage. Options
+    /// need not outlive the snapshot. Discard partial tree/commit bytes on error.
+    pub fn finish_with_commit(self, options: CommitOptions<'_>) -> Result<Snapshot<'storage>> {
+        Snapshot::from_entries_with_commit(
+            &self.entries[..self.length],
+            self.tree_storage,
+            self.commit_storage,
+            options,
+        )
     }
 }
 
@@ -199,7 +343,28 @@ impl<'a> Snapshot<'a> {
         tree_storage: &'a mut [u8],
         commit_storage: &'a mut [u8],
     ) -> Result<Self> {
-        Self::build(Input::Files(files), tree_storage, commit_storage, false)
+        Self::new_with_commit(
+            files,
+            tree_storage,
+            commit_storage,
+            CommitOptions::default(),
+        )
+    }
+
+    /// Build a flat snapshot with custom root-commit metadata, using raw tree storage.
+    pub fn new_with_commit(
+        files: &'a [File<'a>],
+        tree_storage: &'a mut [u8],
+        commit_storage: &'a mut [u8],
+        options: CommitOptions<'_>,
+    ) -> Result<Self> {
+        Self::build(
+            Input::Files(files),
+            tree_storage,
+            commit_storage,
+            false,
+            options,
+        )
     }
 
     /// Build nested trees with regular/executable files, symlinks, and empty trees.
@@ -213,7 +378,29 @@ impl<'a> Snapshot<'a> {
         tree_storage: &'a mut [u8],
         commit_storage: &'a mut [u8],
     ) -> Result<Self> {
-        Self::build(Input::Entries(entries), tree_storage, commit_storage, true)
+        Self::from_entries_with_commit(
+            entries,
+            tree_storage,
+            commit_storage,
+            CommitOptions::default(),
+        )
+    }
+
+    /// Build nested trees with custom root-commit metadata. Tree storage and
+    /// validation follow from_entries; options are copied into commit_storage.
+    pub fn from_entries_with_commit(
+        entries: &'a [Entry<'a>],
+        tree_storage: &'a mut [u8],
+        commit_storage: &'a mut [u8],
+        options: CommitOptions<'_>,
+    ) -> Result<Self> {
+        Self::build(
+            Input::Entries(entries),
+            tree_storage,
+            commit_storage,
+            true,
+            options,
+        )
     }
 
     fn build(
@@ -221,7 +408,9 @@ impl<'a> Snapshot<'a> {
         tree_storage: &'a mut [u8],
         commit_storage: &'a mut [u8],
         framed: bool,
+        options: CommitOptions<'_>,
     ) -> Result<Self> {
+        options.validate()?;
         let length = write_tree(input, tree_storage, 0, framed)?;
         let trees = &tree_storage[..length];
         let root = Trees {
@@ -239,7 +428,11 @@ impl<'a> Snapshot<'a> {
         let mut commit = SliceWriter::new(commit_storage);
         commit.write_all(b"tree ")?;
         commit.write_all(&tree_id.to_hex())?;
-        commit.write_all(b"\nauthor git-zero <git-zero@example.invalid> 0 +0000\ncommitter git-zero <git-zero@example.invalid> 0 +0000\n\nIn-memory snapshot\n")?;
+        commit.write_all(b"\n")?;
+        write_identity(&mut commit, b"author", options.author)?;
+        write_identity(&mut commit, b"committer", options.committer)?;
+        commit.write_all(b"\n")?;
+        commit.write_all(options.message.as_bytes())?;
         let commit = commit.finish();
         let head = Object {
             kind: ObjectKind::Commit,
@@ -284,6 +477,21 @@ impl<'a> Snapshot<'a> {
         self.refs = refs;
         Ok(self)
     }
+}
+
+fn write_identity(
+    output: &mut SliceWriter<'_>,
+    header: &[u8],
+    identity: CommitIdentity<'_>,
+) -> Result<()> {
+    use core::fmt::Write as _;
+    output.write_all(header)?;
+    output.write_all(b" ")?;
+    output.write_all(identity.name.as_bytes())?;
+    output.write_all(b" <")?;
+    output.write_all(identity.email.as_bytes())?;
+    writeln!(output, "> {} {}", identity.timestamp, identity.timezone)
+        .map_err(|_| Error::BufferTooSmall)
 }
 
 fn validate_name(name: &str) -> Result<()> {

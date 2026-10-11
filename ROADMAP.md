@@ -26,7 +26,7 @@ and host adapters for native `rustix`, Wasm, and Cloudflare Workers.
 - [x] Caller-owned object metadata/index arrays to avoid repeated scans and hashing.
 - [x] Bounded readers for large or generated objects; explicitly size scratch and
   resumable state, and avoid requiring a whole object in one borrowed slice.
-- [ ] Incremental snapshot builder with configurable commit identity/message/time.
+- [x] Incremental root-entry snapshot builder with configurable commit identity/message/time.
 - [ ] Validation of custom repository object graphs, tree order, and reachability.
 - [ ] Native file-backed object provider using `rustix`, with optional prepacked data.
 

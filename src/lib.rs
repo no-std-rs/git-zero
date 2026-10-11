@@ -20,7 +20,9 @@ pub mod zlib;
 pub use object::{Object, ObjectId, ObjectInfo, ObjectKind};
 pub use reader::{ObjectHasher, ObjectReader};
 pub use repository::{IndexedRepository, ObjectMetadata, Repository};
-pub use snapshot::{Entry, EntryKind, File, Snapshot};
+pub use snapshot::{
+    CommitIdentity, CommitOptions, Entry, EntryKind, File, Snapshot, SnapshotBuilder,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {

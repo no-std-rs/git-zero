@@ -5,7 +5,7 @@
 mod abi {
     use core::cell::UnsafeCell;
     use git_zero::{
-        Error, File, Snapshot,
+        Entry, EntryKind, Error, SnapshotBuilder,
         http::{self, Request},
         io::SliceWriter,
     };
@@ -82,24 +82,6 @@ mod abi {
         let headers = take(&mut input, lengths[1])?;
         let vars = take(&mut input, lengths[2])?;
         let runtime = take(&mut input, lengths[3])?;
-        let files = [
-            File {
-                name: "cf.json",
-                contents: cf,
-            },
-            File {
-                name: "headers.json",
-                contents: headers,
-            },
-            File {
-                name: "runtime.json",
-                contents: runtime,
-            },
-            File {
-                name: "vars.json",
-                contents: vars,
-            },
-        ];
         let target_length = length(&mut input)?;
         let target = core::str::from_utf8(take(&mut input, target_length)?)
             .map_err(|_| Error::InvalidRequest)?;
@@ -113,7 +95,20 @@ mod abi {
         };
         let mut tree = [0; 1024];
         let mut commit = [0; 1024];
-        let repository = Snapshot::new(&files, &mut tree, &mut commit)?;
+        let mut entries = [Entry::EMPTY; 4];
+        let mut builder = SnapshotBuilder::new(&mut entries, &mut tree, &mut commit);
+        for (name, contents) in [
+            ("cf.json", cf),
+            ("headers.json", headers),
+            ("vars.json", vars),
+            ("runtime.json", runtime),
+        ] {
+            builder.push(Entry {
+                name,
+                kind: EntryKind::File(contents),
+            })?;
+        }
+        let repository = builder.finish()?;
         let mut body = SliceWriter::new(&mut output[3..]);
         let response = http::serve(
             &repository,
