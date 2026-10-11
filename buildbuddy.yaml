@@ -19,4 +19,4 @@ actions:
       - run: |
           set -eu
           /var/lib/llm-cc/bin/llm-cc-coordinate --repository no-std-rs/git-zero --default-branch main
-          python3 scripts/llm-cc-ratio.py "$BUILDBUDDY_ARTIFACTS_DIRECTORY"
+          python3 -I scripts/llm-cc-ratio.py "$BUILDBUDDY_ARTIFACTS_DIRECTORY"

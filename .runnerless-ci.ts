@@ -1,6 +1,6 @@
 import {
   ArtifactComment, ArtifactSpec, ArtifactStatus, artifacts,
-  checks, comments, configuration, event, PageRequest, policies, pulls, Value, workflow,
+  checks, comments, configuration, event, PageRequest, policies, pulls, repo, Value, workflow,
 } from "runnerless/v1";
 
 const comparison = new ArtifactSpec("public-artifacts",
@@ -23,6 +23,17 @@ function reportRatio(details: Value): void {
   if (details.get("pullNumber").isNull()) return;
   const pr = pulls.get();
   if (pr.state != "open") return;
+  // A verified envelope proves publication identity, not measurement provenance.
+  // Accept ratios only when the workflow and producer match trusted base code.
+  const producers = ["buildbuddy.yaml", "scripts/llm-cc-ratio.py"];
+  for (let i = 0; i < producers.length; i++) {
+    const path = producers[i];
+    if (repo.readText(path, "head") != repo.readText(path, "base")) {
+      checks.report("LM-CC/token", false,
+        "The comparison producer changed: " + path + "; deploy producer updates through a trusted rollout.");
+      return;
+    }
+  }
   let nextPage: i32 = 1;
   while (nextPage > 0) {
     const page = comments.list(new PageRequest(nextPage, 20));

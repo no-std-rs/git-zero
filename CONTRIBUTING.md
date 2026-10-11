@@ -42,12 +42,19 @@ fail. `scripts/llm-cc-ratio.py` adds full-precision ratios from `report.json` to
 published comment and refreshes its checksum envelope. Runnerless reads only the
 verified comparison publisher's bot comment, matching its repository, PR, head,
 and target commit before comparing ratios; it does not use rounded table values.
+The gate also requires `buildbuddy.yaml` and the ratio script to match the trusted
+base revision. Python runs with `-I` so files in the PR cannot shadow its standard
+library imports. Changes to these producer files require a separate trusted
+rollout; a PR cannot change the producer and pass its own measurement gate.
 
 Runnerless executes the trusted base program. The new gate starts on PRs whose
 base contains this policy; this PR validates the program and report handoff
 locally. After the policy lands, apply the recorded ruleset to require
 `Runnerless / LM-CC/token` from My Toolkit (`4602759`). Adding the required context
 before the base program supports it would leave PRs waiting for a missing check.
+Apply the recorded strict status-check setting at the same time. If the target
+branch advances, GitHub requires the PR branch to be updated before merging,
+which gives the new head a fresh comparison rather than accepting an older pass.
 
 `.llm-cc/rules.json` classifies the core and native adapters as runtime, test
 directories as tests, and demos/scripts as tooling. Generated build output,

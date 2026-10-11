@@ -2,6 +2,8 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -82,6 +84,23 @@ class RatioHandoffTests(unittest.TestCase):
             directory = Path(name)
             (directory / "skipped.json").write_text("{}")
             gate.annotate(directory)
+
+    def test_isolated_producer_ignores_pr_imports(self):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            self.artifacts(directory)
+            # A proposed checkout must not inject code through standard imports.
+            producer = directory / "producer.py"
+            producer.write_bytes(Path(spec.origin).read_bytes())
+            (directory / "json.py").write_text("raise RuntimeError('untrusted import')\n")
+            unsafe = subprocess.run([sys.executable, str(producer), str(directory)],
+                                    cwd=directory, capture_output=True, text=True)
+            self.assertNotEqual(unsafe.returncode, 0)
+            self.assertIn("untrusted import", unsafe.stderr)
+            result = subprocess.run([sys.executable, "-I", str(producer), str(directory)],
+                                    cwd=directory, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.payload(directory)["head_ratio"], 0.1)
 
 
 if __name__ == "__main__":
