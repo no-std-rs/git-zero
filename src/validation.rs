@@ -4,7 +4,8 @@ use core::cmp::Ordering;
 use crate::{
     Error, Object, ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader, Repository,
     Result,
-    repository::{MAX_HEAD_REF_LENGTH, validate_ref_name},
+    repository::validate_refs,
+    snapshot::{cmp_tree_names, validate_name},
 };
 
 /// Cached identity and size of a validated object, in enumeration order.
@@ -198,38 +199,6 @@ fn reach(
     Ok(())
 }
 
-fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
-    let head = repository.head_ref();
-    validate_ref_name(head)?;
-    if !head.starts_with("refs/heads/") || head.len() > MAX_HEAD_REF_LENGTH {
-        return Err(Error::InvalidReference);
-    }
-    let mut found = false;
-    for index in 0..repository.reference_count() {
-        let name = repository
-            .reference_name(index)
-            .ok_or(Error::InvalidReference)?;
-        validate_ref_name(name)?;
-        found |= name == head;
-        for previous in 0..index {
-            let previous = repository
-                .reference_name(previous)
-                .ok_or(Error::InvalidReference)?;
-            if previous >= name
-                || name
-                    .strip_prefix(previous)
-                    .is_some_and(|suffix| suffix.starts_with('/'))
-            {
-                return Err(Error::InvalidReference);
-            }
-        }
-    }
-    if !found {
-        return Err(Error::InvalidReference);
-    }
-    Ok(())
-}
-
 /// Buffered streaming cursor. Seek discards buffered bytes; logical offsets
 /// exclude unread bytes and remain 64-bit independently of the host usize.
 struct Body<'scratch, 'repo, R: Repository + ?Sized> {
@@ -368,15 +337,25 @@ fn tree_entry<'a>(
         _ => return Err(Error::InvalidObject),
     };
     let name = body.until(0, scratch)?;
-    if name.is_empty()
-        || matches!(name, b"." | b"..")
-        || name.eq_ignore_ascii_case(b".git")
-        || name.contains(&b'/')
-        || name.contains(&b'\\')
-    {
-        return Err(Error::InvalidFileName);
-    }
+    validate_name(name)?;
     Ok((kind, name, body.id()?))
+}
+
+fn check_duplicate_name(
+    body: &mut Body<'_, '_, impl Repository + ?Sized>,
+    scratch: &mut [u8],
+    name: &[u8],
+    before: u64,
+) -> Result<()> {
+    let resume = body.offset();
+    body.seek(0)?;
+    while body.offset() < before {
+        let (_, previous, _) = tree_entry(body, scratch)?;
+        if previous == name {
+            return Err(Error::UnsortedFiles);
+        }
+    }
+    body.seek(resume)
 }
 
 fn validate_tree(
@@ -395,14 +374,13 @@ fn validate_tree(
         let (kind, name, id) = tree_entry(body, current)?;
         if start != 0 {
             let old = &previous[..previous_length];
-            let terminator = |kind| if kind == ObjectKind::Tree { b'/' } else { 0 };
             if old == name
-                || old
-                    .iter()
-                    .copied()
-                    .chain([terminator(previous_kind)])
-                    .cmp(name.iter().copied().chain([terminator(kind)]))
-                    != Ordering::Less
+                || cmp_tree_names(
+                    old,
+                    previous_kind == ObjectKind::Tree,
+                    name,
+                    kind == ObjectKind::Tree,
+                ) != Ordering::Less
             {
                 return Err(Error::UnsortedFiles);
             }
@@ -414,15 +392,7 @@ fn validate_tree(
         // still duplicates a name. Reread earlier entries instead of keeping
         // an unbounded set of names or recursively visiting child trees.
         if kind == ObjectKind::Tree && start != 0 {
-            let resume = body.offset();
-            body.seek(0)?;
-            while body.offset() < start {
-                let (_, old, _) = tree_entry(body, previous)?;
-                if old == name {
-                    return Err(Error::UnsortedFiles);
-                }
-            }
-            body.seek(resume)?;
+            check_duplicate_name(body, previous, name, start)?;
         }
         previous[..name.len()].copy_from_slice(name);
         previous_length = name.len();

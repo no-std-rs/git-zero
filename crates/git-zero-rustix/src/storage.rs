@@ -6,7 +6,7 @@ use git_zero::{
     http::{self, Request, Response},
     io::Write,
     pack,
-    repository::{MAX_HEAD_REF_LENGTH, validate_ref_name},
+    repository::validate_refs,
 };
 use rustix::{
     fd::{AsFd, OwnedFd},
@@ -117,26 +117,9 @@ impl<'a> FileRepository<'a> {
 
     /// Advertise sorted, unique refs that all alias head, including head_ref.
     pub fn with_refs(mut self, head_ref: &'a str, refs: &'a [&'a str]) -> Result<Self> {
-        validate_ref_name(head_ref)?;
-        if !head_ref.starts_with("refs/heads/")
-            || head_ref.len() > MAX_HEAD_REF_LENGTH
-            || !refs.contains(&head_ref)
-        {
-            return Err(Error::InvalidReference);
-        }
-        for (index, name) in refs.iter().enumerate() {
-            validate_ref_name(name)?;
-            if refs[..index].iter().any(|previous| {
-                previous >= name
-                    || name
-                        .strip_prefix(previous)
-                        .is_some_and(|suffix| suffix.starts_with('/'))
-            }) {
-                return Err(Error::InvalidReference);
-            }
-        }
         self.head_ref = head_ref;
         self.refs = refs;
+        validate_refs(&self)?;
         Ok(self)
     }
 
@@ -155,13 +138,7 @@ impl<'a> FileRepository<'a> {
         object_scratch: &mut [u8],
         compare_scratch: &mut [u8],
     ) -> Result<Self> {
-        let size = file_size(&fd).map_err(|error| {
-            if error == Error::InvalidObject {
-                Error::CorruptPack
-            } else {
-                error
-            }
-        })?;
+        let size = file_size(&fd).map_err(pack_error)?;
         let file = Region {
             fd,
             offset: 0,
@@ -192,16 +169,7 @@ impl<'a> FileRepository<'a> {
         output: &mut impl Write,
     ) -> Result<()> {
         if let Some(file) = &self.prepacked {
-            let mut offset = 0;
-            while offset < file.size {
-                if scratch.is_empty() {
-                    return Err(Error::BufferTooSmall);
-                }
-                let length = file.read(offset, scratch)?;
-                output.write_all(&scratch[..length])?;
-                offset += length as u64;
-            }
-            Ok(())
+            file.copy_to(scratch, output)
         } else {
             pack::write_with_scratch(self, scratch, output).map(|_| ())
         }
@@ -264,6 +232,13 @@ fn file_size(fd: &impl AsFd) -> Result<u64> {
     u64::try_from(stat.st_size).map_err(|_| Error::InvalidObject)
 }
 
+fn pack_error(error: Error) -> Error {
+    match error {
+        Error::InvalidObject => Error::CorruptPack,
+        other => other,
+    }
+}
+
 struct Region {
     fd: OwnedFd,
     offset: u64,
@@ -271,6 +246,19 @@ struct Region {
 }
 
 impl Region {
+    fn copy_to(&self, scratch: &mut [u8], output: &mut impl Write) -> Result<()> {
+        let mut offset = 0;
+        while offset < self.size {
+            if scratch.is_empty() {
+                return Err(Error::BufferTooSmall);
+            }
+            let length = self.read(offset, scratch)?;
+            output.write_all(&scratch[..length])?;
+            offset += length as u64;
+        }
+        Ok(())
+    }
+
     fn read(&self, offset: u64, storage: &mut [u8]) -> Result<usize> {
         if offset >= self.size || storage.is_empty() {
             return Ok(0);
@@ -302,13 +290,7 @@ impl Write for Compare<'_> {
             let length = self
                 .file
                 .read(self.position, &mut self.scratch[..capacity])
-                .map_err(|error| {
-                    if error == Error::InvalidObject {
-                        Error::CorruptPack
-                    } else {
-                        error
-                    }
-                })?;
+                .map_err(pack_error)?;
             if length == 0 || self.scratch[..length] != bytes[..length] {
                 return Err(Error::CorruptPack);
             }
