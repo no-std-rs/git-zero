@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Opt-in paired Git/git-zero HTTP benchmarks; Linux with GNU time."""
+"""Paired Git/git-zero benchmarks through one Rust HTTP host implementation."""
 import argparse
 import concurrent.futures
+import contextlib
 import hashlib
 import json
 import os
@@ -14,8 +15,10 @@ import tempfile
 import threading
 import time
 
-from interop import environment, reference_server, run, zero_server
-from upstream_http import compare_repository, refs, snapshot_fixture, verify_checkout
+from interop import environment, run
+from upstream_http import refs
+from benchmark_fixture import create, verify
+from benchmark_harness import Server
 
 
 WORKLOADS = [f"{operation}-{protocol}" for operation in
@@ -65,13 +68,19 @@ def measure(arguments, env, time_binary):
 def summary(samples):
     wall = sorted(sample["wall_s"] for sample in samples)
     # Nearest-rank p95 preserves an observed sample even for small runs.
-    return {"median_wall_s": statistics.median(wall),
+    result = {"median_wall_s": statistics.median(wall),
             "p95_wall_s": wall[(95 * len(wall) + 99) // 100 - 1],
             "median_cpu_s": statistics.median(sample["cpu_s"] for sample in samples),
             "median_max_rss_kib": statistics.median(sample["max_rss_kib"] for sample in samples)}
+    for key in ("cpu_s", "frontend_cpu_s", "backend_children_cpu_s", "response_bytes", "request_count", "frontend_rss_kib"):
+        result["median_server_" + key] = statistics.median(sample["server"][key] for sample in samples)
+    # RSS high-water marks are lifetime observations, never counter deltas.
+    for key in ("frontend_peak_rss_kib", "backend_child_peak_rss_kib"):
+        result["server_" + key] = max(sample["server"][key] for sample in samples)
+    return result
 
 
-def benchmark(name, binary, git, samples, warmup, time_binary):
+def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, samples, warmup, time_binary, response_limit):
     operation, protocol = name.rsplit("-", 1)
     smart = protocol == "smart"
     with tempfile.TemporaryDirectory(prefix=f"git-zero-benchmark-{name}-") as directory:
@@ -79,19 +88,21 @@ def benchmark(name, binary, git, samples, warmup, time_binary):
         env = environment(git)
         if not smart:
             env["GIT_SMART_HTTP"] = "0"
-        bare, head = snapshot_fixture(root, env)
+        bare, head = fixture / "repo.git", metadata["head"]
         expected_refs = {b"HEAD": head.encode(), b"refs/heads/main": head.encode()}
         results = {implementation: [] for implementation in ("git", "zero")}
-        with reference_server(root, env, smart) as reference, zero_server(binary, env) as zero:
-            urls = {"git": reference, "zero": zero}
-            # Client comparison holds the Git reference server fixed. Server
-            # comparison holds the real Git client and snapshot contents fixed.
+        with contextlib.ExitStack() as stack:
+            original = stack.enter_context(Server(harness, fixture, backend, "git", protocol, env, root, response_limit))
+            zero = (original if operation == "client-discovery" else
+                    stack.enter_context(Server(harness, fixture, backend, "zero", protocol, env, root, response_limit)))
+            servers = {"git": original, "zero": zero}
+            urls = {implementation: server.url for implementation, server in servers.items()}
             fetch_targets = {}
             if operation == "server-fetch":
                 for implementation, url in urls.items():
                     target = root / f"fetch-{implementation}"
                     run("git", "clone", "-q", url, str(target), env=env)
-                    compare_repository(bare, target, "--all", env)
+                    verify(bare, target, expected, env)
                     fetch_targets[implementation] = target
             for index in range(warmup + samples):
                 # Reverse paired order each round to distribute host/cache drift.
@@ -99,8 +110,8 @@ def benchmark(name, binary, git, samples, warmup, time_binary):
                 for implementation in order:
                     url = urls[implementation]
                     if operation == "client-discovery":
-                        arguments = (["git", "-c", "protocol.version=0", "ls-remote", reference]
-                                     if implementation == "git" else [binary, "ls-remote", reference])
+                        arguments = (["git", "-c", "protocol.version=0", "ls-remote", original.url]
+                                     if implementation == "git" else [binary, "ls-remote", original.url])
                     elif operation == "server-discovery":
                         arguments = ["git", "-c", "protocol.version=0", "ls-remote", url]
                     elif operation == "server-clone":
@@ -109,22 +120,26 @@ def benchmark(name, binary, git, samples, warmup, time_binary):
                     else:
                         target = fetch_targets[implementation]
                         arguments = ["git", "-C", str(target), "-c", "protocol.version=0", "fetch", "origin"]
+                    server = servers[implementation]
+                    mark = len(server.records())
                     output, measurements = measure(arguments, env, time_binary)
+                    measurements["server"] = server.measurements(mark)
                     if operation.endswith("discovery"):
                         assert refs(output) == expected_refs
                     else:
-                        compare_repository(bare, target, "--all", env)
-                        verify_checkout(bare, target, head, env)
+                        verify(bare, target, expected, env)
                     if index >= warmup:
                         results[implementation].append(measurements)
         summaries = {implementation: summary(values) for implementation, values in results.items()}
         return {"workload": name, "samples": results, "summary": summaries,
+                "server_startup": {implementation: server.startup for implementation, server in servers.items()},
                 "zero_over_git_wall_ratio": summaries["zero"]["median_wall_s"] / summaries["git"]["median_wall_s"]}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=Path(__file__).resolve().parents[1] / "target/release/git-zero")
+    parser.add_argument("--harness", type=Path, default=Path(__file__).resolve().parents[1] / "target/release/examples/benchmark-server")
     parser.add_argument("--git", default=os.environ.get("GIT_ZERO_TEST_GIT", "git"))
     parser.add_argument("--time", default="/usr/bin/time", help="GNU time executable for command RSS")
     parser.add_argument("--samples", type=int, default=25)
@@ -132,46 +147,77 @@ def main():
     parser.add_argument("--jobs", type=int, default=1, help="Independent workload workers; 1 avoids benchmark contention")
     parser.add_argument("--case", action="append", choices=WORKLOADS)
     parser.add_argument("--output", type=Path, required=True, help="JSON report including every raw measurement")
+    parser.add_argument("--fixture-dir", type=Path, help="Retain the synthetic repository/export in a new directory")
+    parser.add_argument("--files", type=int, default=64)
+    parser.add_argument("--blob-bytes", type=int, default=16384)
+    parser.add_argument("--commits", type=int, default=16)
+    parser.add_argument("--git-compression", type=int, choices=range(10), default=0, help="0 matches stored-DEFLATE; 6 shows compression tradeoffs")
+    parser.add_argument("--response-limit", type=int, default=32 * 1024 * 1024, help="Per-response body budget in the Rust host")
     args = parser.parse_args()
     if args.samples < 1 or args.warmup < 0 or args.jobs < 1:
         parser.error("samples/jobs must be positive and warmup nonnegative")
+    if min(args.files, args.commits, args.response_limit) < 1 or args.blob_bytes < 0:
+        parser.error("files/commits/response-limit must be positive and blob-bytes nonnegative")
     if platform.system() != "Linux" or not hasattr(os, "wait4"):
         parser.error("CPU/RSS measurement currently requires Linux")
     binary = str(args.binary.resolve())
+    harness = str(args.harness.resolve())
+    if not Path(binary).is_file() or not Path(harness).is_file():
+        parser.error("build the native git-zero binary and benchmark-server example first")
     repository_root = Path(__file__).resolve().parents[1]
     git = str(Path(args.git).resolve()) if os.sep in args.git else args.git
     env = environment(git)
+    backend = str(Path(run("git", "--exec-path", env=env).decode().strip()) / "git-http-backend")
     if b"GNU Time" not in run(args.time, "--version", env=env):
         parser.error("--time must select GNU time")
     cases = list(dict.fromkeys(args.case or WORKLOADS))
     report = {
-        "schema_version": 1, "git_version": run("git", "--version", env=env).decode().strip(),
+        "schema_version": 2, "git_version": run("git", "--version", env=env).decode().strip(),
         "git_zero_binary_sha256": hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
+        "harness_sha256": hashlib.sha256(Path(harness).read_bytes()).hexdigest(),
+        "git_http_backend_sha256": hashlib.sha256(Path(backend).read_bytes()).hexdigest(),
         "source_revision": run("git", "rev-parse", "HEAD", cwd=repository_root, env=env).decode().strip(),
         "source_dirty": bool(run("git", "status", "--porcelain", cwd=repository_root, env=env)),
         "platform": platform.platform(), "cpu_count": os.cpu_count(),
         "rss_observer": run(args.time, "--version", env=env).decode().splitlines()[0],
         "samples_per_implementation": args.samples, "warmup_rounds": args.warmup, "jobs": args.jobs,
-        "fixture": {"files": 1, "objects": 3, "file_bytes": 56, "history_commits": 1},
+        "budgets": {"request_bytes": 65536, "object_read_bytes": 65536, "response_bytes": args.response_limit},
         "measurement_scope": "Fresh client command tree; CPU/RSS exclude server processes. "
                              "CPU includes the small GNU time observer; RSS excludes Python launcher memory. "
                              "Persistent warm servers and OS caches; no cold-cache claim. "
-                             "Git server uses Python HTTP/CGI shim; zero uses native rustix. "
-                             "Results describe these loopback deployments, not encoder throughput.",
+                             "Both backends use the same Rust HTTP parser/response writer and file-backed object graph. "
+                             "Git smart HTTP uses CGI/upload-pack; Git dumb HTTP serves loose files directly through Rust. "
+                             "Server request CPU includes frontend and reaped Git children via getrusage deltas. "
+                             "Server RSS separates frontend /proc VmRSS/VmHWM and largest-child lifetime ru_maxrss; "
+                             "these peaks are not simultaneous aggregate memory and must not be added. "
+                             "Server initialization, control barriers and metric reporting are outside request intervals. "
+                             "Rust generates stored-DEFLATE responses; Git compression is configurable, deltas disabled.",
         "results": [],
     }
     print(f"{report['git_version']}; {args.samples} paired samples, {args.jobs} workload workers", flush=True)
-    print("workload | Git median ms | zero median ms | zero/Git | Git/zero CPU ms | Git/zero RSS KiB", flush=True)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
-        futures = {executor.submit(benchmark, name, binary, git, args.samples, args.warmup, args.time): name for name in cases}
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            report["results"].append(result)
-            original, zero = result["summary"]["git"], result["summary"]["zero"]
-            print(f"{result['workload']} | {original['median_wall_s'] * 1000:.3f} | "
-                  f"{zero['median_wall_s'] * 1000:.3f} | {result['zero_over_git_wall_ratio']:.3f} | "
-                  f"{original['median_cpu_s'] * 1000:.3f}/{zero['median_cpu_s'] * 1000:.3f} | "
-                  f"{original['median_max_rss_kib']:.0f}/{zero['median_max_rss_kib']:.0f}", flush=True)
+    print("workload | Git/zero wall ms | ratio | server CPU ms | frontend peak KiB | child peak KiB", flush=True)
+    fixture_context = (contextlib.nullcontext(args.fixture_dir.resolve()) if args.fixture_dir else
+                       tempfile.TemporaryDirectory(prefix="git-zero-benchmark-fixture-"))
+    with fixture_context as directory:
+        fixture = Path(directory)
+        if args.fixture_dir:
+            fixture.mkdir(parents=True, exist_ok=False)
+        bare, expected, metadata = create(fixture, env, args.files, args.blob_bytes, args.commits, args.git_compression)
+        report["fixture"] = metadata
+        report["fixture_directory"] = str(fixture) if args.fixture_dir else None
+        print(f"Fixture: {metadata['objects']} objects, {metadata['raw_object_bytes']} raw bytes, HEAD {metadata['head']}", flush=True)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+            futures = {executor.submit(benchmark, name, binary, harness, git, backend, fixture, expected, metadata,
+                                       args.samples, args.warmup, args.time, args.response_limit): name for name in cases}
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                report["results"].append(result)
+                original, zero = result["summary"]["git"], result["summary"]["zero"]
+                print(f"{result['workload']} | {original['median_wall_s'] * 1000:.3f}/{zero['median_wall_s'] * 1000:.3f} | "
+                      f"{result['zero_over_git_wall_ratio']:.3f} | "
+                      f"{original['median_server_cpu_s'] * 1000:.3f}/{zero['median_server_cpu_s'] * 1000:.3f} | "
+                      f"{original['server_frontend_peak_rss_kib']}/{zero['server_frontend_peak_rss_kib']} | "
+                      f"{original['server_backend_child_peak_rss_kib']}/{zero['server_backend_child_peak_rss_kib']}", flush=True)
     report["results"].sort(key=lambda result: result["workload"])
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")

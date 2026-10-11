@@ -14,6 +14,13 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Shared Rust benchmark host correctness and resource smoke test
+        run: |
+          cargo test -p git-zero-rustix --example benchmark-server --locked
+          cargo build -p git-zero-rustix --example benchmark-server --locked
+          python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
+            --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
+            --jobs 8 --samples 2 --warmup 1 --output /tmp/git-zero-benchmark-smoke.json
       - run: cargo check -p git-zero --target wasm32-unknown-unknown --locked
       - run: cargo check -p git-zero --target riscv32imac-unknown-none-elf --locked
 

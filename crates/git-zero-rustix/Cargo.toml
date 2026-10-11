@@ -14,5 +14,8 @@ rustix = { version = "1.1.4", default-features = false, features = ["fs", "net"]
 name = "git-zero"
 path = "src/main.rs"
 
+[dev-dependencies]
+libc = "0.2"
+
 [lints]
 workspace = true

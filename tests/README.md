@@ -125,40 +125,89 @@ configuration through `GIT_ZERO_TEST_JOBS`, `GIT_ZERO_TEST_GIT` and
 
 ## Performance comparison
 
-Use an optimized native binary and opt into the Linux benchmark (Python's
-standard library plus GNU `time`). Correctness checks run outside timing.
+Use optimized native binaries and opt into the Linux benchmark (Python's
+standard library plus GNU `time`). Python creates the fixture and runs clients;
+all timed HTTP traffic passes through the Rust host. Correctness checks and
+control barriers run outside timing.
 
 ```sh
 cargo build -p git-zero-rustix --bin git-zero --release --locked
-python3 tests/benchmark.py --samples 31 --warmup 3 --output /tmp/git-zero-performance.json
+cargo build -p git-zero-rustix --example benchmark-server --release --locked
+python3 tests/benchmark.py --samples 31 --warmup 3 \
+  --fixture-dir /tmp/git-zero-synthetic --output /tmp/git-zero-performance.json
 python3 tests/benchmark.py --jobs 8 --samples 5 --output /tmp/git-zero-contention.json
 ```
 
-Eight independently runnable workloads compare both HTTP protocols. Client
-discovery holds Git's reference server fixed and compares Git/git-zero ref
-output. Server discovery, fresh clones and unchanged-remote fetches hold the
-real Git client fixed and compare Git's HTTP/CGI deployment with the native
-git-zero server. Both serve the same independently Git-created snapshot and
-must produce identical refs, object graphs and checkout bytes/modes.
+The default synthetic repository has 64 files of 16 KiB, 16 commits, mixed
+repetitive/binary content, and one changed file per later commit. `--files`,
+`--blob-bytes` and `--commits` control scale. Git creates and strictly checks the
+repository; reachable bodies are exported into `objects.raw` and `objects.tsv`
+for the existing Rust file provider. Both backends have identical object IDs,
+history, refs and checkout contents. Rust validates the exported graph before
+listening, reads bodies by file offset, and generates responses without a
+prepacked cache. Fixture creation/export is outside measurements; separate server
+startup wall/CPU/RSS observations include Rust's graph validation.
 
-Each workload owns its fixture, ports, processes and measurement files.
-`--case`, `--git`, `--binary`, `--samples`, `--warmup` and `--jobs` permit separate
-runners and explicit resource budgets. Timing defaults to one workload worker
+The same Rust executable parses requests, buffers responses and writes HTTP
+headers/body for both backends. Smart Git requests invoke `git-http-backend`;
+dumb Git requests serve its loose files directly through Rust, without CGI.
+The native backend calls core HTTP/pack functions using `FileRepository` and
+`ValidatedRepository`. All clients request protocol v0. The host can route
+`/git/repo.git` and `/zero/repo.git` together, or enable one backend per process.
+The benchmark uses separate instances of that same host so unused backend state
+and previous requests cannot contaminate the other backend's memory counters.
+
+Eight independently runnable workloads compare both protocols. Client discovery
+holds the Git-backed Rust server fixed and compares Git/git-zero ref output.
+Server discovery, fresh clones and unchanged-remote fetches hold the real Git
+client fixed. Every measured operation checks refs or the complete reachable
+object graph, strict integrity, HEAD and checkout bytes/modes outside timing.
+
+Git's loose/pack compression defaults to 0 and deltas are disabled to match
+Rust's stored-DEFLATE encoder as closely as possible. `--git-compression 6`
+measures a different compression tradeoff explicitly. Response body byte counts
+remain visible; Git's compressed loose storage and Rust's raw file representation
+and encoder are still different implementations. No Python HTTP server is involved.
+
+Each workload owns its ports, processes, clones and measurement files. Workers
+share only the immutable synthetic fixture. `--case`, `--git`, `--binary`,
+`--harness`, `--samples`, `--warmup` and `--jobs` permit separate runners.
+`--response-limit` sets the response budget; request and object-read buffers
+are each 64 KiB. Timing defaults to one workload worker
 to avoid contention. Pair order alternates every round; warmups are discarded.
 The JSON report retains every wall/CPU/RSS sample, median/p95 summaries, the
 zero/Git latency ratio, tool/binary identity, source revision and host metadata.
-RSS excludes inherited Python launcher memory; CPU includes the small GNU time
-observer. Both resource metrics cover the client command tree, including waited
-descendants, and exclude persistent HTTP server processes.
+Client CPU/RSS remain separate: GNU time excludes inherited Python launcher
+memory, while client CPU includes the small time observer. The Rust host records
+per-request wall time, `getrusage(RUSAGE_SELF)` and `RUSAGE_CHILDREN` CPU deltas,
+including reaped CGI/upload-pack descendants, response bytes and page faults.
+Read/dispatch/write are measured; resource reporting and barriers run afterwards.
+The host owns CGI stdin/stdout and kills/reaps unfinished children on errors;
+the runner stops each server process group on completion or failure.
 
-This initial microbenchmark uses one root commit, three objects and one 56-byte
-file. It measures fresh commands against warm persistent servers/OS caches;
-it does not claim cold-cache performance. Git's Python HTTP/CGI shim contributes
-to server latency. Results describe those deployments and startup/HTTP overhead,
-not general Git encoder speed or large-repository throughput. Git-zero returns
-raw fetch data; comparing its fetch directly with Git's complete materialization
-would measure different work. The caller-provided Linux kernel benchmark,
-large-object scaling and standalone server CPU/RSS remain roadmap work.
+Server memory reports current frontend RSS and its process-lifetime high-water
+mark from `/proc`, plus the largest reaped child's lifetime `ru_maxrss` in KiB.
+These high-water marks include preparation/warmups and are not per-operation
+increments, simultaneous aggregate RSS, or unique physical memory. **Do not add
+frontend and child peaks.** No CPU/RSS claim is inferred from client counters.
+Git's smart CGI process interface remains part of the measured backend cost;
+the shared frontend does not turn Git into an in-process server library.
+
+The JSON schema is version 2 and preserves raw client/server samples, startup
+measurements, host/tool/binary identities, buffer budgets, fixture parameters and
+fingerprints. `--fixture-dir` retains Git's repository, raw export and metadata
+in a new directory. To use both routes manually after creating that fixture:
+
+```sh
+target/release/examples/benchmark-server /tmp/git-zero-synthetic \
+  "$(git --exec-path)/git-http-backend" both smart /tmp/git-zero-server-metrics.jsonl 33554432
+# Append /git/repo.git or /zero/repo.git to the printed listening URL.
+```
+
+These are warm loopback measurements, with no cold-cache claim. Git-zero's raw
+fetch is still not compared with Git's full materialization. The caller-provided
+Linux kernel benchmark, advanced compression/delta modes, simultaneous process
+tree memory and Wasm memory growth remain roadmap work.
 
 ## Wasm and allocator-free targets
 
