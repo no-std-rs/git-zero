@@ -27,6 +27,8 @@ for checks and repository connection requirements.
 - Complete SHA-1 packs generated on demand from unpacked objects. The encoder
   streams valid zlib/DEFLATE stored blocks, so it uses bounded memory but does
   not yet compress data or create deltas. Identical blobs and subtrees are deduplicated.
+- Optional caller-owned object metadata and ID indexes for constant-time
+  enumeration and binary-search lookup without repeated scans or hashing.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
   and checksum-validates smart packs, and fetches dumb loose objects.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
@@ -136,6 +138,27 @@ smart HTTP. See [tests/README.md](tests/README.md) for the interoperability chec
 
 A custom `Repository` implementation must expose a stable, complete reachable
 object set and a commit `HEAD` for its URL. Its refs are aliases of that commit.
+
+For repeated requests, wrap a snapshot or custom repository in `IndexedRepository`:
+
+```rust
+use git_zero::IndexedRepository;
+
+// `repository` is the snapshot built above. Choose capacities for its objects.
+let mut objects = [None; 16];
+let mut by_id = [0; 16];
+let repository = IndexedRepository::new(&repository, &mut objects, &mut by_id)?;
+```
+
+Each array needs at least `repository.object_count()` slots. Indexing reads the
+source count once, reads and hashes each object once, and sorts the ID index in
+place without allocating. It borrows object bodies and preserves object order,
+refs, IDs, and pack bytes. Subsequent enumeration and `object_id` access use the
+metadata directly; `find` uses binary search. `metadata` exposes the cached ID,
+kind, and borrowed body. Indexing pays the source's scan cost once; it does not
+accelerate snapshot construction or validate custom object graphs. Insufficient
+capacity returns `BufferTooSmall`; missing source objects return `ObjectNotFound`.
+The native demo builds its index once before accepting requests.
 
 Use `pack::write` to stream directly to any `io::Write` implementation. Use
 `cache::write` with a `PackCache` and pack-sized scratch buffer to reuse generated

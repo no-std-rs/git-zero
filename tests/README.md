@@ -7,6 +7,7 @@ matrix. Network isolation must permit local loopback sockets.
 
 ```sh
 cargo test --workspace --locked
+python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 Core tests run under Cargo's normal parallel runner. The integration test invokes
@@ -41,6 +42,13 @@ explicitly downloads that loose object through the native git-zero client and
 saves the server's bytes before the disk integrity check; smart clone needs no
 supplement. Core tests cover tree ordering, duplicate names, exact buffer limits,
 depth limits, ref validation, and unchanged object IDs for equivalent flat inputs.
+The native demo and nested clone test use caller-owned metadata indexes. Index
+tests check capacity and missing-object errors, preservation of enumeration order
+and HTTP/pack bytes, and repeated reads without reentering the source repository.
+The Python tests cover the LM-CC/token report handoff, including full precision,
+incomplete/invalid measurements, checksum validation, and bounded comment output.
+They also reproduce a PR file shadowing Python's `json` module and verify that
+the isolated producer ignores it while preserving the measured ratio.
 
 ## Selective runs and CI sharding
 

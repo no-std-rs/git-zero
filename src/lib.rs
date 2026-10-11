@@ -17,7 +17,7 @@ pub mod snapshot;
 pub mod zlib;
 
 pub use object::{Object, ObjectId, ObjectKind};
-pub use repository::Repository;
+pub use repository::{IndexedRepository, ObjectMetadata, Repository};
 pub use snapshot::{Entry, EntryKind, File, Snapshot};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

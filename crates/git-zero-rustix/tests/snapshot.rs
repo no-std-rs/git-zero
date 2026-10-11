@@ -2,7 +2,7 @@
 mod common;
 
 use git_zero::{
-    ObjectId, Repository, Snapshot,
+    IndexedRepository, ObjectId, Repository, Snapshot,
     client::{self, Transport},
     http,
     io::SliceWriter,
@@ -68,6 +68,9 @@ fn real_git_clones_nested_modes_empty_trees_and_custom_refs() {
         .unwrap()
         .with_refs(common::HEAD_REF, common::REFS)
         .unwrap();
+    let mut objects = [None; 6];
+    let mut by_id = [0; 6];
+    let repo = IndexedRepository::new(&repo, &mut objects, &mut by_id).unwrap();
     let listener = listen(0).unwrap();
     let port = local_port(&listener).unwrap();
     let url = format!("http://127.0.0.1:{port}/repo.git");

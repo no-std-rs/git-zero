@@ -1,5 +1,5 @@
 use git_zero::{
-    Error, File, Snapshot,
+    Error, File, IndexedRepository, Snapshot,
     client::{self, Protocol},
     http::{self, Response},
     io::SliceWriter,
@@ -45,6 +45,9 @@ fn serve(port: u16) -> git_zero::Result<()> {
     let mut tree_storage = [0; 1024];
     let mut commit_storage = [0; 1024];
     let repository = Snapshot::new(&files, &mut tree_storage, &mut commit_storage)?;
+    let mut objects = [None; 3]; // Commit, tree, and the README blob.
+    let mut by_id = [0; 3];
+    let repository = IndexedRepository::new(&repository, &mut objects, &mut by_id)?;
     let listener = listen(port)?;
     // Port 0 is assigned by the OS and reported only after the socket is bound.
     println!("http://127.0.0.1:{}/repo.git", local_port(&listener)?);
