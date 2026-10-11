@@ -6,3 +6,4 @@ examples/cloudflare-worker/build/
 .env*
 *.log
 __pycache__/
+/interop-artifacts/

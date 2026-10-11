@@ -17,6 +17,42 @@ jobs:
       - run: cargo check -p git-zero --target wasm32-unknown-unknown --locked
       - run: cargo check -p git-zero --target riscv32imac-unknown-none-elf --locked
 
+  interop:
+    name: interop (${{ matrix.os }}, Git ${{ matrix.git }}, shard ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        git: [system, 2.53.0]
+        shard: [0/2, 1/2]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Build pinned upstream Git
+        if: matrix.git != 'system'
+        env:
+          REFERENCE_GIT_VERSION: ${{ matrix.git }}
+        run: |
+          git clone --depth 1 --branch "v$REFERENCE_GIT_VERSION" https://github.com/git/git.git "$RUNNER_TEMP/git-source"
+          make -C "$RUNNER_TEMP/git-source" -j "$(python3 -c 'import os; print(os.cpu_count() or 1)')" \
+            prefix="$RUNNER_TEMP/reference-git" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_OPENSSL=YesPlease NO_EXPAT=YesPlease
+          make -C "$RUNNER_TEMP/git-source" install \
+            prefix="$RUNNER_TEMP/reference-git" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_OPENSSL=YesPlease NO_EXPAT=YesPlease
+          echo "GIT_ZERO_TEST_GIT=$RUNNER_TEMP/reference-git/bin/git" >> "$GITHUB_ENV"
+      - run: cargo build -p git-zero-rustix --bin git-zero --locked
+      - name: Parallel Git cross-validation
+        run: python3 tests/interop.py --shard '${{ matrix.shard }}' --artifacts interop-artifacts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: interop-${{ strategy.job-index }}
+          path: interop-artifacts
+          if-no-files-found: ignore
+
   worker:
     runs-on: ubuntu-latest
     defaults:

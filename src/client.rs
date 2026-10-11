@@ -72,7 +72,17 @@ impl<'a> Iterator for References<'a> {
         let line = match self.protocol {
             Protocol::Smart => loop {
                 match pktline::read(&mut self.bytes) {
-                    Ok(Some(Packet::Data(line))) => break line,
+                    Ok(Some(Packet::Data(line))) => {
+                        // An empty v0 repository advertises capabilities using
+                        // a zero ID and this pseudo-ref. Git ls-remote omits it.
+                        let reference = line.split(|&byte| byte == 0).next().unwrap_or_default();
+                        let reference = reference.strip_suffix(b"\n").unwrap_or(reference);
+                        if reference == b"0000000000000000000000000000000000000000 capabilities^{}"
+                        {
+                            continue;
+                        }
+                        break line;
+                    }
                     Ok(Some(Packet::Flush)) => continue,
                     Ok(None) => return None,
                     Err(error) => {

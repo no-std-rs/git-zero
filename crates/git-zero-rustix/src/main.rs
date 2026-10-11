@@ -114,6 +114,13 @@ fn fetch(url: &str, list_only: bool) -> git_zero::Result<()> {
     };
     let discovery = client::discover(&mut transport, &mut discovery_storage)?;
     if list_only {
+        if discovery.protocol == Protocol::Dumb {
+            match client::read_head(&mut transport, &discovery, &mut response_storage) {
+                Ok(head) => println!("{head}\tHEAD"),
+                Err(Error::ObjectNotFound) => {} // Empty/unborn remote.
+                Err(error) => return Err(error),
+            }
+        }
         for reference in discovery.references() {
             let reference = reference?;
             println!("{}\t{}", reference.id, reference.name);

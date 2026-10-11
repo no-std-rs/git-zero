@@ -11,7 +11,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 Core tests run under Cargo's normal parallel runner. The integration test invokes
-`interop.py`, which runs these independent cases with four workers:
+`interop.py`, which runs these independent cases with one worker per available CPU:
 
 | Client | Server | Smart HTTP | Dumb HTTP |
 | --- | --- | --- | --- |
@@ -93,17 +93,35 @@ remain separate work.
 
 ## Selective runs and CI sharding
 
+The eight original matrix cases run alongside sixteen independent differential
+cases. See [upstream-http.md](upstream-http.md) for the pinned upstream coverage
+map, exact comparisons, expected unsupported operations and parallelism contract.
+The new cases compare all refs and object bodies with Git, exercise merge history,
+proven delta packs and packed dumb baselines, change the remote between fetches,
+and compare native snapshot output with independently Git-generated objects.
+
 ```sh
 cargo build -p git-zero-rustix --bin git-zero --locked
 python3 tests/interop.py --jobs 8
 python3 tests/interop.py --jobs 2 --case git-zero-smart --case zero-git-smart
 python3 tests/interop.py --case zero-git-dumb
+python3 tests/interop.py --case upstream-packed-smart
+python3 tests/interop.py --list-cases
+python3 tests/interop.py --shard 0/2 --artifacts /tmp/git-zero-traces
+python3 tests/interop.py --shard 1/2 --artifacts /tmp/git-zero-traces
+python3 tests/interop.py --git /opt/git-2.53/bin/git
 ```
 
 Case names are `<client>-<server>-<protocol>`, with `git`/`zero` and `smart`/`dumb`.
 `--binary /absolute/path/to/git-zero` chooses a release or separately built binary.
 Independent invocations can run simultaneously; separate `--case` selections
-also allow CI jobs to shard the matrix.
+and zero-based `--shard INDEX/TOTAL` selections allow disjoint CI jobs. Artifact
+directories stay unique even across simultaneous invocations of the same case.
+`--artifacts` preserves fixture repositories, downloaded bytes, command logs,
+HTTP requests and packet/curl traces. The CI matrix spans Linux/macOS, installed
+Git and pinned Git 2.53.0, and two independent shards. Cargo accepts the same
+configuration through `GIT_ZERO_TEST_JOBS`, `GIT_ZERO_TEST_GIT` and
+`GIT_ZERO_TEST_ARTIFACTS`.
 
 ## Wasm and allocator-free targets
 
@@ -141,6 +159,8 @@ sh scripts/test-upstream-git.sh /path/to/git-source 4
 
 This runs those upstream suites unchanged against Git itself. It is a baseline,
 not additional git-zero coverage. Direct substitution of git-zero into those
-tests is a roadmap item, with feature mapping and license/provenance handling
-for any future extracted GPL fixtures. The local matrix is the current git-zero
-compatibility gate.
+tests remains a roadmap item. The [coverage map](upstream-http.md) groups their
+assertions into supported comparisons, planned features and operations outside
+the initial scope. Our independently authored fixture adapter uses real Git
+commands and HTTP servers, without copying GPL test bodies. The parallel local
+matrix and differential cases are the current git-zero compatibility gate.
