@@ -25,6 +25,19 @@ use rustix::{
     },
 };
 
+#[cfg(not(target_vendor = "apple"))]
+const SOCKET_FLAGS: SocketFlags = SocketFlags::CLOEXEC;
+#[cfg(target_vendor = "apple")]
+const SOCKET_FLAGS: SocketFlags = SocketFlags::empty();
+
+fn close_on_exec(socket: OwnedFd) -> Result<OwnedFd> {
+    // Darwin has no SOCK_CLOEXEC/accept4 flags; set the descriptor flag after
+    // creation. Other platforms set it atomically through SOCKET_FLAGS.
+    #[cfg(target_vendor = "apple")]
+    rustix::io::fcntl_setfd(&socket, rustix::io::FdFlags::CLOEXEC).map_err(|_| Error::Backend)?;
+    Ok(socket)
+}
+
 pub fn listen(port: u16) -> Result<OwnedFd> {
     let socket = socket()?;
     sockopt::set_socket_reuseaddr(&socket, true).map_err(|_| Error::Backend)?;
@@ -42,19 +55,17 @@ pub fn local_port(socket: &impl AsFd) -> Result<u16> {
 }
 
 pub fn accept(socket: &impl AsFd) -> Result<OwnedFd> {
-    let client = net::accept_with(socket, SocketFlags::CLOEXEC).map_err(|_| Error::Backend)?;
+    let client =
+        close_on_exec(net::accept_with(socket, SOCKET_FLAGS).map_err(|_| Error::Backend)?)?;
     timeouts(&client)?;
     Ok(client)
 }
 
 fn socket() -> Result<OwnedFd> {
-    net::socket_with(
-        AddressFamily::INET,
-        SocketType::STREAM,
-        SocketFlags::CLOEXEC,
-        None,
+    close_on_exec(
+        net::socket_with(AddressFamily::INET, SocketType::STREAM, SOCKET_FLAGS, None)
+            .map_err(|_| Error::Backend)?,
     )
-    .map_err(|_| Error::Backend)
 }
 
 fn timeouts(socket: &impl AsFd) -> Result<()> {
@@ -69,8 +80,16 @@ pub struct SocketWriter<'a>(pub BorrowedFd<'a>);
 
 impl Write for SocketWriter<'_> {
     fn write_all(&mut self, mut bytes: &[u8]) -> Result<()> {
+        #[cfg(target_vendor = "apple")]
+        let flags = {
+            // Cover borrowed host sockets as well as sockets opened here.
+            sockopt::set_socket_nosigpipe(self.0, true).map_err(|_| Error::Backend)?;
+            SendFlags::empty()
+        };
+        #[cfg(not(target_vendor = "apple"))]
+        let flags = SendFlags::NOSIGNAL;
         while !bytes.is_empty() {
-            match net::send(self.0, bytes, SendFlags::NOSIGNAL) {
+            match net::send(self.0, bytes, flags) {
                 Ok(0) => return Err(Error::Backend),
                 Ok(length) => bytes = &bytes[length..],
                 Err(rustix::io::Errno::INTR) => continue,
