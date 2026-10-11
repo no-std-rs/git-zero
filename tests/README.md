@@ -47,6 +47,8 @@ tests check capacity and missing-object errors, preservation of enumeration orde
 and HTTP/pack bytes, and repeated reads without reentering the source repository.
 The Python tests cover the LM-CC/token report handoff, including full precision,
 incomplete/invalid measurements, checksum validation, and bounded comment output.
+They also reproduce a PR file shadowing Python's `json` module and verify that
+the isolated producer ignores it while preserving the measured ratio.
 
 ## Selective runs and CI sharding
 
