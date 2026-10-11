@@ -27,8 +27,8 @@ and host adapters for native `rustix`, Wasm, and Cloudflare Workers.
 - [x] Bounded readers for large or generated objects; explicitly size scratch and
   resumable state, and avoid requiring a whole object in one borrowed slice.
 - [x] Incremental root-entry snapshot builder with configurable commit identity/message/time.
-- [ ] Validation of custom repository object graphs, tree order, and reachability.
-- [ ] Native file-backed object provider using `rustix`, with optional prepacked data.
+- [x] Validation of custom repository object graphs, tree order, and reachability.
+- [x] Native file-backed object provider using `rustix`, with optional prepacked data.
 
 Acceptance: Git `fsck --strict` accepts nested and generated snapshots; deterministic
 inputs yield identical IDs on native and Wasm without enabling an allocator.
@@ -101,7 +101,9 @@ cannot overwrite each other's buffers or change repository identities.
   nested trees, aggressive packing, and deltas in the interoperability matrix.
 - [ ] Incremental fetch after changing a backend snapshot, pack reuse and eviction races.
 - [ ] Fuzz packet lines, HTTP routing, zlib/pack parsers, and object-graph validation.
-- [ ] Allocation tracking, fixed-budget benchmarks, and Wasm memory growth checks.
+- [x] Allocation tracking for native file providers, repository validation, prepacked
+  verification, and pack generation/serving.
+- [ ] Fixed-budget benchmarks and Wasm memory growth checks.
 - [ ] Opt-in local Linux kernel repository benchmark using a caller-provided clone
   and pinned revision; compare supported clone/fetch and object-reading workloads
   with real Git over loopback, recording wall/CPU time, peak RSS, throughput,

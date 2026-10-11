@@ -67,6 +67,30 @@ rejection. Real Git imports a custom builder snapshot and accepts `fsck --strict
 The allocator-free Worker uses the builder with default metadata, so its existing
 clone and object checks also exercise the builder in Wasm.
 
+Repository validation tests cover SHA-1 mismatches, missing/wrong-kind links,
+duplicate IDs, unreachable objects, malformed commit/tree records, canonical
+modes, byte-based ordering, nonconsecutive file/directory name duplicates, binary
+names, refs, exact scratch limits and backend failures. Deep trees and long parent
+histories use iterative traversal with bounded scratch; a 1 MiB generated object
+validates without a full-body buffer. Git's strict pack importer and `fsck --strict`
+accept a validated streamed merge history with shared empty trees and an external
+gitlink. Native nested/generated clone tests serve validated repositories; the
+native demo and allocator-free Worker also validate before serving, preserving IDs
+and pack/HTTP bytes across native and Wasm execution.
+
+Native storage tests persist raw object bodies and compare their IDs and generated
+pack/loose bytes against a 1 MiB generated repository. They exercise interleaved
+and concurrent positional readers, ranges in shared files, sparse offsets above
+4 GiB, invalid ranges, missing/nonregular files, final symlinks, replacement/unlink,
+and truncation. Prepacked tests reject corrupt headers, bodies and trailers,
+truncated/extra bytes and the wrong object closure, and prove reuse reads only the
+verified pack. A thread-local allocation counter checks file opening, validation,
+prepacked verification and pack generation/serving with fixed caller buffers.
+Real Git clones/fetches nested file-backed snapshots through smart and dumb HTTP,
+with and without a prepacked file, and passes `fsck --strict` in all four cases.
+This advances the testing roadmap; benchmarks and Wasm memory-growth tracking
+remain separate work.
+
 ## Selective runs and CI sharding
 
 ```sh

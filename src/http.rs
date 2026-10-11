@@ -50,6 +50,24 @@ pub fn serve_with_scratch(
     scratch: &mut [u8],
     output: &mut impl Write,
 ) -> Result<Response> {
+    serve_with_pack(repository, request, scratch, output, |scratch, output| {
+        pack::write_with_scratch(repository, scratch, output).map(|_| ())
+    })
+}
+
+/// Serve with a host-provided complete-pack writer. It is called once only for
+/// a valid upload-pack request ending in `done`, after writing the NAK packet.
+/// The writer must emit a complete checksummed pack containing exactly this
+/// repository's objects, and respect the repository's stability contract.
+/// Other routes and no-done requests use the ordinary core behavior. On any
+/// error discard the entire partial response, including the NAK.
+pub fn serve_with_pack<W: Write>(
+    repository: &impl Repository,
+    request: Request<'_>,
+    scratch: &mut [u8],
+    output: &mut W,
+    write_pack: impl FnOnce(&mut [u8], &mut W) -> Result<()>,
+) -> Result<Response> {
     let path = request.path.trim_start_matches('/');
     let mut response = Response {
         status: 200,
@@ -101,7 +119,7 @@ pub fn serve_with_scratch(
             response.content_type = "application/x-git-upload-pack-result";
             if upload_request(repository.head(), request.body)? {
                 pktline::write(output, b"NAK\n")?;
-                pack::write_with_scratch(repository, scratch, output)?;
+                write_pack(scratch, output)?;
             } else {
                 pktline::write(output, b"NAK\n")?;
             }

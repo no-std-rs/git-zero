@@ -35,10 +35,14 @@ for checks and repository connection requirements.
   enumeration and binary-search lookup without repeated scans or hashing.
 - Bounded readers and resumable hashing for large/generated objects, with
   caller-sized scratch for pack and loose-object responses.
+- Opt-in validation and indexing of custom repositories, checking object IDs,
+  tree order and links, commit parents, and exact reachability from HEAD.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
   and checksum-validates smart packs, and fetches dumb loose objects.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
 - A loopback IPv4 server/client adapter and a Cloudflare Workers Wasm demo.
+- Native file-backed raw objects and verified prepacked responses, with positional
+  reads and caller-owned scratch, using `rustix` without `std` or `alloc`.
 - Parallel interoperability tests mixing real Git and git-zero clients/servers.
 
 The client returns wire objects: raw packs for smart HTTP and zlib objects for
@@ -51,7 +55,7 @@ SHA-256 repositories, and the standalone `git://` transport remain future work.
 | Location | Responsibility |
 | --- | --- |
 | `src/` | Safe, allocation-free objects, snapshots, pack/cache, HTTP client/server |
-| `crates/git-zero-rustix/` | `no_std` socket adapters; small `std` process wrapper |
+| `crates/git-zero-rustix/` | `no_std` file/socket adapters; small `std` process wrapper |
 | `examples/cloudflare-worker/wasm/` | `no_std` raw Wasm ABI with fixed buffers |
 | `examples/cloudflare-worker/src/` | JavaScript host for Cloudflare metadata and HTTP |
 | `tests/` | Core checks, real Git pack validation, parallel HTTP matrix |
@@ -83,6 +87,62 @@ It serves a fixed `README.md` snapshot and handles connections serially. The
 native client accepts `http://IPv4:port/path` URLs. Its current transport uses
 HTTP/1.0 with connection close, bounded buffers, and socket timeouts; DNS, TLS,
 redirects, and chunked responses need a richer transport.
+
+The native library also provides `FileObject` and `FileRepository`. Supply an
+ordered manifest of IDs/kinds and immutable files containing **raw uncompressed
+object bodies**; this does not open an ordinary Git object directory or decode
+loose zlib files/compressed pack entries. `FileObject::open_at` takes a borrowed
+`CStr` path and a directory descriptor without allocating. It opens a regular
+file with close-on-exec and rejects a symlink in the final path component; parent
+directories and absolute paths retain ordinary `openat` behavior. `from_fd`
+accepts an owned descriptor, and `from_range` accepts a raw body range within a
+larger file. Ranges and reads use 64-bit offsets up to native `i64::MAX`.
+
+```rust
+use git_zero::{ObjectKind, Repository, ValidatedRepository};
+use git_zero_rustix::{FileObject, FileRepository};
+
+// dir, commit_id, tree_id and blob_id come from the host's object manifest.
+let objects = [
+    FileObject::open_at(&dir, c"commit", ObjectKind::Commit, commit_id)?,
+    FileObject::open_at(&dir, c"tree", ObjectKind::Tree, tree_id)?,
+    FileObject::open_at(&dir, c"blob", ObjectKind::Blob, blob_id)?,
+];
+let repository = FileRepository::new(commit_id, &objects);
+let mut metadata = [None; 3];
+let mut by_id = [0; 3];
+let repository = ValidatedRepository::new(
+    &repository, &mut metadata, &mut by_id, &mut [0; 1024], &mut [0; 512],
+)?;
+```
+
+The caller owns the object array, and each object owns its descriptor. Enumeration
+uses manifest order, and bodies are read with `pread`, so independent cursors and
+threads do not alter a shared descriptor's file position. Replacement, rename or
+unlink cannot redirect an open object to another inode. Hosts must prevent
+in-place writes for the lifetime of the repository URL; an open descriptor alone
+does not make an immutable snapshot. Invalid ranges/nonregular files return
+`InvalidObject`, absent paths/indices return `ObjectNotFound`, and syscall failures
+return `Backend`. Unexpected EOF after truncation returns `InvalidObject`.
+
+`FileRepository::with_refs` configures sorted commit aliases. Construction trusts
+the manifest's IDs and graph; `ValidatedRepository` checks them with bounded
+scratch. To reuse a pack, call `with_prepacked(pack_fd, object_scratch,
+compare_scratch)` on the file repository. It compares the complete file against
+the core encoder's exact output, checking object closure/order, framing and
+checksum without a pack-sized buffer. Corrupt, truncated, extra, or mismatched
+pack bytes return `CorruptPack`; empty scratch returns `BufferTooSmall`.
+The verified pack file must also remain immutable. This supports packs generated
+by this encoder; importing arbitrary compressed/delta packs remains roadmap work.
+
+`write_pack_with_scratch` reads the verified pack when attached and otherwise
+encodes the raw object files. `FileRepository::serve_with_scratch` reuses that
+pack for valid smart upload requests; dumb loose-object routes encode raw bodies.
+To route through a validated index, pass its repository to
+`http::serve_with_pack` and supply a closure calling the file repository's pack
+writer. The closure runs once only when a valid upload request ends in `done`,
+after the NAK packet. Other requests keep the existing routing and validation.
+Scratch and output limits remain explicit; discard partial output on any error.
 
 ## Embed the core
 
@@ -204,7 +264,49 @@ metadata directly; `find` uses binary search. `metadata` exposes the cached ID,
 kind, and borrowed body. Indexing pays the source's scan cost once; it does not
 accelerate snapshot construction or validate custom object graphs. Insufficient
 capacity returns `BufferTooSmall`; missing source objects return `ObjectNotFound`.
-The native demo builds its index once before accepting requests.
+The native demo validates and indexes its repository once before accepting requests.
+
+Use `ValidatedRepository` to check custom providers and cache their IDs and
+64-bit metadata, including providers that only support streamed bodies:
+
+```rust
+use git_zero::ValidatedRepository;
+
+let mut objects = [None; 16];
+let mut by_id = [0; 16];
+let mut read = [0; 1024];
+let mut parse = [0; 512];
+let repository = ValidatedRepository::new(
+    &repository, &mut objects, &mut by_id, &mut read, &mut parse,
+)?;
+```
+
+Both arrays need one slot per enumerated object. Read scratch needs at least
+one byte; parse scratch must fit each commit header line without its LF and
+twice each tree name without its NUL. Object bodies can exceed both buffers.
+The scratch buffers are reusable after construction; only the arrays and provider
+remain borrowed. `metadata` exposes each validated ID, kind and 64-bit size;
+ID lookup uses binary search. The wrapper preserves enumeration, refs and wire
+bytes, and delegates body reads to the provider, which must remain stable.
+
+Validation hashes every body and rejects mismatched IDs, duplicate object IDs,
+missing links, incorrect target kinds, malformed commit headers/tree records,
+noncanonical tree modes, invalid names, unsorted/duplicate tree names, and extra
+objects unreachable from HEAD. It follows parent commits and shared subtrees
+without recursion. Gitlinks (`160000`) name external commits and are not followed.
+All advertised refs still alias the same commit, so annotated tag objects are
+unreachable and rejected. This checks the repository graph contract; identity
+semantics, platform-specific filename aliases and special-file policies such as
+`.gitmodules` need separate validation to match every Git `fsck` check.
+
+Insufficient arrays or scratch return `BufferTooSmall`; missing objects/links
+return `ObjectNotFound`; invalid refs/names/order use `InvalidReference`,
+`InvalidFileName` and `UnsortedFiles`. Other invalid graph data returns
+`InvalidObject`, and backend errors propagate. Discard partial arrays on failure.
+Hashing is linear in body bytes. Pending-object scans and directory/file duplicate
+checks can take quadratic work; the latter reread earlier tree entries to avoid
+an unbounded name set. Validation does not use the provider's `find_index`, so a
+bad lookup implementation cannot hide missing or mismatched graph links.
 
 For bodies that cannot fit in a borrowed slice, implement `Repository::object_info`,
 `read_object`, and `object_id`. `object_info` reports the kind and exact 64-bit body
@@ -236,7 +338,7 @@ owns scratch or allocates. A read/hash step performs at most one provider read;
 EOF needs no buffer, and nonempty bodies need at least one scratch byte. Early EOF
 and overreported read counts return `InvalidObject`; backend errors propagate.
 Read errors leave the cursor/hash unchanged for retry. Providers must report exact
-lengths and stable contents; this interface does not validate object graphs.
+lengths and stable contents; use `ValidatedRepository` for object-graph checks.
 `pack::write_loose_with_scratch` and `http::serve_with_scratch` also accept an
 explicit read budget. Pack/loose bytes are independent of scratch size and short
 reads. The convenience `pack::write` and `http::serve` reserve 1 KiB of stack

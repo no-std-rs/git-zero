@@ -1,7 +1,10 @@
-//! Blocking, allocation-free IPv4 HTTP/1.0 adapters for local development.
+//! Allocation-free file storage and blocking IPv4 HTTP/1.0 adapters.
 //! The sample process wrapper uses std for arguments and logging.
 #![no_std]
 #![forbid(unsafe_code)]
+
+pub mod storage;
+pub use storage::{FileObject, FileRepository};
 
 use core::{
     fmt::Write as _,

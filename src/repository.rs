@@ -210,3 +210,38 @@ pub fn validate_ref_name(name: &str) -> crate::Result<()> {
     }
     Ok(())
 }
+
+/// Validate a repository's advertised commit aliases and default branch name.
+/// Names must be valid, sorted, unique, free of path conflicts, and include HEAD's
+/// branch. This checks names only; object identities and graph closure are separate.
+pub fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
+    let head = repository.head_ref();
+    validate_ref_name(head)?;
+    if !head.starts_with("refs/heads/") || head.len() > MAX_HEAD_REF_LENGTH {
+        return Err(Error::InvalidReference);
+    }
+    let mut found = false;
+    for index in 0..repository.reference_count() {
+        let name = repository
+            .reference_name(index)
+            .ok_or(Error::InvalidReference)?;
+        validate_ref_name(name)?;
+        found |= name == head;
+        for previous in 0..index {
+            let previous = repository
+                .reference_name(previous)
+                .ok_or(Error::InvalidReference)?;
+            if previous >= name
+                || name
+                    .strip_prefix(previous)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+            {
+                return Err(Error::InvalidReference);
+            }
+        }
+    }
+    if !found {
+        return Err(Error::InvalidReference);
+    }
+    Ok(())
+}

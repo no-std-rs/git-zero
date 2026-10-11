@@ -3,7 +3,7 @@ use core::cmp::Ordering;
 use crate::{
     Error, Object, ObjectId, ObjectKind, Repository, Result,
     io::{SliceWriter, Write},
-    repository::validate_ref_name,
+    repository::validate_refs,
 };
 
 /// Maximum number of tree levels, including the root, to bound recursive stack use.
@@ -52,18 +52,26 @@ impl Entry<'_> {
 
     /// Git tree order: compare bytes with a trailing '/' for trees, NUL otherwise.
     pub fn cmp_name(&self, other: &Self) -> Ordering {
-        let terminator = |entry: &Self| {
-            if matches!(entry.kind, EntryKind::Tree(_)) {
-                b'/'
-            } else {
-                0
-            }
-        };
-        self.name
-            .bytes()
-            .chain([terminator(self)])
-            .cmp(other.name.bytes().chain([terminator(other)]))
+        cmp_tree_names(
+            self.name.as_bytes(),
+            matches!(self.kind, EntryKind::Tree(_)),
+            other.name.as_bytes(),
+            matches!(other.kind, EntryKind::Tree(_)),
+        )
     }
+}
+
+pub(crate) fn cmp_tree_names(
+    left: &[u8],
+    left_tree: bool,
+    right: &[u8],
+    right_tree: bool,
+) -> Ordering {
+    let terminator = |tree| if tree { b'/' } else { 0 };
+    left.iter()
+        .copied()
+        .chain([terminator(left_tree)])
+        .cmp(right.iter().copied().chain([terminator(right_tree)]))
 }
 
 /// One commit identity and its recorded time. The offset does not adjust seconds.
@@ -169,7 +177,7 @@ impl<'storage, 'data: 'storage> SnapshotBuilder<'storage, 'data> {
     /// Insert in Git tree order. Invalid names, duplicates (UnsortedFiles), and
     /// exhausted slots (BufferTooSmall) leave every occupied slot unchanged.
     pub fn push(&mut self, entry: Entry<'data>) -> Result<()> {
-        validate_name(entry.name)?;
+        validate_name(entry.name.as_bytes())?;
         let occupied = &self.entries[..self.length];
         if occupied.iter().any(|previous| previous.name == entry.name) {
             return Err(Error::UnsortedFiles);
@@ -455,26 +463,9 @@ impl<'a> Snapshot<'a> {
     /// conflicts (e.g. refs/heads/a and refs/heads/a/b). Include head_ref in
     /// the slice. Ref configuration does not change any object ID or cache key.
     pub fn with_refs(mut self, head_ref: &'a str, refs: &'a [&'a str]) -> Result<Self> {
-        validate_ref_name(head_ref)?;
-        if head_ref.len() > crate::repository::MAX_HEAD_REF_LENGTH
-            || !head_ref.starts_with("refs/heads/")
-            || !refs.contains(&head_ref)
-        {
-            return Err(Error::InvalidReference);
-        }
-        for (index, name) in refs.iter().enumerate() {
-            validate_ref_name(name)?;
-            if index > 0 && refs[index - 1] >= *name
-                || refs[..index].iter().any(|previous| {
-                    name.strip_prefix(previous)
-                        .is_some_and(|suffix| suffix.starts_with('/'))
-                })
-            {
-                return Err(Error::InvalidReference);
-            }
-        }
         self.head_ref = head_ref;
         self.refs = refs;
+        validate_refs(&self)?;
         Ok(self)
     }
 }
@@ -494,11 +485,11 @@ fn write_identity(
         .map_err(|_| Error::BufferTooSmall)
 }
 
-fn validate_name(name: &str) -> Result<()> {
+pub(crate) fn validate_name(name: &[u8]) -> Result<()> {
     if name.is_empty()
-        || matches!(name, "." | "..")
-        || name.eq_ignore_ascii_case(".git")
-        || name.bytes().any(|byte| matches!(byte, 0 | b'/' | b'\\'))
+        || matches!(name, b"." | b"..")
+        || name.eq_ignore_ascii_case(b".git")
+        || name.iter().any(|byte| matches!(byte, 0 | b'/' | b'\\'))
     {
         return Err(Error::InvalidFileName);
     }
@@ -512,7 +503,7 @@ fn write_tree(input: Input<'_>, storage: &mut [u8], depth: usize, framed: bool) 
     let mut length = 0_usize;
     let mut previous: Option<Entry<'_>> = None;
     for (index, entry) in input.entries().enumerate() {
-        validate_name(entry.name)?;
+        validate_name(entry.name.as_bytes())?;
         if previous.is_some_and(|previous| previous.cmp_name(&entry) != Ordering::Less)
             || input
                 .entries()

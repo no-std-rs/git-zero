@@ -15,6 +15,7 @@ pub mod pktline;
 pub mod reader;
 pub mod repository;
 pub mod snapshot;
+pub mod validation;
 pub mod zlib;
 
 pub use object::{Object, ObjectId, ObjectInfo, ObjectKind};
@@ -23,6 +24,7 @@ pub use repository::{IndexedRepository, ObjectMetadata, Repository};
 pub use snapshot::{
     CommitIdentity, CommitOptions, Entry, EntryKind, File, Snapshot, SnapshotBuilder,
 };
+pub use validation::{ValidatedRepository, ValidationMetadata};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
