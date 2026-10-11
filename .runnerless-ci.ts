@@ -1,3 +1,4 @@
+import { badges, BadgeSpec } from "runnerless/v1";
 import {
   ArtifactComment, ArtifactSpec, ArtifactStatus, artifacts,
   checks, comments, configuration, event, PageRequest, policies, pulls, repo, Value, workflow,
@@ -73,6 +74,7 @@ function reportRatio(details: Value): void {
 // Runnerless compiles this program to Wasm using its versioned SDK.
 // Pull requests execute the trusted base revision of the program.
 export function configure(): void {
+  badges.define(new BadgeSpec("badge", "medium", "slowest-job"));
   program.configure();
   configuration.workflow("pull-request-policy", ["pull_request"]);
   configuration.workflow("llm-cc-token-ratio", [
