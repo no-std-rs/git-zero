@@ -105,6 +105,9 @@ cannot overwrite each other's buffers or change repository identities.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.
+  An opt-in paired HTTP microbenchmark is available in `tests/benchmark.py`;
+  it compares discovery and identical server workloads, records raw wall/CPU/RSS
+  samples, and keeps large-repository/server-resource measurements explicit future work.
 - [ ] Opt-in local Linux kernel repository benchmark using a caller-provided clone
   and pinned revision; compare supported clone/fetch and object-reading workloads
   with real Git over loopback, recording wall/CPU time, peak RSS, throughput,

@@ -123,6 +123,43 @@ Git and pinned Git 2.53.0, and two independent shards. Cargo accepts the same
 configuration through `GIT_ZERO_TEST_JOBS`, `GIT_ZERO_TEST_GIT` and
 `GIT_ZERO_TEST_ARTIFACTS`.
 
+## Performance comparison
+
+Use an optimized native binary and opt into the Linux benchmark (Python's
+standard library plus GNU `time`). Correctness checks run outside timing.
+
+```sh
+cargo build -p git-zero-rustix --bin git-zero --release --locked
+python3 tests/benchmark.py --samples 31 --warmup 3 --output /tmp/git-zero-performance.json
+python3 tests/benchmark.py --jobs 8 --samples 5 --output /tmp/git-zero-contention.json
+```
+
+Eight independently runnable workloads compare both HTTP protocols. Client
+discovery holds Git's reference server fixed and compares Git/git-zero ref
+output. Server discovery, fresh clones and unchanged-remote fetches hold the
+real Git client fixed and compare Git's HTTP/CGI deployment with the native
+git-zero server. Both serve the same independently Git-created snapshot and
+must produce identical refs, object graphs and checkout bytes/modes.
+
+Each workload owns its fixture, ports, processes and measurement files.
+`--case`, `--git`, `--binary`, `--samples`, `--warmup` and `--jobs` permit separate
+runners and explicit resource budgets. Timing defaults to one workload worker
+to avoid contention. Pair order alternates every round; warmups are discarded.
+The JSON report retains every wall/CPU/RSS sample, median/p95 summaries, the
+zero/Git latency ratio, tool/binary identity, source revision and host metadata.
+RSS excludes inherited Python launcher memory; CPU includes the small GNU time
+observer. Both resource metrics cover the client command tree, including waited
+descendants, and exclude persistent HTTP server processes.
+
+This initial microbenchmark uses one root commit, three objects and one 56-byte
+file. It measures fresh commands against warm persistent servers/OS caches;
+it does not claim cold-cache performance. Git's Python HTTP/CGI shim contributes
+to server latency. Results describe those deployments and startup/HTTP overhead,
+not general Git encoder speed or large-repository throughput. Git-zero returns
+raw fetch data; comparing its fetch directly with Git's complete materialization
+would measure different work. The caller-provided Linux kernel benchmark,
+large-object scaling and standalone server CPU/RSS remain roadmap work.
+
 ## Wasm and allocator-free targets
 
 ```sh
