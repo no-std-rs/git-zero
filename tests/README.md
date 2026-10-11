@@ -60,6 +60,13 @@ also use that blob with 17-byte core read scratch and validate its checkout. The
 current native HTTP host still needs a complete response buffer, independently
 of the core object-read budget; streaming host I/O remains roadmap work.
 
+Builder tests check arrival-order independence, unchanged historical objects,
+slot capacity and failed-insertion atomicity, nested validation, exact commit
+messages, distinct author/committer metadata, 64-bit times, and header injection
+rejection. Real Git imports a custom builder snapshot and accepts `fsck --strict`.
+The allocator-free Worker uses the builder with default metadata, so its existing
+clone and object checks also exercise the builder in Wasm.
+
 ## Selective runs and CI sharding
 
 ```sh

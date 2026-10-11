@@ -22,6 +22,8 @@ for checks and repository connection requirements.
 - Borrowed entries become nested trees, regular/executable files, symlinks,
   and one deterministic commit with **no parents**. Empty trees are supported.
   `HEAD` defaults to `refs/heads/main`; callers can configure branch/tag aliases.
+- Incremental root-entry construction in caller-owned slots, with configurable
+  author/committer identities, Unix times, timezones, and exact commit messages.
 - Read-only smart HTTP discovery and `git-upload-pack`, using protocol v0.
   Git clients requesting v2 can fall back to the v0 advertisement.
 - Ordinary Git HTTP, usually called **dumb HTTP**: `HEAD`, `info/refs`, branch
@@ -128,6 +130,45 @@ holds all raw tree bodies plus four bytes per tree, including empty/duplicate
 trees. Tree depth is limited to 64 levels including the root; excess depth returns
 `Unsupported`. All refs alias the snapshot's single commit; ref names must be
 valid, unique, byte-sorted, include the default branch, and have no path conflicts.
+
+`SnapshotBuilder` accepts root entries incrementally in any arrival order and
+inserts them in Git order. Initialize caller-owned slots with `Entry::EMPTY`;
+only occupied slots enter the snapshot. Borrowed child trees are preassembled
+and validated at finish. It does not create directories from path strings.
+
+```rust
+use git_zero::{CommitIdentity, CommitOptions, Entry, EntryKind, SnapshotBuilder};
+
+let mut entries = [Entry::EMPTY; 8];
+let mut trees = [0; 1024];
+let mut commit = [0; 512];
+let mut builder = SnapshotBuilder::new(&mut entries, &mut trees, &mut commit);
+builder.push(Entry { name: "z.txt", kind: EntryKind::File(b"last") })?;
+builder.push(Entry { name: "a.txt", kind: EntryKind::File(b"first") })?;
+let identity = CommitIdentity {
+    name: "Snapshot Author", email: "author@example.invalid",
+    timestamp: 1_700_000_000, timezone: "+0000",
+};
+let repository = builder.finish_with_commit(CommitOptions {
+    author: identity, committer: identity, message: "Generated snapshot\n",
+})?;
+```
+
+Failed insertions preserve occupied slots: duplicates return `UnsortedFiles`,
+invalid components return `InvalidFileName`, and full capacity returns
+`BufferTooSmall`. Finishing consumes the builder; discard partial tree/commit
+bytes on error. Slot storage and object contents remain borrowed by the snapshot,
+but commit metadata is serialized and need only live until finish. Insertion is
+linear in the occupied root entries and uses no extra scratch or allocator.
+
+`finish()` retains the historical commit bytes and IDs. For preassembled inputs,
+`Snapshot::new_with_commit` and `Snapshot::from_entries_with_commit` accept the
+same options while retaining each constructor's tree-storage layout. Names and
+emails must be nonempty and contain no control bytes or angle brackets. Messages
+are preserved exactly, with no added newline, and may not contain NUL. Unix times
+are unsigned seconds up to `i64::MAX`; timezone offsets have a sign, hours 00–23,
+and minutes 00–59 and do not adjust those seconds. Malformed metadata returns
+`InvalidObject`. Very large timestamps need not be displayable by every host Git.
 Names must fit smart discovery packets: at most 65,474 bytes per ref and 65,457
 bytes for the default branch (which also appears in the HEAD symref capability).
 Changing refs leaves object IDs and pack-cache keys stable.
