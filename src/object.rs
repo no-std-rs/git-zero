@@ -73,13 +73,35 @@ pub struct Object<'a> {
     pub data: &'a [u8],
 }
 
-impl Object<'_> {
+/// Object metadata independent of how its body is stored. Lengths are 64-bit
+/// so generated objects need not fit in one slice, including on 32-bit hosts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObjectInfo {
+    pub kind: ObjectKind,
+    pub size: u64,
+}
+
+impl ObjectInfo {
+    /// Write the loose-object/hash header. A 32-byte buffer fits every header.
     pub fn header<'a>(&self, storage: &'a mut [u8]) -> Result<&'a [u8]> {
         use core::fmt::Write;
         let mut header = SliceWriter::new(storage);
-        write!(&mut header, "{} {}\0", self.kind.name(), self.data.len())
+        write!(&mut header, "{} {}\0", self.kind.name(), self.size)
             .map_err(|_| Error::BufferTooSmall)?;
         Ok(header.finish())
+    }
+}
+
+impl Object<'_> {
+    pub fn info(&self) -> ObjectInfo {
+        ObjectInfo {
+            kind: self.kind,
+            size: self.data.len() as u64,
+        }
+    }
+
+    pub fn header<'a>(&self, storage: &'a mut [u8]) -> Result<&'a [u8]> {
+        self.info().header(storage)
     }
 
     pub fn id(&self) -> ObjectId {

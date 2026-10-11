@@ -24,7 +24,7 @@ and host adapters for native `rustix`, Wasm, and Cloudflare Workers.
 
 - [x] Nested trees, executable files, symlinks, empty trees, and configurable refs.
 - [x] Caller-owned object metadata/index arrays to avoid repeated scans and hashing.
-- [ ] Bounded readers for large or generated objects; explicitly size scratch and
+- [x] Bounded readers for large or generated objects; explicitly size scratch and
   resumable state, and avoid requiring a whole object in one borrowed slice.
 - [ ] Incremental snapshot builder with configurable commit identity/message/time.
 - [ ] Validation of custom repository object graphs, tree order, and reachability.
@@ -102,6 +102,10 @@ cannot overwrite each other's buffers or change repository identities.
 - [ ] Incremental fetch after changing a backend snapshot, pack reuse and eviction races.
 - [ ] Fuzz packet lines, HTTP routing, zlib/pack parsers, and object-graph validation.
 - [ ] Allocation tracking, fixed-budget benchmarks, and Wasm memory growth checks.
+- [ ] Opt-in local Linux kernel repository benchmark using a caller-provided clone
+  and pinned revision; compare supported clone/fetch and object-reading workloads
+  with real Git over loopback, recording wall/CPU time, peak RSS, throughput,
+  and caller-owned buffer budgets for cold/warm runs.
 - [ ] Protocol traces and retained artifacts on failure; CI matrix over Git versions
   and Linux/macOS, with jobs isolated by temporary paths and ephemeral ports.
 

@@ -1,4 +1,4 @@
-use crate::{Error, Object, ObjectId, Result};
+use crate::{Error, Object, ObjectId, ObjectInfo, Result};
 
 /// Maximum ref name size in bytes that fits a smart HTTP advertisement.
 pub const MAX_REF_NAME_LENGTH: usize = crate::pktline::MAX_LENGTH - 4 - 40 - b" \n".len();
@@ -11,16 +11,45 @@ pub const MAX_HEAD_REF_LENGTH: usize = MAX_REF_NAME_LENGTH - b"HEAD\0symref=HEAD
 /// `head` must refer to a commit. Objects must stay stable throughout a request
 /// and across discovery/fetch requests for the same repository URL. Enumeration
 /// must be complete and deterministic; each index below `object_count` must exist.
-/// Implementations may borrow memory or load objects into caller-owned storage.
+/// Implementations may borrow memory or implement `object_info`/`read_object`
+/// for file-backed or generated bodies. Their lengths and IDs must be exact.
 /// All advertised refs are aliases for this single commit. Ref names must be
 /// valid, unique, byte-sorted, and include `head_ref`, a branch under `refs/heads/`.
 /// Names must fit `MAX_REF_NAME_LENGTH`; `head_ref` must fit `MAX_HEAD_REF_LENGTH`.
 pub trait Repository {
     fn head(&self) -> ObjectId;
     fn object_count(&self) -> usize;
-    fn object(&self, index: usize) -> Option<Object<'_>>;
+    /// Optional borrowed-body fast path. Streaming providers can leave this as
+    /// `None` and implement `object_info`, `read_object`, and `object_id` instead.
+    fn object(&self, _index: usize) -> Option<Object<'_>> {
+        None
+    }
 
-    /// Return an object's ID. Implementations with metadata can avoid hashing.
+    fn object_info(&self, index: usize) -> Result<ObjectInfo> {
+        self.object(index)
+            .map(|object| object.info())
+            .ok_or(Error::ObjectNotFound)
+    }
+
+    /// Read at most `storage.len()` body bytes starting at a byte offset.
+    /// Short reads are allowed. Return zero only at EOF or for empty storage.
+    /// Calls must be independent of earlier reads, enabling interleaved readers
+    /// and retries. Errors may modify storage but must not change the object.
+    fn read_object(&self, index: usize, offset: u64, storage: &mut [u8]) -> Result<usize> {
+        let object = self.object(index).ok_or(Error::ObjectNotFound)?;
+        let Some(bytes) = usize::try_from(offset)
+            .ok()
+            .and_then(|offset| object.data.get(offset..))
+        else {
+            return Ok(0);
+        };
+        let length = bytes.len().min(storage.len());
+        storage[..length].copy_from_slice(&bytes[..length]);
+        Ok(length)
+    }
+
+    /// Return an object's ID. Streaming providers must supply precomputed IDs;
+    /// `ObjectHasher` computes them incrementally with caller-owned scratch.
     fn object_id(&self, index: usize) -> Option<ObjectId> {
         self.object(index).map(|object| object.id())
     }
@@ -38,8 +67,12 @@ pub trait Repository {
     }
 
     fn find(&self, id: ObjectId) -> Option<Object<'_>> {
-        (0..self.object_count())
-            .find_map(|index| self.object(index).filter(|object| object.id() == id))
+        self.object(self.find_index(id)?)
+    }
+
+    /// Lookup without requiring a borrowed body. Metadata providers can index it.
+    fn find_index(&self, id: ObjectId) -> Option<usize> {
+        (0..self.object_count()).find(|&index| self.object_id(index) == Some(id))
     }
 }
 
@@ -56,7 +89,8 @@ pub struct ObjectMetadata<'a> {
 /// and sorts an ID index in place. Subsequent object enumeration and ID access
 /// are O(1); lookup by ID is O(log n). Object order, HEAD, and refs are preserved.
 /// The source still owns the bodies and must satisfy [`Repository`]'s stability
-/// contract. This wrapper does not validate object graphs or deduplicate them.
+/// contract. It must expose borrowed bodies through `object`; this wrapper does
+/// not index streaming-only providers, validate object graphs, or deduplicate them.
 pub struct IndexedRepository<'index, 'objects, R: Repository + ?Sized> {
     repository: &'objects R,
     objects: &'index [Option<ObjectMetadata<'objects>>],
@@ -146,14 +180,14 @@ impl<R: Repository + ?Sized> Repository for IndexedRepository<'_, '_, R> {
         self.repository.reference_name(index)
     }
 
-    fn find(&self, id: ObjectId) -> Option<Object<'_>> {
+    fn find_index(&self, id: ObjectId) -> Option<usize> {
         let position = self
             .by_id
             .binary_search_by_key(&id, |&index| {
                 self.objects[index].expect("initialized metadata").id
             })
             .ok()?;
-        self.object(self.by_id[position])
+        Some(self.by_id[position])
     }
 }
 

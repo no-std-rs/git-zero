@@ -50,6 +50,16 @@ incomplete/invalid measurements, checksum validation, and bounded comment output
 They also reproduce a PR file shadowing Python's `json` module and verify that
 the isolated producer ignores it while preserving the measured ratio.
 
+Reader tests cover interleaved cursors, resumable hashing, short reads, backend
+retries, invalid read counts/early EOF, empty scratch, and 64-bit offsets. Generated
+objects match borrowed snapshot IDs and pack/HTTP bytes with read budgets from
+one byte to 64 KiB, across stored-DEFLATE block boundaries. A 1 MiB generated blob
+streams directly to Git's pack importer or loose files using bounded scratch;
+both object stores pass `fsck --strict`. Native smart/dumb clone and fetch tests
+also use that blob with 17-byte core read scratch and validate its checkout. The
+current native HTTP host still needs a complete response buffer, independently
+of the core object-read budget; streaming host I/O remains roadmap work.
+
 ## Selective runs and CI sharding
 
 ```sh
