@@ -5,7 +5,7 @@
 mod abi {
     use core::cell::UnsafeCell;
     use git_zero::{
-        Entry, EntryKind, Error, SnapshotBuilder,
+        Entry, EntryKind, Error, SnapshotBuilder, ValidatedRepository,
         http::{self, Request},
         io::SliceWriter,
     };
@@ -109,6 +109,15 @@ mod abi {
             })?;
         }
         let repository = builder.finish()?;
+        let mut objects = [None; 6]; // Commit, root tree, up to four distinct blobs.
+        let mut by_id = [0; 6];
+        let repository = ValidatedRepository::new(
+            &repository,
+            &mut objects,
+            &mut by_id,
+            &mut [0; 128],
+            &mut [0; 128],
+        )?;
         let mut body = SliceWriter::new(&mut output[3..]);
         let response = http::serve(
             &repository,

@@ -4,7 +4,7 @@ mod common;
 mod streamed;
 
 use git_zero::{
-    IndexedRepository, ObjectId, Repository, Snapshot,
+    IndexedRepository, ObjectId, Repository, Snapshot, ValidatedRepository,
     client::{self, Transport},
     http,
     io::SliceWriter,
@@ -73,6 +73,16 @@ fn real_git_clones_nested_modes_empty_trees_and_custom_refs() {
     let mut objects = [None; 6];
     let mut by_id = [0; 6];
     let repo = IndexedRepository::new(&repo, &mut objects, &mut by_id).unwrap();
+    let mut validated_objects = [None; 6];
+    let mut validated_index = [0; 6];
+    let repo = ValidatedRepository::new(
+        &repo,
+        &mut validated_objects,
+        &mut validated_index,
+        &mut [0; 17],
+        &mut [0; 128],
+    )
+    .unwrap();
     let listener = listen(0).unwrap();
     let port = local_port(&listener).unwrap();
     let url = format!("http://127.0.0.1:{port}/repo.git");
@@ -239,6 +249,11 @@ fn real_git_clones_nested_modes_empty_trees_and_custom_refs() {
 fn real_git_clones_generated_objects_with_bounded_read_scratch() {
     const SIZE: usize = 1_048_577;
     let repo = streamed::GeneratedRepository::new(SIZE as u64, 113);
+    let mut objects = [None; 3];
+    let mut by_id = [0; 3];
+    let repo =
+        ValidatedRepository::new(&repo, &mut objects, &mut by_id, &mut [0; 17], &mut [0; 128])
+            .unwrap();
     let listener = listen(0).unwrap();
     let port = local_port(&listener).unwrap();
     let url = format!("http://127.0.0.1:{port}/repo.git");
