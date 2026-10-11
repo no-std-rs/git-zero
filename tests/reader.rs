@@ -251,7 +251,6 @@ fn reader_uses_64_bit_sizes_and_offsets_without_object_sized_storage() {
 struct Bounded<'a> {
     repository: &'a GeneratedRepository,
     limit: usize,
-    largest_read: Cell<usize>,
 }
 
 impl Repository for Bounded<'_> {
@@ -273,8 +272,6 @@ impl Repository for Bounded<'_> {
 
     fn read_object(&self, index: usize, offset: u64, storage: &mut [u8]) -> Result<usize> {
         assert!(storage.len() <= self.limit);
-        self.largest_read
-            .set(self.largest_read.get().max(storage.len()));
         self.repository.read_object(index, offset, storage)
     }
 }
@@ -297,14 +294,19 @@ fn generated_pack_and_http_bytes_match_borrowed_snapshots_for_every_budget() {
         let mut actual = expected.clone();
         let mut expected_pack = SliceWriter::new(&mut expected);
         let checksum = pack::write(&borrowed, &mut expected_pack).unwrap();
+        let mut default_bytes = vec![0; size as usize + 2048];
+        let mut default_output = SliceWriter::new(&mut default_bytes);
+        assert_eq!(
+            pack::write(&generated, &mut default_output).unwrap(),
+            checksum
+        );
+        assert_eq!(default_output.as_bytes(), expected_pack.as_bytes());
         for capacity in [1, 7, 1024, 65536] {
             let bounded = Bounded {
                 repository: &generated,
                 limit: capacity,
-                largest_read: Cell::new(0),
             };
-            let mut scratch = vec![0; capacity + 1];
-            scratch[capacity] = 0xab;
+            let mut scratch = vec![0; capacity];
             let mut output = SliceWriter::new(&mut actual);
             assert_eq!(
                 pack::write_with_scratch(&bounded, &mut scratch[..capacity], &mut output).unwrap(),
@@ -312,62 +314,68 @@ fn generated_pack_and_http_bytes_match_borrowed_snapshots_for_every_budget() {
             );
             assert_eq!(output.as_bytes(), expected_pack.as_bytes());
             pack::validate(output.as_bytes()).unwrap();
-            let mut default_bytes = vec![0; size as usize + 2048];
-            let mut default_output = SliceWriter::new(&mut default_bytes);
-            assert_eq!(
-                pack::write(&generated, &mut default_output).unwrap(),
-                checksum
-            );
-            assert_eq!(default_output.as_bytes(), expected_pack.as_bytes());
+        }
 
-            let upload = format!("0032want {}\n00000009done\n", borrowed.head());
-            let mut requests = vec![
-                ("GET", "HEAD".to_string(), None, &[][..]),
-                ("GET", "info/refs".to_string(), None, &[][..]),
-                (
-                    "GET",
-                    "info/refs".to_string(),
-                    Some("service=git-upload-pack"),
-                    &[][..],
-                ),
-                (
-                    "POST",
-                    "git-upload-pack".to_string(),
-                    None,
-                    upload.as_bytes(),
-                ),
-                (
-                    "GET",
-                    "objects/00/00000000000000000000000000000000000000".to_string(),
-                    None,
-                    &[][..],
-                ),
-            ];
-            for index in 0..borrowed.object_count() {
-                let id = borrowed.object_id(index).unwrap();
-                assert_eq!(generated.object_id(index), Some(id));
-                assert_eq!(generated.find_index(id), Some(index));
-                assert!(generated.find(id).is_none());
-                let id = id.to_string();
-                requests.push((
-                    "GET",
-                    format!("objects/{}/{}", &id[..2], &id[2..]),
-                    None,
-                    &[][..],
-                ));
-            }
-            for (method, path, query, body) in requests {
-                let request = Request {
-                    method,
-                    path: &path,
-                    query,
-                    body,
+        let upload = format!("0032want {}\n00000009done\n", borrowed.head());
+        let mut requests = vec![
+            ("GET", "HEAD".to_string(), None, &[][..]),
+            ("GET", "info/refs".to_string(), None, &[][..]),
+            (
+                "GET",
+                "info/refs".to_string(),
+                Some("service=git-upload-pack"),
+                &[][..],
+            ),
+            (
+                "POST",
+                "git-upload-pack".to_string(),
+                None,
+                upload.as_bytes(),
+            ),
+            (
+                "GET",
+                "objects/00/00000000000000000000000000000000000000".to_string(),
+                None,
+                &[][..],
+            ),
+        ];
+        for index in 0..borrowed.object_count() {
+            let id = borrowed.object_id(index).unwrap();
+            assert_eq!(generated.object_id(index), Some(id));
+            assert_eq!(generated.find_index(id), Some(index));
+            assert!(generated.find(id).is_none());
+            let id = id.to_string();
+            requests.push((
+                "GET",
+                format!("objects/{}/{}", &id[..2], &id[2..]),
+                None,
+                &[][..],
+            ));
+        }
+        for (method, path, query, body) in requests {
+            let request = Request {
+                method,
+                path: &path,
+                query,
+                body,
+            };
+            let mut expected_bytes = vec![0; size as usize + 2048];
+            let mut expected_output = SliceWriter::new(&mut expected_bytes);
+            let expected_response = http::serve(&borrowed, request, &mut expected_output).unwrap();
+            let mut default_output = SliceWriter::new(&mut default_bytes);
+            http::serve(&generated, request, &mut default_output).unwrap();
+            assert_eq!(
+                default_output.as_bytes(),
+                expected_output.as_bytes(),
+                "{path}"
+            );
+            for capacity in [1, 7, 1024, 65536] {
+                let bounded = Bounded {
+                    repository: &generated,
+                    limit: capacity,
                 };
-                let mut expected_bytes = vec![0; size as usize + 2048];
-                let mut expected_output = SliceWriter::new(&mut expected_bytes);
+                let mut scratch = vec![0; capacity];
                 let mut output = SliceWriter::new(&mut actual);
-                let expected_response =
-                    http::serve(&borrowed, request, &mut expected_output).unwrap();
                 let response = http::serve_with_scratch(
                     &bounded,
                     request,
@@ -381,12 +389,7 @@ fn generated_pack_and_http_bytes_match_borrowed_snapshots_for_every_budget() {
                     "{path}"
                 );
                 assert_eq!(output.as_bytes(), expected_output.as_bytes(), "{path}");
-                let mut default_output = SliceWriter::new(&mut default_bytes);
-                http::serve(&generated, request, &mut default_output).unwrap();
-                assert_eq!(default_output.as_bytes(), output.as_bytes(), "{path}");
             }
-            assert!(bounded.largest_read.get() <= capacity);
-            assert_eq!(scratch[capacity], 0xab);
         }
     }
 }
