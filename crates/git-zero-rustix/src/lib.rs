@@ -188,12 +188,17 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
 }
 
 pub fn respond(socket: &impl AsFd, response: Response, body: &[u8]) -> Result<()> {
+    respond_headers(socket, response, body.len() as u64)?;
+    SocketWriter(socket.as_fd()).write_all(body)
+}
+
+/// Write framing for a body streamed separately by the host. The host must
+/// then write exactly `body_length` bytes and close the connection on failure.
+pub fn respond_headers(socket: &impl AsFd, response: Response, body_length: u64) -> Result<()> {
     let mut storage = [0; 512];
     let mut header = SliceWriter::new(&mut storage);
-    write!(&mut header, "HTTP/1.0 {} Response\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", response.status, response.content_type, body.len()).map_err(|_| Error::BufferTooSmall)?;
-    let mut output = SocketWriter(socket.as_fd());
-    output.write_all(header.as_bytes())?;
-    output.write_all(body)
+    write!(&mut header, "HTTP/1.0 {} Response\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", response.status, response.content_type, body_length).map_err(|_| Error::BufferTooSmall)?;
+    SocketWriter(socket.as_fd()).write_all(header.as_bytes())
 }
 
 /// Numeric IPv4 addresses only. TLS, redirects, and chunked transfer decoding

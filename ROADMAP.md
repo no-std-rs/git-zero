@@ -108,8 +108,9 @@ cannot overwrite each other's buffers or change repository identities.
   `tests/benchmark.py` uses a configurable synthetic Git repository and identical
   file-provider export through a shared Rust HTTP host. Paired discovery/clone/fetch
   measurements retain client and server wall/CPU/RSS, child usage, response bytes,
-  startup costs and buffer budgets. Wasm and simultaneous process-tree memory remain
-  explicit future work.
+  startup costs and buffer budgets. Encoded files share a sendfile path with bounded
+  fallbacks; optional Rust loose caching charges preparation to startup. Wasm and
+  simultaneous process-tree memory remain explicit future work.
 - [ ] Opt-in local Linux kernel repository benchmark using a caller-provided clone
   and pinned revision; compare supported clone/fetch and object-reading workloads
   with real Git over loopback, recording wall/CPU time, peak RSS, throughput,

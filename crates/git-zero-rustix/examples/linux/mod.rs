@@ -1,18 +1,21 @@
 use git_zero::{
-    Error, ObjectId, ObjectInfo, ObjectKind, ValidatedRepository,
+    Error, ObjectId, ObjectInfo, ObjectKind, Repository, ValidatedRepository,
     http::{self, Request, Response},
     io::Write as CoreWrite,
+    pack,
 };
 use git_zero_rustix::{
-    FileObject, FileRepository, accept, listen, local_port, read_request, respond,
+    FileObject, FileRepository, accept, listen, local_port, read_request, respond, respond_headers,
 };
 use std::{
     fs::OpenOptions,
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::Instant,
 };
+
+mod file_transfer;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -162,14 +165,27 @@ fn cgi_headers(bytes: &[u8]) -> Result<(Response, usize)> {
     Ok((response, end + 4))
 }
 
-fn git_static_response(root: &Path, request: Request<'_>, body: &mut Body) -> Result<Response> {
+fn open_file(path: &Path) -> rustix::io::Result<rustix::fd::OwnedFd> {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| rustix::io::Errno::INVAL)?;
+    rustix::fs::open(
+        path.as_c_str(),
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+}
+
+fn git_static_response(
+    root: &Path,
+    request: Request<'_>,
+) -> Result<(Response, Option<rustix::fd::OwnedFd>)> {
     let mut response = Response {
         status: 200,
         content_type: "text/plain; charset=utf-8",
     };
     if request.method != "GET" {
         response.status = 405;
-        return Ok(response);
+        return Ok((response, None));
     }
     let path = request.path;
     let known = matches!(
@@ -187,27 +203,72 @@ fn git_static_response(root: &Path, request: Request<'_>, body: &mut Body) -> Re
     });
     if !known && !object {
         response.status = 404;
-        return Ok(response);
+        return Ok((response, None));
     }
     // Dumb HTTP has no Git server process: serve Git's existing loose files
     // using this host, rather than charging Git a CGI launch for every object.
-    let file = match std::fs::File::open(root.join("repo.git").join(path)) {
+    let file = match open_file(&root.join("repo.git").join(path)) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(rustix::io::Errno::NOENT) => {
             response.status = 404;
-            return Ok(response);
+            return Ok((response, None));
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(format!("{error:?}").into()),
     };
-    file.take(body.limit.checked_add(1).ok_or("response limit overflow")? as u64)
-        .read_to_end(&mut body.bytes)?;
-    if body.bytes.len() > body.limit {
-        return Err("static response exceeds response budget".into());
-    }
     if object {
         response.content_type = "application/x-git-loose-object";
     }
-    Ok(response)
+    Ok((response, Some(file)))
+}
+
+fn cache_loose(
+    root: &Path,
+    repository: &impl Repository,
+    scratch: &mut [u8],
+    limit: usize,
+) -> Result<PathBuf> {
+    let directory = root.join("zero-loose");
+    std::fs::create_dir(&directory)?;
+    let mut body = Body {
+        bytes: Vec::new(),
+        limit,
+    };
+    for index in 0..repository.object_count() {
+        body.bytes.clear();
+        pack::write_loose_with_scratch(repository, index, scratch, &mut body)
+            .map_err(|error| format!("{error:?}"))?;
+        let id = repository
+            .object_id(index)
+            .ok_or("missing cached object ID")?;
+        std::fs::write(directory.join(id.to_string()), &body.bytes)?;
+    }
+    Ok(directory)
+}
+
+fn cached_loose_response(
+    directory: &Path,
+    request: Request<'_>,
+    repository: &impl Repository,
+) -> Result<Option<rustix::fd::OwnedFd>> {
+    let Some(path) = request.path.strip_prefix("objects/") else {
+        return Ok(None);
+    };
+    let path = path.as_bytes();
+    if request.method != "GET" || path.len() != 41 || path[2] != b'/' {
+        return Ok(None);
+    }
+    let mut hex = [0; 40];
+    hex[..2].copy_from_slice(&path[..2]);
+    hex[2..].copy_from_slice(&path[3..]);
+    let Ok(id) = ObjectId::from_hex(&hex) else {
+        return Ok(None);
+    };
+    if repository.find_index(id).is_none() {
+        return Ok(None);
+    }
+    Ok(Some(
+        open_file(&directory.join(id.to_string())).map_err(|error| format!("{error:?}"))?,
+    ))
 }
 
 fn objects(root: &Path) -> Result<(ObjectId, Vec<FileObject>)> {
@@ -256,16 +317,25 @@ pub fn run() -> Result<()> {
     let started = Instant::now();
     let initial = Usage::read(libc::RUSAGE_SELF)?;
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 7 {
-        return Err("usage: benchmark-server FIXTURE GIT_HTTP_BACKEND git|zero|both smart|dumb METRICS_JSONL RESPONSE_LIMIT".into());
+    if args.len() != 9 {
+        return Err("usage: benchmark-server FIXTURE GIT_HTTP_BACKEND git|zero|both smart|dumb METRICS_JSONL RESPONSE_LIMIT auto|buffered generated|cached".into());
     }
     let root = Path::new(&args[1]);
     let enabled = args[3].as_str();
-    if !matches!(enabled, "git" | "zero" | "both") || !matches!(args[4].as_str(), "smart" | "dumb")
+    if !matches!(enabled, "git" | "zero" | "both")
+        || !matches!(args[4].as_str(), "smart" | "dumb")
+        || !matches!(args[7].as_str(), "auto" | "buffered")
+        || !matches!(args[8].as_str(), "generated" | "cached")
     {
         return Err("invalid backend or protocol".into());
     }
     let limit: usize = args[6].parse()?;
+    // SAFETY: SIG_IGN is a valid signal disposition. This dedicated host owns
+    // its process policy; sendfile lacks MSG_NOSIGNAL. Broken sockets must
+    // report EPIPE rather than terminate the host during transfer or fallback.
+    if unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) } == libc::SIG_ERR {
+        return Err(std::io::Error::last_os_error().into());
+    }
     // Backend-only processes keep unused Rust repository state out of Git's RSS.
     let (head, object_files) = if enabled == "git" {
         (ObjectId([0; 20]), Vec::new())
@@ -295,6 +365,23 @@ pub fn run() -> Result<()> {
         .open(&args[5])?;
     let mut request_storage = vec![0; 65536];
     let mut scratch = vec![0; 65536];
+    let cache = if args[8] == "cached" && args[4] == "dumb" {
+        repository
+            .as_ref()
+            .map(|repository| {
+                cache_loose(
+                    Path::new(&args[5])
+                        .parent()
+                        .ok_or("missing metrics parent")?,
+                    repository,
+                    &mut scratch,
+                    limit,
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let socket = listen(0).map_err(|e| format!("{e:?}"))?;
     let (rss, peak) = resident_memory()?;
     writeln!(
@@ -354,20 +441,47 @@ pub fn run() -> Result<()> {
             bytes: Vec::new(),
             limit,
         };
+        let mut file = None;
         let response = if backend == "git" && args[4] == "dumb" {
-            git_static_response(root, request, &mut body)?
+            let (response, source) = git_static_response(root, request)?;
+            file = source;
+            response
         } else if backend == "git" {
             git_response(root, &args[2], request, &mut body)?
         } else {
-            http::serve_with_scratch(
-                repository.as_ref().ok_or("missing Rust repository")?,
-                request,
-                &mut scratch,
-                &mut body,
-            )
-            .map_err(|e| format!("{e:?}"))?
+            let repository = repository.as_ref().ok_or("missing Rust repository")?;
+            file = cache
+                .as_ref()
+                .map(|directory| cached_loose_response(directory, request, repository))
+                .transpose()?
+                .flatten();
+            if file.is_some() {
+                Response {
+                    status: 200,
+                    content_type: "application/x-git-loose-object",
+                }
+            } else {
+                http::serve_with_scratch(repository, request, &mut scratch, &mut body)
+                    .map_err(|e| format!("{e:?}"))?
+            }
         };
-        respond(&client, response, &body.bytes).map_err(|e| format!("{e:?}"))?;
+        let (response_bytes, counts) = if let Some(file) = file {
+            let length = rustix::fs::fstat(&file)
+                .map_err(|e| format!("{e:?}"))?
+                .st_size;
+            let length: u64 = length.try_into()?;
+            if length > limit as u64 {
+                return Err("static response exceeds response budget".into());
+            }
+            respond_headers(&client, response, length).map_err(|e| format!("{e:?}"))?;
+            let counts =
+                file_transfer::send(&client, &file, 0, length, &mut scratch, args[7] == "auto")
+                    .map_err(|e| format!("{e:?}"))?;
+            (length, counts)
+        } else {
+            respond(&client, response, &body.bytes).map_err(|e| format!("{e:?}"))?;
+            (body.bytes.len() as u64, file_transfer::Counts::default())
+        };
         let wall = start.elapsed().as_secs_f64();
         let self_after = Usage::read(libc::RUSAGE_SELF)?;
         let children_after = Usage::read(libc::RUSAGE_CHILDREN)?;
@@ -376,9 +490,11 @@ pub fn run() -> Result<()> {
         // writes. Sampling/reporting runs afterwards, outside these intervals.
         writeln!(
             metrics,
-            "{{\"event\":\"request\",\"backend\":\"{backend}\",\"status\":{},\"response_bytes\":{},\"wall_s\":{wall},\"frontend_cpu_s\":{},\"backend_children_cpu_s\":{},\"frontend_rss_kib\":{rss},\"frontend_peak_rss_kib\":{peak},\"backend_child_peak_rss_kib\":{},\"minor_faults\":{},\"major_faults\":{}}}",
+            "{{\"event\":\"request\",\"backend\":\"{backend}\",\"status\":{},\"response_bytes\":{},\"sendfile_bytes\":{},\"buffered_file_bytes\":{},\"wall_s\":{wall},\"frontend_cpu_s\":{},\"backend_children_cpu_s\":{},\"frontend_rss_kib\":{rss},\"frontend_peak_rss_kib\":{peak},\"backend_child_peak_rss_kib\":{},\"minor_faults\":{},\"major_faults\":{}}}",
             response.status,
-            body.bytes.len(),
+            response_bytes,
+            counts.sendfile_bytes,
+            counts.buffered_file_bytes,
             self_after.cpu() - self_before.cpu(),
             children_after.cpu() - children_before.cpu(),
             children_after.0.ru_maxrss,

@@ -10,10 +10,12 @@ import urllib.request
 
 
 class Server:
-    def __init__(self, harness, fixture, backend, implementation, protocol, env, root, response_limit):
+    def __init__(self, harness, fixture, backend, implementation, protocol, env, root, response_limit,
+                 file_transfer="auto", zero_loose_cache=False):
         self.arguments = [harness, str(fixture), backend, implementation, protocol,
-                          str(root / f"{implementation}-metrics.jsonl"), str(response_limit)]
-        self.path = Path(self.arguments[-2])
+                          str(root / f"{implementation}-metrics.jsonl"), str(response_limit),
+                          file_transfer, "cached" if zero_loose_cache else "generated"]
+        self.path = Path(self.arguments[5])
         self.implementation = implementation
         self.env = env
 
@@ -51,10 +53,14 @@ class Server:
         assert all(r["status"] in (200, 404) for r in records)
         assert all(r["wall_s"] > 0 and r["frontend_cpu_s"] >= 0 and r["backend_children_cpu_s"] >= 0
                    and 0 < r["frontend_rss_kib"] <= r["frontend_peak_rss_kib"] for r in records)
+        assert all(0 <= r["sendfile_bytes"] + r["buffered_file_bytes"] <= r["response_bytes"] for r in records)
+        if self.arguments[7] == "buffered":
+            assert all(r["sendfile_bytes"] == 0 for r in records)
         if self.implementation == "zero" or self.arguments[4] == "dumb":
             assert all(r["backend_children_cpu_s"] == 0 and r["backend_child_peak_rss_kib"] == 0 for r in records)
         result = {"served_by": self.implementation, "request_count": len(records), "requests": records}
-        for key in ("wall_s", "frontend_cpu_s", "backend_children_cpu_s", "response_bytes", "minor_faults", "major_faults"):
+        for key in ("wall_s", "frontend_cpu_s", "backend_children_cpu_s", "response_bytes",
+                    "sendfile_bytes", "buffered_file_bytes", "minor_faults", "major_faults"):
             result[key] = sum(r[key] for r in records)
         for key in ("frontend_rss_kib", "frontend_peak_rss_kib", "backend_child_peak_rss_kib"):
             result[key] = max(r[key] for r in records)

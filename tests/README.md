@@ -166,8 +166,24 @@ object graph, strict integrity, HEAD and checkout bytes/modes outside timing.
 Git's loose/pack compression defaults to 0 and deltas are disabled to match
 Rust's stored-DEFLATE encoder as closely as possible. `--git-compression 6`
 measures a different compression tradeoff explicitly. Response body byte counts
-remain visible; Git's compressed loose storage and Rust's raw file representation
+remain visible. Fixture creation rewrites loose objects through Git's
+`hash-object` to apply compression consistently, checks stored-DEFLATE headers
+at level 0, and records their size/fingerprint as well as the raw export's.
+Git's compressed loose storage and Rust's raw file representation
 and encoder are still different implementations. No Python HTTP server is involved.
+
+Encoded file responses use Linux `sendfile` by default (`--file-transfer auto`).
+Short transfers and interrupted calls resume at the current offset. Unsupported
+syscalls/filesystems fall back to bounded positional reads and socket writes;
+`--file-transfer buffered` forces that path. The dedicated host ignores SIGPIPE
+so disconnected clients produce an error, and it rejects truncated file bodies.
+Per-request sendfile/fallback byte counts show the path actually used.
+
+Rust normally generates loose objects on request. Add `--zero-loose-cache` to
+encode them once during each Rust server's startup and serve those immutable
+files using the same sendfile/fallback path as Git. This explicitly compares
+file serving on both sides; cache creation CPU/RSS remain in startup metrics.
+This option only affects dumb HTTP. Smart Rust packs remain generated on request.
 
 Each workload owns its ports, processes, clones and measurement files. Workers
 share only the immutable synthetic fixture. `--case`, `--git`, `--binary`,
@@ -177,6 +193,8 @@ are each 64 KiB. Timing defaults to one workload worker
 to avoid contention. Pair order alternates every round; warmups are discarded.
 The JSON report retains every wall/CPU/RSS sample, median/p95 summaries, the
 zero/Git latency ratio, tool/binary identity, source revision and host metadata.
+CPU affinity and system load averages are recorded, including the load before
+each sample, so shared-host contention stays visible when interpreting latency.
 Client CPU/RSS remain separate: GNU time excludes inherited Python launcher
 memory, while client CPU includes the small time observer. The Rust host records
 per-request wall time, `getrusage(RUSAGE_SELF)` and `RUSAGE_CHILDREN` CPU deltas,
@@ -200,7 +218,7 @@ in a new directory. To use both routes manually after creating that fixture:
 
 ```sh
 target/release/examples/benchmark-server /tmp/git-zero-synthetic \
-  "$(git --exec-path)/git-http-backend" both smart /tmp/git-zero-server-metrics.jsonl 33554432
+  "$(git --exec-path)/git-http-backend" both smart /tmp/git-zero-server-metrics.jsonl 33554432 auto generated
 # Append /git/repo.git or /zero/repo.git to the printed listening URL.
 ```
 

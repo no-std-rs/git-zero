@@ -38,6 +38,7 @@ def measure(arguments, env, time_binary):
         arguments = [env["GIT_ZERO_TEST_GIT"], *arguments[1:]]
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr, tempfile.NamedTemporaryFile() as rss:
         observed = [time_binary, "-f", "%M", "-o", rss.name, "--", *arguments]
+        host_load = os.getloadavg()
         start = time.perf_counter()
         process = subprocess.Popen(observed, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
 
@@ -62,7 +63,7 @@ def measure(arguments, env, time_binary):
         assert process.returncode == 0, f"{arguments!r}: {stderr.read().decode(errors='replace')}"
         rss_kib = int(Path(rss.name).read_text().strip())
     return output, {"wall_s": elapsed, "cpu_s": usage.ru_utime + usage.ru_stime,
-                    "max_rss_kib": rss_kib}
+                    "max_rss_kib": rss_kib, "host_load_1_5_15": host_load}
 
 
 def summary(samples):
@@ -72,7 +73,8 @@ def summary(samples):
             "p95_wall_s": wall[(95 * len(wall) + 99) // 100 - 1],
             "median_cpu_s": statistics.median(sample["cpu_s"] for sample in samples),
             "median_max_rss_kib": statistics.median(sample["max_rss_kib"] for sample in samples)}
-    for key in ("cpu_s", "frontend_cpu_s", "backend_children_cpu_s", "response_bytes", "request_count", "frontend_rss_kib"):
+    for key in ("cpu_s", "frontend_cpu_s", "backend_children_cpu_s", "response_bytes", "request_count",
+                "frontend_rss_kib", "sendfile_bytes", "buffered_file_bytes"):
         result["median_server_" + key] = statistics.median(sample["server"][key] for sample in samples)
     # RSS high-water marks are lifetime observations, never counter deltas.
     for key in ("frontend_peak_rss_kib", "backend_child_peak_rss_kib"):
@@ -80,7 +82,8 @@ def summary(samples):
     return result
 
 
-def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, samples, warmup, time_binary, response_limit):
+def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, samples, warmup,
+              time_binary, response_limit, file_transfer, zero_loose_cache):
     operation, protocol = name.rsplit("-", 1)
     smart = protocol == "smart"
     with tempfile.TemporaryDirectory(prefix=f"git-zero-benchmark-{name}-") as directory:
@@ -92,9 +95,11 @@ def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, 
         expected_refs = {b"HEAD": head.encode(), b"refs/heads/main": head.encode()}
         results = {implementation: [] for implementation in ("git", "zero")}
         with contextlib.ExitStack() as stack:
-            original = stack.enter_context(Server(harness, fixture, backend, "git", protocol, env, root, response_limit))
+            original = stack.enter_context(Server(harness, fixture, backend, "git", protocol, env, root,
+                                                 response_limit, file_transfer, zero_loose_cache))
             zero = (original if operation == "client-discovery" else
-                    stack.enter_context(Server(harness, fixture, backend, "zero", protocol, env, root, response_limit)))
+                    stack.enter_context(Server(harness, fixture, backend, "zero", protocol, env, root,
+                                               response_limit, file_transfer, zero_loose_cache)))
             servers = {"git": original, "zero": zero}
             urls = {implementation: server.url for implementation, server in servers.items()}
             fetch_targets = {}
@@ -153,6 +158,10 @@ def main():
     parser.add_argument("--commits", type=int, default=16)
     parser.add_argument("--git-compression", type=int, choices=range(10), default=0, help="0 matches stored-DEFLATE; 6 shows compression tradeoffs")
     parser.add_argument("--response-limit", type=int, default=32 * 1024 * 1024, help="Per-response body budget in the Rust host")
+    parser.add_argument("--file-transfer", choices=("auto", "buffered"), default="auto",
+                        help="auto tries sendfile for encoded files, with bounded pread/send fallback")
+    parser.add_argument("--zero-loose-cache", action="store_true",
+                        help="Preencode Rust loose objects at server startup to compare file serving on both dumb backends")
     args = parser.parse_args()
     if args.samples < 1 or args.warmup < 0 or args.jobs < 1:
         parser.error("samples/jobs must be positive and warmup nonnegative")
@@ -179,14 +188,17 @@ def main():
         "source_revision": run("git", "rev-parse", "HEAD", cwd=repository_root, env=env).decode().strip(),
         "source_dirty": bool(run("git", "status", "--porcelain", cwd=repository_root, env=env)),
         "platform": platform.platform(), "cpu_count": os.cpu_count(),
+        "cpu_affinity": sorted(os.sched_getaffinity(0)), "host_load_start_1_5_15": os.getloadavg(),
         "rss_observer": run(args.time, "--version", env=env).decode().splitlines()[0],
         "samples_per_implementation": args.samples, "warmup_rounds": args.warmup, "jobs": args.jobs,
+        "file_transfer": args.file_transfer, "zero_loose_cache": args.zero_loose_cache,
         "budgets": {"request_bytes": 65536, "object_read_bytes": 65536, "response_bytes": args.response_limit},
         "measurement_scope": "Fresh client command tree; CPU/RSS exclude server processes. "
                              "CPU includes the small GNU time observer; RSS excludes Python launcher memory. "
                              "Persistent warm servers and OS caches; no cold-cache claim. "
                              "Both backends use the same Rust HTTP parser/response writer and file-backed object graph. "
                              "Git smart HTTP uses CGI/upload-pack; Git dumb HTTP serves loose files directly through Rust. "
+                             "Encoded files use the selected common transfer path; Rust loose caching is explicit and charged to startup. "
                              "Server request CPU includes frontend and reaped Git children via getrusage deltas. "
                              "Server RSS separates frontend /proc VmRSS/VmHWM and largest-child lifetime ru_maxrss; "
                              "these peaks are not simultaneous aggregate memory and must not be added. "
@@ -208,7 +220,8 @@ def main():
         print(f"Fixture: {metadata['objects']} objects, {metadata['raw_object_bytes']} raw bytes, HEAD {metadata['head']}", flush=True)
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
             futures = {executor.submit(benchmark, name, binary, harness, git, backend, fixture, expected, metadata,
-                                       args.samples, args.warmup, args.time, args.response_limit): name for name in cases}
+                                       args.samples, args.warmup, args.time, args.response_limit,
+                                       args.file_transfer, args.zero_loose_cache): name for name in cases}
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
                 report["results"].append(result)
@@ -219,6 +232,7 @@ def main():
                       f"{original['server_frontend_peak_rss_kib']}/{zero['server_frontend_peak_rss_kib']} | "
                       f"{original['server_backend_child_peak_rss_kib']}/{zero['server_backend_child_peak_rss_kib']}", flush=True)
     report["results"].sort(key=lambda result: result["workload"])
+    report["host_load_end_1_5_15"] = os.getloadavg()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Raw measurements: {args.output}", flush=True)
