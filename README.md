@@ -31,6 +31,8 @@ for checks and repository connection requirements.
   not yet compress data or create deltas. Identical blobs and subtrees are deduplicated.
 - Optional caller-owned object metadata and ID indexes for constant-time
   enumeration and binary-search lookup without repeated scans or hashing.
+- Bounded readers and resumable hashing for large/generated objects, with
+  caller-sized scratch for pack and loose-object responses.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
   and checksum-validates smart packs, and fetches dumb loose objects.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
@@ -140,6 +142,7 @@ smart HTTP. See [tests/README.md](tests/README.md) for the interoperability chec
 
 A custom `Repository` implementation must expose a stable, complete reachable
 object set and a commit `HEAD` for its URL. Its refs are aliases of that commit.
+Bodies can be borrowed slices or generated/read from storage by offset.
 
 For repeated requests, wrap a snapshot or custom repository in `IndexedRepository`:
 
@@ -161,6 +164,42 @@ kind, and borrowed body. Indexing pays the source's scan cost once; it does not
 accelerate snapshot construction or validate custom object graphs. Insufficient
 capacity returns `BufferTooSmall`; missing source objects return `ObjectNotFound`.
 The native demo builds its index once before accepting requests.
+
+For bodies that cannot fit in a borrowed slice, implement `Repository::object_info`,
+`read_object`, and `object_id`. `object_info` reports the kind and exact 64-bit body
+size; `read_object` fills only the provided buffer at the requested 64-bit offset.
+Short reads are supported. Reads must be repeatable and independent of previous
+calls so multiple readers can interleave. `object_id` supplies stable IDs, and
+`find_index` can optionally use a provider's own ID index. The borrowed `object`
+and `find` methods may return `None` for streamed bodies; `IndexedRepository`
+requires borrowed bodies.
+
+```rust
+use git_zero::{ObjectHasher, ObjectReader, pack};
+
+let mut scratch = [0; 1024]; // Choose the read budget, independent of object size.
+let mut reader = ObjectReader::new(&repository, 0)?;
+let length = reader.read(&mut scratch)?;
+// Consume scratch[..length]; retain reader to resume, or seek to another offset.
+let mut hasher = ObjectHasher::new(&repository, 0)?;
+let id = loop {
+    if let Some(id) = hasher.step(&mut scratch)? { break id; }
+    // Retain hasher here to yield between reads.
+};
+pack::write_with_scratch(&repository, &mut scratch, &mut output)?;
+```
+
+`ObjectReader` stores its cursor and metadata inline; `ObjectHasher` adds SHA-1
+state. `core::mem::size_of` gives their exact state budgets for a target. Neither
+owns scratch or allocates. A read/hash step performs at most one provider read;
+EOF needs no buffer, and nonempty bodies need at least one scratch byte. Early EOF
+and overreported read counts return `InvalidObject`; backend errors propagate.
+Read errors leave the cursor/hash unchanged for retry. Providers must report exact
+lengths and stable contents; this interface does not validate object graphs.
+`pack::write_loose_with_scratch` and `http::serve_with_scratch` also accept an
+explicit read budget. Pack/loose bytes are independent of scratch size and short
+reads. The convenience `pack::write` and `http::serve` reserve 1 KiB of stack
+scratch for streamed bodies; borrowed bodies still write directly.
 
 Use `pack::write` to stream directly to any `io::Write` implementation. Use
 `cache::write` with a `PackCache` and pack-sized scratch buffer to reuse generated

@@ -4,6 +4,7 @@ use crate::{
     io::Write,
     pack,
     pktline::{self, Packet},
+    reader::DEFAULT_READ_BUFFER_SIZE,
 };
 
 /// Default HEAD body. The server writes `Repository::head_ref` dynamically.
@@ -26,9 +27,27 @@ pub struct Response {
 
 /// Always send `Cache-Control: no-store` for discovery and upload-pack responses.
 /// A failed call invalidates all output; hosts must discard it before replying.
+/// Reserves 1 KiB of read scratch on the stack for streaming-only providers.
 pub fn serve(
     repository: &impl Repository,
     request: Request<'_>,
+    output: &mut impl Write,
+) -> Result<Response> {
+    serve_with_scratch(
+        repository,
+        request,
+        &mut [0; DEFAULT_READ_BUFFER_SIZE],
+        output,
+    )
+}
+
+/// Serve generated/file-backed objects with an explicit read-buffer budget.
+/// Discovery/ref responses and borrowed bodies need no scratch; nonempty
+/// streamed bodies need at least one byte. Errors invalidate all output.
+pub fn serve_with_scratch(
+    repository: &impl Repository,
+    request: Request<'_>,
+    scratch: &mut [u8],
     output: &mut impl Write,
 ) -> Result<Response> {
     let path = request.path.trim_start_matches('/');
@@ -82,7 +101,7 @@ pub fn serve(
             response.content_type = "application/x-git-upload-pack-result";
             if upload_request(repository.head(), request.body)? {
                 pktline::write(output, b"NAK\n")?;
-                pack::write(repository, output)?;
+                pack::write_with_scratch(repository, scratch, output)?;
             } else {
                 pktline::write(output, b"NAK\n")?;
             }
@@ -109,9 +128,9 @@ pub fn serve(
                 hex[..2].copy_from_slice(&object_path[..2]);
                 hex[2..].copy_from_slice(&object_path[3..]);
                 if let Ok(id) = ObjectId::from_hex(&hex) {
-                    if let Some(object) = repository.find(id) {
+                    if let Some(index) = repository.find_index(id) {
                         response.content_type = "application/x-git-loose-object";
-                        pack::write_loose(object, output)?;
+                        pack::write_loose_with_scratch(repository, index, scratch, output)?;
                     } else {
                         response.status = 404;
                     }

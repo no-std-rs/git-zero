@@ -1,5 +1,7 @@
 #[path = "../../../tests/common/mod.rs"]
 mod common;
+#[path = "../../../tests/common/streamed.rs"]
+mod streamed;
 
 use git_zero::{
     IndexedRepository, ObjectId, Repository, Snapshot,
@@ -229,6 +231,74 @@ fn real_git_clones_nested_modes_empty_trees_and_custom_refs() {
                         .contains(&format!("{}\t{name}\n", repo.head()))
                 );
             }
+        }
+    });
+}
+
+#[test]
+fn real_git_clones_generated_objects_with_bounded_read_scratch() {
+    const SIZE: usize = 1_048_577;
+    let repo = streamed::GeneratedRepository::new(SIZE as u64, 113);
+    let listener = listen(0).unwrap();
+    let port = local_port(&listener).unwrap();
+    let url = format!("http://127.0.0.1:{port}/repo.git");
+    let directory =
+        std::env::temp_dir().join(format!("git-zero-generated-{}-{port}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let _cleanup = Cleanup(directory.clone());
+    let stopped = AtomicBool::new(false);
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut request_storage = [0; 4096];
+            // The current native HTTP host buffers responses. Object generation
+            // in the core uses a separate 17-byte read budget for every object.
+            let mut response_storage = vec![0; SIZE + 4096];
+            let mut scratch = [0; 17];
+            loop {
+                let socket = accept(&listener).unwrap();
+                if stopped.load(Ordering::SeqCst) {
+                    break;
+                }
+                let mut request = read_request(&socket, &mut request_storage).unwrap();
+                request.path = request.path.strip_prefix("/repo.git/").unwrap();
+                let mut output = SliceWriter::new(&mut response_storage);
+                let response =
+                    http::serve_with_scratch(&repo, request, &mut scratch, &mut output).unwrap();
+                respond(&socket, response, output.as_bytes()).unwrap();
+            }
+        });
+        let _stop = Stop {
+            stopped: &stopped,
+            port,
+        };
+        for dumb in [false, true] {
+            let clone = directory.join(if dumb { "dumb" } else { "smart" });
+            let clone_path = clone.to_str().unwrap();
+            git(&["clone", "-q", &url, clone_path], dumb);
+            git(&["-C", clone_path, "fsck", "--strict"], dumb);
+            git(&["-C", clone_path, "fetch", "origin"], dumb);
+            assert_eq!(
+                git(&["-C", clone_path, "rev-parse", "HEAD"], dumb).stdout,
+                format!("{}\n", repo.head()).as_bytes()
+            );
+            let path = clone.join("generated.bin");
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), SIZE as u64);
+            let mut file = std::fs::File::open(path).unwrap();
+            let mut storage = [0; 1024];
+            let mut offset = 0_u64;
+            loop {
+                use std::io::Read;
+                let length = file.read(&mut storage).unwrap();
+                if length == 0 {
+                    break;
+                }
+                for (index, &byte) in storage[..length].iter().enumerate() {
+                    assert_eq!(byte, streamed::byte_at(offset + index as u64));
+                }
+                offset += length as u64;
+            }
+            assert_eq!(offset, SIZE as u64);
         }
     });
 }

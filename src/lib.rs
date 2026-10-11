@@ -12,11 +12,13 @@ pub mod io;
 pub mod object;
 pub mod pack;
 pub mod pktline;
+pub mod reader;
 pub mod repository;
 pub mod snapshot;
 pub mod zlib;
 
-pub use object::{Object, ObjectId, ObjectKind};
+pub use object::{Object, ObjectId, ObjectInfo, ObjectKind};
+pub use reader::{ObjectHasher, ObjectReader};
 pub use repository::{IndexedRepository, ObjectMetadata, Repository};
 pub use snapshot::{Entry, EntryKind, File, Snapshot};
 
@@ -24,6 +26,7 @@ pub use snapshot::{Entry, EntryKind, File, Snapshot};
 pub enum Error {
     BufferTooSmall,
     InvalidObjectId,
+    InvalidObject,
     InvalidPacket,
     InvalidRequest,
     InvalidFileName,
