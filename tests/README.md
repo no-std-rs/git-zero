@@ -226,8 +226,9 @@ target/release/examples/benchmark-server /tmp/git-zero-synthetic \
 
 These are warm loopback measurements, with no cold-cache claim. Git-zero's raw
 fetch is still not compared with Git's full materialization. The caller-provided
-Linux kernel benchmark, advanced compression/delta modes, simultaneous process
-tree memory and Wasm memory growth remain roadmap work.
+Linux kernel benchmark, advanced compression/delta modes and simultaneous process
+tree memory remain roadmap work. Wasm linear-memory budgets are checked separately
+by the Worker tests described below.
 
 ## Wasm and allocator-free targets
 
@@ -239,6 +240,15 @@ cd examples/cloudflare-worker
 npm ci
 npm test
 ```
+
+Worker ABI tests cap initial linear memory at 24 Wasm pages (1.5 MiB), assert
+64 KiB input/128 KiB output capacities, and require the memory buffer to remain
+identical after calls. They repeat discovery, pack generation and loose-object
+reads 128 times on one instance, check pack/object SHA-1 values, exercise an exact
+64 KiB input frame and a large pack, and reject truncated/invalid frames and
+over-capacity lengths before checking recovery. Two independent instances also
+prove output-buffer isolation. These checks measure Rust Wasm linear memory;
+JavaScript allocation and total isolate memory are separate host costs.
 
 Worker tests compile a real Wasm module and use real Git against a Node HTTP host
 of the exact Worker handler. This validates the shared ABI/protocol and concurrency;

@@ -1,0 +1,144 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { test } from "node:test";
+import { inflateSync } from "node:zlib";
+
+const module = await WebAssembly.compile(await readFile(new URL("../build/git_zero_worker_wasm.wasm", import.meta.url)));
+const INPUT_BYTES = 64 * 1024;
+const OUTPUT_BYTES = 128 * 1024;
+const MEMORY_BUDGET = 24 * 64 * 1024;
+
+function instance() {
+  const { exports } = new WebAssembly.Instance(module, {});
+  assert.equal(exports.input_capacity(), INPUT_BYTES);
+  assert.equal(exports.output_capacity(), OUTPUT_BYTES);
+  assert.ok(exports.memory.buffer.byteLength <= MEMORY_BUDGET, "initial linear memory exceeds 24 Wasm pages");
+  return exports;
+}
+
+function frame(parts, target, body = Buffer.alloc(0)) {
+  const files = parts.map((part) => Buffer.from(part));
+  const path = Buffer.from(target);
+  const lengths = Buffer.alloc(16);
+  files.forEach((file, index) => lengths.writeUInt32LE(file.length, index * 4));
+  const targetLength = Buffer.alloc(4);
+  targetLength.writeUInt32LE(path.length);
+  return Buffer.concat([lengths, ...files, targetLength, path, body]);
+}
+
+function call(exports, input, method = 0) {
+  assert.ok(input.length <= INPUT_BYTES);
+  const memory = exports.memory.buffer;
+  new Uint8Array(memory, exports.input_ptr(), input.length).set(input);
+  const length = exports.serve(input.length, method);
+  assert.equal(exports.memory.buffer, memory, "serve grew or replaced linear memory");
+  if (length < 0) return length;
+  assert.ok(length >= 3 && length <= OUTPUT_BYTES, "response exceeds the output budget");
+  const output = Buffer.from(new Uint8Array(memory, exports.output_ptr(), length));
+  return { status: output.readUInt16LE(0), type: output[2], body: output.subarray(3) };
+}
+
+function packet(line) {
+  return Buffer.from(`${(Buffer.byteLength(line) + 4).toString(16).padStart(4, "0")}${line}`);
+}
+
+const parts = ["{\"colo\":\"CDG\"}\n", "{}\n", "{\"public\":true}\n", "{\"format\":1}\n"];
+
+test("Wasm keeps fixed memory across repeated discovery, pack and loose-object requests", () => {
+  const exports = instance();
+  const memory = exports.memory.buffer;
+  const discovery = call(exports, frame(parts, "info/refs?service=git-upload-pack"));
+  assert.equal(discovery.status, 200);
+  assert.equal(discovery.type, 1);
+  const head = /([0-9a-f]{40}) HEAD\0/.exec(discovery.body.toString())[1];
+  const upload = Buffer.concat([packet(`want ${head}\n`), Buffer.from("0000"), packet("done\n")]);
+  const target = `objects/${head.slice(0, 2)}/${head.slice(2)}`;
+  let expectedPack;
+  let expectedLoose;
+  for (let round = 0; round < 128; round++) {
+    assert.deepEqual(call(exports, frame(parts, "info/refs?service=git-upload-pack")), discovery);
+    const pack = call(exports, frame(parts, "git-upload-pack", upload), 1);
+    assert.equal(pack.status, 200);
+    assert.equal(pack.type, 2);
+    assert.equal(pack.body.subarray(0, 12).toString(), "0008NAK\nPACK");
+    const bytes = pack.body.subarray(8);
+    assert.deepEqual(createHash("sha1").update(bytes.subarray(0, -20)).digest(), bytes.subarray(-20));
+    const loose = call(exports, frame(parts, target));
+    assert.equal(loose.status, 200);
+    assert.equal(loose.type, 3);
+    assert.equal(createHash("sha1").update(inflateSync(loose.body)).digest("hex"), head);
+    if (round === 0) {
+      expectedPack = pack;
+      expectedLoose = loose;
+    }
+    assert.deepEqual(pack, expectedPack);
+    assert.deepEqual(loose, expectedLoose);
+  }
+  assert.equal(exports.memory.buffer, memory);
+});
+
+test("Wasm serves a full input frame within its memory and response budgets", () => {
+  const exports = instance();
+  // Exercise the ABI's full 64 KiB capacity, independently of the JS snapshot limit.
+  const target = "git-upload-pack";
+  const headResponse = call(exports, frame(parts, "HEAD"));
+  assert.equal(headResponse.status, 200);
+  const discovery = call(exports, frame(parts, "info/refs?service=git-upload-pack"));
+  const head = /([0-9a-f]{40}) HEAD\0/.exec(discovery.body.toString())[1];
+  const upload = Buffer.concat([packet(`want ${head}\n`), Buffer.from("0000"), packet("done\n")]);
+  // The ABI accepts a full frame on GET as well as on upload-pack.
+  const padded = frame(parts, "HEAD", Buffer.alloc(INPUT_BYTES - frame(parts, "HEAD").length));
+  assert.equal(padded.length, INPUT_BYTES);
+  assert.deepEqual(call(exports, padded), headResponse);
+
+  const largeParts = ["a".repeat(INPUT_BYTES - 20 - Buffer.byteLength(target) - upload.length - 3), "b", "c", "d"];
+  const largeDiscovery = call(exports, frame(largeParts, "info/refs"));
+  assert.equal(largeDiscovery.status, 200);
+  const largeHead = largeDiscovery.body.toString().split("\t")[0];
+  const largeUpload = Buffer.concat([packet(`want ${largeHead}\n`), Buffer.from("0000"), packet("done\n")]);
+  const input = frame(largeParts, target, largeUpload);
+  assert.equal(input.length, INPUT_BYTES);
+  const response = call(exports, input, 1);
+  assert.equal(response.status, 200);
+  assert.equal(response.type, 2);
+  assert.ok(response.body.length > 64 * 1024, "large pack path was not exercised");
+  const bytes = response.body.subarray(8);
+  assert.deepEqual(createHash("sha1").update(bytes.subarray(0, -20)).digest(), bytes.subarray(-20));
+});
+
+test("malformed ABI frames fail without growth and leave the instance usable", () => {
+  const exports = instance();
+  const memory = exports.memory.buffer;
+  const valid = frame(parts, "HEAD");
+  const expected = call(exports, valid);
+  const invalid = [];
+  for (let length = 0; length < valid.length; length++) invalid.push(valid.subarray(0, length));
+  for (const offset of [0, 4, 8, 12, valid.length - 8]) {
+    const input = Buffer.from(valid);
+    input.writeUInt32LE(0xffffffff, offset);
+    invalid.push(input);
+  }
+  invalid.push(frame(parts, Buffer.from([0xff])));
+  for (const input of invalid) {
+    assert.equal(call(exports, input), -2);
+    assert.deepEqual(call(exports, valid), expected);
+  }
+  assert.equal(call(exports, valid, 2), -2);
+  assert.equal(exports.serve(INPUT_BYTES + 1, 0), -1);
+  assert.equal(exports.serve(0xffffffff, 0), -1);
+  assert.equal(exports.memory.buffer, memory);
+  assert.deepEqual(call(exports, valid), expected);
+});
+
+test("independent Wasm instances preserve their own buffers", () => {
+  const first = instance();
+  const second = instance();
+  assert.notEqual(first.memory.buffer, second.memory.buffer);
+  const original = call(first, frame(parts, "info/refs"));
+  const firstOutput = Buffer.from(new Uint8Array(first.memory.buffer, first.output_ptr(), original.body.length + 3));
+  const changed = call(second, frame(["changed", ...parts.slice(1)], "info/refs"));
+  assert.notDeepEqual(changed.body, original.body);
+  assert.deepEqual(Buffer.from(new Uint8Array(first.memory.buffer, first.output_ptr(), firstOutput.length)), firstOutput);
+  assert.deepEqual(call(first, frame(parts, "info/refs")), original);
+});
