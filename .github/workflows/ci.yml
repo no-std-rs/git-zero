@@ -17,9 +17,9 @@ jobs:
       - name: Shared Rust benchmark host correctness and resource smoke test
         run: |
           cargo test -p git-zero-rustix --example benchmark-server --locked
-          cargo build -p git-zero-rustix --example benchmark-server --example encoder-profile --locked
+          cargo build -p git-zero-rustix --example benchmark-server --example encoder-profile --example decoder-read --locked
           python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
-            --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
+            --binary target/debug/git-zero --decoder target/debug/examples/decoder-read --allow-unpinned-git --files 4 --blob-bytes 256 --commits 3 \
             --jobs 8 --samples 2 --warmup 1 --fixture-dir /tmp/git-zero-benchmark-fixture \
             --limits tests/benchmark-limits.json \
             --output /tmp/git-zero-benchmark-smoke.json
@@ -34,7 +34,7 @@ jobs:
           (root / 'revision').write_text(revision)
           PY
           python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
-            --binary target/debug/git-zero \
+            --binary target/debug/git-zero --decoder target/debug/examples/decoder-read --allow-unpinned-git \
             --source-repo /tmp/git-zero-benchmark-source/source \
             --revision "$(cat /tmp/git-zero-benchmark-source/revision)" \
             --jobs 8 --samples 2 --warmup 1 \
@@ -42,13 +42,13 @@ jobs:
             --output /tmp/git-zero-benchmark-pinned.json
           for transfer in auto buffered; do
             python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
-              --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
+              --binary target/debug/git-zero --allow-unpinned-git --files 4 --blob-bytes 256 --commits 3 \
               --case server-clone-dumb --case server-discovery-dumb --zero-loose-cache \
               --file-transfer "$transfer" --jobs 8 --samples 2 --warmup 1 \
               --output "/tmp/git-zero-benchmark-cached-$transfer.json"
           done
           if python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
-            --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
+            --binary target/debug/git-zero --allow-unpinned-git --files 4 --blob-bytes 256 --commits 3 \
             --case server-discovery-dumb --case server-clone-dumb \
             --response-limit 64 --jobs 2 --samples 1 --warmup 0 \
             --output /tmp/git-zero-benchmark-failure.json; then
@@ -73,7 +73,7 @@ jobs:
           Path('/tmp/git-zero-benchmark-impossible-limits.json').write_text(json.dumps(limits))
           PY
           if python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
-            --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
+            --binary target/debug/git-zero --allow-unpinned-git --files 4 --blob-bytes 256 --commits 3 \
             --case server-discovery-dumb --samples 1 --warmup 0 \
             --limits /tmp/git-zero-benchmark-impossible-limits.json \
             --output /tmp/git-zero-benchmark-budget-failure.json; then
@@ -125,6 +125,7 @@ jobs:
         env:
           REFERENCE_GIT_VERSION: ${{ matrix.git }}
         run: |
+          test "$REFERENCE_GIT_VERSION" = "$(cat tests/git-version.txt)"
           git clone --depth 1 --branch "v$REFERENCE_GIT_VERSION" https://github.com/git/git.git "$RUNNER_TEMP/git-source"
           make -C "$RUNNER_TEMP/git-source" -j "$(python3 -c 'import os; print(os.cpu_count() or 1)')" \
             prefix="$RUNNER_TEMP/reference-git" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_OPENSSL=YesPlease NO_EXPAT=YesPlease
@@ -136,6 +137,35 @@ jobs:
         run: python3 tests/interop.py --shard '${{ matrix.shard }}' --artifacts interop-artifacts
       - name: Changing native snapshots and pack cache reuse
         run: cargo test -p git-zero-rustix --test storage real_git_fetches_changed_file_snapshots_with_cache_eviction_and_return_to_old_head --locked
+      - name: Pinned Git compression, delta and decoder benchmark coverage
+        if: runner.os == 'Linux' && matrix.git != 'system' && matrix.shard == '0/2'
+        run: |
+          cargo build -p git-zero-rustix --bin git-zero --example benchmark-server --example decoder-read --release --locked
+          for profile in matched upstream-defaults; do
+            python3 tests/benchmark.py --git-profile "$profile" \
+              --files 16 --blob-bytes 4096 --commits 6 --samples 3 --warmup 1 \
+              --output "$RUNNER_TEMP/benchmark-$profile.json"
+          done
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          reports = [json.loads((Path(os.environ['RUNNER_TEMP']) / f'benchmark-{profile}.json').read_text())
+                     for profile in ('matched', 'upstream-defaults')]
+          assert all(report['git_version_pin']['matches'] and report['git_version_pin']['required'] for report in reports)
+          assert reports[0]['fixture']['raw_sha256'] == reports[1]['fixture']['raw_sha256']
+          assert reports[0]['algorithms']['equivalent_server_features']
+          assert not reports[1]['algorithms']['equivalent_server_features']
+          assert reports[0]['fixture']['decoder_pack']['delta_objects'] == 0
+          assert reports[1]['fixture']['decoder_pack']['delta_objects'] > 0
+          assert all(len(report['results']) == 10 and report['status'] == 'complete' for report in reports)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Linux' && matrix.git != 'system' && matrix.shard == '0/2'
+        with:
+          name: benchmark-pinned-${{ github.event_name }}
+          path: ${{ runner.temp }}/benchmark-*.json
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

@@ -34,7 +34,10 @@ Aggressive packing must demonstrably contain deltas: `git verify-pack` is checke
 before testing either client. Smart git-zero downloads are imported with
 `git index-pack --strict`, followed by `fsck --strict` and exact comparisons of
 every reachable object's ID, kind and raw body. Returning a raw delta pack is
-covered; decoding deltas inside git-zero remains planned.
+covered. The demo CLI still returns a raw pack; the core now also offers bounded
+entry/delta decoding, checked against Git's IDs, index CRCs and bodies in
+`tests/pack_reader.rs`. Local object-read benchmarks exercise those core APIs;
+complete client fetch/materialization remains planned.
 
 `upstream-snapshot-{smart,dumb}` constructs blob/tree/commit bytes using Git's
 own commands, with the demo's exact content and identity. Both servers must

@@ -166,6 +166,12 @@ remain regression coverage; server completion is measured with real Git clients.
   startup costs and buffer budgets. Encoded files share a sendfile path with bounded
   fallbacks; optional Rust loose caching charges preparation to startup. Wasm and
   simultaneous process-tree memory remain explicit future work.
+  Git 2.53.0 is pinned for timing comparisons. Explicit matched/default/custom
+  compression and delta policies identify equivalent server features. Two local
+  object-read workloads now compare Git and the new decoder against identical
+  loose/packed inputs, verify complete object output and record actual pack
+  deltas. Pinned CI covers matched and default Git policies; additional server
+  compression/delta encoders remain planned in section 3.
   Worker ABI tests now enforce a 24-page initial linear-memory ceiling, fixed
   input/output capacities and no growth across repeated, full-capacity and invalid
   requests. Explicit opt-in wall/CPU/RSS limits now check the largest raw
@@ -176,9 +182,9 @@ remain regression coverage; server completion is measured with real Git clients.
   and pinned revision; compare supported clone/fetch and object-reading workloads
   with real Git over loopback, recording wall/CPU time, peak RSS, throughput,
   and caller-owned buffer budgets for cold/warm runs.
-  Pinned caller-repository fixtures now feed the eight existing paired HTTP
-  workloads, with bounded object/body loading and source-preservation tests.
-  Kernel-scale preparation, local object-reading workloads and controlled
+  Pinned caller-repository fixtures now feed eight paired HTTP and two local
+  object-read workloads, with bounded object/body loading and source-preservation
+  tests. Kernel-scale preparation and controlled
   cold-cache runs remain future work.
 - [x] Protocol traces and retained artifacts on failure; CI matrix over Git versions
   and Linux/macOS, with jobs isolated by temporary paths and ephemeral ports.
