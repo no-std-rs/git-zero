@@ -73,7 +73,12 @@ npx wrangler deploy --dry-run --outdir /tmp/git-zero-worker-bundle
 
 The tests exercise the actual compiled Wasm module, clone it with real Git over
 smart and dumb HTTP, check `git fsck --strict`, and verify one commit, stable
-snapshot IDs, variable selection, and overlapping requests. The dry run validates
+snapshot IDs, variable selection, and overlapping requests. Direct ABI tests
+enforce a 24-page (1.5 MiB) initial linear-memory ceiling and no memory growth
+across repeated discovery/pack/loose requests, full-capacity inputs, malformed
+frames and independent instances. The 64 KiB input and 128 KiB output capacities
+are asserted separately; JavaScript allocation is outside this Wasm budget.
+The dry run validates
 Wrangler packaging without deploying.
 
 References: [Workers Wasm](https://developers.cloudflare.com/workers/runtime-apis/webassembly/),
