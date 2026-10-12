@@ -24,6 +24,22 @@ jobs:
             --limits tests/benchmark-limits.json \
             --output /tmp/git-zero-benchmark-smoke.json
           target/debug/examples/encoder-profile /tmp/git-zero-benchmark-fixture 1
+          PYTHONPATH=tests python3 - <<'PY'
+          from pathlib import Path
+          from interop import environment
+          from test_benchmark_source import source_fixture
+          root = Path('/tmp/git-zero-benchmark-source')
+          root.mkdir()
+          _, revision = source_fixture(root, environment())
+          (root / 'revision').write_text(revision)
+          PY
+          python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
+            --binary target/debug/git-zero \
+            --source-repo /tmp/git-zero-benchmark-source/source \
+            --revision "$(cat /tmp/git-zero-benchmark-source/revision)" \
+            --jobs 8 --samples 2 --warmup 1 \
+            --limits tests/benchmark-limits.json \
+            --output /tmp/git-zero-benchmark-pinned.json
           for transfer in auto buffered; do
             python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
               --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
