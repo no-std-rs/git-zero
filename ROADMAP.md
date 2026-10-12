@@ -172,6 +172,10 @@ remain regression coverage; server completion is measured with real Git clients.
   loose/packed inputs, verify complete object output and record actual pack
   deltas. Pinned CI covers matched and default Git policies; additional server
   compression/delta encoders remain planned in section 3.
+  The initial comparison records competitive server clone latency, slower local
+  decoder reads and a small server CPU increase against the pre-decoder baseline;
+  see `tests/README.md`. Isolating those costs and improving decoder throughput
+  remain performance work; the measured results are not a parity/performance gate.
   Worker ABI tests now enforce a 24-page initial linear-memory ceiling, fixed
   input/output capacities and no growth across repeated, full-capacity and invalid
   requests. Explicit opt-in wall/CPU/RSS limits now check the largest raw

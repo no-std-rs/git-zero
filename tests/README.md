@@ -398,6 +398,48 @@ Linux kernel benchmark's remaining preparation work, additional server encoders
 and simultaneous process tree memory remain roadmap work. Wasm linear-memory
 budgets are checked separately by the Worker tests described below.
 
+### Decoder and Git-default comparison
+
+Revision `ebe634d` was measured with pinned Git 2.53.0, release builds
+(`opt-level = "s"`, LTO, one codegen unit), 21 alternating pairs, three warmups
+and one workload worker. Both policies use the same 111-object, 1,341,030-byte
+raw fixture and independently check every object's ID, kind and body.
+The upstream-default pack contains 19 deltas with maximum depth 15.
+
+| Workload, median wall ms | Matched Git | Matched Rust | Default Git | Rust against default Git |
+| --- | ---: | ---: | ---: | ---: |
+| Smart HTTP clone | 104.18 | 62.48 | 182.13 | 88.63 |
+| Dumb HTTP clone | 101.92 | 105.63 | 138.48 | 129.49 |
+| Local loose-object reads | 16.70 | 38.81 | 19.89 | 35.75 |
+| Local pack-object reads | 9.25 | 41.09 | 15.15 | 42.19 |
+
+Server clone latency remains competitive on warm loopback, while the new local
+readers are slower than Git. Default-Git smart/dumb clone responses total
+648,543/674,949 bytes versus Rust's 1,343,340/1,344,644 bytes: the stored-block
+server sends about twice as much data. This bandwidth difference matters away
+from loopback. Local-read CPU medians against default Git are 8.27/17.50 ms
+(Git/Rust loose) and 5.92/21.89 ms (Git/Rust pack); Rust's extra authentication
+and host materialization are included. These observations do not isolate which
+decoder phase dominates.
+
+A separate alternating baseline/current comparison used identical server
+fixtures, response byte counts, compiler (rustc 1.97.1), release profile and 21
+clone pairs. It compared pre-decoder `242eabd` with `ebe634d`:
+
+| Rust clone | Baseline wall ms | Current wall ms | Baseline server CPU ms | Current server CPU ms |
+| --- | ---: | ---: | ---: | ---: |
+| Smart HTTP | 24.93 | 25.48 | 1.288 | 1.513 |
+| Dumb HTTP | 40.34 | 39.91 | 1.987 | 2.147 |
+
+Wall medians differ by about +2%/-1%; server CPU rose about 17%/8%
+(0.225/0.160 ms). This is a measured CPU increase even though encoder source
+behavior is unchanged. The shared host was loaded, so these runs establish
+neither a universal latency ranking nor an isolated cause for the CPU increase.
+Raw reports and retained encoded fixtures are under
+`/tmp/git-zero-pr16-benchmark/{matched,upstream,revisions}.json` on the measuring
+host. Reproduce the paired profiles with the commands above; the reports retain
+all samples, binary fingerprints, pin/config policies, host load and buffer limits.
+
 ### Isolating encoder CPU
 
 The Linux `encoder-profile` example loads and checks the same raw export before
