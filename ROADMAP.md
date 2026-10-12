@@ -102,6 +102,11 @@ cannot overwrite each other's buffers or change repository identities.
   nested trees, aggressive packing, and deltas in the interoperability matrix.
 - [ ] Incremental fetch after changing a backend snapshot, pack reuse and eviction races.
 - [ ] Fuzz packet lines, HTTP routing, zlib/pack parsers, and object-graph validation.
+  Four bounded libFuzzer targets now cover packet lines, client discovery/HEAD/
+  pack framing, HTTP routing/upload requests, and commit/tree graph validation.
+  Their shared assertions and seeded mutations also run in ordinary Cargo tests;
+  CI runs AddressSanitizer smoke campaigns. Zlib inflation and pack-entry/delta
+  parsing still need targets when those client APIs are implemented.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.

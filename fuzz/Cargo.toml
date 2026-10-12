@@ -1,0 +1,44 @@
+[package]
+name = "git-zero-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.85"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+git-zero = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "packets"
+path = "fuzz_targets/packets.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "responses"
+path = "fuzz_targets/responses.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "routing"
+path = "fuzz_targets/routing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "graph"
+path = "fuzz_targets/graph.rs"
+test = false
+doc = false
+bench = false

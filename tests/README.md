@@ -256,6 +256,25 @@ Wrangler dry-run packaging checks the Cloudflare bundle. It is not a deployed-ed
 integration test. The bare-metal build validates that the core needs no `std`;
 Wasm compilation/linking succeeds without supplying any global allocator.
 
+## Parser fuzzing
+
+`cargo test -p git-zero --test fuzz --locked` replays independently authored
+binary seeds, every prefix truncation, six byte substitutions at every position,
+and reproducible xorshift inputs against four shared targets. It also checks
+non-hex packet prefixes at every position and the maximum packet-length boundary.
+The same target functions back a separate cargo-fuzz workspace; core dependencies
+remain allocation-free. See [fuzz/README.md](../fuzz/README.md) for formats, exact
+buffer budgets, smoke campaigns and crash replay. CI runs 5,000 AddressSanitizer
+iterations per target on a pinned nightly toolchain and retains crash artifacts.
+
+Packet checks enforce hexadecimal framing, progress and non-consuming errors.
+Client response checks exercise discovery, default-branch lookup, pack framing
+and overreported transport lengths. Routing varies method, path, query, body and
+output capacity. Graph mutations recompute object IDs so invalid commit/tree
+records reach parsing, and compare borrowed versus short-read providers using
+the same bounded scratch. These targets cover existing APIs; zlib inflation and
+pack-entry/delta parsing are still roadmap work.
+
 ## Git's existing HTTP tests
 
 Git maintains [t5550-http-fetch-dumb.sh](https://github.com/git/git/blob/master/t/t5550-http-fetch-dumb.sh),
