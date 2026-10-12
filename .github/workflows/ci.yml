@@ -17,10 +17,12 @@ jobs:
       - name: Shared Rust benchmark host correctness and resource smoke test
         run: |
           cargo test -p git-zero-rustix --example benchmark-server --locked
-          cargo build -p git-zero-rustix --example benchmark-server --locked
+          cargo build -p git-zero-rustix --example benchmark-server --example encoder-profile --locked
           python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
             --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
-            --jobs 8 --samples 2 --warmup 1 --output /tmp/git-zero-benchmark-smoke.json
+            --jobs 8 --samples 2 --warmup 1 --fixture-dir /tmp/git-zero-benchmark-fixture \
+            --output /tmp/git-zero-benchmark-smoke.json
+          target/debug/examples/encoder-profile /tmp/git-zero-benchmark-fixture 1
           for transfer in auto buffered; do
             python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
               --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
