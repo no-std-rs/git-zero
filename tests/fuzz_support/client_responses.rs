@@ -21,6 +21,13 @@ impl Transport for Reply<'_> {
     }
 }
 
+/// Exercise discovery, HEAD lookup, pack framing, and transport size checks.
+///
+/// The input is one transport body, reused for each request with HTTP status 200.
+/// Separate 4096-byte buffers keep borrowed discovery data stable during HEAD
+/// lookup; a 128-byte request buffer bounds fetch construction. Successful packs
+/// must pass framing/checksum validation. Final requests deliberately report a
+/// body larger than the supplied storage and must fail before indexing it.
 pub fn responses(data: &[u8]) {
     if data.len() > MAX_INPUT {
         return;
@@ -43,16 +50,10 @@ pub fn responses(data: &[u8]) {
     // A transport may overreport its body size; every client entrypoint must
     // reject the size before indexing the caller's storage.
     transport.extra = MAX_INPUT + 1;
-    assert!(matches!(
-        client::discover(&mut transport, &mut storage),
-        Err(Error::BufferTooSmall)
-    ));
-    assert_eq!(
-        client::fetch_pack(&mut transport, id, &mut request, &mut response),
-        Err(Error::BufferTooSmall)
-    );
-    assert_eq!(
-        client::fetch_loose(&mut transport, id, &mut response),
-        Err(Error::BufferTooSmall)
-    );
+    let errors = [
+        client::discover(&mut transport, &mut storage).err(),
+        client::fetch_pack(&mut transport, id, &mut request, &mut response).err(),
+        client::fetch_loose(&mut transport, id, &mut response).err(),
+    ];
+    assert_eq!(errors, [Some(Error::BufferTooSmall); 3]);
 }

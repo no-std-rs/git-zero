@@ -10,24 +10,16 @@ use git_zero::{
 
 #[test]
 fn object_ids_match_git_known_vectors() {
-    assert_eq!(
-        Object {
+    for (data, expected) in [
+        (b"".as_slice(), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"),
+        (b"hello\n", "ce013625030ba8dba906f756967f9e9ca394464a"),
+    ] {
+        let object = Object {
             kind: ObjectKind::Blob,
-            data: b""
-        }
-        .id()
-        .to_string(),
-        "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
-    );
-    assert_eq!(
-        Object {
-            kind: ObjectKind::Blob,
-            data: b"hello\n"
-        }
-        .id()
-        .to_string(),
-        "ce013625030ba8dba906f756967f9e9ca394464a"
-    );
+            data,
+        };
+        assert_eq!(object.id().to_string(), expected);
+    }
     for hex in [b"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".as_slice(), b"a"] {
         assert_eq!(ObjectId::from_hex(hex), Err(Error::InvalidObjectId));
     }
@@ -116,12 +108,63 @@ fn packet_parser_rejects_truncation_and_v2_control_packets() {
         b"0008a",
         b"xxxx",
     ] {
-        let mut bytes = bytes;
-        assert_eq!(pktline::read(&mut bytes), Err(Error::InvalidPacket));
+        reject_packet(bytes);
     }
     let mut bytes = b"0000".as_slice();
     assert_eq!(pktline::read(&mut bytes), Ok(Some(Packet::Flush)));
     assert_eq!(pktline::read(&mut bytes), Ok(None));
+}
+
+#[test]
+fn packet_prefixes_require_four_hex_digits() {
+    for data in [b"+000".as_slice(), b"+004", b"+00a123456", b"-000"] {
+        reject_packet(data);
+    }
+    for byte in (0..=255_u8).filter(|byte| !byte.is_ascii_hexdigit()) {
+        for index in 0..4 {
+            let mut data = *b"0004";
+            data[index] = byte;
+            reject_packet(&data);
+        }
+    }
+    let mut remaining = b"000Aabcdef".as_slice();
+    assert_eq!(
+        pktline::read(&mut remaining),
+        Ok(Some(Packet::Data(b"abcdef")))
+    );
+    assert!(remaining.is_empty());
+}
+
+#[test]
+fn packet_length_boundary_is_enforced() {
+    for length in [
+        pktline::MAX_LENGTH - 1,
+        pktline::MAX_LENGTH,
+        pktline::MAX_LENGTH + 1,
+    ] {
+        let mut data = format!("{length:04x}").into_bytes();
+        data.resize(length, 0xff);
+        let mut remaining = data.as_slice();
+        if length <= pktline::MAX_LENGTH {
+            assert_eq!(
+                pktline::read(&mut remaining),
+                Ok(Some(Packet::Data(&data[4..])))
+            );
+            assert!(remaining.is_empty());
+        } else {
+            reject_packet(&data);
+        }
+    }
+}
+
+fn reject_packet(data: &[u8]) {
+    let mut remaining = data;
+    assert_eq!(
+        pktline::read(&mut remaining),
+        Err(Error::InvalidPacket),
+        "{data:?}"
+    );
+    assert_eq!(remaining, data);
 }
 
 struct Loopback<'a, R> {

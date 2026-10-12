@@ -6,6 +6,13 @@ use git_zero::{
     pack,
 };
 
+/// Decode one bounded HTTP request and check any successful response.
+///
+/// Byte zero selects GET/POST/PUT/DELETE/HEAD; byte one selects a writer capacity
+/// of 0, 1, 16, 64, or 4096 bytes. The rest is path, query, and body separated by
+/// two NULs; invalid UTF-8 paths/queries are skipped. An empty snapshot uses fixed
+/// tree/commit storage and one-byte read scratch. Upload replies must begin with
+/// NAK and any following pack must validate; output must fit the chosen writer.
 pub fn routing(data: &[u8]) {
     if data.len() < 2 || data.len() > MAX_INPUT {
         return;

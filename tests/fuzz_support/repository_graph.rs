@@ -1,12 +1,11 @@
 use super::MAX_INPUT;
-use git_zero::{
-    Error, Object, ObjectId, ObjectInfo, ObjectKind, Repository, Result, ValidatedRepository,
-};
+use git_zero::{Object, ObjectId, ObjectKind, Repository, Result, ValidatedRepository};
+#[path = "../common/short_reads.rs"]
+mod short_reads;
+use short_reads::Streamed;
 
 struct Graph<'a> {
     objects: [Object<'a>; 3],
-    borrowed: bool,
-    read_limit: usize,
 }
 
 impl Repository for Graph<'_> {
@@ -17,31 +16,20 @@ impl Repository for Graph<'_> {
         self.objects.len()
     }
     fn object(&self, index: usize) -> Option<Object<'_>> {
-        if !self.borrowed {
-            return None;
-        }
         self.objects.get(index).copied()
-    }
-    fn object_info(&self, index: usize) -> Result<ObjectInfo> {
-        self.objects
-            .get(index)
-            .map(Object::info)
-            .ok_or(Error::ObjectNotFound)
-    }
-    fn object_id(&self, index: usize) -> Option<ObjectId> {
-        self.objects.get(index).map(Object::id)
-    }
-    fn read_object(&self, index: usize, offset: u64, storage: &mut [u8]) -> Result<usize> {
-        let object = self.objects.get(index).ok_or(Error::ObjectNotFound)?;
-        let bytes = object.data.get(offset as usize..).unwrap_or_default();
-        let count = bytes.len().min(storage.len()).min(self.read_limit);
-        storage[..count].copy_from_slice(&bytes[..count]);
-        Ok(count)
     }
 }
 
+/// Compare borrowed and short-read validation of one mutated object record.
+///
+/// Byte zero chooses a tree (even) or commit (odd); byte one sets a read limit of
+/// 1..=64 bytes. Remaining bytes replace that record in a three-object snapshot
+/// containing a fixed blob. Tree mutations rebuild their enclosing commit with
+/// the new tree ID so failures reach structural parsing. Both providers use three metadata/index
+/// slots, 64-byte read scratch, and 128-byte parse scratch. Their results must
+/// match, including errors; successful graphs preserve HEAD and all objects.
 pub fn graph(data: &[u8]) {
-    if data.len() < 2 || data.len() > MAX_INPUT {
+    if !(2..=MAX_INPUT).contains(&data.len()) {
         return;
     }
     let blob = Object {
@@ -49,13 +37,12 @@ pub fn graph(data: &[u8]) {
         data: b"seed\n",
     };
     let mutate_tree = data[0] & 1 == 0;
-    let mut tree_storage = [0; 32];
-    tree_storage[..12].copy_from_slice(b"100644 file\0");
-    tree_storage[12..].copy_from_slice(&blob.id().0);
+    // The independent tree seed supplies the canonical tree for commit mutations.
+    let tree_storage = &include_bytes!("../../fuzz/corpus/graph/tree")[2..];
     let tree_bytes = if mutate_tree {
         &data[2..]
     } else {
-        &tree_storage
+        tree_storage
     };
     let tree = Object {
         kind: ObjectKind::Tree,
@@ -63,11 +50,12 @@ pub fn graph(data: &[u8]) {
     };
     // Recompute IDs after mutations so malformed records reach the graph parser
     // rather than failing only at the initial object checksum check.
-    let commit_storage = format!(
-        "tree {}\nauthor A <a@b> 0 +0000\ncommitter A <a@b> 0 +0000\n\nfuzz\n",
-        tree.id()
-    );
+    let commit_storage;
     let commit_bytes = if mutate_tree {
+        commit_storage = format!(
+            "tree {}\nauthor A <a@b> 0 +0000\ncommitter A <a@b> 0 +0000\n\nfuzz\n",
+            tree.id()
+        );
         commit_storage.as_bytes()
     } else {
         &data[2..]
@@ -80,17 +68,15 @@ pub fn graph(data: &[u8]) {
         tree,
         blob,
     ];
-    let mut repository = Graph {
-        objects,
-        borrowed: true,
-        read_limit: usize::from(data[1] % 64) + 1,
+    let repository = Graph { objects };
+    let streamed = Streamed {
+        source: &repository,
+        limit: usize::from(data[1] % 64) + 1,
     };
-    let expected = validate(&repository);
-    repository.borrowed = false;
-    assert_eq!(validate(&repository), expected);
+    assert_eq!(validate(&repository), validate(&streamed));
 }
 
-fn validate(repository: &Graph<'_>) -> Result<()> {
+fn validate(repository: &dyn Repository) -> Result<()> {
     ValidatedRepository::new(
         repository,
         &mut [None; 3],
@@ -99,7 +85,9 @@ fn validate(repository: &Graph<'_>) -> Result<()> {
         &mut [0; 128],
     )
     .map(|validated| {
-        assert_eq!(validated.head(), repository.head());
-        assert_eq!(validated.object_count(), 3);
+        assert_eq!(
+            (validated.head(), validated.object_count()),
+            (repository.head(), 3)
+        );
     })
 }

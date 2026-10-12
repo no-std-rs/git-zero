@@ -330,10 +330,11 @@ Wasm compilation/linking succeeds without supplying any global allocator.
 
 ## Parser fuzzing
 
-`cargo test -p git-zero --test fuzz --locked` replays independently authored
-binary seeds, every prefix truncation, six byte substitutions at every position,
-and reproducible xorshift inputs against four shared targets. It also checks
-non-hex packet prefixes at every position and the maximum packet-length boundary.
+`cargo test -p git-zero --test fuzz --locked` embeds and replays the 32 independently
+authored binary seeds, every prefix truncation, six byte substitutions at every position,
+and reproducible xorshift inputs against four shared targets.
+`cargo test -p git-zero --test core --locked` also checks non-hex packet prefixes
+at every position and the maximum packet-length boundary.
 The same target functions back a separate cargo-fuzz workspace; core dependencies
 remain allocation-free. See [fuzz/README.md](../fuzz/README.md) for formats, exact
 buffer budgets, smoke campaigns and crash replay. CI runs 5,000 AddressSanitizer

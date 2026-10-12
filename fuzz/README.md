@@ -18,7 +18,8 @@ duplicate entries and truncated object IDs.
 | `routing` | Method byte, capacity byte, path NUL query NUL body | Method selects GET/POST/PUT/DELETE/HEAD; capacity selects 0/1/16/64/4096 bytes. A fixed empty snapshot uses 256-byte tree and 512-byte commit storage, one-byte read scratch and at most 4 KiB output. Successful upload responses must contain NAK and a valid pack when present. |
 | `graph` | Mode byte, short-read byte, object record | Even mode mutates a tree; odd mode mutates a commit. Other objects and IDs are rebuilt to reach structural validation. Borrowed/streamed outcomes must match with three metadata/index slots, 64-byte read and 128-byte parse scratch. Short reads range from 1 to 64 bytes. |
 
-Each target ignores inputs over 4096 bytes. Host-side graph construction uses
+Each target ignores inputs over 4096 bytes. The packet oracle formats a four-byte
+header independently and accepts either hex case. Host-side graph construction uses
 one bounded `String` plus fixed arrays and borrowed input; the validated core
 operates on caller buffers. Each target has its own support module, and the
 ordinary mutation runner reuses buffers while preserving its input sequence.
@@ -49,7 +50,10 @@ cargo +nightly-2026-08-09 fuzz run packets fuzz/artifacts/packets/crash-HASH
 ```
 
 Keep a minimized reproducer as a named seed and add a focused assertion if its
-expected behavior can be stated precisely. `fuzz/Cargo.lock` pins the optional
+expected behavior can be stated precisely. Register its `include_bytes!` entry
+in `tests/fuzz.rs` too: ordinary tests embed the seed corpus, so missing fixture
+paths fail at compile time and replay does not depend on the working directory.
+`fuzz/Cargo.lock` pins the optional
 harness dependencies. `cargo fmt --manifest-path fuzz/Cargo.toml --check` checks
 the standalone package; the normal workspace format and Clippy checks cover the
 shared target support.
