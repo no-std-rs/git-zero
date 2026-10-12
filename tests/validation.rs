@@ -1,3 +1,6 @@
+#[path = "common/short_reads.rs"]
+mod short_reads;
+use short_reads::Streamed;
 mod common;
 #[path = "common/streamed.rs"]
 mod streamed;
@@ -119,46 +122,22 @@ fn empty_tree() -> OwnedObject {
 }
 
 fn outcome(repository: &dyn Repository, read_size: usize, parse_size: usize) -> Result<()> {
-    let mut objects = vec![None; repository.object_count()];
-    let mut by_id = vec![0; repository.object_count()];
+    let count = repository.object_count();
+    let mut objects = vec![None; count];
+    let mut by_id = vec![0; count];
     let mut read = vec![0; read_size];
     let mut parse = vec![0; parse_size];
     ValidatedRepository::new(repository, &mut objects, &mut by_id, &mut read, &mut parse)
         .map(|_| ())
 }
 
-/// Suppress borrowed bodies and deliberately return short reads.
-struct Streamed<'a> {
-    source: &'a dyn Repository,
-    limit: usize,
-}
-impl Repository for Streamed<'_> {
-    fn head(&self) -> ObjectId {
-        self.source.head()
-    }
-    fn object_count(&self) -> usize {
-        self.source.object_count()
-    }
-    fn object_info(&self, index: usize) -> Result<ObjectInfo> {
-        self.source.object_info(index)
-    }
-    fn object_id(&self, index: usize) -> Option<ObjectId> {
-        self.source.object_id(index)
-    }
-    fn read_object(&self, index: usize, offset: u64, storage: &mut [u8]) -> Result<usize> {
-        let capacity = self.limit.min(storage.len());
-        self.source
-            .read_object(index, offset, &mut storage[..capacity])
-    }
-    fn head_ref(&self) -> &str {
-        self.source.head_ref()
-    }
-    fn reference_count(&self) -> usize {
-        self.source.reference_count()
-    }
-    fn reference_name(&self, index: usize) -> Option<&str> {
-        self.source.reference_name(index)
-    }
+fn tree_outcome(
+    data: Vec<u8>,
+    children: Vec<OwnedObject>,
+    read_size: usize,
+    parse_size: usize,
+) -> Result<()> {
+    outcome(&Fixture::tree(data, children), read_size, parse_size)
 }
 
 #[test]
@@ -342,10 +321,7 @@ fn graph_rejects_missing_targets_wrong_kinds_extra_and_duplicate_objects() {
     ] {
         let mut tree = vec![];
         entry(&mut tree, kind, b"x", target);
-        assert_eq!(
-            outcome(&Fixture::tree(tree, children), 7, 128),
-            Err(expected)
-        );
+        assert_eq!(tree_outcome(tree, children, 7, 128), Err(expected));
     }
     let mut fixture = Fixture::tree(vec![], vec![]);
     fixture.head = empty.id();
@@ -356,10 +332,12 @@ fn graph_rejects_missing_targets_wrong_kinds_extra_and_duplicate_objects() {
     assert_eq!(outcome(&fixture, 7, 128), Err(Error::InvalidObject));
     let parent = commit(empty.id(), &[], b"parent");
     let child = commit(empty.id(), &[parent.id()], b"child");
-    let fixture = Fixture::new(vec![empty.clone(), child.clone()], child.id());
+    let head = child.id();
+    let fixture = Fixture::new(vec![empty.clone(), child], head);
     assert_eq!(outcome(&fixture, 7, 128), Err(Error::ObjectNotFound));
     let child = commit(empty.id(), &[blob.id()], b"child");
-    let fixture = Fixture::new(vec![empty, blob, child.clone()], child.id());
+    let head = child.id();
+    let fixture = Fixture::new(vec![empty, blob, child], head);
     assert_eq!(outcome(&fixture, 7, 128), Err(Error::InvalidObject));
     let tag = OwnedObject {
         kind: ObjectKind::Tag,
@@ -387,7 +365,7 @@ fn tree_order_names_modes_and_framing_are_checked_across_read_boundaries() {
             entry(&mut tree, b"100644", name, blob.id());
         }
         assert_eq!(
-            outcome(&Fixture::tree(tree, vec![blob.clone()]), 1, 128),
+            tree_outcome(tree, vec![blob.clone()], 1, 128),
             Err(Error::UnsortedFiles)
         );
     }
@@ -395,32 +373,22 @@ fn tree_order_names_modes_and_framing_are_checked_across_read_boundaries() {
     entry(&mut tree, b"40000", b"foo", empty.id());
     entry(&mut tree, b"100644", b"foo.bar", blob.id());
     assert_eq!(
-        outcome(
-            &Fixture::tree(tree, vec![blob.clone(), empty.clone()]),
-            31,
-            128
-        ),
+        tree_outcome(tree, vec![blob.clone(), empty.clone()], 31, 128),
         Err(Error::UnsortedFiles)
     );
     let mut tree = vec![];
     entry(&mut tree, b"100644", b"foo", blob.id());
     entry(&mut tree, b"100644", b"foo.bar", blob.id());
     entry(&mut tree, b"40000", b"foo", empty.id());
+    let fixture = Fixture::tree(tree, vec![blob.clone(), empty.clone()]);
     for read in [1, 7, 4096] {
-        assert_eq!(
-            outcome(
-                &Fixture::tree(tree.clone(), vec![blob.clone(), empty.clone()]),
-                read,
-                129
-            ),
-            Err(Error::UnsortedFiles)
-        );
+        assert_eq!(outcome(&fixture, read, 129), Err(Error::UnsortedFiles));
     }
     for name in [b"".as_slice(), b".", b"..", b".GiT", b"a/b", b"a\\b"] {
         let mut tree = vec![];
         entry(&mut tree, b"100644", name, blob.id());
         assert_eq!(
-            outcome(&Fixture::tree(tree, vec![blob.clone()]), 1, 128),
+            tree_outcome(tree, vec![blob.clone()], 1, 128),
             Err(Error::InvalidFileName)
         );
     }
@@ -435,7 +403,7 @@ fn tree_order_names_modes_and_framing_are_checked_across_read_boundaries() {
         let mut tree = vec![];
         entry(&mut tree, mode, b"x", blob.id());
         assert_eq!(
-            outcome(&Fixture::tree(tree, vec![blob.clone()]), 1, 128),
+            tree_outcome(tree, vec![blob.clone()], 1, 128),
             Err(Error::InvalidObject)
         );
     }
@@ -443,11 +411,7 @@ fn tree_order_names_modes_and_framing_are_checked_across_read_boundaries() {
     entry(&mut complete, b"100644", b"x", blob.id());
     for length in 1..complete.len() {
         assert_eq!(
-            outcome(
-                &Fixture::tree(complete[..length].to_vec(), vec![blob.clone()]),
-                1,
-                128
-            ),
+            tree_outcome(complete[..length].to_vec(), vec![blob.clone()], 1, 128),
             Err(Error::InvalidObject),
             "truncated at {length}"
         );
@@ -455,14 +419,14 @@ fn tree_order_names_modes_and_framing_are_checked_across_read_boundaries() {
     let mut tree = vec![];
     entry(&mut tree, b"100644", b"x", ObjectId([0; 20]));
     assert_eq!(
-        outcome(&Fixture::tree(tree, vec![]), 1, 128),
+        tree_outcome(tree, vec![], 1, 128),
         Err(Error::InvalidObject)
     );
     // Binary names are legal Git bytes, independently of UTF-8.
     let mut tree = vec![];
     entry(&mut tree, b"100644", b"\xfe", blob.id());
     entry(&mut tree, b"100755", b"\xff", blob.id());
-    assert_eq!(outcome(&Fixture::tree(tree, vec![blob]), 1, 128), Ok(()));
+    assert_eq!(tree_outcome(tree, vec![blob], 1, 128), Ok(()));
 }
 
 #[test]
@@ -486,10 +450,12 @@ fn commit_headers_reject_broken_edges_and_missing_or_reordered_fields() {
             kind: ObjectKind::Commit,
             data: data.into_bytes(),
         };
-        let fixture = Fixture::new(vec![empty.clone(), object.clone()], object.id());
+        let head = object.id();
+        let fixture = Fixture::new(vec![empty.clone(), object], head);
         assert_eq!(outcome(&fixture, 1, 128), Err(Error::InvalidObject));
     }
-    let fixture = Fixture::new(vec![empty, good.clone()], good.id());
+    let head = good.id();
+    let fixture = Fixture::new(vec![empty, good], head);
     assert_eq!(outcome(&fixture, 1, 128), Ok(())); // Message is opaque graph data.
 }
 

@@ -37,6 +37,9 @@ pub fn read<'a>(input: &mut &'a [u8]) -> Result<Option<Packet<'a>>> {
         return Ok(None);
     }
     let prefix = input.get(..4).ok_or(Error::InvalidPacket)?;
+    if !prefix.iter().all(u8::is_ascii_hexdigit) {
+        return Err(Error::InvalidPacket);
+    }
     let prefix = core::str::from_utf8(prefix).map_err(|_| Error::InvalidPacket)?;
     let length = usize::from_str_radix(prefix, 16).map_err(|_| Error::InvalidPacket)?;
     if length == 0 {
