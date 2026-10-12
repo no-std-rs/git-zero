@@ -88,8 +88,24 @@ verified pack. A thread-local allocation counter checks file opening, validation
 prepacked verification and pack generation/serving with fixed caller buffers.
 Real Git clones/fetches nested file-backed snapshots through smart and dumb HTTP,
 with and without a prepacked file, and passes `fsck --strict` in all four cases.
-This advances the testing roadmap; benchmarks and Wasm memory-growth tracking
-remain separate work.
+
+The changing-snapshot test keeps the same native HTTP URL while selecting
+immutable file-backed snapshots between completed fetch sessions. Real Git
+clones through smart and dumb HTTP, fetches A → B → A, checks the remote tracking
+ref and single root history, verifies every object body and checkout byte, and
+passes `fsck --strict`. The snapshots change a binary file, add/remove files and
+share an unchanged blob. A fixed 4 KiB, single-entry pack cache serves repeat
+downloads and regenerates each evicted HEAD exactly once; generated and cached
+wire bytes match. A thread-local allocation counter covers all served routes.
+This test runs across the existing Linux/macOS and system/pinned Git CI matrix,
+using `GIT_ZERO_TEST_GIT` to select the reference executable.
+
+Core cache tests cover HEAD/encoder key separation, eviction, scratch and cache
+capacity exhaustion, read/write backend failures, and output failure followed by
+a scratchless retry. Hits do not enter the object provider. Failed generation or
+insertion produces no pack output; a successfully inserted complete pack survives
+an output failure. These synchronous tests leave concurrent host coordination,
+corrupt cache entries and persistent backend policy for future work.
 
 ## Selective runs and CI sharding
 

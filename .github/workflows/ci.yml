@@ -118,6 +118,8 @@ jobs:
       - run: cargo build -p git-zero-rustix --bin git-zero --locked
       - name: Parallel Git cross-validation
         run: python3 tests/interop.py --shard '${{ matrix.shard }}' --artifacts interop-artifacts
+      - name: Changing native snapshots and pack cache reuse
+        run: cargo test -p git-zero-rustix --test storage real_git_fetches_changed_file_snapshots_with_cache_eviction_and_return_to_old_head --locked
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

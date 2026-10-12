@@ -101,6 +101,11 @@ cannot overwrite each other's buffers or change repository identities.
 - [ ] Empty/bare repositories, arbitrary refs, tags, large binary blobs, deep histories,
   nested trees, aggressive packing, and deltas in the interoperability matrix.
 - [ ] Incremental fetch after changing a backend snapshot, pack reuse and eviction races.
+  Native smart/dumb tests now fetch file-backed snapshots through A → B → A at
+  one URL, validate refs, object bodies and checkouts with real Git, and exercise
+  fixed-memory complete-pack hits and eviction without allocation. Core tests
+  cover cache/backend/output failures and bounded retries. Concurrent eviction
+  and writer coordination remain host-backend work.
 - [ ] Fuzz packet lines, HTTP routing, zlib/pack parsers, and object-graph validation.
   Four bounded libFuzzer targets now cover packet lines, client discovery/HEAD/
   pack framing, HTTP routing/upload requests, and commit/tree graph validation.
