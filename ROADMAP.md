@@ -1,8 +1,28 @@
 # Roadmap
 
-The goal is a read-only Git client/server library with an allocation-free,
+The goal is a Git HTTP client/server library with an allocation-free,
 `no_std` core, stable synthetic repositories, on-demand packing, optional caching,
 and host adapters for native `rustix`, Wasm, and Cloudflare Workers.
+
+The current priority is **read-only HTTP server parity**, including its tests.
+Complete the server milestones below before starting further client features.
+Existing client code and regression tests remain in place. Read/write server
+support follows in section 7; completed client work and its deferred fetch/push
+follow-ups are recorded in section 8.
+
+Server parity means real Git can discover refs, clone, and fetch from git-zero
+over smart and dumb HTTP with the same refs, reachable objects, checkout contents,
+and supported negotiation behavior as Git's reference server. The target includes
+protocol v0/v1/v2, SHA-1/SHA-256, and shallow/filter fetches within explicit resource
+limits. Each capability stays unadvertised until its implementation and tests
+pass. Exceeding a limit must produce a documented failure without a successful
+partial response. Byte-identical pack encoding is not an acceptance requirement.
+
+Real Git is the client and Git `http-backend` or a static bare repository is the
+oracle for server acceptance. git-zero's client must not be a prerequisite for
+proving server correctness. HTTP authentication and deployment policy belong to
+hosts. Write support (`receive-pack`) has its own implementation and acceptance
+milestone after the read-only server gate.
 
 ## 0. Working foundation
 
@@ -20,7 +40,7 @@ and host adapters for native `rustix`, Wasm, and Cloudflare Workers.
 - [x] Parallel real-Git interoperability matrix and Wasm clone tests.
 - [x] README, testing instructions, and CI checks for native/Wasm/bare-metal builds.
 
-## 1. Object and repository storage
+## 1. Server objects, repositories, and refs
 
 - [x] Nested trees, executable files, symlinks, empty trees, and configurable refs.
 - [x] Caller-owned object metadata/index arrays to avoid repeated scans and hashing.
@@ -29,51 +49,43 @@ and host adapters for native `rustix`, Wasm, and Cloudflare Workers.
 - [x] Incremental root-entry snapshot builder with configurable commit identity/message/time.
 - [x] Validation of custom repository object graphs, tree order, and reachability.
 - [x] Native file-backed object provider using `rustix`, with optional prepacked data.
+- [ ] Empty/bare repositories, unborn and detached HEAD, symbolic refs, independent
+  branch tips, lightweight/annotated tags, and peeled ref advertisements.
+- [ ] Serve the correct reachable closure for selected refs and tag targets,
+  including merge histories and repositories with objects beyond HEAD's closure.
+- [ ] SHA-256 object IDs, repository validation, ref advertisements, packs, and
+  object-format negotiation alongside the existing SHA-1 path.
 
 Acceptance: Git `fsck --strict` accepts nested and generated snapshots; deterministic
 inputs yield identical IDs on native and Wasm without enabling an allocator.
+Real Git clone/fetch tests compare every advertised ref and reachable object's
+ID, kind, body, file mode, and checkout content with independently generated Git
+repositories. Cover empty/unborn remotes, detached HEAD, distinct branches,
+annotated tags, deep trees, merge histories, binary blobs, and both object formats.
 
-## 2. Client object consumption
+## 2. Smart HTTP and upload-pack parity
 
-- [x] Incremental zlib inflation into caller buffers with output/ratio limits.
-  The core decoder handles stored/fixed/dynamic DEFLATE, validates Adler-32,
-  borrows a 32 KiB history window and uses less than 2 KiB of resumable state.
-  Output and prefix expansion budgets are enforced before each emitted byte;
-  callers explicitly choose a prefix allowance. Python zlib, real Git loose
-  objects, allocation tracking and a bounded fuzz target cover the decoder.
-- [x] Validate loose-object headers, lengths, and IDs before exposing contents.
-  `Object::from_loose`, `client::decode_loose` and `fetch_loose_object` require a
-  canonical header, exact body size and matching SHA-1 before returning a body.
-  Complete zlib validation and rejection of trailing bytes precede exposure.
-- [x] Pack entry reader, CRC checks, object IDs, and bounded delta resolution.
-  The SHA-1 pack reader checks container framing/checksum, entry lengths and
-  exact count/closure, computes wire CRCs for comparison with index CRCs, and
-  reconstructs offset/reference deltas against explicitly supplied bases.
-  Canonical IDs, same-pack offset identity and output/instruction/depth budgets
-  are checked; base lookup and whole-fetch storage remain host responsibilities.
-- [ ] Caller-owned pack indexes and object sinks for complete smart fetches.
-- [ ] Dumb object-graph traversal, `objects/info/packs` and pack/index downloads,
-  with an explicit memory bound for visited objects and traversal state.
-- [ ] Correct empty/unborn remotes, symbolic refs, branch/tag selection, and SHA-256.
-- [ ] A complete clone/materialization example using a host object sink and checkout.
-
-Acceptance: git-zero imports and checks out a real Git repository through both
-HTTP protocols, including packed dumb repositories and delta-compressed packs.
-
-## 3. Protocol compatibility
-
+- [ ] Multiple wanted refs/IDs and bounded reachable-object selection, with an
+  explicit policy for unadvertised, unreachable, and arbitrary-object wants.
 - [ ] Broader v0 capability negotiation, ACK/have negotiation, sideband and error packets.
 - [ ] Protocol v1/v2 (`ls-refs`, `fetch`) with accurate capability advertisements.
 - [ ] Incremental requests and responses, backpressure, cancellation, and resume points.
 - [ ] Shallow/filter requests with bounded traversal and documented rejection paths.
-- [ ] Proper method/content-type checks and a wider malformed-request corpus.
-- [ ] Optional `git://` transport after HTTP compatibility is established.
+- [ ] Proper method/content-type checks, service selection, protocol-version
+  handling, route normalization, and a wider malformed-request corpus.
 
 Acceptance: supported cases from upstream HTTP tests have mapped, reproducible
 git-zero coverage; unsupported operations return explicit errors.
+Use real Git to exercise v0/v1/v2 discovery, clone, incremental fetch, multiple
+wants, have/ACK negotiation, sideband, shallow/deepen, and advertised filters.
+Compare refs and imported object closures with Git's server; retain packet/HTTP
+traces. Test malformed packets, unsupported capabilities, unauthorized wants,
+wrong methods/media types, truncated bodies, and exhausted request/output budgets.
 
-## 4. Packing and cache backends
+## 3. Dumb HTTP, packing, and cache backends
 
+- [ ] Serve `objects/info/packs` and valid pack/index downloads for packed dumb
+  repositories, alongside loose objects and consistently published refs/HEAD.
 - [ ] Bounded actual DEFLATE compression, with stored blocks as a selectable fallback.
 - [ ] Reuse prepacked entries and existing packs when their closure matches the request.
 - [ ] Optional delta generation with strict CPU/memory budgets.
@@ -84,17 +96,19 @@ git-zero coverage; unsupported operations return explicit errors.
 
 Acceptance: cache miss/hit/reuse paths produce equivalent objects; cache failures,
 corrupt entries, and concurrent writers have tested behavior.
+Real Git must clone and fetch loose-only, packed-only, and mixed dumb repositories.
+Validate generated packs/indexes with Git's strict importer and object checks;
+compare compressed, stored-block, prepacked, cached, and uncached results. Cover
+corrupt/truncated cache entries, changing refs, eviction, failed writes, and
+concurrent cold misses. Optional delta generation can follow the correctness
+baseline without blocking server parity.
 
-## 5. Platform adapters and demo
+## 4. Server adapters and hosting
 
-- [ ] Native DNS/IPv6/TLS, HTTP/1.1 framing, chunked transfer, redirects, and configurable limits.
+- [ ] Native IPv6/listener and TLS integration, HTTP/1.1 request/response framing,
+  chunked transfer, keep-alive, timeouts, and configurable connection/body limits.
 - [ ] Poll-based `rustix` server with independent per-connection caller-owned state.
-- [ ] Streaming Wasm client/server ABI and transport callbacks without Rust allocation.
-- [ ] GitHub Pages demo at `no-std-rs/git-zero`: run the Wasm client in the browser,
-  fetch this project's own repository from GitHub, resolve the default branch's
-  tip ref, check out that commit in memory, and list every file in its tree.
-  Plan browser CORS support or an optional HTTP proxy so the demo exercises the
-  Git client rather than substituting a GitHub API file listing.
+- [ ] Streaming Wasm server ABI and host I/O callbacks without Rust allocation.
 - [ ] Worker integration with async storage, streaming responses, and isolate-safe reuse.
 - [ ] Replace long embedded snapshot URLs with optional immutable persisted snapshots;
   preserve stable IDs across discovery and downloads, retries, and isolate changes.
@@ -104,15 +118,28 @@ corrupt entries, and concurrent writers have tested behavior.
 
 Acceptance: native and Worker hosts share protocol behavior; overlapping requests
 cannot overwrite each other's buffers or change repository identities.
+Run real Git clone/fetch against both adapters and compare objects/refs with the
+reference server. Exercise short reads/writes, slow and disconnected clients,
+chunked requests, concurrent sessions, timeouts, cancellation, storage failures,
+and repeated Worker requests. Define snapshot consistency across discovery and
+upload-pack, and verify bounded per-connection state and isolate-safe reuse.
 
-## 6. Test expansion
+## 5. Server parity tests and resource budgets
+
+Tests accompany each server milestone above. Existing git-zero client tests
+remain regression coverage; server completion is measured with real Git clients.
 
 - [x] Map upstream `t5550`/`t5551` cases to supported/planned/out-of-scope features;
   see `tests/upstream-http.md` for the pinned reference and independent comparisons.
+- [ ] Extend that map into a server acceptance matrix with a named local case,
+  reference-server comparison, host/protocol/object-format coverage, and explicit
+  remaining gap for every in-scope feature. Separate server results from client
+  limitations; a Git-only reference baseline does not prove git-zero server parity.
 - [ ] Reusable upstream fixture adapter where Git's harness allows replacing a server;
   record GPL provenance for any copied tests rather than copying them silently.
 - [ ] Empty/bare repositories, arbitrary refs, tags, large binary blobs, deep histories,
-  nested trees, aggressive packing, and deltas in the interoperability matrix.
+  nested trees, aggressive packing, and deltas served by git-zero in the real-Git
+  client interoperability matrix, including protocol versions and object formats.
 - [ ] Incremental fetch after changing a backend snapshot, pack reuse and eviction races.
   Native smart/dumb tests now fetch file-backed snapshots through A → B → A at
   one URL, validate refs, object bodies and checkouts with real Git, and exercise
@@ -127,6 +154,9 @@ cannot overwrite each other's buffers or change repository identities.
   Their shared assertions and seeded mutations also run in ordinary Cargo tests;
   CI runs AddressSanitizer smoke campaigns. Pack-index parsing needs coverage
   when its client API is implemented.
+- [ ] Expand server fuzz coverage for capability/want/have negotiation, v2 commands,
+  shallow/filter state, incremental HTTP framing, and concurrent/cancelled request
+  state. Retain regressions and check bounded work, state reset, and output guards.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.
@@ -153,4 +183,99 @@ cannot overwrite each other's buffers or change repository identities.
 - [x] Protocol traces and retained artifacts on failure; CI matrix over Git versions
   and Linux/macOS, with jobs isolated by temporary paths and ephemeral ports.
 
-Production write support (`receive-pack`) is outside the initial read-only scope.
+Acceptance: each server feature has positive and negative tests using independent
+fixtures and the reference server. Native/Wasm allocation and memory ceilings,
+concurrency isolation, and malformed-input campaigns are enforced in CI. Benchmarks
+compare real Git clients against Git and git-zero servers on identical repositories,
+including cold/warm clone and incremental fetch; retain wall/CPU/RSS, wire bytes,
+throughput, startup costs, and caller-owned buffer budgets. Keep optional
+kernel-scale benchmarks separate from mandatory, reproducible correctness checks.
+
+## 6. Server parity completion gate
+
+- [ ] All in-scope server cases have passing real-Git comparisons on native and
+  Worker/Wasm hosts across the supported Git/platform CI matrix.
+- [ ] Smart v0/v1/v2 and dumb HTTP clone/fetch, refs/tags/HEAD, incremental and
+  shallow/filter fetches, and SHA-1/SHA-256 pass their acceptance tests.
+- [ ] Streaming, concurrent requests, cancellation, cache/storage failures, and
+  resource-limit failures preserve repository consistency and bounded memory.
+- [ ] Server documentation accurately lists capabilities, host responsibilities,
+  configured limits, and remaining optional work; no advertised feature lacks tests.
+
+Start further client development after this gate passes. The next implementation
+step is to add independent server cases for refs/HEAD and selected-object wants,
+then implement the missing behavior alongside those tests.
+
+## 7. Read/write server support
+
+- [ ] A host-owned writable object store and ref transaction interface, with
+  explicit durability, locking, and compare-and-swap semantics for old/new IDs.
+- [ ] `receive-pack` discovery, bounded update-command and capability parsing,
+  pack ingestion, and accurate status/error responses.
+- [ ] Quarantine incoming objects until pack checksums, object IDs, delta bases,
+  graph connectivity, and requested ref updates have been validated. Bound
+  request size, object count, expanded bytes, delta depth, and validation work.
+- [ ] Branch/tag creation, update, and deletion; configurable fast-forward/force
+  policy and host authorization before publishing objects or changing refs.
+- [ ] Advertise atomic updates only when the host can commit the complete ref
+  transaction atomically. Failed validation or rejected atomic pushes publish
+  no ref changes; retries and concurrent pushes preserve old-ID checks.
+- [ ] Real Git push tests against git-zero and Git's reference server: initial
+  and incremental pushes, annotated tags, deletion, non-fast-forward rejection,
+  allowed force pushes, stale old IDs, multiple refs, and atomic failures.
+- [ ] Negative and resource tests for corrupt/truncated packs, missing bases,
+  disconnected objects, denied updates, storage failures, concurrent writers,
+  interrupted requests, and exhausted caller-owned buffers.
+
+Acceptance: real Git can push, then clone/fetch and pass `fsck --strict` against
+the accepted repository. Rejected pushes leave the promised ref/object visibility
+unchanged. Native and Worker hosts document writable storage, authentication,
+durability, and transaction guarantees before enabling receive-pack.
+
+## 8. Client work — deferred until server parity
+
+- [x] Incremental zlib inflation into caller buffers with output/ratio limits.
+  The core decoder handles stored/fixed/dynamic DEFLATE, validates Adler-32,
+  borrows a 32 KiB history window and uses less than 2 KiB of resumable state.
+  Output and prefix expansion budgets are enforced before each emitted byte;
+  callers explicitly choose a prefix allowance. Python zlib, real Git loose
+  objects, allocation tracking and a bounded fuzz target cover the decoder.
+- [x] Validate loose-object headers, lengths, and IDs before exposing contents.
+  `Object::from_loose`, `client::decode_loose` and `fetch_loose_object` require a
+  canonical header, exact body size and matching SHA-1 before returning a body.
+  Complete zlib validation and rejection of trailing bytes precede exposure.
+- [x] Pack entry reader, CRC checks, object IDs, and bounded delta resolution.
+  The SHA-1 pack reader checks container framing/checksum, entry lengths and
+  exact count/closure, computes wire CRCs for comparison with index CRCs, and
+  reconstructs offset/reference deltas against explicitly supplied bases.
+  Canonical IDs, same-pack offset identity and output/instruction/depth budgets
+  are checked; base lookup and whole-fetch storage remain host responsibilities.
+- [ ] Caller-owned pack indexes and object sinks for complete smart fetches.
+- [ ] Dumb object-graph traversal, `objects/info/packs` and pack/index downloads,
+  with an explicit memory bound for visited objects and traversal state.
+- [ ] Correct empty/unborn remotes, symbolic refs, branch/tag selection, and SHA-256.
+- [ ] A complete clone/materialization example using a host object sink and checkout.
+- [ ] Client capability and ACK/have negotiation, protocol v1/v2, sideband/error
+  decoding, shallow/filter requests, and bounded incremental transport state.
+- [ ] Client push: receive-pack discovery, ref selection, old/new-ID commands,
+  bounded outgoing pack generation, capability negotiation, and per-ref status
+  handling. Support creation/update/deletion and explicitly requested force or
+  atomic operations within the server's advertised capabilities.
+- [ ] Fetch/push interoperability against both Git and git-zero servers, with
+  corrupt transfers, rejected refs, interrupted I/O, and exact buffer limits.
+- [ ] Native client DNS/IPv6/TLS, HTTP/1.1/chunked framing, redirects, content-type
+  validation, and configurable transport limits.
+- [ ] Streaming Wasm client ABI and transport callbacks without Rust allocation.
+- [ ] GitHub Pages demo at `no-std-rs/git-zero`: run the Wasm client in the browser,
+  fetch this project's own repository from GitHub, resolve the default branch's
+  tip ref, check out that commit in memory, and list every file in its tree.
+  Plan browser CORS support or an optional HTTP proxy so the demo exercises the
+  Git client rather than substituting a GitHub API file listing.
+- [ ] Optional `git://` transport after HTTP server and client compatibility.
+
+Acceptance: git-zero imports and checks out a real Git repository through both
+HTTP protocols, including packed dumb repositories and delta-compressed packs.
+Its push client publishes supported ref updates to Git and git-zero servers;
+real Git independently verifies the resulting refs, objects, and checkouts.
+Client-specific upstream coverage, parser fuzzing, and host transport tests expand
+with those deferred features.
