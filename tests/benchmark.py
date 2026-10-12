@@ -19,6 +19,7 @@ from interop import environment, run
 from upstream_http import refs
 from benchmark_fixture import create, verify
 from benchmark_harness import Server
+from benchmark_limits import evaluate, load
 
 
 WORKLOADS = [f"{operation}-{protocol}" for operation in
@@ -152,6 +153,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=1, help="Independent workload workers; 1 avoids benchmark contention")
     parser.add_argument("--case", action="append", choices=WORKLOADS)
     parser.add_argument("--output", type=Path, required=True, help="JSON report including every raw measurement")
+    parser.add_argument("--limits", type=Path, help="JSON upper bounds for selected workload/implementation metrics")
     parser.add_argument("--fixture-dir", type=Path, help="Retain the synthetic repository/export in a new directory")
     parser.add_argument("--files", type=int, default=64)
     parser.add_argument("--blob-bytes", type=int, default=16384)
@@ -167,6 +169,11 @@ def main():
         parser.error("samples/jobs must be positive and warmup nonnegative")
     if min(args.files, args.commits, args.response_limit) < 1 or args.blob_bytes < 0:
         parser.error("files/commits/response-limit must be positive and blob-bytes nonnegative")
+    cases = list(dict.fromkeys(args.case or WORKLOADS))
+    try:
+        limits = load(args.limits, cases) if args.limits else {"schema_version": 1, "limits": []}
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     if platform.system() != "Linux" or not hasattr(os, "wait4"):
         parser.error("CPU/RSS measurement currently requires Linux")
     binary = str(args.binary.resolve())
@@ -179,9 +186,8 @@ def main():
     backend = str(Path(run("git", "--exec-path", env=env).decode().strip()) / "git-http-backend")
     if b"GNU Time" not in run(args.time, "--version", env=env):
         parser.error("--time must select GNU time")
-    cases = list(dict.fromkeys(args.case or WORKLOADS))
     report = {
-        "schema_version": 2, "git_version": run("git", "--version", env=env).decode().strip(),
+        "schema_version": 3, "git_version": run("git", "--version", env=env).decode().strip(),
         "git_zero_binary_sha256": hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
         "harness_sha256": hashlib.sha256(Path(harness).read_bytes()).hexdigest(),
         "git_http_backend_sha256": hashlib.sha256(Path(backend).read_bytes()).hexdigest(),
@@ -193,6 +199,7 @@ def main():
         "samples_per_implementation": args.samples, "warmup_rounds": args.warmup, "jobs": args.jobs,
         "file_transfer": args.file_transfer, "zero_loose_cache": args.zero_loose_cache,
         "budgets": {"request_bytes": 65536, "object_read_bytes": 65536, "response_bytes": args.response_limit},
+        "resource_limits": limits,
         "measurement_scope": "Fresh client command tree; CPU/RSS exclude server processes. "
                              "CPU includes the small GNU time observer; RSS excludes Python launcher memory. "
                              "Persistent warm servers and OS caches; no cold-cache claim. "
@@ -238,13 +245,18 @@ def main():
                       f"{original['server_frontend_peak_rss_kib']}/{zero['server_frontend_peak_rss_kib']} | "
                       f"{original['server_backend_child_peak_rss_kib']}/{zero['server_backend_child_peak_rss_kib']}", flush=True)
     report["results"].sort(key=lambda result: result["workload"])
-    report["status"] = "failed" if report["errors"] else "complete"
+    report["budget_evaluations"] = evaluate(limits, report["results"])
+    violations = [entry for entry in report["budget_evaluations"] if entry["status"] != "passed"]
+    for entry in violations:
+        print(f"BUDGET FAILED: {entry['workload']}/{entry['implementation']} {entry['metric']}: "
+              f"{entry['observed_maximum']} <= {entry['maximum']} ({entry['status']})", flush=True)
+    report["status"] = "failed" if report["errors"] or violations else "complete"
     report["host_load_end_1_5_15"] = os.getloadavg()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Raw measurements: {args.output}", flush=True)
-    if report["errors"]:
-        raise SystemExit("Benchmark failed; completed workloads and errors are retained in the JSON report")
+    if report["status"] == "failed":
+        raise SystemExit("Benchmark failed; measurements, errors and budget evaluations are retained in the JSON report")
 
 
 if __name__ == "__main__":

@@ -118,8 +118,10 @@ cannot overwrite each other's buffers or change repository identities.
   simultaneous process-tree memory remain explicit future work.
   Worker ABI tests now enforce a 24-page initial linear-memory ceiling, fixed
   input/output capacities and no growth across repeated, full-capacity and invalid
-  requests. JavaScript/isolate memory accounting and benchmark regression budgets
-  remain future work.
+  requests. Explicit opt-in wall/CPU/RSS limits now check the largest raw
+  benchmark observations, retain failures in schema-3 reports, and enforce native
+  memory caps in CI. JavaScript/isolate memory accounting and simultaneous process
+  tree RSS remain future work.
 - [ ] Opt-in local Linux kernel repository benchmark using a caller-provided clone
   and pinned revision; compare supported clone/fetch and object-reading workloads
   with real Git over loopback, recording wall/CPU time, peak RSS, throughput,

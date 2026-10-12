@@ -21,6 +21,7 @@ jobs:
           python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
             --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
             --jobs 8 --samples 2 --warmup 1 --fixture-dir /tmp/git-zero-benchmark-fixture \
+            --limits tests/benchmark-limits.json \
             --output /tmp/git-zero-benchmark-smoke.json
           target/debug/examples/encoder-profile /tmp/git-zero-benchmark-fixture 1
           for transfer in auto buffered; do
@@ -46,6 +47,33 @@ jobs:
           assert [result['workload'] for result in report['results']] == ['server-discovery-dumb']
           assert [error['workload'] for error in report['errors']] == ['server-clone-dumb']
           assert report['errors'][0]['message']
+          PY
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          limits = {'schema_version': 1, 'limits': [{
+              'workload': 'server-discovery-dumb', 'implementation': 'zero',
+              'metric': 'server.frontend_peak_rss_kib', 'maximum': 0}]}
+          Path('/tmp/git-zero-benchmark-impossible-limits.json').write_text(json.dumps(limits))
+          PY
+          if python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
+            --binary target/debug/git-zero --files 4 --blob-bytes 256 --commits 3 \
+            --case server-discovery-dumb --samples 1 --warmup 0 \
+            --limits /tmp/git-zero-benchmark-impossible-limits.json \
+            --output /tmp/git-zero-benchmark-budget-failure.json; then
+            echo "Expected RSS to exceed the deliberately impossible limit"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('/tmp/git-zero-benchmark-budget-failure.json').read_text())
+          assert report['schema_version'] == 3 and report['status'] == 'failed'
+          assert not report['errors']
+          assert report['results'][0]['samples']['zero'][0]['server']['frontend_peak_rss_kib'] > 0
+          evaluation, = report['budget_evaluations']
+          assert evaluation['status'] == 'exceeded' and evaluation['maximum'] == 0
+          assert evaluation['observed_maximum'] > 0 and evaluation['observations'] == 1
           PY
       - uses: actions/upload-artifact@v4
         if: always()

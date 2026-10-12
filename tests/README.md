@@ -211,12 +211,46 @@ frontend and child peaks.** No CPU/RSS claim is inferred from client counters.
 Git's smart CGI process interface remains part of the measured backend cost;
 the shared frontend does not turn Git into an in-process server library.
 
-The JSON schema is version 2 and preserves raw client/server samples, startup
+The JSON schema is version 3 and preserves raw client/server samples, startup
 measurements, host/tool/binary identities, buffer budgets, fixture parameters and
 fingerprints. `--fixture-dir` retains Git's repository, raw export and metadata
 in a new directory. A failed workload leaves completed cases and explicit errors
-in a report marked `failed`, and the command exits unsuccessfully. To use both
-routes manually after creating that fixture:
+in a report marked `failed`, and the command exits unsuccessfully.
+
+`--limits path.json` adds explicit regression checks to a run. The file uses
+`schema_version: 1` and a nonempty `limits` array. Each entry selects one executed
+`workload`, `implementation` (`git` or `zero`), `metric` and inclusive numeric
+`maximum`. For example, `tests/benchmark-limits.json` caps the tiny CI fixture's
+Rust smart-clone client and frontend at 65,536 KiB each, and requires no backend
+child memory. Run it with the CI fixture dimensions:
+
+```sh
+python3 tests/benchmark.py --files 4 --blob-bytes 256 --commits 3 \
+  --case server-clone-smart --samples 2 --warmup 1 \
+  --limits tests/benchmark-limits.json --output /tmp/git-zero-budget-check.json
+```
+
+Supported metrics are `client.wall_s`, `client.cpu_s`, `client.max_rss_kib`,
+`server.wall_s`, `server.cpu_s`, `server.frontend_peak_rss_kib`,
+`server.backend_child_peak_rss_kib`, `startup.wall_s`, `startup.cpu_s` and
+`startup.frontend_peak_rss_kib`. Each limit checks the largest raw measured
+observation, so a single outlier fails even when the median passes. Startup
+limits check the one startup observation for that server. Wall/CPU observations
+exclude discarded warmups; lifetime RSS peaks still include preparation/warmups.
+Client, frontend and child memory stay separate. In client-discovery workloads,
+both implementations use the same Git-backed server, as in the paired samples.
+
+Limits are opt-in observations, checked after the workloads finish. Choose
+wall/CPU caps for your fixture and host; CI enforces memory caps without imposing
+timing caps on shared runners. Unknown metrics, duplicates and limits for
+unselected workloads fail before servers start. Missing, invalid or exceeded
+observations fail the run. `resource_limits` records the policy and
+`budget_evaluations` records every observed maximum, sample count and outcome;
+all raw samples remain in the failed report. Unit tests cover boundary values,
+outliers and incomplete results; CI exercises passing caps and an impossible
+zero-KiB cap through the real Rust host and Git clients.
+
+To use both routes manually after creating that fixture:
 
 ```sh
 target/release/examples/benchmark-server /tmp/git-zero-synthetic \

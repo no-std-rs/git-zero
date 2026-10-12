@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "limits": [
+    {
+      "workload": "server-clone-smart",
+      "implementation": "zero",
+      "metric": "client.max_rss_kib",
+      "maximum": 65536
+    },
+    {
+      "workload": "server-clone-smart",
+      "implementation": "zero",
+      "metric": "server.frontend_peak_rss_kib",
+      "maximum": 65536
+    },
+    {
+      "workload": "server-clone-smart",
+      "implementation": "zero",
+      "metric": "server.backend_child_peak_rss_kib",
+      "maximum": 0
+    }
+  ]
+}
