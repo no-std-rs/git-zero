@@ -274,11 +274,64 @@ target/release/examples/benchmark-server /tmp/git-zero-synthetic \
 # Append /git/repo.git or /zero/repo.git to the printed listening URL.
 ```
 
+### Pinned caller repositories
+
+Opt into an existing local SHA-1 repository instead of the synthetic fixture.
+Supply the full lowercase commit ID; branch names and abbreviated IDs are
+rejected, so moving HEAD or another ref cannot select a different workload.
+
+```sh
+python3 tests/benchmark.py --source-repo /path/to/linux \
+  --revision 'FULL_40_CHARACTER_COMMIT_ID' \
+  --max-source-objects 8192 --max-source-bytes 67108864 \
+  --case server-clone-smart --case server-fetch-smart \
+  --samples 5 --warmup 1 --output /tmp/git-zero-pinned-performance.json
+```
+
+The importer reads the selected commit's complete reachable graph, including
+merge parents, from Git's object store. It ignores working-copy changes and
+replacement refs, disables lazy fetching and transport access, and rejects
+shallow repositories, legacy graft files, borrowed alternate object stores
+(including shared clones), or missing objects. It creates a separate bare repository
+with that commit at HEAD/main and the same raw export used by the native host.
+Source refs, config, index, packs and worktree remain unchanged. Reports and
+retained fixtures must be outside the source and its Git directories, including
+shared worktree metadata; symlinked destinations are resolved before checking.
+Extra source
+branches and annotated tag objects are excluded from the selected commit graph.
+Checkout verification covers nested paths, arbitrary path bytes, executable
+files and symlinks; external gitlinks remain uninitialized directories.
+
+The defaults cap enumeration at 8192 objects and retained raw bodies at 64 MiB.
+Enumeration stops at the object bound; object sizes are checked before loading
+all bodies. Increase both limits explicitly for a larger selection, and size
+the independent HTTP response budget with `--response-limit`. The fixture report
+records the source path, exact commit, complete history count, limits and the
+existing raw/encoded fingerprints. These input limits do not describe Python's
+total preparation memory; the current native host also owns one descriptor per
+object. Fixture preparation remains outside request timing.
+
+Git reads source packs and deltas during preparation. Both prepared backends
+retain identical IDs and bodies, and the benchmark's compression/delta policy
+still applies to the separate Git fixture. This measures the prepared backends,
+rather than the caller repository's original storage layout. Synthetic
+`--files`, `--blob-bytes` and `--commits` cannot be combined with this mode.
+
+Ten real-Git unit tests check packed merge history, source preservation,
+moving refs/replacements, exact and exceeded limits, invalid selections,
+overlapping destinations, shallow/SHA-256 repositories and unavailable promised
+objects. They also reject shared/transitive alternates and grafts in common
+worktree metadata before enumeration or writes. CI runs all
+eight paired HTTP workloads against a small packed caller fixture, checking
+its nested binary files, symlink, executable and external gitlink. These remain
+warm-server/cache measurements; kernel-scale preparation, local object-reading
+workloads and controlled cold-cache runs remain roadmap work.
+
 These are warm loopback measurements, with no cold-cache claim. Git-zero's raw
 fetch is still not compared with Git's full materialization. The caller-provided
-Linux kernel benchmark, advanced compression/delta modes and simultaneous process
-tree memory remain roadmap work. Wasm linear-memory budgets are checked separately
-by the Worker tests described below.
+Linux kernel benchmark's remaining workloads, advanced compression/delta modes
+and simultaneous process tree memory remain roadmap work. Wasm linear-memory
+budgets are checked separately by the Worker tests described below.
 
 ### Isolating encoder CPU
 

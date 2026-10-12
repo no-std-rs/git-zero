@@ -131,6 +131,10 @@ cannot overwrite each other's buffers or change repository identities.
   and pinned revision; compare supported clone/fetch and object-reading workloads
   with real Git over loopback, recording wall/CPU time, peak RSS, throughput,
   and caller-owned buffer budgets for cold/warm runs.
+  Pinned caller-repository fixtures now feed the eight existing paired HTTP
+  workloads, with bounded object/body loading and source-preservation tests.
+  Kernel-scale preparation, local object-reading workloads and controlled
+  cold-cache runs remain future work.
 - [x] Protocol traces and retained artifacts on failure; CI matrix over Git versions
   and Linux/macOS, with jobs isolated by temporary paths and ephemeral ports.
 

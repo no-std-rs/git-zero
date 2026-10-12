@@ -20,6 +20,7 @@ from upstream_http import refs
 from benchmark_fixture import create, verify
 from benchmark_harness import Server
 from benchmark_limits import evaluate, load
+from benchmark_source import create as create_source, read as read_source
 
 
 WORKLOADS = [f"{operation}-{protocol}" for operation in
@@ -154,10 +155,14 @@ def main():
     parser.add_argument("--case", action="append", choices=WORKLOADS)
     parser.add_argument("--output", type=Path, required=True, help="JSON report including every raw measurement")
     parser.add_argument("--limits", type=Path, help="JSON upper bounds for selected workload/implementation metrics")
-    parser.add_argument("--fixture-dir", type=Path, help="Retain the synthetic repository/export in a new directory")
-    parser.add_argument("--files", type=int, default=64)
-    parser.add_argument("--blob-bytes", type=int, default=16384)
-    parser.add_argument("--commits", type=int, default=16)
+    parser.add_argument("--fixture-dir", type=Path, help="Retain the prepared repository/export in a new directory")
+    parser.add_argument("--source-repo", type=Path, help="Read a caller repository instead of generating a synthetic fixture")
+    parser.add_argument("--revision", help="Full lowercase SHA-1 commit ID; required with --source-repo")
+    parser.add_argument("--max-source-objects", type=int, default=8192, help="Object-count ceiling before loading source bodies")
+    parser.add_argument("--max-source-bytes", type=int, default=64 * 1024 * 1024, help="Raw-body byte ceiling before loading source bodies")
+    parser.add_argument("--files", type=int, help="Synthetic file count (default: 64)")
+    parser.add_argument("--blob-bytes", type=int, help="Synthetic bytes per blob (default: 16384)")
+    parser.add_argument("--commits", type=int, help="Synthetic history length (default: 16)")
     parser.add_argument("--git-compression", type=int, choices=range(10), default=0, help="0 matches stored-DEFLATE; 6 shows compression tradeoffs")
     parser.add_argument("--response-limit", type=int, default=32 * 1024 * 1024, help="Per-response body budget in the Rust host")
     parser.add_argument("--file-transfer", choices=("auto", "buffered"), default="auto",
@@ -165,8 +170,17 @@ def main():
     parser.add_argument("--zero-loose-cache", action="store_true",
                         help="Preencode Rust loose objects at server startup to compare file serving on both dumb backends")
     args = parser.parse_args()
+    if bool(args.source_repo) != bool(args.revision):
+        parser.error("--source-repo and --revision must be supplied together")
+    dimensions = (args.files, args.blob_bytes, args.commits)
+    if args.source_repo and any(value is not None for value in dimensions):
+        parser.error("synthetic dimensions cannot be combined with --source-repo")
+    args.files, args.blob_bytes, args.commits = (
+        default if value is None else value for value, default in zip(dimensions, (64, 16384, 16)))
     if args.samples < 1 or args.warmup < 0 or args.jobs < 1:
         parser.error("samples/jobs must be positive and warmup nonnegative")
+    if min(args.max_source_objects, args.max_source_bytes) < 1:
+        parser.error("source object and byte limits must be positive")
     if min(args.files, args.commits, args.response_limit) < 1 or args.blob_bytes < 0:
         parser.error("files/commits/response-limit must be positive and blob-bytes nonnegative")
     cases = list(dict.fromkeys(args.case or WORKLOADS))
@@ -183,6 +197,14 @@ def main():
     repository_root = Path(__file__).resolve().parents[1]
     git = str(Path(args.git).resolve()) if os.sep in args.git else args.git
     env = environment(git)
+    source = None
+    if args.source_repo:
+        try:
+            source = read_source(args.source_repo, args.revision, env,
+                                 args.max_source_objects, args.max_source_bytes,
+                                 (args.output, args.fixture_dir))
+        except (OSError, ValueError, AssertionError, subprocess.TimeoutExpired) as error:
+            parser.error(str(error))
     backend = str(Path(run("git", "--exec-path", env=env).decode().strip()) / "git-http-backend")
     if b"GNU Time" not in run(args.time, "--version", env=env):
         parser.error("--time must select GNU time")
@@ -221,7 +243,12 @@ def main():
         fixture = Path(directory)
         if args.fixture_dir:
             fixture.mkdir(parents=True, exist_ok=False)
-        bare, expected, metadata = create(fixture, env, args.files, args.blob_bytes, args.commits, args.git_compression)
+        if source is None:
+            bare, expected, metadata = create(fixture, env, args.files, args.blob_bytes, args.commits, args.git_compression)
+        else:
+            expected, description = source
+            bare, expected, metadata = create_source(fixture, env, args.revision, expected, description,
+                                                     args.git_compression)
         report["fixture"] = metadata
         report["fixture_directory"] = str(fixture) if args.fixture_dir else None
         print(f"Fixture: {metadata['objects']} objects, {metadata['raw_object_bytes']} raw bytes, HEAD {metadata['head']}", flush=True)

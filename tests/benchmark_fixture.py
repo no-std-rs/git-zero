@@ -1,18 +1,24 @@
 """Deterministic Git repository and identical raw file-provider export."""
 import hashlib
 import json
+import os
 
 from interop import run
 from upstream_http import git, object_manifest
 
 
-def create(root, env, files, blob_bytes, commits, compression):
+def initialize(root, env, compression):
     bare = root / "repo.git"
     run("git", "init", "-q", "--bare", "--object-format=sha1", "-b", "main", str(bare), env=env)
     for key, value in (("core.compression", compression), ("core.looseCompression", compression),
                        ("pack.compression", compression),
                        ("pack.window", 0), ("pack.depth", 0), ("http.getanyfile", "true")):
         git(bare, "config", key, str(value), env=env)
+    return bare
+
+
+def create(root, env, files, blob_bytes, commits, compression):
+    bare = initialize(root, env, compression)
     entries = {}
     parent = None
     for revision in range(commits):
@@ -29,9 +35,14 @@ def create(root, env, files, blob_bytes, commits, compression):
         parents = ["-p", parent] if parent else []
         parent = git(bare, "commit-tree", tree, *parents, env=env,
                      data=f"synthetic revision {revision}\n".encode()).strip().decode()
-    git(bare, "update-ref", "refs/heads/main", parent, env=env)
-    git(bare, "update-server-info", env=env)
-    manifest = object_manifest(bare, "--all", env)
+    manifest = object_manifest(bare, parent, env)
+    return export(root, bare, parent, manifest, env, compression,
+                  {"kind": "synthetic", "files": files, "blob_bytes": blob_bytes,
+                   "history_commits": commits})
+
+
+def export(root, bare, head, manifest, env, compression, description):
+    """Encode identical bodies for Git and the raw provider in an owned fixture."""
     # mktree does not load default compression config in some Git versions.
     # Rewrite every loose object through hash-object, which does, before any
     # server sees this fixture. Object IDs and graph stay exactly the same.
@@ -39,15 +50,17 @@ def create(root, env, files, blob_bytes, commits, compression):
     loose_bytes = 0
     for oid, (kind, body) in sorted(manifest.items()):
         path = bare / "objects" / oid[:2].decode() / oid[2:].decode()
-        path.unlink()
+        path.unlink(missing_ok=True)
         assert git(bare, "hash-object", "-w", "-t", kind.decode(), "--stdin", env=env, data=body).strip() == oid
         encoded = path.read_bytes()
         if compression == 0:
             assert (encoded[2] >> 1) & 3 == 0, "expected stored-DEFLATE loose object"
         loose_digest.update(encoded)
         loose_bytes += len(encoded)
+    git(bare, "update-ref", "refs/heads/main", head, env=env)
+    git(bare, "update-server-info", env=env)
     git(bare, "fsck", "--strict", env=env)
-    rows = [parent]
+    rows = [head]
     digest = hashlib.sha256()
     with (root / "objects.raw").open("wb") as raw:
         for oid, (kind, body) in sorted(manifest.items()):
@@ -55,8 +68,7 @@ def create(root, env, files, blob_bytes, commits, compression):
             raw.write(body)
             digest.update(body)
     (root / "objects.tsv").write_text("\n".join(rows) + "\n")
-    metadata = {"head": parent, "files": files, "blob_bytes": blob_bytes,
-                "history_commits": commits, "objects": len(manifest),
+    metadata = {**description, "head": head, "objects": len(manifest),
                 "raw_object_bytes": (root / "objects.raw").stat().st_size,
                 "raw_sha256": digest.hexdigest(), "git_compression": compression,
                 "git_loose_object_bytes": loose_bytes, "git_loose_sha256": loose_digest.hexdigest(),
@@ -78,7 +90,13 @@ def verify(bare, target, expected, env):
             continue
         metadata, name = record.split(b"\t", 1)
         mode, kind, oid = metadata.split()
-        assert kind == b"blob"
-        path = target / name.decode()
-        assert path.read_bytes() == expected[oid][1]
-        assert bool(path.stat().st_mode & 0o111) == (mode == b"100755")
+        path = target / os.fsdecode(name)
+        if mode == b"160000":
+            assert kind == b"commit" and path.is_dir() and not path.is_symlink()
+        elif mode == b"120000":
+            assert kind == b"blob" and path.is_symlink()
+            assert os.fsencode(os.readlink(path)) == expected[oid][1]
+        else:
+            assert kind == b"blob" and not path.is_symlink()
+            assert path.read_bytes() == expected[oid][1]
+            assert bool(path.stat().st_mode & 0o111) == (mode == b"100755")
