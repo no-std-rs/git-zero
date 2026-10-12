@@ -214,7 +214,9 @@ the shared frontend does not turn Git into an in-process server library.
 The JSON schema is version 2 and preserves raw client/server samples, startup
 measurements, host/tool/binary identities, buffer budgets, fixture parameters and
 fingerprints. `--fixture-dir` retains Git's repository, raw export and metadata
-in a new directory. To use both routes manually after creating that fixture:
+in a new directory. A failed workload leaves completed cases and explicit errors
+in a report marked `failed`, and the command exits unsuccessfully. To use both
+routes manually after creating that fixture:
 
 ```sh
 target/release/examples/benchmark-server /tmp/git-zero-synthetic \

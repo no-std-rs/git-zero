@@ -204,7 +204,7 @@ def main():
                              "these peaks are not simultaneous aggregate memory and must not be added. "
                              "Server initialization, control barriers and metric reporting are outside request intervals. "
                              "Rust generates stored-DEFLATE responses; Git compression is configurable, deltas disabled.",
-        "results": [],
+        "expected_workloads": cases, "results": [], "errors": [],
     }
     print(f"{report['git_version']}; {args.samples} paired samples, {args.jobs} workload workers", flush=True)
     print("workload | Git/zero wall ms | ratio | server CPU ms | frontend peak KiB | child peak KiB", flush=True)
@@ -223,7 +223,13 @@ def main():
                                        args.samples, args.warmup, args.time, args.response_limit,
                                        args.file_transfer, args.zero_loose_cache): name for name in cases}
             for future in concurrent.futures.as_completed(futures):
-                result = future.result()
+                try:
+                    result = future.result()
+                except Exception as error:
+                    failure = {"workload": futures[future], "type": type(error).__name__, "message": str(error)}
+                    report["errors"].append(failure)
+                    print(f"{failure['workload']} FAILED: {failure['type']}: {failure['message']}", flush=True)
+                    continue
                 report["results"].append(result)
                 original, zero = result["summary"]["git"], result["summary"]["zero"]
                 print(f"{result['workload']} | {original['median_wall_s'] * 1000:.3f}/{zero['median_wall_s'] * 1000:.3f} | "
@@ -232,10 +238,13 @@ def main():
                       f"{original['server_frontend_peak_rss_kib']}/{zero['server_frontend_peak_rss_kib']} | "
                       f"{original['server_backend_child_peak_rss_kib']}/{zero['server_backend_child_peak_rss_kib']}", flush=True)
     report["results"].sort(key=lambda result: result["workload"])
+    report["status"] = "failed" if report["errors"] else "complete"
     report["host_load_end_1_5_15"] = os.getloadavg()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Raw measurements: {args.output}", flush=True)
+    if report["errors"]:
+        raise SystemExit("Benchmark failed; completed workloads and errors are retained in the JSON report")
 
 
 if __name__ == "__main__":
