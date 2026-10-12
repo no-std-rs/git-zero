@@ -25,6 +25,19 @@ use rustix::{
     },
 };
 
+#[cfg(not(target_vendor = "apple"))]
+const SOCKET_FLAGS: SocketFlags = SocketFlags::CLOEXEC;
+#[cfg(target_vendor = "apple")]
+const SOCKET_FLAGS: SocketFlags = SocketFlags::empty();
+
+fn close_on_exec(socket: OwnedFd) -> Result<OwnedFd> {
+    // Darwin has no SOCK_CLOEXEC/accept4 flags; set the descriptor flag after
+    // creation. Other platforms set it atomically through SOCKET_FLAGS.
+    #[cfg(target_vendor = "apple")]
+    rustix::io::fcntl_setfd(&socket, rustix::io::FdFlags::CLOEXEC).map_err(|_| Error::Backend)?;
+    Ok(socket)
+}
+
 pub fn listen(port: u16) -> Result<OwnedFd> {
     let socket = socket()?;
     sockopt::set_socket_reuseaddr(&socket, true).map_err(|_| Error::Backend)?;
@@ -42,19 +55,17 @@ pub fn local_port(socket: &impl AsFd) -> Result<u16> {
 }
 
 pub fn accept(socket: &impl AsFd) -> Result<OwnedFd> {
-    let client = net::accept_with(socket, SocketFlags::CLOEXEC).map_err(|_| Error::Backend)?;
+    let client =
+        close_on_exec(net::accept_with(socket, SOCKET_FLAGS).map_err(|_| Error::Backend)?)?;
     timeouts(&client)?;
     Ok(client)
 }
 
 fn socket() -> Result<OwnedFd> {
-    net::socket_with(
-        AddressFamily::INET,
-        SocketType::STREAM,
-        SocketFlags::CLOEXEC,
-        None,
+    close_on_exec(
+        net::socket_with(AddressFamily::INET, SocketType::STREAM, SOCKET_FLAGS, None)
+            .map_err(|_| Error::Backend)?,
     )
-    .map_err(|_| Error::Backend)
 }
 
 fn timeouts(socket: &impl AsFd) -> Result<()> {
@@ -69,8 +80,16 @@ pub struct SocketWriter<'a>(pub BorrowedFd<'a>);
 
 impl Write for SocketWriter<'_> {
     fn write_all(&mut self, mut bytes: &[u8]) -> Result<()> {
+        #[cfg(target_vendor = "apple")]
+        let flags = {
+            // Cover borrowed host sockets as well as sockets opened here.
+            sockopt::set_socket_nosigpipe(self.0, true).map_err(|_| Error::Backend)?;
+            SendFlags::empty()
+        };
+        #[cfg(not(target_vendor = "apple"))]
+        let flags = SendFlags::NOSIGNAL;
         while !bytes.is_empty() {
-            match net::send(self.0, bytes, SendFlags::NOSIGNAL) {
+            match net::send(self.0, bytes, flags) {
                 Ok(0) => return Err(Error::Backend),
                 Ok(length) => bytes = &bytes[length..],
                 Err(rustix::io::Errno::INTR) => continue,
@@ -169,12 +188,17 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
 }
 
 pub fn respond(socket: &impl AsFd, response: Response, body: &[u8]) -> Result<()> {
+    respond_headers(socket, response, body.len() as u64)?;
+    SocketWriter(socket.as_fd()).write_all(body)
+}
+
+/// Write framing for a body streamed separately by the host. The host must
+/// then write exactly `body_length` bytes and close the connection on failure.
+pub fn respond_headers(socket: &impl AsFd, response: Response, body_length: u64) -> Result<()> {
     let mut storage = [0; 512];
     let mut header = SliceWriter::new(&mut storage);
-    write!(&mut header, "HTTP/1.0 {} Response\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", response.status, response.content_type, body.len()).map_err(|_| Error::BufferTooSmall)?;
-    let mut output = SocketWriter(socket.as_fd());
-    output.write_all(header.as_bytes())?;
-    output.write_all(body)
+    write!(&mut header, "HTTP/1.0 {} Response\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", response.status, response.content_type, body_length).map_err(|_| Error::BufferTooSmall)?;
+    SocketWriter(socket.as_fd()).write_all(header.as_bytes())
 }
 
 /// Numeric IPv4 addresses only. TLS, redirects, and chunked transfer decoding

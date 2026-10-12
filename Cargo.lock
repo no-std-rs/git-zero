@@ -84,6 +84,7 @@ name = "git-zero-rustix"
 version = "0.1.0"
 dependencies = [
  "git-zero",
+ "libc",
  "rustix",
 ]
 

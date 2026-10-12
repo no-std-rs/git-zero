@@ -128,6 +128,51 @@ struct Loopback<'a, R> {
     repo: &'a R,
     dumb: bool,
 }
+
+#[test]
+fn empty_smart_advertisement_has_no_refs_or_fetchable_head() {
+    struct Advertisement(Vec<u8>);
+    impl Transport for Advertisement {
+        fn request(
+            &mut self,
+            request: Request<'_>,
+            response: &mut [u8],
+        ) -> git_zero::Result<(u16, usize)> {
+            assert_eq!(request.path, "info/refs");
+            response[..self.0.len()].copy_from_slice(&self.0);
+            Ok((200, self.0.len()))
+        }
+    }
+    for reference in [
+        b"0000000000000000000000000000000000000000 capabilities^{}\0multi_ack symref=HEAD:refs/heads/main\n".as_slice(),
+        b"0000000000000000000000000000000000000000 capabilities^{}\n",
+    ] {
+        let mut wire = b"001e# service=git-upload-pack\n0000".to_vec();
+        wire.extend_from_slice(format!("{:04x}", reference.len() + 4).as_bytes());
+        wire.extend_from_slice(reference);
+        wire.extend_from_slice(b"0000");
+        let mut transport = Advertisement(wire);
+        let mut storage = [0; 512];
+        let discovery = client::discover(&mut transport, &mut storage).unwrap();
+        assert_eq!(discovery.protocol, Protocol::Smart);
+        assert_eq!(discovery.references().count(), 0);
+        assert_eq!(discovery.head(), Err(Error::ObjectNotFound));
+        assert_eq!(
+            client::read_head(&mut transport, &discovery, &mut []),
+            Err(Error::ObjectNotFound)
+        );
+    }
+    // The marker must not mask a truncated packet after it.
+    let mut wire = b"001e# service=git-upload-pack\n0000".to_vec();
+    let reference = b"0000000000000000000000000000000000000000 capabilities^{}\0agent=git\n";
+    wire.extend_from_slice(format!("{:04x}", reference.len() + 4).as_bytes());
+    wire.extend_from_slice(reference);
+    wire.extend_from_slice(b"0008a");
+    assert!(matches!(
+        client::discover(&mut Advertisement(wire), &mut [0; 512]),
+        Err(Error::InvalidPacket)
+    ));
+}
 impl<R: Repository> Transport for Loopback<'_, R> {
     fn request(
         &mut self,

@@ -94,7 +94,8 @@ cannot overwrite each other's buffers or change repository identities.
 
 ## 6. Test expansion
 
-- [ ] Map upstream `t5550`/`t5551` cases to supported/planned/out-of-scope features.
+- [x] Map upstream `t5550`/`t5551` cases to supported/planned/out-of-scope features;
+  see `tests/upstream-http.md` for the pinned reference and independent comparisons.
 - [ ] Reusable upstream fixture adapter where Git's harness allows replacing a server;
   record GPL provenance for any copied tests rather than copying them silently.
 - [ ] Empty/bare repositories, arbitrary refs, tags, large binary blobs, deep histories,
@@ -104,11 +105,17 @@ cannot overwrite each other's buffers or change repository identities.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.
+  `tests/benchmark.py` uses a configurable synthetic Git repository and identical
+  file-provider export through a shared Rust HTTP host. Paired discovery/clone/fetch
+  measurements retain client and server wall/CPU/RSS, child usage, response bytes,
+  startup costs and buffer budgets. Encoded files share a sendfile path with bounded
+  fallbacks; optional Rust loose caching charges preparation to startup. Wasm and
+  simultaneous process-tree memory remain explicit future work.
 - [ ] Opt-in local Linux kernel repository benchmark using a caller-provided clone
   and pinned revision; compare supported clone/fetch and object-reading workloads
   with real Git over loopback, recording wall/CPU time, peak RSS, throughput,
   and caller-owned buffer budgets for cold/warm runs.
-- [ ] Protocol traces and retained artifacts on failure; CI matrix over Git versions
+- [x] Protocol traces and retained artifacts on failure; CI matrix over Git versions
   and Linux/macOS, with jobs isolated by temporary paths and ephemeral ports.
 
 Production write support (`receive-pack`) is outside the initial read-only scope.

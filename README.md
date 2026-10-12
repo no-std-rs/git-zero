@@ -386,7 +386,8 @@ cd examples/cloudflare-worker
 npm test
 ```
 
-`cargo test` runs the eight-way native interoperability matrix in parallel. All
+`cargo test` runs the eight-way native interoperability matrix plus sixteen
+upstream-inspired differential cases in parallel, defaulting to the CPU count. All
 HTTP tests need permission to bind/connect to loopback. The Worker tests clone
 through the actual Wasm module with real Git over both HTTP protocols. See
 [tests/README.md](tests/README.md) for selective runs, CI sharding, and the optional
