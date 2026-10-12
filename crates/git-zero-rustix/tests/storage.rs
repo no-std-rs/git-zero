@@ -1,11 +1,15 @@
+#[path = "../../../tests/common/cache.rs"]
+mod cache_support;
 #[path = "../../../tests/common/mod.rs"]
 mod common;
 #[path = "../../../tests/common/streamed.rs"]
 mod streamed;
 
 use git_zero::{
-    Error, ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader, Repository, Snapshot,
-    ValidatedRepository, client,
+    Error, File as SnapshotFile, ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader,
+    Repository, Snapshot, ValidatedRepository,
+    cache::{self, Key},
+    client,
     http::{self, Request},
     io::{SliceWriter, Write},
     pack, pktline,
@@ -60,7 +64,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-fn without_allocations(operation: impl FnOnce()) {
+fn without_allocations<T>(operation: impl FnOnce() -> T) -> T {
     ALLOCATIONS.with(|count| count.set(0));
     struct Guard;
     impl Drop for Guard {
@@ -70,13 +74,14 @@ fn without_allocations(operation: impl FnOnce()) {
     }
     TRACK.with(|track| track.set(true));
     let guard = Guard;
-    operation();
+    let result = operation();
     drop(guard);
     assert_eq!(
         ALLOCATIONS.with(Cell::get),
         0,
         "adapter operation allocated"
     );
+    result
 }
 
 struct Temporary(PathBuf);
@@ -581,7 +586,8 @@ fn provider_validation_pack_verification_and_serving_allocate_nothing() {
 }
 
 fn git(args: &[&str], dumb: bool) -> Output {
-    let mut command = Command::new("git");
+    let mut command =
+        Command::new(std::env::var_os("GIT_ZERO_TEST_GIT").unwrap_or_else(|| "git".into()));
     for (name, _) in
         std::env::vars_os().filter(|(name, _)| name.as_encoded_bytes().starts_with(b"GIT_"))
     {
@@ -713,4 +719,219 @@ fn real_git_clones_file_backed_nested_snapshots_with_and_without_prepacked_data(
             }
         });
     }
+}
+
+fn assert_snapshot_checkout(
+    source: &impl Repository,
+    files: &[SnapshotFile<'_>],
+    clone: &Path,
+    absent: &str,
+    dumb: bool,
+) {
+    let path = clone.to_str().unwrap();
+    assert_eq!(
+        git(&["-C", path, "rev-parse", "origin/main"], dumb).stdout,
+        format!("{}\n", source.head()).as_bytes(),
+    );
+    git(&["-C", path, "reset", "--hard", "origin/main"], dumb);
+    git(&["-C", path, "fsck", "--strict"], dumb);
+    assert_eq!(
+        git(&["-C", path, "rev-list", "--count", "HEAD"], dumb).stdout,
+        b"1\n"
+    );
+    for file in files {
+        assert_eq!(std::fs::read(clone.join(file.name)).unwrap(), file.contents);
+    }
+    assert!(!clone.join(absent).exists());
+    for index in 0..source.object_count() {
+        let object = source.object(index).unwrap();
+        assert_eq!(
+            git(
+                &[
+                    "-C",
+                    path,
+                    "cat-file",
+                    object.kind.name(),
+                    &object.id().to_string()
+                ],
+                dumb,
+            )
+            .stdout,
+            object.data,
+        );
+    }
+}
+
+fn serve_snapshot_requests(
+    repositories: &[&impl Repository],
+    active: &AtomicUsize,
+    stopped: &AtomicBool,
+    listener: &OwnedFd,
+) -> cache_support::Cache {
+    let mut cache = cache_support::Cache::new();
+    let mut input = [0; 4096];
+    let mut bytes = [0; 8192];
+    let mut pack_storage = [0; 4096];
+    loop {
+        let socket = accept(listener).unwrap();
+        if stopped.load(Ordering::SeqCst) {
+            break;
+        }
+        // Select one immutable repository for the entire request.
+        let repository = repositories[active.load(Ordering::SeqCst)];
+        let mut request = read_request(&socket, &mut input).unwrap();
+        request.path = request.path.strip_prefix("/repo.git/").unwrap();
+        let mut output = SliceWriter::new(&mut bytes);
+        let response = without_allocations(|| {
+            http::serve_with_pack(
+                repository,
+                request,
+                &mut [0; 17],
+                &mut output,
+                |_, output| cache::write(repository, &mut cache, &mut pack_storage, output),
+            )
+            .unwrap()
+        });
+        respond(&socket, response, output.as_bytes()).unwrap();
+    }
+    cache
+}
+
+#[test]
+fn real_git_fetches_changed_file_snapshots_with_cache_eviction_and_return_to_old_head() {
+    let directory = Temporary::new();
+    let first_directory = Temporary::new();
+    let second_directory = Temporary::new();
+    let first_files = [
+        SnapshotFile {
+            name: "changed",
+            contents: b"before\n",
+        },
+        SnapshotFile {
+            name: "removed",
+            contents: b"old only\n",
+        },
+        SnapshotFile {
+            name: "stable",
+            contents: b"shared object\n",
+        },
+    ];
+    let second_files = [
+        SnapshotFile {
+            name: "added",
+            contents: b"new only\n",
+        },
+        SnapshotFile {
+            name: "changed",
+            contents: b"after\0\xff\n",
+        },
+        SnapshotFile {
+            name: "stable",
+            contents: b"shared object\n",
+        },
+    ];
+    let mut first_tree = [0; 512];
+    let mut first_commit = [0; 512];
+    let first = Snapshot::new(&first_files, &mut first_tree, &mut first_commit).unwrap();
+    let mut second_tree = [0; 512];
+    let mut second_commit = [0; 512];
+    let second = Snapshot::new(&second_files, &mut second_tree, &mut second_commit).unwrap();
+    assert_ne!(first.head(), second.head());
+    let first_objects = persist(&first, &first_directory.0);
+    let second_objects = persist(&second, &second_directory.0);
+    let first_repository = FileRepository::new(first.head(), &first_objects);
+    let second_repository = FileRepository::new(second.head(), &second_objects);
+    let mut first_metadata = [None; 5];
+    let mut first_by_id = [0; 5];
+    let first_validated = ValidatedRepository::new(
+        &first_repository,
+        &mut first_metadata,
+        &mut first_by_id,
+        &mut [0; 17],
+        &mut [0; 128],
+    )
+    .unwrap();
+    let mut second_metadata = [None; 5];
+    let mut second_by_id = [0; 5];
+    let second_validated = ValidatedRepository::new(
+        &second_repository,
+        &mut second_metadata,
+        &mut second_by_id,
+        &mut [0; 17],
+        &mut [0; 128],
+    )
+    .unwrap();
+    let repositories = [&first_validated, &second_validated];
+    let listener = listen(0).unwrap();
+    let port = local_port(&listener).unwrap();
+    let url = format!("http://127.0.0.1:{port}/repo.git");
+    let active = AtomicUsize::new(0);
+    let stopped = AtomicBool::new(false);
+    struct Stop<'a>(&'a AtomicBool, u16);
+    impl Drop for Stop<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect(("127.0.0.1", self.1));
+        }
+    }
+    std::thread::scope(|scope| {
+        let worker =
+            scope.spawn(|| serve_snapshot_requests(&repositories, &active, &stopped, &listener));
+        let stop = Stop(&stopped, port);
+        for (phase, index) in [0, 1, 0].into_iter().enumerate() {
+            // Change the backend only between completed discovery/fetch sessions.
+            active.store(index, Ordering::SeqCst);
+            let source = [&first, &second][index];
+            let mut expected_bytes = [0; 4096];
+            let mut expected = SliceWriter::new(&mut expected_bytes);
+            pack::write(source, &mut expected).unwrap();
+            for _ in 0..2 {
+                let mut wire = [0; 16384];
+                let mut request = [0; 1024];
+                let mut response = [0; 8192];
+                let mut transport = HttpTransport {
+                    address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+                    repository_path: "/repo.git",
+                    wire_storage: &mut wire,
+                };
+                let downloaded =
+                    client::fetch_pack(&mut transport, source.head(), &mut request, &mut response)
+                        .unwrap();
+                assert_eq!(downloaded, expected.as_bytes());
+                pack::validate(downloaded).unwrap();
+            }
+            for dumb in [false, true] {
+                let clone = directory.0.join(format!("clone-{dumb}"));
+                let path = clone.to_str().unwrap();
+                if phase == 0 {
+                    git(&["clone", "-q", &url, path], dumb);
+                }
+                git(&["-C", path, "fetch", "origin"], dumb);
+                assert_snapshot_checkout(
+                    source,
+                    [&first_files, &second_files][index],
+                    &clone,
+                    ["added", "removed"][index],
+                    dumb,
+                );
+            }
+        }
+        drop(stop);
+        let cache = worker.join().unwrap();
+        assert_eq!(
+            cache.key,
+            Some(Key {
+                head: first.head(),
+                encoder_version: 1
+            })
+        );
+        assert_eq!(
+            cache.puts, 3,
+            "A → B → A must regenerate each evicted pack once"
+        );
+        assert!(
+            cache.gets.get() >= 6,
+            "each phase also serves a repeat download from cache"
+        );
+    });
 }
