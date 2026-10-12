@@ -39,6 +39,8 @@ for checks and repository connection requirements.
   tree order and links, commit parents, and exact reachability from HEAD.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
   and checksum-validates smart packs, and fetches dumb loose objects.
+- Incremental zlib inflation with caller-owned history/output buffers, stored/
+  fixed/dynamic DEFLATE support, Adler-32 validation and output/expansion limits.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
 - A loopback IPv4 server/client adapter and a Cloudflare Workers Wasm demo.
 - Native file-backed raw objects and verified prepacked responses, with positional
@@ -46,9 +48,43 @@ for checks and repository connection requirements.
 - Parallel interoperability tests mixing real Git and git-zero clients/servers.
 
 The client returns wire objects: raw packs for smart HTTP and zlib objects for
-dumb HTTP. It does not yet inflate/index packs, resolve deltas, traverse a dumb
+dumb HTTP. It does not yet read/index pack entries, resolve deltas, traverse a dumb
 repository, or create a checkout. Push, shallow/filter requests, protocol v2,
 SHA-256 repositories, and the standalone `git://` transport remain future work.
+
+## Incremental zlib inflation
+
+`zlib::Inflater` decodes downloaded zlib bytes without allocation or external
+compression dependencies. It borrows one caller-owned `zlib::WINDOW_SIZE`
+(32 KiB) history array; its resumable state is less than 2 KiB. Input and output
+chunks can be as small as one byte, and overlapping back-references work across
+history wraps and block boundaries.
+
+Construct the decoder with `InflateLimits { max_output, max_ratio, ratio_slack }`.
+Before each output byte it enforces both the absolute output cap and
+`output <= consumed_input * max_ratio + ratio_slack`, using saturating arithmetic.
+Only consumed bytes from the current zlib stream contribute to the ratio;
+unconsumed trailing bytes cannot enlarge the budget. The explicit slack permits
+compressible prefixes. Zero ratio permits at most the slack bytes. These checks
+behave identically across chunk partitions.
+
+`update(input, output, end_of_input)` returns consumed/written counts and
+`NeedInput`, `NeedOutput` or `Finished`. Advance input by the consumed count,
+retain the decoder and provide the unconsumed suffix on the next call. Set
+`end_of_input` when the supplied slice contains the last available bytes;
+missing input then reports `InvalidZlib`, while full output remains resumable.
+Empty chunks are accepted, and exact output budgets allow parsing the final
+block and checksum. `Finished` leaves subsequent pack entries or trailing bytes
+untouched; callers requiring one complete loose-object response must reject any
+remaining suffix.
+
+Stage output until `Finished`, which validates the zlib header, block structure,
+back-reference distances and Adler-32. Discard staged data on error; a failing
+call can modify its output buffer. Malformed/truncated data returns
+`InvalidZlib`, exhausted expansion budgets return `LimitExceeded`, and preset
+dictionaries return `Unsupported`. Errors are terminal until `reset(limits)`.
+The decoder does not yet validate Git loose-object headers, body lengths or IDs.
+See the [API example](src/zlib.rs) for a complete bounded loop.
 
 ## Workspace
 

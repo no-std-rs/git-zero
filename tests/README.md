@@ -24,6 +24,18 @@ The client currently stops at downloaded pack/loose data. Its dumb cases do not
 claim to clone the entire repository. A tiny proxy forces dumb discovery in the
 git-zero client/server case. Real Git uses `GIT_SMART_HTTP=0` to select that path.
 
+`tests/inflate.rs` compares the core zlib decoder with Python's standard zlib
+and a real Git-created loose object. Stored, fixed, dynamic and mixed blocks run
+with one-byte input/output, overlapping copies, a 32768-byte back-reference,
+history wraps, 15-bit codes, single-code/empty-distance alphabets and code-length
+repeats crossing table boundaries. It checks truncations, checksums, malformed
+trees, reserved codes, dictionary rejection, exact/zero output caps, saturating
+ratio/slack budgets, chunk-independent failure positions, trailing bytes and
+reset isolation. A thread-local allocator counter covers construction, streaming
+and reset with fixed buffers; a size assertion caps decoder state at 2 KiB,
+independently of its caller-owned 32 KiB history window. Existing Adler-32 encoder
+regressions remain in `tests/zlib.rs`.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are

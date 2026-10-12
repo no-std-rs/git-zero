@@ -40,6 +40,8 @@ pub enum Error {
     Unsupported,
     Backend,
     CorruptPack,
+    InvalidZlib,
+    LimitExceeded,
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

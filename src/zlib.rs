@@ -1,5 +1,33 @@
-//! A streaming zlib encoder using uncompressed DEFLATE blocks (RFC 1950/1951).
-//! This is valid Git compression with bounded memory, but does not reduce size.
+//! Allocation-free streaming zlib encoding and inflation (RFC 1950/1951).
+//! The encoder uses stored blocks; the decoder also accepts fixed and dynamic
+//! Huffman blocks, with caller-owned history and explicit expansion budgets.
+//! The decoder is implemented from [RFC 1950](https://www.rfc-editor.org/rfc/rfc1950)
+//! and [RFC 1951](https://www.rfc-editor.org/rfc/rfc1951).
+//!
+//! ```
+//! use git_zero::{io::{SliceWriter, Write}, zlib::{Inflater, InflateLimits, InflateStatus, WINDOW_SIZE}};
+//! # fn example() -> git_zero::Result<()> {
+//! let mut input: &[u8] = &[120, 156, 203, 72, 205, 201, 201, 7, 0, 6, 44, 2, 21];
+//! let mut window = [0; WINDOW_SIZE];
+//! let limits = InflateLimits { max_output: 5, max_ratio: 16, ratio_slack: 0 };
+//! let mut decoder = Inflater::new(&mut window, limits);
+//! let mut scratch = [0; 2];
+//! let mut storage = [0; 5];
+//! let mut staged = SliceWriter::new(&mut storage);
+//! loop {
+//!     let progress = decoder.update(input, &mut scratch, true)?;
+//!     staged.write_all(&scratch[..progress.written])?;
+//!     input = &input[progress.consumed..];
+//!     if progress.status == InflateStatus::Finished { break; }
+//! }
+//! assert_eq!(staged.as_bytes(), b"hello");
+//! assert!(input.is_empty());
+//! # Ok(()) }
+//! # example().unwrap();
+//! ```
+mod inflate;
+pub use inflate::{InflateLimits, InflateProgress, InflateStatus, Inflater, WINDOW_SIZE};
+
 use crate::{Error, ObjectReader, Repository, Result, io::Write};
 
 pub fn write_parts(output: &mut impl Write, parts: &[&[u8]]) -> Result<()> {

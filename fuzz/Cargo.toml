@@ -16,6 +16,13 @@ git-zero = { path = ".." }
 members = ["."]
 
 [[bin]]
+name = "inflation"
+path = "fuzz_targets/inflation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "packets"
 path = "fuzz_targets/packets.rs"
 test = false

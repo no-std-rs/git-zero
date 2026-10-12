@@ -1,6 +1,7 @@
 //! Bounded HTTP fetch primitives. The host supplies transport and storage.
 //! Smart fetch returns a validated raw pack; dumb fetch returns a zlib loose
-//! object. Checkout, inflation, delta resolution and pack indexing are not provided.
+//! object. `crate::zlib` provides bounded inflation; Git object validation,
+//! checkout, delta resolution and pack indexing are not yet provided here.
 use crate::{
     Error, ObjectId, Result,
     http::Request,

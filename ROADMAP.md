@@ -35,7 +35,12 @@ inputs yield identical IDs on native and Wasm without enabling an allocator.
 
 ## 2. Client object consumption
 
-- [ ] Incremental zlib inflation into caller buffers with output/ratio limits.
+- [x] Incremental zlib inflation into caller buffers with output/ratio limits.
+  The core decoder handles stored/fixed/dynamic DEFLATE, validates Adler-32,
+  borrows a 32 KiB history window and uses less than 2 KiB of resumable state.
+  Output and prefix expansion budgets are enforced before each emitted byte;
+  callers explicitly choose a prefix allowance. Python zlib, real Git loose
+  objects, allocation tracking and a bounded fuzz target cover the decoder.
 - [ ] Validate loose-object headers, lengths, and IDs before exposing contents.
 - [ ] Pack entry reader, CRC checks, object IDs, and bounded delta resolution.
 - [ ] Caller-owned pack indexes and object sinks for complete smart fetches.
@@ -107,11 +112,12 @@ cannot overwrite each other's buffers or change repository identities.
   cover cache/backend/output failures and bounded retries. Concurrent eviction
   and writer coordination remain host-backend work.
 - [ ] Fuzz packet lines, HTTP routing, zlib/pack parsers, and object-graph validation.
-  Four bounded libFuzzer targets now cover packet lines, client discovery/HEAD/
-  pack framing, HTTP routing/upload requests, and commit/tree graph validation.
+  Five bounded libFuzzer targets now cover packet lines, client discovery/HEAD/
+  pack framing, HTTP routing/upload requests, commit/tree graph validation and
+  incremental zlib inflation with expansion budgets.
   Their shared assertions and seeded mutations also run in ordinary Cargo tests;
-  CI runs AddressSanitizer smoke campaigns. Zlib inflation and pack-entry/delta
-  parsing still need targets when those client APIs are implemented.
+  CI runs AddressSanitizer smoke campaigns. Pack-entry/delta parsing still needs
+  targets when those client APIs are implemented.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.
