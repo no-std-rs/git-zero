@@ -104,6 +104,7 @@ version = "0.0.0"
 dependencies = [
  "git-zero",
  "libfuzzer-sys",
+ "sha1",
 ]
 
 [[package]]

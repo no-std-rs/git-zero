@@ -41,8 +41,16 @@ inputs yield identical IDs on native and Wasm without enabling an allocator.
   Output and prefix expansion budgets are enforced before each emitted byte;
   callers explicitly choose a prefix allowance. Python zlib, real Git loose
   objects, allocation tracking and a bounded fuzz target cover the decoder.
-- [ ] Validate loose-object headers, lengths, and IDs before exposing contents.
-- [ ] Pack entry reader, CRC checks, object IDs, and bounded delta resolution.
+- [x] Validate loose-object headers, lengths, and IDs before exposing contents.
+  `Object::from_loose`, `client::decode_loose` and `fetch_loose_object` require a
+  canonical header, exact body size and matching SHA-1 before returning a body.
+  Complete zlib validation and rejection of trailing bytes precede exposure.
+- [x] Pack entry reader, CRC checks, object IDs, and bounded delta resolution.
+  The SHA-1 pack reader checks container framing/checksum, entry lengths and
+  exact count/closure, computes wire CRCs for comparison with index CRCs, and
+  reconstructs offset/reference deltas against explicitly supplied bases.
+  Canonical IDs, same-pack offset identity and output/instruction/depth budgets
+  are checked; base lookup and whole-fetch storage remain host responsibilities.
 - [ ] Caller-owned pack indexes and object sinks for complete smart fetches.
 - [ ] Dumb object-graph traversal, `objects/info/packs` and pack/index downloads,
   with an explicit memory bound for visited objects and traversal state.
@@ -112,12 +120,13 @@ cannot overwrite each other's buffers or change repository identities.
   cover cache/backend/output failures and bounded retries. Concurrent eviction
   and writer coordination remain host-backend work.
 - [ ] Fuzz packet lines, HTTP routing, zlib/pack parsers, and object-graph validation.
-  Five bounded libFuzzer targets now cover packet lines, client discovery/HEAD/
+  Seven bounded libFuzzer targets now cover packet lines, client discovery/HEAD/
   pack framing, HTTP routing/upload requests, commit/tree graph validation and
-  incremental zlib inflation with expansion budgets.
+  incremental zlib inflation with expansion budgets, loose-object envelopes and
+  pack entries/delta instructions.
   Their shared assertions and seeded mutations also run in ordinary Cargo tests;
-  CI runs AddressSanitizer smoke campaigns. Pack-entry/delta parsing still needs
-  targets when those client APIs are implemented.
+  CI runs AddressSanitizer smoke campaigns. Pack-index parsing needs coverage
+  when its client API is implemented.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.

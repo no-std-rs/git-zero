@@ -41,6 +41,8 @@ for checks and repository connection requirements.
   and checksum-validates smart packs, and fetches dumb loose objects.
 - Incremental zlib inflation with caller-owned history/output buffers, stored/
   fixed/dynamic DEFLATE support, Adler-32 validation and output/expansion limits.
+- Loose-object envelope validation before body exposure, plus a SHA-1 pack entry
+  reader with wire CRCs, canonical object IDs and bounded offset/reference deltas.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
 - A loopback IPv4 server/client adapter and a Cloudflare Workers Wasm demo.
 - Native file-backed raw objects and verified prepacked responses, with positional
@@ -48,7 +50,7 @@ for checks and repository connection requirements.
 - Parallel interoperability tests mixing real Git and git-zero clients/servers.
 
 The client returns wire objects: raw packs for smart HTTP and zlib objects for
-dumb HTTP. It does not yet read/index pack entries, resolve deltas, traverse a dumb
+dumb HTTP. It does not yet index complete fetched packs, traverse a dumb
 repository, or create a checkout. Push, shallow/filter requests, protocol v2,
 SHA-256 repositories, and the standalone `git://` transport remain future work.
 
@@ -83,8 +85,45 @@ back-reference distances and Adler-32. Discard staged data on error; a failing
 call can modify its output buffer. Malformed/truncated data returns
 `InvalidZlib`, exhausted expansion budgets return `LimitExceeded`, and preset
 dictionaries return `Unsupported`. Errors are terminal until `reset(limits)`.
-The decoder does not yet validate Git loose-object headers, body lengths or IDs.
+The standalone inflater leaves Git envelope validation to the object decoder.
 See the [API example](src/zlib.rs) for a complete bounded loop.
+
+## Validated client objects and pack entries
+
+`client::decode_loose(compressed, expected_id, staging, window, limits)` validates
+one complete loose response. Its staging capacity and inflation limits include
+the Git header and body. It returns a borrowed `Object` only after the zlib
+checksum, canonical type/unsigned decimal size, exact body length and expected
+SHA-1 match. Concatenated streams and trailing bytes fail. `fetch_loose_object`
+combines the existing dumb transport request with this decoding, using separate
+compressed/inflated buffers. `Object::from_loose` performs envelope/ID checks on
+bytes already inflated by a host. These checks do not validate commit/tree/tag
+semantics or traverse the repository graph.
+
+`pack::Reader::new(pack)` checks a complete SHA-1 pack's header and trailer.
+`read_entry(staging, window, limits)` decodes one entry into caller buffers,
+checks its declared size and records offsets and the wire CRC-32. A failure
+preserves the cursor for retry; discard modified staging bytes. `finish()` or a
+read returning `None` verifies the declared entry count and exact pack closure.
+`Entry::verify_crc32` compares a trusted index CRC with the computed CRC; CRCs
+are carried by Git's index files rather than the pack entries themselves.
+
+Plain entries expose `Entry::object()` as a `ResolvedObject` with a computed
+canonical ID. For deltas, provide a materialized base to `resolve_delta` plus
+separate result storage and `DeltaLimits { max_output, max_instructions,
+max_depth }`. Offset bases must have the correct offset in the same pack;
+reference bases must have the advertised ID. Host objects can become reference
+bases through `ResolvedObject::external`. Delta copies, inserts, base/result
+sizes, exact instruction closure and chain depth are checked before returning
+a canonical body and ID. `verify_id` compares it with a trusted expected ID.
+`pack::apply_delta` provides the one-level instruction primitive separately.
+
+The reader needs the complete compressed pack plus staging for one inflated
+body/instruction stream and one 32 KiB history window. Delta application also
+needs its canonical base and caller-bounded result storage. No recursion or
+allocation occurs. Forward-base lookup, caller-owned indexes, object sinks and
+complete fetch orchestration are the next storage layer; the native `fetch`
+command retains its existing wire-output behavior.
 
 ## Workspace
 

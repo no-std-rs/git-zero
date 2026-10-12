@@ -620,4 +620,15 @@ fn real_git_loose_object_inflates_with_small_caller_buffers() {
     let mut expected = format!("blob {}\0", body.len()).into_bytes();
     expected.extend_from_slice(&body);
     assert_eq!(decode(&encoded, 1, 17, LIMITS).unwrap(), expected);
+    let mut staging = vec![0; expected.len()];
+    let mut window = [0; WINDOW_SIZE];
+    let object = git_zero::client::decode_loose(
+        &encoded,
+        git_zero::ObjectId::from_hex(id.as_bytes()).unwrap(),
+        &mut staging,
+        &mut window,
+        LIMITS,
+    )
+    .unwrap();
+    assert_eq!(object.data, body);
 }

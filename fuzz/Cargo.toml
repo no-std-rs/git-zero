@@ -11,9 +11,24 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 git-zero = { path = ".." }
+sha1 = { version = "0.10.7", default-features = false }
 
 [workspace]
 members = ["."]
+
+[[bin]]
+name = "loose"
+path = "fuzz_targets/loose.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "entries"
+path = "fuzz_targets/entries.rs"
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "inflation"

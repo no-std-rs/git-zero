@@ -36,6 +36,21 @@ and reset with fixed buffers; a size assertion caps decoder state at 2 KiB,
 independently of its caller-owned 32 KiB history window. Existing Adler-32 encoder
 regressions remain in `tests/zlib.rs`.
 
+Loose-object tests check all four kinds, canonical 64-bit headers, exact buffers,
+ID/body/header mismatches, checksum failures, trailing streams, transport status/
+length errors and allocation-free fetch/decode. The real Git loose-object fixture
+also passes through the validated client decoder.
+
+Pack-reader tests generate both offset-delta and reference-delta packs with real
+Git, require actual deltas, strictly import them, then compare every computed
+entry CRC and canonical ID with Git's v2 index and every reconstructed body with
+`cat-file`. Commit/tree/blob/tag entries are all covered. Synthetic cases cover
+two delta levels, same-pack base identity, external reference bases, multi-byte
+offsets, sparse copy fields, default 65536-byte copies, missing/wrong bases,
+malformed sizes/varints/instructions, exact/overrun capacities, output/CPU/depth
+budgets and cursor-preserving retries. Allocation tracking covers pack reading,
+hashing, CRC computation and delta resolution with fixed caller storage.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are

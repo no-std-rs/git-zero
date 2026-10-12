@@ -18,6 +18,8 @@ duplicate entries and truncated object IDs.
 | `routing` | Method byte, capacity byte, path NUL query NUL body | Method selects GET/POST/PUT/DELETE/HEAD; capacity selects 0/1/16/64/4096 bytes. A fixed empty snapshot uses 256-byte tree and 512-byte commit storage, one-byte read scratch and at most 4 KiB output. Successful upload responses must contain NAK and a valid pack when present. |
 | `graph` | Mode byte, short-read byte, object record | Even mode mutates a tree; odd mode mutates a commit. Other objects and IDs are rebuilt to reach structural validation. Borrowed/streamed outcomes must match with three metadata/index slots, 64-byte read and 128-byte parse scratch. Short reads range from 1 to 64 bytes. |
 | `inflation` | Raw zlib bytes | Whole/fragmented outcomes, emitted bytes and terminal positions must match. One 32 KiB history window, two 4 KiB staged outputs and 258-byte guarded scratch; 4096/257-byte output budgets with 64/1 expansion ratios. Old history cannot affect a new stream, trailing bytes stay unconsumed, errors stay terminal and each call makes bounded progress. |
+| `loose` | Inflated loose bytes | Actual SHA-1 reaches header/length checks; successful bodies must reserialize to the input and reject a wrong ID. |
+| `entries` | Pack/delta bytes | Repaired pack SHA-1 reaches entry parsing; one 32 KiB window, guarded 1 KiB entry/result buffers, a fixed 256-byte base, 128 delta instructions and depth 2. Cursor rollback, count/closure, offsets, IDs, CRCs and range limits are exercised. |
 
 Each target ignores inputs over 4096 bytes. The packet oracle formats a four-byte
 header independently and accepts either hex case. Host-side graph construction uses
@@ -26,9 +28,10 @@ operates on caller buffers. Each target has its own support module, and the
 ordinary mutation runner reuses buffers while preserving its input sequence.
 The explicit packet-boundary regression separately exercises 65520-byte frames.
 Inflation seeds are generated with Python's zlib and cover stored, fixed,
-dynamic, empty, excessive-expansion and bad-checksum streams. Pack-entry/delta
-parsing needs additional targets when those client APIs exist; `pack::validate`
-currently checks framing and SHA-1 only.
+dynamic, empty, excessive-expansion and bad-checksum streams. Loose seeds cover
+all relevant envelope paths; pack seeds include plain entries, both delta kinds,
+standalone instructions and reserved types. `pack::validate` retains its original
+framing/SHA-1 behavior; `pack::Reader` also checks entry bodies and exact closure.
 
 Install the pinned CI tools and run a bounded campaign from the repository root:
 
@@ -40,7 +43,7 @@ cargo +nightly-2026-08-09 fuzz run packets /tmp/git-zero-fuzz/packets fuzz/corpu
   -runs=5000 -max_len=4096 -timeout=5 -rss_limit_mb=512
 ```
 
-Repeat for `responses`, `routing`, `graph` and `inflation`, with separate writable output
+Repeat for `responses`, `routing`, `graph`, `inflation`, `loose` and `entries`, with separate writable output
 corpus directories. libFuzzer writes new inputs into the first directory;
 the checked-in seed directories stay unchanged. For longer local campaigns,
 replace `-runs=5000` with `-max_total_time=600`. CI smoke runs are regression
