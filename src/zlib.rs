@@ -61,10 +61,20 @@ impl<'a, W: Write> Encoder<'a, W> {
 
     fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         self.output.write_all(bytes)?;
-        for &byte in bytes {
-            self.s1 = (self.s1 + u32::from(byte)) % 65521;
-            self.s2 = (self.s2 + self.s1) % 65521;
+        // Starting with reduced sums, 5552 bytes of 0xff keep even s2 below
+        // u32::MAX: (n + 1) * 65520 + 255 * n * (n + 1) / 2. Reduce once per
+        // bounded chunk instead of twice per byte, including across calls.
+        let (mut s1, mut s2) = (self.s1, self.s2);
+        for chunk in bytes.chunks(5552) {
+            for &byte in chunk {
+                s1 += u32::from(byte);
+                s2 += s1;
+            }
+            s1 %= 65521;
+            s2 %= 65521;
         }
+        self.s1 = s1;
+        self.s2 = s2;
         Ok(())
     }
 

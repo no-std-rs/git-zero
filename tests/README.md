@@ -230,6 +230,78 @@ Linux kernel benchmark, advanced compression/delta modes and simultaneous proces
 tree memory remain roadmap work. Wasm linear-memory budgets are checked separately
 by the Worker tests described below.
 
+### Isolating encoder CPU
+
+The Linux `encoder-profile` example loads and checks the same raw export before
+timing. It reports five rounds of process CPU and wall time per complete object
+graph, with reusable output storage and a configurable repetition count. Copying,
+the former scalar Adler-32 calculation, stored zlib, loose encoding, pack encoding
+and bulk blob SHA-1 run separately. File reads, HTTP, fixture validation and output
+logging are outside the timed loops. Compile with this repository's release
+profile (`opt-level = "s"`, LTO and one codegen unit) when comparing revisions.
+
+```sh
+cargo build -p git-zero-rustix --example encoder-profile --release --locked
+target/release/examples/encoder-profile /tmp/git-zero-synthetic 200 \
+  > /tmp/git-zero-encoder-profile.jsonl
+```
+
+On Git 2.53.0 and the default 111-object, 1,341,030-byte fixture, the same profiler
+built against baseline `f78a54e` and the batched encoder gave these median CPU
+times (five rounds of 200 graphs, in milliseconds):
+
+| In-memory operation | Baseline | Batched Adler-32 |
+| --- | ---: | ---: |
+| Copy bodies into reusable storage | 0.027 | 0.019 |
+| Scalar Adler-32 reference | 2.900 | 3.029 |
+| Stored zlib | 3.042 | 1.062 |
+| Loose objects | 3.064 | 1.022 |
+| Pack including SHA-1 trailer | 3.610 | 1.105 |
+| SHA-1 of the complete export as one blob | 0.525 | 0.529 |
+
+Two modulo reductions per input byte dominated the original encoder. The current
+encoder reduces after at most 5552 bytes, the largest batch whose worst-case
+second sum fits `u32` when both starting sums are reduced. This is also the
+bound used by [zlib's Adler-32 implementation](https://github.com/madler/zlib/blob/v1.3.1/adler32.c).
+It preserves stored-block boundaries, checksums and wire bytes, with the same
+fixed memory. Tests cover all-`0xff` overflow boundaries, multiple blocks,
+arbitrary part boundaries, short reader buffers and real Git imports.
+
+Separate untraced HTTP runs used 31 alternating pairs, three warmups and one
+workload worker. Each clone's graph and checkout passed Git validation outside
+timing. Server CPU includes the frontend and reaped Git descendants:
+
+| Clone workload | Git before | Rust before | Git after | Rust after |
+| --- | ---: | ---: | ---: | ---: |
+| Smart HTTP, CPU ms | 17.825 | 4.234 | 15.352 | 1.755 |
+| Dumb HTTP, generated Rust loose objects, CPU ms | 3.355 | 5.798 | 3.134 | 3.151 |
+
+These runs use identical fixture fingerprints and compression level 0 without
+deltas. The host was heavily loaded, and Git's control measurements also moved;
+use these as workload-specific CPU observations rather than general latency
+rankings. After the change, median frontend lifetime peak RSS was 3960/3856 KiB
+for Git/Rust smart clone and 2456/2492 KiB for dumb clone. Git's largest reaped
+smart child peak was separately 5680 KiB; these peaks must not be added.
+
+The original smart advantage has several measured causes. Git Trace2 records
+two `upload-pack` commands and one `pack-objects` per clone; the host starts two
+additional CGI processes, while the Rust route starts none. Rust validates its
+immutable graph during startup. Git enumerates and prepares a pack per request,
+and its [non-reuse packing path](https://github.com/git/git/blob/v2.53.0/builtin/pack-objects.c)
+reads object bodies and compresses them again. Packing a separate copy of the
+same Git fixture reduced its median smart CPU to 13.176 ms, versus 4.296 ms for
+unchanged Rust. Storage layout therefore explains part of the difference.
+Trace2 region durations are wall time, separate from untraced CPU measurements.
+
+Hash implementations also differ: the installed Git binary includes
+[SHA1DC collision detection](https://github.com/git/git/blob/v2.53.0/sha1dc_git.c),
+while this machine's Rust `sha1` backend uses Intel SHA instructions without that
+collision detector. A separate `git hash-object --stdin` experiment measured
+1.595 ms CPU for an empty input and 5.054 ms for the export; the difference includes
+file I/O and is not a pure checksum measurement. The in-memory blob hash above
+produces the same object ID. These backend, preparation and storage differences
+remain even though the HTTP frontend, logical repository and client are shared.
+
 ## Wasm and allocator-free targets
 
 ```sh
