@@ -291,7 +291,8 @@ python3 tests/benchmark.py --source-repo /path/to/linux \
 The importer reads the selected commit's complete reachable graph, including
 merge parents, from Git's object store. It ignores working-copy changes and
 replacement refs, disables lazy fetching and transport access, and rejects
-shallow repositories or missing objects. It creates a separate bare repository
+shallow repositories, legacy graft files, borrowed alternate object stores
+(including shared clones), or missing objects. It creates a separate bare repository
 with that commit at HEAD/main and the same raw export used by the native host.
 Source refs, config, index, packs and worktree remain unchanged. Reports and
 retained fixtures must be outside the source and its Git directories, including
@@ -316,10 +317,11 @@ still applies to the separate Git fixture. This measures the prepared backends,
 rather than the caller repository's original storage layout. Synthetic
 `--files`, `--blob-bytes` and `--commits` cannot be combined with this mode.
 
-Eight real-Git unit tests check packed merge history, source preservation,
+Ten real-Git unit tests check packed merge history, source preservation,
 moving refs/replacements, exact and exceeded limits, invalid selections,
 overlapping destinations, shallow/SHA-256 repositories and unavailable promised
-objects. CI runs all
+objects. They also reject shared/transitive alternates and grafts in common
+worktree metadata before enumeration or writes. CI runs all
 eight paired HTTP workloads against a small packed caller fixture, checking
 its nested binary files, symlink, executable and external gitlink. These remain
 warm-server/cache measurements; kernel-scale preparation, local object-reading

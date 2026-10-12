@@ -133,6 +133,30 @@ class BenchmarkSourceTests(unittest.TestCase):
             with self.subTest(maximum=maximum), self.assertRaisesRegex(ValueError, "positive"):
                 self.load(max_bytes=maximum)
 
+    def test_shared_and_transitive_alternates_are_rejected_before_writes(self):
+        shared, transitive = self.root / "shared", self.root / "transitive"
+        run("git", "clone", "-q", "--shared", str(self.source), str(shared), env=self.env)
+        run("git", "clone", "-q", "--shared", str(shared), str(transitive), env=self.env)
+        destination = self.source / ".git/objects/report.json"
+        before = fingerprint(self.root)
+        with patch("benchmark_source.object_ids", side_effect=AssertionError("enumeration too early")):
+            for source in (shared, transitive):
+                with self.subTest(source=source), self.assertRaisesRegex(ValueError, "alternates"):
+                    read(source, self.head, self.env, 100, 1000000, (destination,))
+        self.assertFalse(destination.exists())
+        self.assertEqual(fingerprint(self.root), before)
+
+    def test_grafts_in_common_worktree_metadata_are_rejected_before_enumeration(self):
+        linked = self.root / "linked"
+        git(self.source, "worktree", "add", "-q", "--detach", str(linked), self.head, env=self.env)
+        (self.source / ".git/info/grafts").write_text(self.head + "\n")
+        before = fingerprint(self.root)
+        with patch("benchmark_source.object_ids", side_effect=AssertionError("enumeration too early")):
+            for source in (self.source, linked):
+                with self.subTest(source=source), self.assertRaisesRegex(ValueError, "graft"):
+                    read(source, self.head, self.env, 100, 1000000)
+        self.assertEqual(fingerprint(self.root), before)
+
     def test_unpinned_refs_and_noncommit_objects_are_rejected(self):
         for revision in ("HEAD", self.head[:12], self.head.upper(), "--all", "0" * 39):
             with self.subTest(revision=revision), self.assertRaisesRegex(ValueError, "full lowercase"):

@@ -81,6 +81,11 @@ def read(source, revision, env, max_objects, max_bytes, destinations=()):
                           ("source_common_directory", "--git-common-dir")):
         path = Path(os.fsdecode(git(source, "rev-parse", argument, env=readonly).strip()))
         description[key] = str((source / path).resolve())
+    if (Path(description["source_common_directory"]) / "info/grafts").exists():
+        raise ValueError("source must not use legacy graft files")
+    if any(line.startswith(b"alternate: ") for line in
+           git(source, "count-objects", "-v", env=readonly).splitlines()):
+        raise ValueError("source must not borrow objects through alternates")
     check_destinations(description, destinations)
     ids = object_ids(source, revision, readonly, max_objects)
     headers = git(source, "cat-file", "--batch-check", env=readonly,
