@@ -77,31 +77,39 @@ fn seeded_fuzz_targets_replay_and_mutate_the_corpus() {
         for path in paths {
             let seed = std::fs::read(&path).unwrap();
             assert!(seed.len() <= fuzz_support::MAX_INPUT);
-            target(&seed);
-            for length in 0..seed.len() {
-                target(&seed[..length]);
-            }
-            for index in 0..seed.len() {
-                for byte in [0, b'+', b'\n', b'0', b'f', 0xff] {
-                    let mut mutated = seed.clone();
-                    mutated[index] = byte;
-                    target(&mutated);
-                }
-            }
+            replay(&seed, target);
         }
-        // A fixed xorshift seed makes CI failures reproducible. Exercise binary
-        // inputs as well as the structured checked-in corpus.
-        let mut state = 0x6a09_e667_f3bc_c909_u64;
-        for length in 0..512 {
-            let data: Vec<_> = (0..length)
-                .map(|_| {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    state as u8
-                })
-                .collect();
-            target(&data);
+        random_inputs(target);
+    }
+}
+
+fn replay(seed: &[u8], target: fn(&[u8])) {
+    target(seed);
+    for length in 0..seed.len() {
+        target(&seed[..length]);
+    }
+    let mut mutated = seed.to_vec();
+    for index in 0..seed.len() {
+        for byte in [0, b'+', b'\n', b'0', b'f', 0xff] {
+            mutated[index] = byte;
+            target(&mutated);
         }
+        mutated[index] = seed[index];
+    }
+}
+
+fn random_inputs(target: fn(&[u8])) {
+    // Preserve the fixed xorshift sequence while reusing one bounded buffer.
+    let mut state = 0x6a09_e667_f3bc_c909_u64;
+    let mut storage = [0; 512];
+    for length in 0..storage.len() {
+        let data = &mut storage[..length];
+        for byte in data.iter_mut() {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *byte = state as u8;
+        }
+        target(data);
     }
 }

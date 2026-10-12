@@ -19,7 +19,9 @@ duplicate entries and truncated object IDs.
 | `graph` | Mode byte, short-read byte, object record | Even mode mutates a tree; odd mode mutates a commit. Other objects and IDs are rebuilt to reach structural validation. Borrowed/streamed outcomes must match with three metadata/index slots, 64-byte read and 128-byte parse scratch. Short reads range from 1 to 64 bytes. |
 
 Each target ignores inputs over 4096 bytes. Host-side graph construction uses
-bounded `Vec`/`String` values; the validated core operates on caller buffers.
+one bounded `String` plus fixed arrays and borrowed input; the validated core
+operates on caller buffers. Each target has its own support module, and the
+ordinary mutation runner reuses buffers while preserving its input sequence.
 The explicit packet-boundary regression separately exercises 65520-byte frames.
 Zlib inflation and pack-entry/delta parsing need additional targets when those
 client APIs exist; `pack::validate` currently checks framing and SHA-1 only.
