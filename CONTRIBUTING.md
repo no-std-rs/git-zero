@@ -57,7 +57,7 @@ branch advances, GitHub requires the PR branch to be updated before merging,
 which gives the new head a fresh comparison rather than accepting an older pass.
 
 `.llm-cc/rules.json` classifies the core and native adapters as runtime, test
-directories as tests, and demos/scripts as tooling. Generated build output,
+and fuzz directories as tests, and demos/scripts as tooling. Generated build output,
 dependencies, and vendored code are excluded. Validate changes with
 `llm-cc rules check .llm-cc/rules.json` and `llm-cc rules explain PATH...`.
 

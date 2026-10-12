@@ -6,7 +6,7 @@
     "**/dist/**",
     "**/vendor/**"
   ],
-  "tests": ["tests/**", "**/tests/**", "**/test/**"],
+  "tests": ["tests/**", "**/tests/**", "**/test/**", "fuzz/**"],
   "tooling": ["examples/**", "scripts/**", ".github/**"],
   "extensions": {}
 }
