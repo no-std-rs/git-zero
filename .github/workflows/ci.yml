@@ -137,6 +137,8 @@ jobs:
         run: python3 tests/interop.py --shard '${{ matrix.shard }}' --artifacts interop-artifacts
       - name: Changing native snapshots and pack cache reuse
         run: cargo test -p git-zero-rustix --test storage real_git_fetches_changed_file_snapshots_with_cache_eviction_and_return_to_old_head --locked
+      - name: Empty, unborn and detached server comparisons
+        run: cargo test -p git-zero-rustix --test head_states --locked
       - name: Pinned Git compression, delta and decoder benchmark coverage
         if: runner.os == 'Linux' && matrix.git != 'system' && matrix.shard == '0/2'
         run: |

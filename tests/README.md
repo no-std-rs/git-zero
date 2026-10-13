@@ -24,6 +24,19 @@ The client currently stops at downloaded pack/loose data. Its dumb cases do not
 claim to clone the entire repository. A tiny proxy forces dumb discovery in the
 git-zero client/server case. Real Git uses `GIT_SMART_HTTP=0` to select that path.
 
+The native `head_states` suite runs eight independent server comparisons: unborn
+HEAD on the default/custom branch and detached HEAD with/without a branch ref,
+each over smart and dumb HTTP. `server_head_states.py` creates the Git oracle
+using Git's own object and ref commands. Real Git compares all discovery refs
+and symrefs, clone HEAD state, object IDs/kinds/bodies, checkout contents, strict
+fsck and detached HEAD fetches. Empty clones contain no refs or objects. The suite
+runs throughout the Linux/macOS and system/pinned Git CI matrix. Failures retain
+fixtures, packet/curl traces and HTTP/command logs in the reported temporary path.
+Core tests enforce unborn name/packet budgets, reject all empty-repository wants
+before output, validate empty/detached graphs and preserve state through indexes
+without allocation. `http-backend` emits an empty raw `/HEAD` for unborn refs;
+git-zero serves the symbolic HEAD file, matching Git's static dumb repository.
+
 `tests/inflate.rs` compares the core zlib decoder with Python's standard zlib
 and a real Git-created loose object. Stored, fixed, dynamic and mixed blocks run
 with one-byte input/output, overlapping copies, a 32768-byte back-reference,

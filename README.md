@@ -317,8 +317,27 @@ needing a complete disk object store must explicitly fetch that object or use
 smart HTTP. See [tests/README.md](tests/README.md) for the interoperability check.
 
 A custom `Repository` implementation must expose a stable, complete reachable
-object set and a commit `HEAD` for its URL. Its refs are aliases of that commit.
+object set and a commit `HEAD` for its URL, or an empty unborn repository.
+Its refs are aliases of the resolved commit.
 Bodies can be borrowed slices or generated/read from storage by offset.
+
+`Repository::head_state` distinguishes `Head::Symbolic { target, id }`,
+`Head::Detached(id)` and `Head::Unborn(target)`. Existing implementations default
+to a symbolic HEAD using `head_ref()` and `head()`. For an unborn HEAD, `head()`
+returns the all-zero sentinel; use `head_state().id()` to distinguish absence.
+`EmptyRepository::new("refs/heads/main")` validates the target and serves an
+empty ref list, the v0 `capabilities^{}` marker, and symbolic dumb HTTP `HEAD`.
+Unborn repositories contain no objects or advertised refs; upload-pack rejects
+every want, including the zero ID, before writing output. V0 does not negotiate
+an unborn default branch: Git's smart empty clone may use its own initial branch,
+matching the reference server. Dumb `HEAD` preserves the configured target.
+
+For a detached file-backed repository, use
+`FileRepository::with_detached_head(&refs)`; `refs` may be empty. HTTP `HEAD`
+returns the direct commit ID, and smart discovery omits the HEAD symref.
+`with_refs` switches back to a symbolic HEAD. Indexing and graph validation
+preserve all three HEAD states. Independent ref tips and annotated tags remain
+roadmap work.
 
 For repeated requests, wrap a snapshot or custom repository in `IndexedRepository`:
 
@@ -356,8 +375,9 @@ let repository = ValidatedRepository::new(
 )?;
 ```
 
-Both arrays need one slot per enumerated object. Read scratch needs at least
-one byte; parse scratch must fit each commit header line without its LF and
+Both arrays need one slot per enumerated object. Empty repositories need no
+scratch. For nonempty bodies, read scratch needs at least one byte; parse scratch
+must fit each commit header line without its LF and
 twice each tree name without its NUL. Object bodies can exceed both buffers.
 The scratch buffers are reusable after construction; only the arrays and provider
 remain borrowed. `metadata` exposes each validated ID, kind and 64-bit size;

@@ -1,6 +1,6 @@
 //! Routing for paths relative to the repository URL; HTTP framing belongs to the host.
 use crate::{
-    Error, ObjectId, Repository, Result,
+    Error, Head, ObjectId, Repository, Result,
     io::Write,
     pack,
     pktline::{self, Packet},
@@ -75,8 +75,12 @@ pub fn serve_with_pack<W: Write>(
     };
     match (request.method, path) {
         ("GET", "HEAD") => {
-            output.write_all(b"ref: ")?;
-            output.write_all(repository.head_ref().as_bytes())?;
+            if let Some(target) = repository.head_state().target() {
+                output.write_all(b"ref: ")?;
+                output.write_all(target.as_bytes())?;
+            } else {
+                output.write_all(&repository.head().to_hex())?;
+            }
             output.write_all(b"\n")?;
         }
         ("GET", "info/refs") => match service(request.query) {
@@ -84,16 +88,8 @@ pub fn serve_with_pack<W: Write>(
                 response.content_type = "application/x-git-upload-pack-advertisement";
                 pktline::write(output, b"# service=git-upload-pack\n")?;
                 output.write_all(b"0000")?;
+                advertise_head(repository.head_state(), output)?;
                 let head = repository.head().to_hex();
-                pktline::write_parts(
-                    output,
-                    &[
-                        &head,
-                        b" HEAD\0symref=HEAD:",
-                        repository.head_ref().as_bytes(),
-                        b"\n",
-                    ],
-                )?;
                 for index in 0..repository.reference_count() {
                     let name = repository
                         .reference_name(index)
@@ -117,7 +113,7 @@ pub fn serve_with_pack<W: Write>(
         },
         ("POST", "git-upload-pack") => {
             response.content_type = "application/x-git-upload-pack-result";
-            if upload_request(repository.head(), request.body)? {
+            if upload_request(repository.head_state().id(), request.body)? {
                 pktline::write(output, b"NAK\n")?;
                 write_pack(scratch, output)?;
             } else {
@@ -191,7 +187,25 @@ fn service(query: Option<&str>) -> Option<&str> {
         .find_map(|field| field.strip_prefix("service="))
 }
 
-fn upload_request(head: ObjectId, mut bytes: &[u8]) -> Result<bool> {
+fn advertise_head(head: Head<'_>, output: &mut impl Write) -> Result<()> {
+    let id = head.id().unwrap_or(ObjectId([0; 20])).to_hex();
+    let name = if head.id().is_some() {
+        b" HEAD\0".as_slice()
+    } else {
+        b" capabilities^{}\0"
+    };
+    if let Some(target) = head.target() {
+        pktline::write_parts(
+            output,
+            &[&id, name, b"symref=HEAD:", target.as_bytes(), b"\n"],
+        )
+    } else {
+        pktline::write_parts(output, &[&id, name, b"\n"])
+    }
+}
+
+fn upload_request(head: Option<ObjectId>, mut bytes: &[u8]) -> Result<bool> {
+    let head = head.ok_or(Error::InvalidRequest)?;
     let mut wanted = false;
     let mut done = false;
     while let Some(packet) = pktline::read(&mut bytes)? {

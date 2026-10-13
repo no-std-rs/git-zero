@@ -20,7 +20,7 @@ pub mod zlib;
 
 pub use object::{Object, ObjectId, ObjectInfo, ObjectKind};
 pub use reader::{ObjectHasher, ObjectReader};
-pub use repository::{IndexedRepository, ObjectMetadata, Repository};
+pub use repository::{EmptyRepository, Head, IndexedRepository, ObjectMetadata, Repository};
 pub use snapshot::{
     CommitIdentity, CommitOptions, Entry, EntryKind, File, Snapshot, SnapshotBuilder,
 };
