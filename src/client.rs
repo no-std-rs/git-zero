@@ -1,12 +1,15 @@
 //! Bounded HTTP fetch primitives. The host supplies transport and storage.
 //! Smart fetch returns a validated raw pack; dumb fetch returns a zlib loose
-//! object. Checkout, inflation, delta resolution and pack indexing are not provided.
+//! object. Bounded loose-object decoding validates headers, lengths and IDs;
+//! `crate::zlib` also provides standalone inflation, and `crate::pack` provides
+//! entry/delta decoding. Graph traversal, checkout and pack indexing remain work.
 use crate::{
-    Error, ObjectId, Result,
+    Error, Object, ObjectId, Result,
     http::Request,
     io::{SliceWriter, Write},
     pack,
     pktline::{self, Packet},
+    zlib::{InflateLimits, InflateStatus, Inflater, WINDOW_SIZE},
 };
 
 pub trait Transport {
@@ -261,4 +264,40 @@ pub fn fetch_loose<'a>(
         return Err(Error::Backend);
     }
     response_storage.get(..length).ok_or(Error::BufferTooSmall)
+}
+
+/// Decode exactly one loose response into caller-owned staging storage.
+/// Storage/limits include the Git header (at most 28 bytes) and body. A borrowed
+/// body is returned only after zlib, canonical header, length and ID validation.
+/// Discard staging bytes on error; concatenated streams/trailing bytes fail.
+pub fn decode_loose<'a>(
+    compressed: &[u8],
+    expected: ObjectId,
+    storage: &'a mut [u8],
+    window: &mut [u8; WINDOW_SIZE],
+    limits: InflateLimits,
+) -> Result<Object<'a>> {
+    let mut decoder = Inflater::new(window, limits);
+    let progress = decoder.update(compressed, storage, true)?;
+    if progress.status == InflateStatus::NeedOutput {
+        return Err(Error::BufferTooSmall);
+    }
+    if progress.status != InflateStatus::Finished || progress.consumed != compressed.len() {
+        return Err(Error::InvalidObject);
+    }
+    Object::from_loose(&storage[..progress.written], expected)
+}
+
+/// Fetch and validate a dumb-HTTP loose object using independent wire and
+/// inflated buffers. The transport remains responsible for HTTP framing.
+pub fn fetch_loose_object<'a>(
+    transport: &mut impl Transport,
+    expected: ObjectId,
+    response_storage: &mut [u8],
+    object_storage: &'a mut [u8],
+    window: &mut [u8; WINDOW_SIZE],
+    limits: InflateLimits,
+) -> Result<Object<'a>> {
+    let compressed = fetch_loose(transport, expected, response_storage)?;
+    decode_loose(compressed, expected, object_storage, window, limits)
 }

@@ -24,6 +24,33 @@ The client currently stops at downloaded pack/loose data. Its dumb cases do not
 claim to clone the entire repository. A tiny proxy forces dumb discovery in the
 git-zero client/server case. Real Git uses `GIT_SMART_HTTP=0` to select that path.
 
+`tests/inflate.rs` compares the core zlib decoder with Python's standard zlib
+and a real Git-created loose object. Stored, fixed, dynamic and mixed blocks run
+with one-byte input/output, overlapping copies, a 32768-byte back-reference,
+history wraps, 15-bit codes, single-code/empty-distance alphabets and code-length
+repeats crossing table boundaries. It checks truncations, checksums, malformed
+trees, reserved codes, dictionary rejection, exact/zero output caps, saturating
+ratio/slack budgets, chunk-independent failure positions, trailing bytes and
+reset isolation. A thread-local allocator counter covers construction, streaming
+and reset with fixed buffers; a size assertion caps decoder state at 2 KiB,
+independently of its caller-owned 32 KiB history window. Existing Adler-32 encoder
+regressions remain in `tests/zlib.rs`.
+
+Loose-object tests check all four kinds, canonical 64-bit headers, exact buffers,
+ID/body/header mismatches, checksum failures, trailing streams, transport status/
+length errors and allocation-free fetch/decode. The real Git loose-object fixture
+also passes through the validated client decoder.
+
+Pack-reader tests generate both offset-delta and reference-delta packs with real
+Git, require actual deltas, strictly import them, then compare every computed
+entry CRC and canonical ID with Git's v2 index and every reconstructed body with
+`cat-file`. Commit/tree/blob/tag entries are all covered. Synthetic cases cover
+two delta levels, same-pack base identity, external reference bases, multi-byte
+offsets, sparse copy fields, default 65536-byte copies, missing/wrong bases,
+malformed sizes/varints/instructions, exact/overrun capacities, output/CPU/depth
+budgets and cursor-preserving retries. Allocation tracking covers pack reading,
+hashing, CRC computation and delta resolution with fixed caller storage.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are
@@ -143,16 +170,25 @@ configuration through `GIT_ZERO_TEST_JOBS`, `GIT_ZERO_TEST_GIT` and
 
 Use optimized native binaries and opt into the Linux benchmark (Python's
 standard library plus GNU `time`). Python creates the fixture and runs clients;
-all timed HTTP traffic passes through the Rust host. Correctness checks and
+timed HTTP traffic passes through the Rust host. Correctness checks and
 control barriers run outside timing.
 
 ```sh
 cargo build -p git-zero-rustix --bin git-zero --release --locked
-cargo build -p git-zero-rustix --example benchmark-server --release --locked
+cargo build -p git-zero-rustix --example benchmark-server --example decoder-read --release --locked
 python3 tests/benchmark.py --samples 31 --warmup 3 \
   --fixture-dir /tmp/git-zero-synthetic --output /tmp/git-zero-performance.json
 python3 tests/benchmark.py --jobs 8 --samples 5 --output /tmp/git-zero-contention.json
+python3 tests/benchmark.py --git-profile upstream-defaults --samples 31 --warmup 3 \
+  --output /tmp/git-zero-upstream-defaults.json
 ```
+
+Timing runs require Git **2.53.0**, pinned in `tests/git-version.txt`; select its
+binary with `--git`. A version mismatch fails before fixture preparation.
+`--allow-unpinned-git` explicitly permits system-Git correctness smoke tests;
+the report records the expected/actual version and whether the pin was required.
+CI runs both profiles with pinned Git and retains their reports. System-Git
+smoke coverage remains separate from those pinned comparisons.
 
 The default synthetic repository has 64 files of 16 KiB, 16 commits, mixed
 repetitive/binary content, and one changed file per later commit. `--files`,
@@ -179,10 +215,38 @@ Server discovery, fresh clones and unchanged-remote fetches hold the real Git
 client fixed. Every measured operation checks refs or the complete reachable
 object graph, strict integrity, HEAD and checkout bytes/modes outside timing.
 
-Git's loose/pack compression defaults to 0 and deltas are disabled to match
-Rust's stored-DEFLATE encoder as closely as possible. `--git-compression 6`
-measures a different compression tradeoff explicitly. Response body byte counts
-remain visible. Fixture creation rewrites loose objects through Git's
+Two additional local workloads, `client-object-read-loose` and
+`client-object-read-pack`, compare Git's `cat-file --batch` with `decoder-read`.
+Both read the **same encoded files** and emit every expected ID, kind and body;
+the runner compares complete batch output outside timing. These exercise zlib,
+loose-object envelope/ID validation, pack checksums/entry CRC computation and
+offset/reference delta resolution. Pack preparation uses a separate owned bare
+repository, leaving the HTTP loose fixture intact. Its fingerprint, byte count,
+delta count and maximum chain depth are recorded. Both profiles use identical
+raw bodies; the matched pack contains no deltas, and CI requires actual deltas
+in the upstream-default pack.
+
+Local-read timings include fresh process startup, file I/O, host allocation,
+decoding, materialization and batch output. Rust additionally authenticates
+canonical IDs/checksums and uses bounded host slots with linear base lookup;
+Git uses its existing object database/index. They measure complete object reads,
+not isolated inflater CPU or a complete HTTP client fetch. Client wall/CPU/RSS
+are reported without invented server/startup counters. The example bounds object
+count to 8192, raw bodies to 64 MiB and pack base/instruction slots to 128 MiB,
+and rejects fixtures exceeding that host staging budget.
+
+The default `--git-profile matched` selects compression 0 and disables deltas
+on both servers. `--git-profile upstream-defaults` leaves Git's compression,
+window and depth settings unset; its HTTP comparison measures the current
+stored-block server against Git's default compressor/delta search. The report
+explicitly marks whether server compression/delta features are equivalent.
+Local-read inputs remain identical between readers in either profile.
+`--git-compression`, `--git-delta-window` and `--git-delta-depth` permit additional
+Git configurations, labeled `custom`; they cannot accompany upstream-defaults.
+Algorithm descriptors and exact config overrides stay in each report so future
+server encoders can join the same comparison. The current server encoder is
+stored DEFLATE without deltas. Response body byte counts remain visible.
+Fixture creation rewrites loose objects through Git's
 `hash-object` to apply compression consistently, checks stored-DEFLATE headers
 at level 0, and records their size/fingerprint as well as the raw export's.
 Git's compressed loose storage and Rust's raw file representation
@@ -322,16 +386,130 @@ moving refs/replacements, exact and exceeded limits, invalid selections,
 overlapping destinations, shallow/SHA-256 repositories and unavailable promised
 objects. They also reject shared/transitive alternates and grafts in common
 worktree metadata before enumeration or writes. CI runs all
-eight paired HTTP workloads against a small packed caller fixture, checking
+eight paired HTTP workloads plus both local-read workloads against a small
+packed caller fixture, checking
 its nested binary files, symlink, executable and external gitlink. These remain
-warm-server/cache measurements; kernel-scale preparation, local object-reading
-workloads and controlled cold-cache runs remain roadmap work.
+warm-server/cache measurements; kernel-scale preparation and controlled
+cold-cache runs remain roadmap work.
 
 These are warm loopback measurements, with no cold-cache claim. Git-zero's raw
 fetch is still not compared with Git's full materialization. The caller-provided
-Linux kernel benchmark's remaining workloads, advanced compression/delta modes
+Linux kernel benchmark's remaining preparation work, additional server encoders
 and simultaneous process tree memory remain roadmap work. Wasm linear-memory
 budgets are checked separately by the Worker tests described below.
+
+### Decoder and Git-default comparison
+
+Revision `ebe634d` was measured with pinned Git 2.53.0, release builds
+(`opt-level = "s"`, LTO, one codegen unit), 21 alternating pairs, three warmups
+and one workload worker. Both policies use the same 111-object, 1,341,030-byte
+raw fixture and independently check every object's ID, kind and body.
+The upstream-default pack contains 19 deltas with maximum depth 15.
+
+| Workload, median wall ms | Matched Git | Matched Rust | Default Git | Rust against default Git |
+| --- | ---: | ---: | ---: | ---: |
+| Smart HTTP clone | 104.18 | 62.48 | 182.13 | 88.63 |
+| Dumb HTTP clone | 101.92 | 105.63 | 138.48 | 129.49 |
+| Local loose-object reads | 16.70 | 38.81 | 19.89 | 35.75 |
+| Local pack-object reads | 9.25 | 41.09 | 15.15 | 42.19 |
+
+Server clone latency remains competitive on warm loopback, while the new local
+readers are slower than Git. Default-Git smart/dumb clone responses total
+648,543/674,949 bytes versus Rust's 1,343,340/1,344,644 bytes: the stored-block
+server sends about twice as much data. This bandwidth difference matters away
+from loopback. Local-read CPU medians against default Git are 8.27/17.50 ms
+(Git/Rust loose) and 5.92/21.89 ms (Git/Rust pack); Rust's extra authentication
+and host materialization are included. These observations do not isolate which
+decoder phase dominates.
+
+A separate alternating baseline/current comparison used identical server
+fixtures, response byte counts, compiler (rustc 1.97.1), release profile and 21
+clone pairs. It compared pre-decoder `242eabd` with `ebe634d`:
+
+| Rust clone | Baseline wall ms | Current wall ms | Baseline server CPU ms | Current server CPU ms |
+| --- | ---: | ---: | ---: | ---: |
+| Smart HTTP | 24.93 | 25.48 | 1.288 | 1.513 |
+| Dumb HTTP | 40.34 | 39.91 | 1.987 | 2.147 |
+
+Wall medians differ by about +2%/-1%; server CPU rose about 17%/8%
+(0.225/0.160 ms). This is a measured CPU increase even though encoder source
+behavior is unchanged. The shared host was loaded, so these runs establish
+neither a universal latency ranking nor an isolated cause for the CPU increase.
+Raw reports and retained encoded fixtures are under
+`/tmp/git-zero-pr16-benchmark/{matched,upstream,revisions}.json` on the measuring
+host. Reproduce the paired profiles with the commands above; the reports retain
+all samples, binary fingerprints, pin/config policies, host load and buffer limits.
+
+### Decoder read optimizations
+
+Revision `6355c25` batches stored-block and back-reference emission, history
+copies and Adler-32 updates. Small Huffman prefix tables use already available
+bits without speculative input reads; resumable state remains below 2 KiB.
+Pack CRCs process eight bytes per step with an 8 KiB constant table. Output and
+expansion budgets still stop before the first excessive byte, with identical
+failure positions across chunk partitions. Independent zlib/Git oracles,
+all-`0xff` checksum boundaries, guarded output, allocation tracking and a
+bitwise CRC reference cover the optimized paths.
+
+The host reader buffers 64 KiB of batch output, allocates exact declared entry
+sizes through `Reader::next_entry_size`, and allocates reconstruction slots only
+for deltas. Header declarations are checked against the host budget before
+allocation and validated against the inflated stream. Offset bases use binary
+search and reference bases use an ID index. The same fixture now uses
+1,341,030/1,888,901 bytes of pack slots for matched/default inputs, down from
+7,288,704 bytes. These host allocations remain included in CPU and RSS.
+
+Both pinned 21-pair, three-warmup, one-worker ten-workload profiles passed after
+the changes, including all object IDs, kinds and bodies and the 19-delta default
+pack. Local-read medians, including the GNU time observer, are:
+
+| Policy / local reads | Git wall ms | Rust wall ms | Git CPU ms | Rust CPU ms |
+| --- | ---: | ---: | ---: | ---: |
+| Matched loose | 30.18 | 26.49 | 8.21 | 6.03 |
+| Matched pack | 22.55 | 24.94 | 5.65 | 7.76 |
+| Default loose | 38.97 | 25.57 | 8.71 | 7.64 |
+| Default pack | 30.00 | 25.67 | 6.14 | 7.74 |
+
+Loose reads use less CPU than Git in both policies. Pack reads still use about
+26–37% more CPU, including complete pack authentication, canonical object IDs
+and host body retention. The heavily loaded host makes these wall medians
+unsuitable for a general latency ranking. Full-profile raw reports and encoded
+fixtures are under `/tmp/git-zero-pr16-perf-fix/{matched,upstream}.json` and
+`{matched,upstream}-fixture` on the measuring host. They retain decoder binary
+fingerprints; both runs record an uncommitted working tree based on `ac8697e`.
+Their decoder fingerprint matches the binary built from `6355c25`.
+
+A separate 21-sample comparison rotates Git, the saved pre-optimization decoder
+(`ac8697e`) and `6355c25` through identical retained loose/pack files, after three
+warmups. It checks complete batch output outside timing and uses `wait4`
+directly, excluding the GNU time observer. CPU medians are:
+
+| Policy / local reads | Git CPU ms | Before CPU ms | After CPU ms | Reduction |
+| --- | ---: | ---: | ---: | ---: |
+| Matched loose | 7.44 | 20.10 | 4.84 | 76% |
+| Matched pack | 4.85 | 26.43 | 6.86 | 74% |
+| Default loose | 7.87 | 18.27 | 6.58 | 64% |
+| Default pack | 4.94 | 20.92 | 6.41 | 69% |
+
+All three processes have one median voluntary context switch. Default pack
+minor faults fall from 1846 to 716 (Git: 207); user CPU falls from 13.63 to
+2.31 ms and system CPU from 7.09 to 3.97 ms. Involuntary switches fall with
+shorter runs, but remain sensitive to host scheduling. This points to reduced
+decoder and allocation work as the measured improvement, with no evidence of
+excess voluntary scheduling in the original reader. It does not identify
+individual syscalls or prove that fault reduction explains all system CPU.
+The comparison script, samples and binary fingerprints are retained in
+`/tmp/git-zero-pr16-perf-fix/resources-{paired.py,paired.json,metadata.json}`.
+
+Reports now retain separate user/system CPU, voluntary/involuntary context
+switches and minor/major page faults in each sample and summary. `wait4` counts
+include the command's observer and waited descendants, exclude the HTTP server,
+and do not count syscalls. Both local readers have three median voluntary
+switches with this observer. No major faults occurred in these warm runs.
+[Git 2.53.0's packfile reader](https://github.com/git/git/blob/v2.53.0/packfile.c)
+maps pack/index windows, while this host owns the compressed pack and retains
+decoded entries. Mapped/indexed storage remains a possible I/O improvement;
+these measurements do not isolate its benefit or measure cold-cache behavior.
 
 ### Isolating encoder CPU
 
@@ -435,7 +613,7 @@ Wasm compilation/linking succeeds without supplying any global allocator.
 
 `cargo test -p git-zero --test fuzz --locked` embeds and replays the 32 independently
 authored binary seeds, every prefix truncation, six byte substitutions at every position,
-and reproducible xorshift inputs against four shared targets.
+and reproducible xorshift inputs against seven shared targets.
 `cargo test -p git-zero --test core --locked` also checks non-hex packet prefixes
 at every position and the maximum packet-length boundary.
 The same target functions back a separate cargo-fuzz workspace; core dependencies
@@ -448,8 +626,9 @@ Client response checks exercise discovery, default-branch lookup, pack framing
 and overreported transport lengths. Routing varies method, path, query, body and
 output capacity. Graph mutations recompute object IDs so invalid commit/tree
 records reach parsing, and compare borrowed versus short-read providers using
-the same bounded scratch. These targets cover existing APIs; zlib inflation and
-pack-entry/delta parsing are still roadmap work.
+the same bounded scratch. Inflation checks resumable state and output/ratio
+limits; loose/pack targets validate envelopes, entries and bounded delta
+instructions. Pack-index file parsing remains roadmap work.
 
 ## Git's existing HTTP tests
 

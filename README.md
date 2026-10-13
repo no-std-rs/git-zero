@@ -39,6 +39,10 @@ for checks and repository connection requirements.
   tree order and links, commit parents, and exact reachability from HEAD.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
   and checksum-validates smart packs, and fetches dumb loose objects.
+- Incremental zlib inflation with caller-owned history/output buffers, stored/
+  fixed/dynamic DEFLATE support, Adler-32 validation and output/expansion limits.
+- Loose-object envelope validation before body exposure, plus a SHA-1 pack entry
+  reader with wire CRCs, canonical object IDs and bounded offset/reference deltas.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
 - A loopback IPv4 server/client adapter and a Cloudflare Workers Wasm demo.
 - Native file-backed raw objects and verified prepacked responses, with positional
@@ -46,9 +50,80 @@ for checks and repository connection requirements.
 - Parallel interoperability tests mixing real Git and git-zero clients/servers.
 
 The client returns wire objects: raw packs for smart HTTP and zlib objects for
-dumb HTTP. It does not yet inflate/index packs, resolve deltas, traverse a dumb
+dumb HTTP. It does not yet index complete fetched packs, traverse a dumb
 repository, or create a checkout. Push, shallow/filter requests, protocol v2,
 SHA-256 repositories, and the standalone `git://` transport remain future work.
+
+## Incremental zlib inflation
+
+`zlib::Inflater` decodes downloaded zlib bytes without allocation or external
+compression dependencies. It borrows one caller-owned `zlib::WINDOW_SIZE`
+(32 KiB) history array; its resumable state is less than 2 KiB. Input and output
+chunks can be as small as one byte, and overlapping back-references work across
+history wraps and block boundaries.
+
+Construct the decoder with `InflateLimits { max_output, max_ratio, ratio_slack }`.
+Before each output byte it enforces both the absolute output cap and
+`output <= consumed_input * max_ratio + ratio_slack`, using saturating arithmetic.
+Only consumed bytes from the current zlib stream contribute to the ratio;
+unconsumed trailing bytes cannot enlarge the budget. The explicit slack permits
+compressible prefixes. Zero ratio permits at most the slack bytes. These checks
+behave identically across chunk partitions.
+
+`update(input, output, end_of_input)` returns consumed/written counts and
+`NeedInput`, `NeedOutput` or `Finished`. Advance input by the consumed count,
+retain the decoder and provide the unconsumed suffix on the next call. Set
+`end_of_input` when the supplied slice contains the last available bytes;
+missing input then reports `InvalidZlib`, while full output remains resumable.
+Empty chunks are accepted, and exact output budgets allow parsing the final
+block and checksum. `Finished` leaves subsequent pack entries or trailing bytes
+untouched; callers requiring one complete loose-object response must reject any
+remaining suffix.
+
+Stage output until `Finished`, which validates the zlib header, block structure,
+back-reference distances and Adler-32. Discard staged data on error; a failing
+call can modify its output buffer. Malformed/truncated data returns
+`InvalidZlib`, exhausted expansion budgets return `LimitExceeded`, and preset
+dictionaries return `Unsupported`. Errors are terminal until `reset(limits)`.
+The standalone inflater leaves Git envelope validation to the object decoder.
+See the [API example](src/zlib.rs) for a complete bounded loop.
+
+## Validated client objects and pack entries
+
+`client::decode_loose(compressed, expected_id, staging, window, limits)` validates
+one complete loose response. Its staging capacity and inflation limits include
+the Git header and body. It returns a borrowed `Object` only after the zlib
+checksum, canonical type/unsigned decimal size, exact body length and expected
+SHA-1 match. Concatenated streams and trailing bytes fail. `fetch_loose_object`
+combines the existing dumb transport request with this decoding, using separate
+compressed/inflated buffers. `Object::from_loose` performs envelope/ID checks on
+bytes already inflated by a host. These checks do not validate commit/tree/tag
+semantics or traverse the repository graph.
+
+`pack::Reader::new(pack)` checks a complete SHA-1 pack's header and trailer.
+`read_entry(staging, window, limits)` decodes one entry into caller buffers,
+checks its declared size and records offsets and the wire CRC-32. A failure
+preserves the cursor for retry; discard modified staging bytes. `finish()` or a
+read returning `None` verifies the declared entry count and exact pack closure.
+`Entry::verify_crc32` compares a trusted index CRC with the computed CRC; CRCs
+are carried by Git's index files rather than the pack entries themselves.
+
+Plain entries expose `Entry::object()` as a `ResolvedObject` with a computed
+canonical ID. For deltas, provide a materialized base to `resolve_delta` plus
+separate result storage and `DeltaLimits { max_output, max_instructions,
+max_depth }`. Offset bases must have the correct offset in the same pack;
+reference bases must have the advertised ID. Host objects can become reference
+bases through `ResolvedObject::external`. Delta copies, inserts, base/result
+sizes, exact instruction closure and chain depth are checked before returning
+a canonical body and ID. `verify_id` compares it with a trusted expected ID.
+`pack::apply_delta` provides the one-level instruction primitive separately.
+
+The reader needs the complete compressed pack plus staging for one inflated
+body/instruction stream and one 32 KiB history window. Delta application also
+needs its canonical base and caller-bounded result storage. No recursion or
+allocation occurs. Forward-base lookup, caller-owned indexes, object sinks and
+complete fetch orchestration are the next storage layer; the native `fetch`
+command retains its existing wire-output behavior.
 
 ## Workspace
 

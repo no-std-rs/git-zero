@@ -4,6 +4,9 @@ use crate::{
 };
 use sha1::{Digest, Sha1};
 
+mod decode;
+pub use decode::{DeltaLimits, Entry, EntryKind, Reader, ResolvedObject, apply_delta, crc32};
+
 struct HashWriter<'a, W> {
     output: &'a mut W,
     hash: Sha1,

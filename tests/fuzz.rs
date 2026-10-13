@@ -2,7 +2,41 @@ mod fuzz_support;
 
 type Target = (&'static str, fn(&[u8]), &'static [&'static [u8]]);
 
-const TARGETS: [Target; 4] = [
+const TARGETS: [Target; 7] = [
+    (
+        "loose",
+        fuzz_support::loose,
+        &[
+            include_bytes!("../fuzz/corpus/loose/blob"),
+            include_bytes!("../fuzz/corpus/loose/empty"),
+            include_bytes!("../fuzz/corpus/loose/tag"),
+            include_bytes!("../fuzz/corpus/loose/bad-length"),
+            include_bytes!("../fuzz/corpus/loose/leading-zero"),
+        ],
+    ),
+    (
+        "entries",
+        fuzz_support::entries,
+        &[
+            include_bytes!("../fuzz/corpus/entries/plain"),
+            include_bytes!("../fuzz/corpus/entries/offset"),
+            include_bytes!("../fuzz/corpus/entries/reference"),
+            include_bytes!("../fuzz/corpus/entries/delta"),
+            include_bytes!("../fuzz/corpus/entries/reserved"),
+        ],
+    ),
+    (
+        "inflation",
+        fuzz_support::inflation,
+        &[
+            include_bytes!("../fuzz/corpus/inflation/stored"),
+            include_bytes!("../fuzz/corpus/inflation/fixed"),
+            include_bytes!("../fuzz/corpus/inflation/dynamic"),
+            include_bytes!("../fuzz/corpus/inflation/empty"),
+            include_bytes!("../fuzz/corpus/inflation/expansion"),
+            include_bytes!("../fuzz/corpus/inflation/bad-checksum"),
+        ],
+    ),
     (
         "packets",
         fuzz_support::packets,

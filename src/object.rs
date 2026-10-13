@@ -31,10 +31,9 @@ impl ObjectId {
 
 impl fmt::Display for ObjectId {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in self.0 {
-            write!(output, "{byte:02x}")?;
-        }
-        Ok(())
+        let hex = self.to_hex();
+        let text = core::str::from_utf8(&hex).map_err(|_| fmt::Error)?;
+        output.write_str(text)
     }
 }
 
@@ -82,8 +81,38 @@ pub struct ObjectInfo {
 }
 
 impl ObjectInfo {
+    /// Parse one complete canonical Git header, including its terminating NUL.
+    /// Sizes use unsigned decimal without leading zeros and fit in 64 bits.
+    pub fn from_header(header: &[u8]) -> Result<Self> {
+        let header = header.strip_suffix(&[0]).ok_or(Error::InvalidObject)?;
+        let space = header
+            .iter()
+            .position(|&byte| byte == b' ')
+            .ok_or(Error::InvalidObject)?;
+        let kind = match &header[..space] {
+            b"commit" => ObjectKind::Commit,
+            b"tree" => ObjectKind::Tree,
+            b"blob" => ObjectKind::Blob,
+            b"tag" => ObjectKind::Tag,
+            _ => return Err(Error::InvalidObject),
+        };
+        let decimal = &header[space + 1..];
+        if decimal.is_empty()
+            || decimal.len() > 20
+            || !decimal[0].is_ascii_digit()
+            || (decimal.len() > 1 && decimal[0] == b'0')
+        {
+            return Err(Error::InvalidObject);
+        }
+        let size = core::str::from_utf8(decimal)
+            .map_err(|_| Error::InvalidObject)?
+            .parse()
+            .map_err(|_| Error::InvalidObject)?;
+        Ok(Self { kind, size })
+    }
+
     /// Write the loose-object/hash header. A 32-byte buffer fits every header.
-    pub fn header<'a>(&self, storage: &'a mut [u8]) -> Result<&'a [u8]> {
+    pub fn header<'header>(&self, storage: &'header mut [u8]) -> Result<&'header [u8]> {
         use core::fmt::Write;
         let mut header = SliceWriter::new(storage);
         write!(&mut header, "{} {}\0", self.kind.name(), self.size)
@@ -92,7 +121,28 @@ impl ObjectInfo {
     }
 }
 
-impl Object<'_> {
+impl<'a> Object<'a> {
+    /// Validate already inflated loose bytes before exposing a borrowed body.
+    /// Header syntax, exact body length and the expected SHA-1 must all match.
+    /// This checks the object's envelope, not its commit/tree/tag semantics.
+    pub fn from_loose(bytes: &'a [u8], expected: ObjectId) -> Result<Self> {
+        let end = bytes
+            .iter()
+            .take(32)
+            .position(|&byte| byte == 0)
+            .ok_or(Error::InvalidObject)?
+            + 1;
+        let info = ObjectInfo::from_header(&bytes[..end])?;
+        let data = &bytes[end..];
+        if data.len() as u64 != info.size || Sha1::digest(bytes)[..] != expected.0 {
+            return Err(Error::InvalidObject);
+        }
+        Ok(Self {
+            kind: info.kind,
+            data,
+        })
+    }
+
     pub fn info(&self) -> ObjectInfo {
         ObjectInfo {
             kind: self.kind,
@@ -100,7 +150,7 @@ impl Object<'_> {
         }
     }
 
-    pub fn header<'a>(&self, storage: &'a mut [u8]) -> Result<&'a [u8]> {
+    pub fn header<'header>(&self, storage: &'header mut [u8]) -> Result<&'header [u8]> {
         self.info().header(storage)
     }
 

@@ -5,14 +5,14 @@ import os
 
 from interop import run
 from upstream_http import git, object_manifest
+from benchmark_config import coerce
 
 
 def initialize(root, env, compression):
+    config = coerce(compression)
     bare = root / "repo.git"
     run("git", "init", "-q", "--bare", "--object-format=sha1", "-b", "main", str(bare), env=env)
-    for key, value in (("core.compression", compression), ("core.looseCompression", compression),
-                       ("pack.compression", compression),
-                       ("pack.window", 0), ("pack.depth", 0), ("http.getanyfile", "true")):
+    for key, value in config.overrides().items():
         git(bare, "config", key, str(value), env=env)
     return bare
 
@@ -43,6 +43,7 @@ def create(root, env, files, blob_bytes, commits, compression):
 
 def export(root, bare, head, manifest, env, compression, description):
     """Encode identical bodies for Git and the raw provider in an owned fixture."""
+    config = coerce(compression)
     # mktree does not load default compression config in some Git versions.
     # Rewrite every loose object through hash-object, which does, before any
     # server sees this fixture. Object IDs and graph stay exactly the same.
@@ -53,7 +54,7 @@ def export(root, bare, head, manifest, env, compression, description):
         path.unlink(missing_ok=True)
         assert git(bare, "hash-object", "-w", "-t", kind.decode(), "--stdin", env=env, data=body).strip() == oid
         encoded = path.read_bytes()
-        if compression == 0:
+        if config.compression == 0:
             assert (encoded[2] >> 1) & 3 == 0, "expected stored-DEFLATE loose object"
         loose_digest.update(encoded)
         loose_bytes += len(encoded)
@@ -70,9 +71,11 @@ def export(root, bare, head, manifest, env, compression, description):
     (root / "objects.tsv").write_text("\n".join(rows) + "\n")
     metadata = {**description, "head": head, "objects": len(manifest),
                 "raw_object_bytes": (root / "objects.raw").stat().st_size,
-                "raw_sha256": digest.hexdigest(), "git_compression": compression,
+                "raw_sha256": digest.hexdigest(), "git_compression": config.compression,
                 "git_loose_object_bytes": loose_bytes, "git_loose_sha256": loose_digest.hexdigest(),
-                "git_delta_window": 0, "git_delta_depth": 0,
+                "git_delta_window": config.delta_window, "git_delta_depth": config.delta_depth,
+                "algorithms": config.algorithms(),
+                "git_local_config": git(bare, "config", "--local", "--list", env=env).decode().splitlines(),
                 "git_storage": "loose Git objects", "zero_storage": "identical raw bodies in a file; no prepacked cache"}
     (root / "fixture.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return bare, manifest, metadata
