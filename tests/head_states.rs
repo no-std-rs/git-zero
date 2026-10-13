@@ -59,7 +59,7 @@ fn response(repository: &impl Repository, path: &str, smart: bool) -> Vec<u8> {
 }
 
 #[test]
-fn empty_repository_advertises_unborn_head_and_rejects_all_wants() {
+fn empty_repository_advertises_unborn_head() {
     let repository = EmptyRepository::new("refs/heads/new").unwrap();
     assert_eq!(repository.head_state(), Head::Unborn("refs/heads/new"));
     assert_eq!(repository.head_state().id(), None);
@@ -82,6 +82,11 @@ fn empty_repository_advertises_unborn_head_and_rejects_all_wants() {
     ))));
     assert_eq!(pktline::read(&mut packets), Ok(Some(Packet::Flush)));
     assert!(packets.is_empty());
+}
+
+#[test]
+fn empty_repository_rejects_all_wants_before_output() {
+    let repository = EmptyRepository::new("refs/heads/main").unwrap();
     for id in [ObjectId([0; 20]), ObjectId([1; 20])] {
         let request = format!("0032want {id}\n00000009done\n").into_bytes();
         let mut storage = [0; 128];
@@ -111,7 +116,7 @@ fn empty_repository_advertises_unborn_head_and_rejects_all_wants() {
 }
 
 #[test]
-fn head_state_survives_indexes_and_allocation_free_validation() {
+fn empty_indexes_and_validation_need_no_scratch_or_allocation() {
     let empty = EmptyRepository::new("refs/heads/main").unwrap();
     allocations::without_allocations(|| {
         let indexed = IndexedRepository::new(&empty, &mut [], &mut []).unwrap();
@@ -131,6 +136,10 @@ fn head_state_survives_indexes_and_allocation_free_validation() {
         )
         .unwrap();
     });
+}
+
+#[test]
+fn detached_heads_survive_indexes_and_validation() {
     let files = [File {
         name: "file",
         contents: b"contents\n",
@@ -185,7 +194,7 @@ fn head_state_survives_indexes_and_allocation_free_validation() {
 }
 
 #[test]
-fn inconsistent_heads_and_unborn_packet_limits_fail_explicitly() {
+fn unborn_targets_and_packet_limits_fail_explicitly() {
     for target in ["main", "refs/tags/main", "refs/heads/../main"] {
         assert!(matches!(
             EmptyRepository::new(target),
@@ -204,6 +213,11 @@ fn inconsistent_heads_and_unborn_packet_limits_fail_explicitly() {
         EmptyRepository::new(&format!("{target}x")),
         Err(Error::InvalidReference)
     ));
+}
+
+#[test]
+fn inconsistent_head_states_fail_explicitly() {
+    let empty = EmptyRepository::new("refs/heads/main").unwrap();
     for (state, refs, expected) in [
         (
             Head::Detached(ObjectId([0; 20])),

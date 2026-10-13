@@ -37,6 +37,23 @@ impl Drop for Stop<'_> {
     }
 }
 
+fn serve(repository: &impl Repository, listener: &impl rustix::fd::AsFd, stopped: &AtomicBool) {
+    let mut request_storage = [0; 4096];
+    let mut response_storage = [0; 8192];
+    loop {
+        let socket = accept(listener).unwrap();
+        if stopped.load(Ordering::SeqCst) {
+            break;
+        }
+        let mut request = read_request(&socket, &mut request_storage).unwrap();
+        request.path = request.path.strip_prefix("/repo.git/").unwrap();
+        let mut output = SliceWriter::new(&mut response_storage);
+        let response =
+            http::serve_with_scratch(repository, request, &mut [0; 17], &mut output).unwrap();
+        respond(&socket, response, output.as_bytes()).unwrap();
+    }
+}
+
 fn compare(repository: &(impl Repository + Sync), state: &str) {
     let mut metadata = vec![None; repository.object_count()];
     let mut by_id = vec![0; repository.object_count()];
@@ -56,21 +73,7 @@ fn compare(repository: &(impl Repository + Sync), state: &str) {
     let stopped = AtomicBool::new(false);
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            let mut request_storage = [0; 4096];
-            let mut response_storage = [0; 8192];
-            loop {
-                let socket = accept(&listener).unwrap();
-                if stopped.load(Ordering::SeqCst) {
-                    break;
-                }
-                let mut request = read_request(&socket, &mut request_storage).unwrap();
-                request.path = request.path.strip_prefix("/repo.git/").unwrap();
-                let mut output = SliceWriter::new(&mut response_storage);
-                let response =
-                    http::serve_with_scratch(&repository, request, &mut [0; 17], &mut output)
-                        .unwrap();
-                respond(&socket, response, output.as_bytes()).unwrap();
-            }
+            serve(&repository, &listener, &stopped);
         });
         let _stop = Stop {
             stopped: &stopped,
