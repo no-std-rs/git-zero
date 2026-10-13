@@ -39,6 +39,13 @@ entry/delta decoding, checked against Git's IDs, index CRCs and bodies in
 `tests/pack_reader.rs`. Local object-read benchmarks exercise those core APIs;
 complete client fetch/materialization remains planned.
 
+The native Cargo `head_states` suite additionally compares git-zero's server
+with Git's HTTP backend/static bare oracle for empty/unborn and detached HEAD
+with/without branch aliases. These are server discovery/clone/fetch comparisons
+using real Git, distinct from the `upstream-empty` and `upstream-detached` client
+regressions above. Non-HEAD symbolic refs, independent tips and annotated tag
+closures remain planned server cases.
+
 `upstream-snapshot-{smart,dumb}` constructs blob/tree/commit bytes using Git's
 own commands, with the demo's exact content and identity. Both servers must
 advertise identical refs and produce identical reachable objects and checkouts.

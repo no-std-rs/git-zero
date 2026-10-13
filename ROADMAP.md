@@ -51,6 +51,11 @@ milestone after the read-only server gate.
 - [x] Native file-backed object provider using `rustix`, with optional prepacked data.
 - [ ] Empty/bare repositories, unborn and detached HEAD, symbolic refs, independent
   branch tips, lightweight/annotated tags, and peeled ref advertisements.
+  Empty repositories and unborn symbolic HEAD now have allocation-free core
+  APIs; detached HEAD supports both commit aliases and a branchless repository.
+  Real Git discovery, clone and fetch compare native smart/dumb hosts with Git's
+  HTTP backend and static bare repositories across the Git/platform CI matrix.
+  Independent branch tips, non-HEAD symbolic refs and annotated/peeled tags remain.
 - [ ] Serve the correct reachable closure for selected refs and tag targets,
   including merge histories and repositories with objects beyond HEAD's closure.
 - [ ] SHA-256 object IDs, repository validation, ref advertisements, packs, and

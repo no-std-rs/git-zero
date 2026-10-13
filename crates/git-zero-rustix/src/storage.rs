@@ -2,7 +2,7 @@
 use core::ffi::CStr;
 
 use git_zero::{
-    Error, ObjectId, ObjectInfo, ObjectKind, Repository, Result,
+    Error, Head, ObjectId, ObjectInfo, ObjectKind, Repository, Result,
     http::{self, Request, Response},
     io::Write,
     pack,
@@ -100,6 +100,7 @@ pub struct FileRepository<'a> {
     objects: &'a [FileObject],
     head: ObjectId,
     head_ref: &'a str,
+    detached: bool,
     refs: &'a [&'a str],
     prepacked: Option<Region>,
 }
@@ -110,6 +111,7 @@ impl<'a> FileRepository<'a> {
             objects,
             head,
             head_ref: "refs/heads/main",
+            detached: false,
             refs: &["refs/heads/main"],
             prepacked: None,
         }
@@ -118,6 +120,16 @@ impl<'a> FileRepository<'a> {
     /// Advertise sorted, unique refs that all alias head, including head_ref.
     pub fn with_refs(mut self, head_ref: &'a str, refs: &'a [&'a str]) -> Result<Self> {
         self.head_ref = head_ref;
+        self.detached = false;
+        self.refs = refs;
+        validate_refs(&self)?;
+        Ok(self)
+    }
+
+    /// Serve a direct commit HEAD without a symbolic branch. Refs remain aliases
+    /// of that commit, and may be empty. The graph still needs core validation.
+    pub fn with_detached_head(mut self, refs: &'a [&'a str]) -> Result<Self> {
+        self.detached = true;
         self.refs = refs;
         validate_refs(&self)?;
         Ok(self)
@@ -193,6 +205,16 @@ impl<'a> FileRepository<'a> {
 impl Repository for FileRepository<'_> {
     fn head(&self) -> ObjectId {
         self.head
+    }
+    fn head_state(&self) -> Head<'_> {
+        if self.detached {
+            Head::Detached(self.head)
+        } else {
+            Head::Symbolic {
+                target: self.head_ref,
+                id: self.head,
+            }
+        }
     }
     fn object_count(&self) -> usize {
         self.objects.len()

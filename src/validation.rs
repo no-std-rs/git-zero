@@ -1,8 +1,8 @@
-//! Opt-in validation of the single-HEAD repository contract, without allocation.
+//! Opt-in validation of the repository graph contract, without allocation.
 use core::cmp::Ordering;
 
 use crate::{
-    Error, Object, ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader, Repository,
+    Error, Head, Object, ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader, Repository,
     Result,
     repository::validate_refs,
     snapshot::{cmp_tree_names, validate_name},
@@ -21,7 +21,8 @@ pub struct ValidationMetadata {
 ///
 /// Checks SHA-1 IDs, unique enumeration, commit/tree links and target kinds,
 /// tree modes, names, Git ordering and duplicates, and exact reachability from a
-/// commit HEAD. Commit parents are followed; gitlinks name external repositories
+/// commit HEAD, or an empty graph for an unborn HEAD. Commit parents are followed;
+/// gitlinks name external repositories
 /// and are not followed. Refs retain the single-commit alias contract.
 ///
 /// This is graph validation, not a replacement for all of Git's fsck policies:
@@ -42,7 +43,8 @@ pub struct ValidatedRepository<'index, 'repo, R: Repository + ?Sized> {
 impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R> {
     /// Each metadata/index array needs object_count slots; extra slots are
     /// untouched. Initialize metadata with `[None; N]`. Read scratch needs at
-    /// least one byte. Parse scratch must fit the longest commit header line
+    /// least one byte for nonempty bodies. Empty repositories need no scratch.
+    /// Parse scratch must fit the longest commit header line
     /// (excluding LF), and twice the longest tree name (excluding NUL).
     /// Neither scratch buffer is retained. Their sizes do not limit body sizes.
     ///
@@ -96,7 +98,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             return Err(Error::InvalidObject);
         }
         let head = repository.head();
-        reach(objects, by_id, head, ObjectKind::Commit)?;
+        if let Some(id) = repository.head_state().id() {
+            reach(objects, by_id, id, ObjectKind::Commit)?;
+        }
         while let Some(index) = objects.iter().position(|slot| {
             let object = slot.expect("initialized metadata");
             object.reached && !object.checked
@@ -136,6 +140,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
 impl<R: Repository + ?Sized> Repository for ValidatedRepository<'_, '_, R> {
     fn head(&self) -> ObjectId {
         self.head
+    }
+    fn head_state(&self) -> Head<'_> {
+        self.repository.head_state()
     }
     fn object_count(&self) -> usize {
         self.objects.len()
