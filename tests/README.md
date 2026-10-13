@@ -440,6 +440,77 @@ Raw reports and retained encoded fixtures are under
 host. Reproduce the paired profiles with the commands above; the reports retain
 all samples, binary fingerprints, pin/config policies, host load and buffer limits.
 
+### Decoder read optimizations
+
+Revision `6355c25` batches stored-block and back-reference emission, history
+copies and Adler-32 updates. Small Huffman prefix tables use already available
+bits without speculative input reads; resumable state remains below 2 KiB.
+Pack CRCs process eight bytes per step with an 8 KiB constant table. Output and
+expansion budgets still stop before the first excessive byte, with identical
+failure positions across chunk partitions. Independent zlib/Git oracles,
+all-`0xff` checksum boundaries, guarded output, allocation tracking and a
+bitwise CRC reference cover the optimized paths.
+
+The host reader buffers 64 KiB of batch output, allocates exact declared entry
+sizes through `Reader::next_entry_size`, and allocates reconstruction slots only
+for deltas. Header declarations are checked against the host budget before
+allocation and validated against the inflated stream. Offset bases use binary
+search and reference bases use an ID index. The same fixture now uses
+1,341,030/1,888,901 bytes of pack slots for matched/default inputs, down from
+7,288,704 bytes. These host allocations remain included in CPU and RSS.
+
+Both pinned 21-pair, three-warmup, one-worker ten-workload profiles passed after
+the changes, including all object IDs, kinds and bodies and the 19-delta default
+pack. Local-read medians, including the GNU time observer, are:
+
+| Policy / local reads | Git wall ms | Rust wall ms | Git CPU ms | Rust CPU ms |
+| --- | ---: | ---: | ---: | ---: |
+| Matched loose | 30.18 | 26.49 | 8.21 | 6.03 |
+| Matched pack | 22.55 | 24.94 | 5.65 | 7.76 |
+| Default loose | 38.97 | 25.57 | 8.71 | 7.64 |
+| Default pack | 30.00 | 25.67 | 6.14 | 7.74 |
+
+Loose reads use less CPU than Git in both policies. Pack reads still use about
+26–37% more CPU, including complete pack authentication, canonical object IDs
+and host body retention. The heavily loaded host makes these wall medians
+unsuitable for a general latency ranking. Full-profile raw reports and encoded
+fixtures are under `/tmp/git-zero-pr16-perf-fix/{matched,upstream}.json` and
+`{matched,upstream}-fixture` on the measuring host. They retain decoder binary
+fingerprints; both runs record an uncommitted working tree based on `ac8697e`.
+Their decoder fingerprint matches the binary built from `6355c25`.
+
+A separate 21-sample comparison rotates Git, the saved pre-optimization decoder
+(`ac8697e`) and `6355c25` through identical retained loose/pack files, after three
+warmups. It checks complete batch output outside timing and uses `wait4`
+directly, excluding the GNU time observer. CPU medians are:
+
+| Policy / local reads | Git CPU ms | Before CPU ms | After CPU ms | Reduction |
+| --- | ---: | ---: | ---: | ---: |
+| Matched loose | 7.44 | 20.10 | 4.84 | 76% |
+| Matched pack | 4.85 | 26.43 | 6.86 | 74% |
+| Default loose | 7.87 | 18.27 | 6.58 | 64% |
+| Default pack | 4.94 | 20.92 | 6.41 | 69% |
+
+All three processes have one median voluntary context switch. Default pack
+minor faults fall from 1846 to 716 (Git: 207); user CPU falls from 13.63 to
+2.31 ms and system CPU from 7.09 to 3.97 ms. Involuntary switches fall with
+shorter runs, but remain sensitive to host scheduling. This points to reduced
+decoder and allocation work as the measured improvement, with no evidence of
+excess voluntary scheduling in the original reader. It does not identify
+individual syscalls or prove that fault reduction explains all system CPU.
+The comparison script, samples and binary fingerprints are retained in
+`/tmp/git-zero-pr16-perf-fix/resources-{paired.py,paired.json,metadata.json}`.
+
+Reports now retain separate user/system CPU, voluntary/involuntary context
+switches and minor/major page faults in each sample and summary. `wait4` counts
+include the command's observer and waited descendants, exclude the HTTP server,
+and do not count syscalls. Both local readers have three median voluntary
+switches with this observer. No major faults occurred in these warm runs.
+[Git 2.53.0's packfile reader](https://github.com/git/git/blob/v2.53.0/packfile.c)
+maps pack/index windows, while this host owns the compressed pack and retains
+decoded entries. Mapped/indexed storage remains a possible I/O improvement;
+these measurements do not isolate its benefit or measure cold-cache behavior.
+
 ### Isolating encoder CPU
 
 The Linux `encoder-profile` example loads and checks the same raw export before
