@@ -86,7 +86,7 @@ fn run(
         );
         storage[written..written + emitted].copy_from_slice(&scratch[..emitted]);
         written += emitted;
-        match result {
+        let progress = match result {
             Err(error) => {
                 assert!(matches!(
                     error,
@@ -99,28 +99,27 @@ fn run(
                     written,
                 };
             }
-            Ok(progress) => {
-                assert!(progress.consumed <= end - consumed);
-                assert_eq!(progress.written, emitted);
-                consumed += progress.consumed;
-                assert_eq!(decoder.total_input(), consumed as u64);
-                if progress.status == InflateStatus::Finished {
-                    let again = decoder.update(data, &mut scratch, true).unwrap();
-                    assert_eq!(
-                        (again.consumed, again.written, again.status),
-                        (0, 0, InflateStatus::Finished)
-                    );
-                    return Outcome {
-                        error: None,
-                        consumed: decoder.total_input(),
-                        written,
-                    };
-                }
-                assert!(progress.consumed != 0 || progress.written != 0);
-                if progress.status == InflateStatus::NeedInput {
-                    assert_eq!(consumed, end);
-                }
-            }
+            Ok(progress) => progress,
+        };
+        assert!(progress.consumed <= end - consumed);
+        assert_eq!(progress.written, emitted);
+        consumed += progress.consumed;
+        assert_eq!(decoder.total_input(), consumed as u64);
+        if progress.status == InflateStatus::Finished {
+            let again = decoder.update(data, &mut scratch, true).unwrap();
+            assert_eq!(
+                (again.consumed, again.written, again.status),
+                (0, 0, InflateStatus::Finished)
+            );
+            return Outcome {
+                error: None,
+                consumed: decoder.total_input(),
+                written,
+            };
+        }
+        assert!(progress.consumed != 0 || progress.written != 0);
+        if progress.status == InflateStatus::NeedInput {
+            assert_eq!(consumed, end);
         }
     }
     panic!("inflation exceeded its input/output progress budget");

@@ -31,10 +31,9 @@ impl ObjectId {
 
 impl fmt::Display for ObjectId {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in self.0 {
-            write!(output, "{byte:02x}")?;
-        }
-        Ok(())
+        let hex = self.to_hex();
+        let text = core::str::from_utf8(&hex).map_err(|_| fmt::Error)?;
+        output.write_str(text)
     }
 }
 
@@ -98,19 +97,17 @@ impl ObjectInfo {
             _ => return Err(Error::InvalidObject),
         };
         let decimal = &header[space + 1..];
-        if decimal.is_empty() || (decimal.len() > 1 && decimal[0] == b'0') {
+        if decimal.is_empty()
+            || decimal.len() > 20
+            || !decimal[0].is_ascii_digit()
+            || (decimal.len() > 1 && decimal[0] == b'0')
+        {
             return Err(Error::InvalidObject);
         }
-        let mut size = 0_u64;
-        for &byte in decimal {
-            if !byte.is_ascii_digit() {
-                return Err(Error::InvalidObject);
-            }
-            size = size
-                .checked_mul(10)
-                .and_then(|size| size.checked_add(u64::from(byte - b'0')))
-                .ok_or(Error::InvalidObject)?;
-        }
+        let size = core::str::from_utf8(decimal)
+            .map_err(|_| Error::InvalidObject)?
+            .parse()
+            .map_err(|_| Error::InvalidObject)?;
         Ok(Self { kind, size })
     }
 

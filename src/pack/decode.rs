@@ -193,11 +193,7 @@ impl<'a> Reader<'a> {
     /// advancing. Hosts must apply their own budget before allocating storage.
     /// The declaration is checked against the actual stream by `read_entry`.
     pub fn next_entry_size(&self) -> Result<Option<u64>> {
-        if self.remaining == 0 {
-            self.finish()?;
-            return Ok(None);
-        }
-        self.entry_header().map(|(_, size, _)| Some(size))
+        Ok(self.entry_header()?.map(|(_, size, _)| size))
     }
 
     /// Read the next entry. Declared size is the inflated body/instruction size.
@@ -209,12 +205,10 @@ impl<'a> Reader<'a> {
         window: &mut [u8; WINDOW_SIZE],
         limits: InflateLimits,
     ) -> Result<Option<Entry<'out>>> {
-        if self.remaining == 0 {
-            self.finish()?;
+        let Some((cursor, size, kind)) = self.entry_header()? else {
             return Ok(None);
-        }
+        };
         let start = self.position;
-        let (cursor, size, kind) = self.entry_header()?;
         if size > limits.max_output {
             return Err(Error::LimitExceeded);
         }
@@ -246,7 +240,11 @@ impl<'a> Reader<'a> {
         }))
     }
 
-    fn entry_header(&self) -> Result<(usize, u64, EntryKind)> {
+    fn entry_header(&self) -> Result<Option<(usize, u64, EntryKind)>> {
+        if self.remaining == 0 {
+            self.finish()?;
+            return Ok(None);
+        }
         let start = self.position;
         let mut cursor = start;
         let first = byte(self.bytes, &mut cursor)?;
@@ -263,25 +261,9 @@ impl<'a> Reader<'a> {
             2 => EntryKind::Object(ObjectKind::Tree),
             3 => EntryKind::Object(ObjectKind::Blob),
             4 => EntryKind::Object(ObjectKind::Tag),
-            6 => {
-                let mut last = byte(self.bytes, &mut cursor)?;
-                let mut distance = u64::from(last & 127);
-                while last & 128 != 0 {
-                    last = byte(self.bytes, &mut cursor)?;
-                    distance = distance
-                        .checked_add(1)
-                        .and_then(|n| n.checked_mul(128))
-                        .and_then(|n| n.checked_add(u64::from(last & 127)))
-                        .ok_or(Error::CorruptPack)?;
-                }
-                let base_offset = (start as u64)
-                    .checked_sub(distance)
-                    .ok_or(Error::CorruptPack)?;
-                if distance == 0 || base_offset < 12 {
-                    return Err(Error::CorruptPack);
-                }
-                EntryKind::OffsetDelta { base_offset }
-            }
+            6 => EntryKind::OffsetDelta {
+                base_offset: offset_base(self.bytes, &mut cursor, start as u64)?,
+            },
             7 => {
                 let end = cursor.checked_add(20).ok_or(Error::CorruptPack)?;
                 let id = self.bytes.get(cursor..end).ok_or(Error::CorruptPack)?;
@@ -292,7 +274,7 @@ impl<'a> Reader<'a> {
             }
             _ => return Err(Error::CorruptPack),
         };
-        Ok((cursor, size, kind))
+        Ok(Some((cursor, size, kind)))
     }
 
     pub fn finish(&self) -> Result<()> {
@@ -343,35 +325,15 @@ pub fn apply_delta<'a>(
         }
         instructions += 1;
         let opcode = take_byte(&mut delta)?;
-        let bytes = if opcode & 128 == 0 {
-            if opcode == 0 {
-                return Err(Error::CorruptPack);
+        let bytes = match opcode {
+            0 => return Err(Error::CorruptPack),
+            1..=127 => {
+                let size = usize::from(opcode);
+                let bytes = delta.get(..size).ok_or(Error::CorruptPack)?;
+                delta = &delta[size..];
+                bytes
             }
-            let size = usize::from(opcode);
-            let bytes = delta.get(..size).ok_or(Error::CorruptPack)?;
-            delta = &delta[size..];
-            bytes
-        } else {
-            let mut offset = 0_u32;
-            let mut count = 0_u32;
-            for shift in 0..4 {
-                if opcode & (1 << shift) != 0 {
-                    offset |= u32::from(take_byte(&mut delta)?) << (shift * 8);
-                }
-            }
-            for shift in 0..3 {
-                if opcode & (16 << shift) != 0 {
-                    count |= u32::from(take_byte(&mut delta)?) << (shift * 8);
-                }
-            }
-            if count == 0 {
-                count = 65536;
-            }
-            let offset = usize::try_from(offset).map_err(|_| Error::CorruptPack)?;
-            let end = offset
-                .checked_add(count as usize)
-                .ok_or(Error::CorruptPack)?;
-            base.data.get(offset..end).ok_or(Error::CorruptPack)?
+            _ => delta_copy(base.data, opcode, &mut delta)?,
         };
         let end = written.checked_add(bytes.len()).ok_or(Error::CorruptPack)?;
         output
@@ -387,6 +349,48 @@ pub fn apply_delta<'a>(
         kind: base.kind,
         data: output,
     })
+}
+
+fn offset_base(bytes: &[u8], cursor: &mut usize, start: u64) -> Result<u64> {
+    let mut last = byte(bytes, cursor)?;
+    let mut distance = u64::from(last & 127);
+    while last & 128 != 0 {
+        last = byte(bytes, cursor)?;
+        distance = distance
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(128))
+            .and_then(|n| n.checked_add(u64::from(last & 127)))
+            .ok_or(Error::CorruptPack)?;
+    }
+    let base = start.checked_sub(distance).ok_or(Error::CorruptPack)?;
+    if distance == 0 || base < 12 {
+        return Err(Error::CorruptPack);
+    }
+    Ok(base)
+}
+
+fn delta_copy<'a>(base: &'a [u8], opcode: u8, delta: &mut &[u8]) -> Result<&'a [u8]> {
+    let offset = sparse_parameter(opcode, 4, delta)?;
+    let count = sparse_parameter(opcode >> 4, 3, delta)?;
+    let count = if count == 0 { 65536 } else { count };
+    let offset = usize::try_from(offset).map_err(|_| Error::CorruptPack)?;
+    let end = offset
+        .checked_add(count as usize)
+        .ok_or(Error::CorruptPack)?;
+    base.get(offset..end).ok_or(Error::CorruptPack)
+}
+
+/// Copy operands omit bytes whose corresponding opcode bit is clear.
+#[inline]
+fn sparse_parameter(mut flags: u8, width: u32, bytes: &mut &[u8]) -> Result<u32> {
+    let mut value = 0;
+    for index in 0..width {
+        if flags & 1 != 0 {
+            value |= u32::from(take_byte(bytes)?) << (index * 8);
+        }
+        flags >>= 1;
+    }
+    Ok(value)
 }
 
 fn byte(bytes: &[u8], cursor: &mut usize) -> Result<u8> {

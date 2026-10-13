@@ -2,9 +2,9 @@
 mod allocations;
 
 use git_zero::{
-    Error, Object, ObjectKind,
+    Error, Object, ObjectId, ObjectKind,
     io::Write,
-    pack::{self, DeltaLimits, EntryKind, Reader, ResolvedObject},
+    pack::{self, DeltaLimits, Entry, EntryKind, Reader, ResolvedObject},
     zlib::{self, InflateLimits, WINDOW_SIZE},
 };
 use sha1::{Digest, Sha1};
@@ -54,16 +54,21 @@ fn crc_matches_bitwise_reference_at_every_slice_and_tail_boundary() {
         .collect();
     for start in 0..8 {
         let mut reference = u32::MAX;
-        for length in 0..=bytes.len() - start {
-            assert_eq!(pack::crc32(&bytes[start..start + length]), !reference);
-            if let Some(&byte) = bytes.get(start + length) {
-                reference ^= u32::from(byte);
-                for _ in 0..8 {
-                    reference = (reference >> 1) ^ if reference & 1 != 0 { 0xedb8_8320 } else { 0 };
-                }
-            }
+        assert_eq!(pack::crc32(&bytes[start..start]), !reference);
+        for (index, &byte) in bytes[start..].iter().enumerate() {
+            reference = crc_bitwise_byte(reference, byte);
+            assert_eq!(pack::crc32(&bytes[start..start + index + 1]), !reference);
         }
     }
+}
+
+// Independent one-byte IEEE CRC update, with no production lookup tables.
+fn crc_bitwise_byte(mut crc: u32, byte: u8) -> u32 {
+    crc ^= u32::from(byte);
+    for _ in 0..8 {
+        crc = (crc >> 1) ^ if crc & 1 != 0 { 0xedb8_8320 } else { 0 };
+    }
+    crc
 }
 
 #[test]
@@ -429,7 +434,6 @@ fn git(directory: &Path, args: &[&str], input: &[u8]) -> Vec<u8> {
 
 #[test]
 fn git_generated_offset_and_reference_packs_match_index_crcs_ids_and_every_body() {
-    const CAPACITY: usize = 65536;
     let directory =
         std::env::temp_dir().join(format!("git-zero-pack-reader-{}", std::process::id()));
     std::fs::create_dir(&directory).unwrap();
@@ -474,128 +478,154 @@ fn git_generated_offset_and_reference_packs_match_index_crcs_ids_and_every_body(
         ids.push(b'\n');
     }
     for offsets in [true, false] {
-        let mut args = vec![
-            "pack-objects",
-            "--stdout",
-            "--window=50",
-            "--depth=10",
-            "--compression=9",
-        ];
-        if offsets {
-            args.push("--delta-base-offset");
-        }
-        let bytes = git(&directory, &args, &ids);
-        let path = directory.join(if offsets {
-            "offset.pack"
-        } else {
-            "reference.pack"
-        });
-        let index_path = path.with_extension("idx");
-        std::fs::write(&path, &bytes).unwrap();
-        git(
-            &directory,
-            &[
-                "index-pack",
-                "--strict",
-                "-o",
-                index_path.to_str().unwrap(),
-                path.to_str().unwrap(),
-            ],
-            &[],
+        verify_git_pack(&directory, &ids, offsets);
+    }
+}
+
+fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
+    const CAPACITY: usize = 65536;
+    let mut args = vec![
+        "pack-objects",
+        "--stdout",
+        "--window=50",
+        "--depth=10",
+        "--compression=9",
+    ];
+    if offsets {
+        args.push("--delta-base-offset");
+    }
+    let bytes = git(directory, &args, ids);
+    let path = directory.join(if offsets {
+        "offset.pack"
+    } else {
+        "reference.pack"
+    });
+    let index_path = path.with_extension("idx");
+    std::fs::write(&path, &bytes).unwrap();
+    git(
+        directory,
+        &[
+            "index-pack",
+            "--strict",
+            "-o",
+            index_path.to_str().unwrap(),
+            path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    let index = std::fs::read(&index_path).unwrap();
+    let rows = index_rows(&index);
+    let count = rows.len();
+    let mut window = [0; WINDOW_SIZE];
+    let mut buffers: Vec<_> = (0..count).map(|_| vec![0; CAPACITY]).collect();
+    let mut reader = Reader::new(&bytes).unwrap();
+    assert_eq!(reader.object_count() as usize, count);
+    let mut entries = Vec::new();
+    for buffer in &mut buffers {
+        entries.push(
+            reader
+                .read_entry(buffer, &mut window, INFLATE)
+                .unwrap()
+                .unwrap(),
         );
-        let index = std::fs::read(&index_path).unwrap();
-        assert_eq!(&index[..8], b"\xfftOc\0\0\0\x02");
-        let count = u32::from_be_bytes(index[1028..1032].try_into().unwrap()) as usize;
-        // Independent test-only reading of Git's v2 .idx tables, in ID order.
-        let rows: Vec<_> = (0..count)
-            .map(|row| {
-                let id = git_zero::ObjectId(
-                    index[1032 + row * 20..1032 + (row + 1) * 20]
-                        .try_into()
-                        .unwrap(),
-                );
-                let crc_start = 1032 + count * 20 + row * 4;
-                let offset_start = 1032 + count * 24 + row * 4;
-                let crc = u32::from_be_bytes(index[crc_start..crc_start + 4].try_into().unwrap());
-                let offset =
-                    u32::from_be_bytes(index[offset_start..offset_start + 4].try_into().unwrap());
-                assert_eq!(offset & 0x8000_0000, 0, "small fixture uses direct offsets");
-                (id, crc, u64::from(offset))
-            })
-            .collect();
-        let mut window = [0; WINDOW_SIZE];
-        let mut buffers: Vec<_> = (0..count).map(|_| vec![0; CAPACITY]).collect();
-        let mut reader = Reader::new(&bytes).unwrap();
-        assert_eq!(reader.object_count() as usize, count);
-        let mut entries = Vec::new();
-        for buffer in &mut buffers {
-            entries.push(
-                reader
-                    .read_entry(buffer, &mut window, INFLATE)
-                    .unwrap()
-                    .unwrap(),
-            );
-        }
-        reader.finish().unwrap();
-        let mut arena = vec![0; count * CAPACITY];
-        let mut staging: Vec<_> = arena.chunks_mut(CAPACITY).map(Some).collect();
-        let mut resolved: Vec<Option<ResolvedObject<'_>>> = (0..count).map(|_| None).collect();
-        for _ in 0..count {
-            let mut progress = false;
-            for (index, entry) in entries.iter().enumerate() {
-                if resolved[index].is_some() {
-                    continue;
-                }
-                if let Some(object) = entry.object() {
-                    resolved[index] = Some(object);
-                    progress = true;
-                    continue;
-                }
-                let base = resolved.iter().flatten().find(|object| match entry.kind() {
-                    EntryKind::OffsetDelta { base_offset } => object.offset() == Some(base_offset),
-                    EntryKind::ReferenceDelta { base_id } => object.id() == base_id,
-                    EntryKind::Object(_) => unreachable!(),
-                });
-                if let Some(base) = base {
-                    let object = entry
-                        .resolve_delta(base, staging[index].take().unwrap(), DELTA)
-                        .unwrap();
-                    resolved[index] = Some(object);
-                    progress = true;
-                }
-            }
-            if resolved.iter().all(Option::is_some) {
-                break;
-            }
-            assert!(progress, "fixture has a missing or cyclic delta base");
-        }
-        let (mut deltas, mut kinds) = (0, [false; 4]);
-        for (entry, object) in entries.iter().zip(&resolved) {
-            let object = object.as_ref().unwrap();
-            let &(expected, crc, _) = rows.iter().find(|row| row.2 == entry.offset()).unwrap();
-            entry.verify_crc32(crc).unwrap();
-            object.verify_id(expected).unwrap();
-            let body = git(
-                &directory,
-                &[
-                    "cat-file",
-                    object.object().kind.name(),
-                    &expected.to_string(),
-                ],
-                &[],
-            );
-            assert_eq!(object.object().data, body);
-            kinds[object.object().kind as usize - 1] = true;
-            if object.delta_depth() != 0 {
-                deltas += 1;
-                assert!(if offsets {
-                    matches!(entry.kind(), EntryKind::OffsetDelta { .. })
-                } else {
-                    matches!(entry.kind(), EntryKind::ReferenceDelta { .. })
-                });
+    }
+    reader.finish().unwrap();
+    let mut arena = vec![0; count * CAPACITY];
+    let mut staging: Vec<_> = arena.chunks_mut(CAPACITY).map(Some).collect();
+    let mut resolved: Vec<Option<ResolvedObject<'_>>> = (0..count).map(|_| None).collect();
+    while !resolved.iter().all(Option::is_some) {
+        let mut progress = false;
+        for (index, entry) in entries.iter().enumerate() {
+            if resolved[index].is_none() {
+                resolved[index] = resolve_entry(entry, &resolved, &mut staging[index]);
+                progress |= resolved[index].is_some();
             }
         }
-        assert!(deltas > 0, "Git must actually produce deltas");
-        assert_eq!(kinds, [true; 4], "commit/tree/blob/tag coverage");
+        assert!(progress, "fixture has a missing or cyclic delta base");
+    }
+    let (mut deltas, mut kinds) = (0, [false; 4]);
+    let (mut requests, mut decoded) = (Vec::new(), Vec::new());
+    for (entry, object) in entries.iter().zip(&resolved) {
+        let object = object.as_ref().unwrap();
+        let &(expected, crc, _) = rows.iter().find(|row| row.2 == entry.offset()).unwrap();
+        verify_git_object(entry, object, expected, crc, offsets);
+        writeln!(requests, "{expected}").unwrap();
+        let body = object.object();
+        writeln!(
+            decoded,
+            "{expected} {} {}",
+            body.kind.name(),
+            body.data.len()
+        )
+        .unwrap();
+        decoded.extend_from_slice(body.data);
+        decoded.push(b'\n');
+        kinds[object.object().kind as usize - 1] = true;
+        deltas += usize::from(object.delta_depth() != 0);
+    }
+    assert!(deltas > 0, "Git must actually produce deltas");
+    assert_eq!(kinds, [true; 4], "commit/tree/blob/tag coverage");
+    // One independent Git process validates every body and its batch envelope.
+    assert_eq!(decoded, git(directory, &["cat-file", "--batch"], &requests));
+}
+
+fn index_rows(index: &[u8]) -> Vec<(ObjectId, u32, u64)> {
+    assert_eq!(&index[..8], b"\xfftOc\0\0\0\x02");
+    let count = u32::from_be_bytes(index[1028..1032].try_into().unwrap()) as usize;
+    // Git v2 indexes store separate ID, CRC and offset tables in ID order.
+    let crc_start = 1032 + count * 20;
+    let offset_start = crc_start + count * 4;
+    let ids = index[1032..crc_start].chunks_exact(20);
+    let crcs = index[crc_start..offset_start].chunks_exact(4);
+    let offsets = index[offset_start..offset_start + count * 4].chunks_exact(4);
+    ids.zip(crcs)
+        .zip(offsets)
+        .map(|((id, crc), offset)| {
+            let id = ObjectId(id.try_into().unwrap());
+            let crc = u32::from_be_bytes(crc.try_into().unwrap());
+            let offset = u32::from_be_bytes(offset.try_into().unwrap());
+            assert_eq!(offset & 0x8000_0000, 0, "small fixture uses direct offsets");
+            (id, crc, u64::from(offset))
+        })
+        .collect()
+}
+
+fn resolve_entry<'a>(
+    entry: &Entry<'a>,
+    resolved: &[Option<ResolvedObject<'a>>],
+    staging: &mut Option<&'a mut [u8]>,
+) -> Option<ResolvedObject<'a>> {
+    if let Some(object) = entry.object() {
+        return Some(object);
+    }
+    let base = resolved
+        .iter()
+        .flatten()
+        .find(|object| match entry.kind() {
+            EntryKind::OffsetDelta { base_offset } => object.offset() == Some(base_offset),
+            EntryKind::ReferenceDelta { base_id } => object.id() == base_id,
+            EntryKind::Object(_) => unreachable!(),
+        })?;
+    Some(
+        entry
+            .resolve_delta(base, staging.take().unwrap(), DELTA)
+            .unwrap(),
+    )
+}
+
+fn verify_git_object(
+    entry: &Entry<'_>,
+    object: &ResolvedObject<'_>,
+    expected: ObjectId,
+    crc: u32,
+    offsets: bool,
+) {
+    entry.verify_crc32(crc).unwrap();
+    object.verify_id(expected).unwrap();
+    if object.delta_depth() != 0 {
+        assert!(matches!(
+            (offsets, entry.kind()),
+            (true, EntryKind::OffsetDelta { .. }) | (false, EntryKind::ReferenceDelta { .. })
+        ));
     }
 }

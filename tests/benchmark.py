@@ -98,6 +98,17 @@ def summary(samples):
     return result
 
 
+def workload_command(operation, implementation, binary, url, target):
+    """Choose the measured client command without starting its process."""
+    if operation == "client-discovery" and implementation == "zero":
+        return [binary, "ls-remote", url]
+    if operation.endswith("discovery"):
+        return ["git", "-c", "protocol.version=0", "ls-remote", url]
+    if operation == "server-clone":
+        return ["git", "-c", "protocol.version=0", "clone", "-q", url, str(target)]
+    return ["git", "-C", str(target), "-c", "protocol.version=0", "fetch", "origin"]
+
+
 def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, samples, warmup,
               time_binary, response_limit, file_transfer, zero_loose_cache):
     operation, protocol = name.rsplit("-", 1)
@@ -125,32 +136,25 @@ def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, 
                     run("git", "clone", "-q", url, str(target), env=env)
                     verify(bare, target, expected, env)
                     fetch_targets[implementation] = target
-            for index in range(warmup + samples):
-                # Reverse paired order each round to distribute host/cache drift.
-                order = ("git", "zero") if index % 2 == 0 else ("zero", "git")
-                for implementation in order:
-                    url = urls[implementation]
-                    if operation == "client-discovery":
-                        arguments = (["git", "-c", "protocol.version=0", "ls-remote", original.url]
-                                     if implementation == "git" else [binary, "ls-remote", original.url])
-                    elif operation == "server-discovery":
-                        arguments = ["git", "-c", "protocol.version=0", "ls-remote", url]
-                    elif operation == "server-clone":
-                        target = root / f"clone-{implementation}-{index}"
-                        arguments = ["git", "-c", "protocol.version=0", "clone", "-q", url, str(target)]
-                    else:
-                        target = fetch_targets[implementation]
-                        arguments = ["git", "-C", str(target), "-c", "protocol.version=0", "fetch", "origin"]
-                    server = servers[implementation]
-                    mark = len(server.records())
-                    output, measurements = measure(arguments, env, time_binary)
-                    measurements["server"] = server.measurements(mark)
-                    if operation.endswith("discovery"):
-                        assert refs(output) == expected_refs
-                    else:
-                        verify(bare, target, expected, env)
-                    if index >= warmup:
-                        results[implementation].append(measurements)
+            # Reverse paired order each round to distribute host/cache drift.
+            order = ("git", "zero", "zero", "git")
+            for iteration in range(2 * (warmup + samples)):
+                index = iteration // 2
+                implementation = order[iteration % 4]
+                url = urls[implementation]
+                target = (root / f"clone-{implementation}-{index}" if operation == "server-clone"
+                          else fetch_targets.get(implementation))
+                arguments = workload_command(operation, implementation, binary, url, target)
+                server = servers[implementation]
+                mark = len(server.records())
+                output, measurements = measure(arguments, env, time_binary)
+                measurements["server"] = server.measurements(mark)
+                if operation.endswith("discovery"):
+                    assert refs(output) == expected_refs
+                else:
+                    verify(bare, target, expected, env)
+                if index >= warmup:
+                    results[implementation].append(measurements)
         summaries = {implementation: summary(values) for implementation, values in results.items()}
         return {"workload": name, "samples": results, "summary": summaries,
                 "server_startup": {implementation: server.startup for implementation, server in servers.items()},

@@ -56,13 +56,7 @@ class BenchmarkConfigTests(unittest.TestCase):
                 self.assertEqual(objects, expected)
                 self.assertEqual(metadata["algorithms"], config.algorithms())
                 self.assertEqual(json.loads((root / "fixture.json").read_text()), metadata)
-                actual = git(bare, "config", "--local", "--list", env=env).decode()
-                if config.profile == "upstream-defaults":
-                    for name in ("core.compression", "core.loosecompression", "pack.compression", "pack.window", "pack.depth"):
-                        self.assertNotIn(name + "=", actual)
-                for oid, (kind, body) in objects.items():
-                    encoded = (bare / "objects" / oid[:2].decode() / oid[2:].decode()).read_bytes()
-                    self.assertEqual(zlib.decompress(encoded), kind + b" " + str(len(body)).encode() + b"\0" + body)
+                self.assert_git_inputs(bare, config, objects, env)
                 pack = prepare_pack(root, env, config)
                 if config.delta_window == 0 or config.delta_depth == 0:
                     self.assertEqual(pack["delta_objects"], 0)
@@ -70,6 +64,16 @@ class BenchmarkConfigTests(unittest.TestCase):
                     self.assertGreater(pack["delta_objects"], 0)
                     self.assertLessEqual(pack["max_delta_depth"], config.delta_depth or 50)
                 self.assertEqual(config.algorithms()["equivalent_server_features"], config.profile == "matched")
+
+    def assert_git_inputs(self, bare, config, objects, env):
+        """Independently check the loose bytes and the selected Git configuration."""
+        actual = git(bare, "config", "--local", "--list", env=env).decode()
+        if config.profile == "upstream-defaults":
+            for name in ("core.compression", "core.loosecompression", "pack.compression", "pack.window", "pack.depth"):
+                self.assertNotIn(name + "=", actual)
+        for oid, (kind, body) in objects.items():
+            encoded = (bare / "objects" / oid[:2].decode() / oid[2:].decode()).read_bytes()
+            self.assertEqual(zlib.decompress(encoded), kind + b" " + str(len(body)).encode() + b"\0" + body)
 
 
 if __name__ == "__main__":

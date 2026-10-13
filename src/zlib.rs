@@ -25,10 +25,12 @@
 //! # Ok(()) }
 //! # example().unwrap();
 //! ```
+mod adler;
 mod inflate;
 pub use inflate::{InflateLimits, InflateProgress, InflateStatus, Inflater, WINDOW_SIZE};
 
 use crate::{Error, ObjectReader, Repository, Result, io::Write};
+use adler::Adler32;
 
 pub fn write_parts(output: &mut impl Write, parts: &[&[u8]]) -> Result<()> {
     let mut encoder = Encoder::new(output)?;
@@ -67,8 +69,7 @@ pub(crate) fn write_reader<R: Repository + ?Sized>(
 
 struct Encoder<'a, W> {
     output: &'a mut W,
-    s1: u32,
-    s2: u32,
+    adler: Adler32,
 }
 
 impl<'a, W: Write> Encoder<'a, W> {
@@ -76,8 +77,7 @@ impl<'a, W: Write> Encoder<'a, W> {
         output.write_all(&[0x78, 0x01])?;
         Ok(Self {
             output,
-            s1: 1,
-            s2: 0,
+            adler: Adler32::new(),
         })
     }
 
@@ -89,20 +89,7 @@ impl<'a, W: Write> Encoder<'a, W> {
 
     fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         self.output.write_all(bytes)?;
-        // Starting with reduced sums, 5552 bytes of 0xff keep even s2 below
-        // u32::MAX: (n + 1) * 65520 + 255 * n * (n + 1) / 2. Reduce once per
-        // bounded chunk instead of twice per byte, including across calls.
-        let (mut s1, mut s2) = (self.s1, self.s2);
-        for chunk in bytes.chunks(5552) {
-            for &byte in chunk {
-                s1 += u32::from(byte);
-                s2 += s1;
-            }
-            s1 %= 65521;
-            s2 %= 65521;
-        }
-        self.s1 = s1;
-        self.s2 = s2;
+        self.adler.update(bytes);
         Ok(())
     }
 
@@ -117,7 +104,6 @@ impl<'a, W: Write> Encoder<'a, W> {
     fn finish(self) -> Result<()> {
         // Empty final block, including for empty input.
         self.output.write_all(&[1, 0, 0, 0xff, 0xff])?;
-        self.output
-            .write_all(&((self.s2 << 16) | self.s1).to_be_bytes())
+        self.output.write_all(&self.adler.value().to_be_bytes())
     }
 }

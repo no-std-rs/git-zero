@@ -1,7 +1,91 @@
+mod huffman;
+
+use super::adler::Adler32;
 use crate::{Error, Result};
+use huffman::{Bits, Huffman, Symbol};
+
+// A missing value retains the reader's partial state for the next input chunk.
+macro_rules! ready {
+    ($value:expr, $pending:expr) => {
+        match $value? {
+            Some(value) => value,
+            None => return Ok($pending),
+        }
+    };
+}
 
 /// DEFLATE's maximum back-reference distance. Each decoder borrows one window.
 pub const WINDOW_SIZE: usize = 32_768;
+
+const CODE_LENGTH_ORDER: [usize; 19] = [
+    16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+];
+
+// RFC 1951 length/distance bases and the number of following extra bits.
+// Tables keep parameter decoding independent of the Huffman symbol reader.
+const LENGTH_CODES: [(u16, u8); 29] = [
+    (3, 0),
+    (4, 0),
+    (5, 0),
+    (6, 0),
+    (7, 0),
+    (8, 0),
+    (9, 0),
+    (10, 0),
+    (11, 1),
+    (13, 1),
+    (15, 1),
+    (17, 1),
+    (19, 2),
+    (23, 2),
+    (27, 2),
+    (31, 2),
+    (35, 3),
+    (43, 3),
+    (51, 3),
+    (59, 3),
+    (67, 4),
+    (83, 4),
+    (99, 4),
+    (115, 4),
+    (131, 5),
+    (163, 5),
+    (195, 5),
+    (227, 5),
+    (258, 0),
+];
+const DISTANCE_CODES: [(u16, u8); 30] = [
+    (1, 0),
+    (2, 0),
+    (3, 0),
+    (4, 0),
+    (5, 1),
+    (7, 1),
+    (9, 2),
+    (13, 2),
+    (17, 3),
+    (25, 3),
+    (33, 4),
+    (49, 4),
+    (65, 5),
+    (97, 5),
+    (129, 6),
+    (193, 6),
+    (257, 7),
+    (385, 7),
+    (513, 8),
+    (769, 8),
+    (1025, 9),
+    (1537, 9),
+    (2049, 10),
+    (3073, 10),
+    (4097, 11),
+    (6145, 11),
+    (8193, 12),
+    (12289, 12),
+    (16385, 13),
+    (24577, 13),
+];
 
 /// Budgets for one zlib stream, including its decompressed loose-object header.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,12 +134,11 @@ pub struct Inflater<'a> {
     distance: Huffman<32, 32>,
     code: Huffman<19, 16>,
     lengths: [u8; 320],
+    dynamic: Dynamic,
     state: State,
     final_block: bool,
     total_output: u64,
-    adler_s1: u32,
-    adler_s2: u32,
-    adler_pending: u16,
+    adler: Adler32,
     failure: Option<Error>,
 }
 
@@ -72,12 +155,11 @@ impl<'a> Inflater<'a> {
             distance: Huffman::new(),
             code: Huffman::new(),
             lengths: [0; 320],
+            dynamic: Dynamic::default(),
             state: State::Header,
             final_block: false,
             total_output: 0,
-            adler_s1: 1,
-            adler_s2: 0,
-            adler_pending: 0,
+            adler: Adler32::new(),
             failure: None,
         }
     }
@@ -90,12 +172,11 @@ impl<'a> Inflater<'a> {
         self.limits = limits;
         self.bits = Bits::default();
         self.symbol = Symbol::default();
+        self.dynamic = Dynamic::default();
         self.state = State::Header;
         self.final_block = false;
         self.total_output = 0;
-        self.adler_s1 = 1;
-        self.adler_s2 = 0;
-        self.adler_pending = 0;
+        self.adler = Adler32::new();
         self.failure = None;
     }
 
@@ -148,50 +229,29 @@ impl<'a> Inflater<'a> {
         // An unavailable bit/symbol leaves its partial state intact.
         macro_rules! bits {
             ($count:expr) => {
-                match self.bits.read($count, input)? {
-                    Some(value) => value,
-                    None => return Ok((written, InflateStatus::NeedInput)),
-                }
+                ready!(
+                    self.bits.read($count, input),
+                    (written, InflateStatus::NeedInput)
+                )
             };
         }
         macro_rules! symbol {
             ($table:ident) => {
-                match self.symbol.read(&self.$table, &mut self.bits, input)? {
-                    Some(value) => value,
-                    None => return Ok((written, InflateStatus::NeedInput)),
-                }
+                ready!(
+                    self.symbol.read(&self.$table, &mut self.bits, input),
+                    (written, InflateStatus::NeedInput)
+                )
             };
         }
         loop {
             match self.state {
                 State::Header => {
-                    let header = bits!(16);
-                    let cmf = header & 255;
-                    let flg = header >> 8;
-                    if cmf & 15 != 8 || cmf >> 4 > 7 || (cmf * 256 + flg) % 31 != 0 {
-                        return Err(Error::InvalidZlib);
-                    }
-                    if flg & 32 != 0 {
-                        return Err(Error::Unsupported);
-                    }
-                    self.window_limit = 1 << ((cmf >> 4) + 8);
+                    self.window_limit = zlib_window(bits!(16))?;
                     self.state = State::Block;
                 }
                 State::Block => {
                     let header = bits!(3);
-                    self.final_block = header & 1 != 0;
-                    self.state = match header >> 1 {
-                        0 => {
-                            self.bits.align();
-                            State::StoredLength
-                        }
-                        1 => {
-                            self.fixed_tables()?;
-                            State::Compressed
-                        }
-                        2 => State::Dynamic,
-                        _ => return Err(Error::InvalidZlib),
-                    };
+                    self.begin_block(header)?;
                 }
                 State::StoredLength => self.state = State::StoredComplement(bits!(16) as u16),
                 State::StoredComplement(length) => {
@@ -202,38 +262,10 @@ impl<'a> Inflater<'a> {
                 }
                 State::Stored(0) => self.end_block(),
                 State::Stored(remaining) => {
-                    // Each stored byte consumes one input byte before its limit
-                    // check. With a positive integer ratio, an allowed first
-                    // byte guarantees the rest of this run's ratio checks.
-                    let next_input = self.bits.total.saturating_add(1);
-                    let ratio_limit = next_input
-                        .saturating_mul(u64::from(self.limits.max_ratio))
-                        .saturating_add(self.limits.ratio_slack);
-                    if self.bits.count == 0 && self.total_output < ratio_limit {
-                        let budget = if self.limits.max_ratio == 0 {
-                            self.limits.max_output.min(self.limits.ratio_slack)
-                        } else {
-                            self.limits.max_output
-                        };
-                        let count = usize::from(remaining)
-                            .min(input.len())
-                            .min(output.len() - written)
-                            .min(WINDOW_SIZE)
-                            .min(
-                                budget
-                                    .saturating_sub(self.total_output)
-                                    .min(u16::MAX as u64) as usize,
-                            )
-                            .min((u64::MAX - self.bits.total).min(u16::MAX as u64) as usize);
-                        if count != 0 {
-                            output[written..written + count].copy_from_slice(&input[..count]);
-                            self.bits.total += count as u64;
-                            *input = &input[count..];
-                            self.emit_slice(&output[written..written + count]);
-                            written += count;
-                            self.state = State::Stored(remaining - count as u16);
-                            continue;
-                        }
+                    let count = self.copy_stored(input, &mut output[written..], remaining);
+                    if count != 0 {
+                        written += count;
+                        continue;
                     }
                     // Preserve the pending byte and failure position even when
                     // a run ends at an output, input or budget boundary.
@@ -243,87 +275,10 @@ impl<'a> Inflater<'a> {
                         stored_remaining: Some(remaining - 1),
                     };
                 }
-                State::Dynamic => {
-                    let header = bits!(14);
-                    let literal = (header & 31) as u16 + 257;
-                    if literal > 286 {
-                        return Err(Error::InvalidZlib);
+                State::Dynamic | State::CodeLengths { .. } | State::Lengths | State::Repeat(_) => {
+                    if !self.read_dynamic_tables(input)? {
+                        return Ok((written, InflateStatus::NeedInput));
                     }
-                    let distance = ((header >> 5) & 31) as u16 + 1;
-                    let count = ((header >> 10) & 15) as u8 + 4;
-                    self.lengths.fill(0);
-                    self.state = State::CodeLengths {
-                        next: 0,
-                        count,
-                        literal,
-                        total: literal + distance,
-                    };
-                }
-                State::CodeLengths {
-                    next,
-                    count,
-                    literal,
-                    total,
-                } => {
-                    const ORDER: [usize; 19] = [
-                        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
-                    ];
-                    self.lengths[ORDER[usize::from(next)]] = bits!(3) as u8;
-                    self.state = if next + 1 == count {
-                        self.code.build(&self.lengths[..19], false, false)?;
-                        State::Lengths {
-                            next: 0,
-                            literal,
-                            total,
-                        }
-                    } else {
-                        State::CodeLengths {
-                            next: next + 1,
-                            count,
-                            literal,
-                            total,
-                        }
-                    };
-                }
-                State::Lengths {
-                    next,
-                    literal,
-                    total,
-                } => {
-                    let value = symbol!(code);
-                    if value <= 15 {
-                        self.lengths[usize::from(next)] = value as u8;
-                        self.finish_lengths(next + 1, literal, total)?;
-                    } else {
-                        if value == 16 && next == 0 {
-                            return Err(Error::InvalidZlib);
-                        }
-                        self.state = State::Repeat {
-                            value,
-                            next,
-                            literal,
-                            total,
-                        };
-                    }
-                }
-                State::Repeat {
-                    value,
-                    next,
-                    literal,
-                    total,
-                } => {
-                    let (extra, base, length) = match value {
-                        16 => (2, 3, self.lengths[usize::from(next - 1)]),
-                        17 => (3, 3, 0),
-                        18 => (7, 11, 0),
-                        _ => return Err(Error::InvalidZlib),
-                    };
-                    let count = bits!(extra) as u16 + base;
-                    if count > total - next {
-                        return Err(Error::InvalidZlib);
-                    }
-                    self.lengths[usize::from(next)..usize::from(next + count)].fill(length);
-                    self.finish_lengths(next + count, literal, total)?;
                 }
                 State::Compressed => {
                     let value = symbol!(literal);
@@ -352,31 +307,18 @@ impl<'a> Inflater<'a> {
                     self.state = stored_remaining.map_or(State::Compressed, State::Stored);
                 }
                 State::Length(index) => {
-                    const BASE: [u16; 29] = [
-                        3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59,
-                        67, 83, 99, 115, 131, 163, 195, 227, 258,
-                    ];
-                    let extra = if index < 8 || index == 28 {
-                        0
-                    } else {
-                        (index / 4 - 1) as u8
-                    };
-                    self.state = State::Distance(BASE[usize::from(index)] + bits!(extra) as u16);
+                    let (base, extra) = LENGTH_CODES[usize::from(index)];
+                    self.state = State::Distance(base + bits!(extra) as u16);
                 }
                 State::Distance(length) => {
                     let index = symbol!(distance);
-                    if index >= 30 {
+                    if usize::from(index) >= DISTANCE_CODES.len() {
                         return Err(Error::InvalidZlib);
                     }
                     self.state = State::DistanceExtra { length, index };
                 }
                 State::DistanceExtra { length, index } => {
-                    let extra = if index < 4 { 0 } else { (index / 2 - 1) as u8 };
-                    let base = if index < 4 {
-                        index + 1
-                    } else {
-                        (2 + index % 2) * (1 << extra) + 1
-                    };
+                    let (base, extra) = DISTANCE_CODES[usize::from(index)];
                     let distance = base + bits!(extra) as u16;
                     if usize::from(distance) > self.window_limit
                         || u64::from(distance) > self.total_output
@@ -395,42 +337,13 @@ impl<'a> Inflater<'a> {
                     if written == output.len() {
                         return Ok((written, InflateStatus::NeedOutput));
                     }
-                    let count = usize::from(remaining)
-                        .min(output.len() - written)
-                        .min(self.output_budget().min(u16::MAX as u64) as usize);
-                    if count == 0 {
-                        return Err(Error::LimitExceeded);
-                    }
-                    let target = &mut output[written..written + count];
-                    let distance = usize::from(distance);
-                    let position = (self.position + WINDOW_SIZE - distance) & (WINDOW_SIZE - 1);
-                    let seed = count.min(distance);
-                    let first = seed.min(WINDOW_SIZE - position);
-                    target[..first].copy_from_slice(&self.window[position..position + first]);
-                    target[first..seed].copy_from_slice(&self.window[..seed - first]);
-                    // Expand overlapping copies from already produced bytes,
-                    // doubling the initialized prefix on each iteration.
-                    let mut initialized = seed;
-                    while initialized < count {
-                        let next = initialized.min(count - initialized);
-                        target.copy_within(..next, initialized);
-                        initialized += next;
-                    }
-                    self.emit_slice(target);
-                    written += count;
-                    self.state = if remaining == count as u16 {
-                        State::Compressed
-                    } else {
-                        State::Copy {
-                            remaining: remaining - count as u16,
-                            distance: distance as u16,
-                        }
-                    };
+                    written +=
+                        self.copy_back_reference(&mut output[written..], remaining, distance)?;
                 }
                 State::Trailer { read, value } => {
                     let value = (value << 8) | bits!(8);
                     if read == 3 {
-                        let actual = ((self.adler_s2 % 65521) << 16) | (self.adler_s1 % 65521);
+                        let actual = self.adler.value();
                         if value != actual {
                             return Err(Error::InvalidZlib);
                         }
@@ -445,6 +358,177 @@ impl<'a> Inflater<'a> {
                 State::Done => return Ok((written, InflateStatus::Finished)),
             }
         }
+    }
+
+    fn begin_block(&mut self, header: u32) -> Result<()> {
+        self.final_block = header & 1 != 0;
+        self.state = match header >> 1 {
+            0 => {
+                self.bits.align();
+                State::StoredLength
+            }
+            1 => {
+                self.fixed_tables()?;
+                State::Compressed
+            }
+            2 => State::Dynamic,
+            _ => return Err(Error::InvalidZlib),
+        };
+        Ok(())
+    }
+
+    /// Advance one dynamic-table phase, retaining partial bits/symbols when
+    /// more input is needed. Keeping table construction separate makes the
+    /// object-emission loop independent of the code-length grammar.
+    fn read_dynamic_tables(&mut self, input: &mut &[u8]) -> Result<bool> {
+        macro_rules! bits {
+            ($count:expr) => {
+                ready!(self.bits.read($count, input), false)
+            };
+        }
+        macro_rules! symbol {
+            ($table:ident) => {
+                ready!(self.symbol.read(&self.$table, &mut self.bits, input), false)
+            };
+        }
+        match self.state {
+            State::Dynamic => {
+                let header = bits!(14);
+                let literal = (header & 31) as u16 + 257;
+                if literal > 286 {
+                    return Err(Error::InvalidZlib);
+                }
+                let distance = ((header >> 5) & 31) as u16 + 1;
+                let count = ((header >> 10) & 15) as u8 + 4;
+                self.lengths.fill(0);
+                self.dynamic = Dynamic {
+                    next: 0,
+                    literal,
+                    total: literal + distance,
+                };
+                self.state = State::CodeLengths { next: 0, count };
+            }
+            State::CodeLengths { next, count } => {
+                self.lengths[CODE_LENGTH_ORDER[usize::from(next)]] = bits!(3) as u8;
+                self.state = if next + 1 == count {
+                    self.code.build(&self.lengths[..19], false, false)?;
+                    State::Lengths
+                } else {
+                    State::CodeLengths {
+                        next: next + 1,
+                        count,
+                    }
+                };
+            }
+            State::Lengths => {
+                let next = self.dynamic.next;
+                let value = symbol!(code);
+                if value <= 15 {
+                    self.lengths[usize::from(next)] = value as u8;
+                    self.finish_lengths(1)?;
+                } else {
+                    if value == 16 && next == 0 {
+                        return Err(Error::InvalidZlib);
+                    }
+                    self.state = State::Repeat(value);
+                }
+            }
+            State::Repeat(value) => {
+                let next = self.dynamic.next;
+                let (extra, base, length) = match value {
+                    16 => (2, 3, self.lengths[usize::from(next - 1)]),
+                    17 => (3, 3, 0),
+                    18 => (7, 11, 0),
+                    _ => return Err(Error::InvalidZlib),
+                };
+                let count = bits!(extra) as u16 + base;
+                if count > self.dynamic.total - next {
+                    return Err(Error::InvalidZlib);
+                }
+                self.lengths[usize::from(next)..usize::from(next + count)].fill(length);
+                self.finish_lengths(count)?;
+            }
+            _ => unreachable!("only dynamic-table phases enter this helper"),
+        }
+        Ok(true)
+    }
+
+    #[inline]
+    fn copy_stored(&mut self, input: &mut &[u8], output: &mut [u8], remaining: u16) -> usize {
+        // Each stored byte consumes one input byte before its limit
+        // check. With a positive integer ratio, an allowed first
+        // byte guarantees the rest of this run's ratio checks.
+        let next_input = self.bits.total.saturating_add(1);
+        let ratio_limit = next_input
+            .saturating_mul(u64::from(self.limits.max_ratio))
+            .saturating_add(self.limits.ratio_slack);
+        if self.bits.count != 0 || self.total_output >= ratio_limit {
+            return 0;
+        }
+        let budget = if self.limits.max_ratio == 0 {
+            self.limits.max_output.min(self.limits.ratio_slack)
+        } else {
+            self.limits.max_output
+        };
+        let count = usize::from(remaining)
+            .min(input.len())
+            .min(output.len())
+            .min(WINDOW_SIZE)
+            .min(
+                budget
+                    .saturating_sub(self.total_output)
+                    .min(u16::MAX as u64) as usize,
+            )
+            .min((u64::MAX - self.bits.total).min(u16::MAX as u64) as usize);
+        if count == 0 {
+            return 0;
+        }
+        output[..count].copy_from_slice(&input[..count]);
+        self.bits.total += count as u64;
+        *input = &input[count..];
+        self.emit_slice(&output[..count]);
+        self.state = State::Stored(remaining - count as u16);
+        count
+    }
+
+    #[inline]
+    fn copy_back_reference(
+        &mut self,
+        output: &mut [u8],
+        remaining: u16,
+        distance: u16,
+    ) -> Result<usize> {
+        let count = usize::from(remaining)
+            .min(output.len())
+            .min(self.output_budget().min(u16::MAX as u64) as usize);
+        if count == 0 {
+            return Err(Error::LimitExceeded);
+        }
+        let target = &mut output[..count];
+        let distance = usize::from(distance);
+        let position = (self.position + WINDOW_SIZE - distance) & (WINDOW_SIZE - 1);
+        let seed = count.min(distance);
+        let first = seed.min(WINDOW_SIZE - position);
+        target[..first].copy_from_slice(&self.window[position..position + first]);
+        target[first..seed].copy_from_slice(&self.window[..seed - first]);
+        // Expand overlapping copies from already produced bytes,
+        // doubling the initialized prefix on each iteration.
+        let mut initialized = seed;
+        while initialized < count {
+            let next = initialized.min(count - initialized);
+            target.copy_within(..next, initialized);
+            initialized += next;
+        }
+        self.emit_slice(target);
+        self.state = if remaining == count as u16 {
+            State::Compressed
+        } else {
+            State::Copy {
+                remaining: remaining - count as u16,
+                distance: distance as u16,
+            }
+        };
+        Ok(count)
     }
 
     fn output_budget(&self) -> u64 {
@@ -464,45 +548,19 @@ impl<'a> Inflater<'a> {
             return Err(Error::LimitExceeded);
         }
         *output = byte;
-        self.window[self.position] = byte;
-        self.position = (self.position + 1) & (WINDOW_SIZE - 1);
-        self.total_output += 1;
-        self.adler_s1 += u32::from(byte);
-        self.adler_s2 += self.adler_s1;
-        self.adler_pending += 1;
-        if self.adler_pending == 5552 {
-            self.adler_s1 %= 65521;
-            self.adler_s2 %= 65521;
-            self.adler_pending = 0;
-        }
+        self.emit_slice(core::slice::from_ref(output));
         Ok(())
     }
 
     /// Commit an already budgeted run of at most one history window.
+    #[inline]
     fn emit_slice(&mut self, bytes: &[u8]) {
         let first = bytes.len().min(WINDOW_SIZE - self.position);
         self.window[self.position..self.position + first].copy_from_slice(&bytes[..first]);
         self.window[..bytes.len() - first].copy_from_slice(&bytes[first..]);
         self.position = (self.position + bytes.len()) & (WINDOW_SIZE - 1);
         self.total_output += bytes.len() as u64;
-        let (mut s1, mut s2) = (self.adler_s1, self.adler_s2);
-        let mut remaining = bytes;
-        while !remaining.is_empty() {
-            let count = remaining.len().min(5552 - usize::from(self.adler_pending));
-            for &byte in &remaining[..count] {
-                s1 += u32::from(byte);
-                s2 += s1;
-            }
-            self.adler_pending += count as u16;
-            if self.adler_pending == 5552 {
-                s1 %= 65521;
-                s2 %= 65521;
-                self.adler_pending = 0;
-            }
-            remaining = &remaining[count..];
-        }
-        self.adler_s1 = s1;
-        self.adler_s2 = s2;
+        self.adler.update(bytes);
     }
 
     fn end_block(&mut self) {
@@ -515,20 +573,22 @@ impl<'a> Inflater<'a> {
     }
 
     fn fixed_tables(&mut self) -> Result<()> {
-        for (index, length) in self.lengths[..288].iter_mut().enumerate() {
-            *length = match index {
-                0..=143 => 8,
-                144..=255 => 9,
-                256..=279 => 7,
-                _ => 8,
-            };
-        }
+        self.lengths[..144].fill(8);
+        self.lengths[144..256].fill(9);
+        self.lengths[256..280].fill(7);
+        self.lengths[280..288].fill(8);
         self.lengths[288..].fill(5);
         self.literal.build(&self.lengths[..288], false, false)?;
         self.distance.build(&self.lengths[288..], false, false)
     }
 
-    fn finish_lengths(&mut self, next: u16, literal: u16, total: u16) -> Result<()> {
+    fn finish_lengths(&mut self, count: u16) -> Result<()> {
+        self.dynamic.next += count;
+        let Dynamic {
+            next,
+            literal,
+            total,
+        } = self.dynamic;
         self.state = if next == total {
             if self.lengths[256] == 0 {
                 return Err(Error::InvalidZlib);
@@ -542,14 +602,30 @@ impl<'a> Inflater<'a> {
             )?;
             State::Compressed
         } else {
-            State::Lengths {
-                next,
-                literal,
-                total,
-            }
+            State::Lengths
         };
         Ok(())
     }
+}
+
+fn zlib_window(header: u32) -> Result<usize> {
+    let cmf = header & 255;
+    let flg = header >> 8;
+    if cmf & 15 != 8 || cmf >> 4 > 7 || (cmf * 256 + flg) % 31 != 0 {
+        return Err(Error::InvalidZlib);
+    }
+    if flg & 32 != 0 {
+        return Err(Error::Unsupported);
+    }
+    Ok(1 << ((cmf >> 4) + 8))
+}
+
+/// Counts shared by the resumable phases of one dynamic Huffman header.
+#[derive(Clone, Copy, Default)]
+struct Dynamic {
+    next: u16,
+    literal: u16,
+    total: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -563,20 +639,9 @@ enum State {
     CodeLengths {
         next: u8,
         count: u8,
-        literal: u16,
-        total: u16,
     },
-    Lengths {
-        next: u16,
-        literal: u16,
-        total: u16,
-    },
-    Repeat {
-        value: u16,
-        next: u16,
-        literal: u16,
-        total: u16,
-    },
+    Lengths,
+    Repeat(u16),
     Compressed,
     Literal {
         byte: u8,
@@ -597,183 +662,4 @@ enum State {
         value: u32,
     },
     Done,
-}
-
-#[derive(Default)]
-struct Bits {
-    value: u32,
-    count: u8,
-    total: u64,
-}
-
-impl Bits {
-    fn read(&mut self, count: u8, input: &mut &[u8]) -> Result<Option<u32>> {
-        while self.count < count {
-            let Some((&byte, remaining)) = input.split_first() else {
-                return Ok(None);
-            };
-            self.total = self.total.checked_add(1).ok_or(Error::LimitExceeded)?;
-            *input = remaining;
-            self.value |= u32::from(byte) << self.count;
-            self.count += 8;
-        }
-        let value = self.value & ((1 << count) - 1);
-        self.value >>= count;
-        self.count -= count;
-        Ok(Some(value))
-    }
-
-    fn align(&mut self) {
-        let padding = self.count % 8;
-        self.value >>= padding;
-        self.count -= padding;
-    }
-}
-
-/// Small prefix tables handle short codes; canonical counts and sorted symbols
-/// handle longer codes in at most 15 bit steps without speculative input reads.
-struct Huffman<const N: usize, const FAST: usize> {
-    counts: [u16; 16],
-    symbols: [u16; N],
-    max_bits: u8,
-    fast: [u16; FAST],
-}
-
-impl<const N: usize, const FAST: usize> Huffman<N, FAST> {
-    fn new() -> Self {
-        Self {
-            counts: [0; 16],
-            symbols: [0; N],
-            max_bits: 0,
-            fast: [0; FAST],
-        }
-    }
-
-    fn build(&mut self, lengths: &[u8], allow_empty: bool, allow_single: bool) -> Result<()> {
-        self.counts.fill(0);
-        self.max_bits = 0;
-        self.fast.fill(0);
-        for &length in lengths {
-            if length > 15 {
-                return Err(Error::InvalidZlib);
-            }
-            if length != 0 {
-                self.counts[usize::from(length)] += 1;
-                self.max_bits = self.max_bits.max(length);
-            }
-        }
-        if self.max_bits == 0 {
-            return if allow_empty {
-                Ok(())
-            } else {
-                Err(Error::InvalidZlib)
-            };
-        }
-        let mut left = 1_i32;
-        for &count in &self.counts[1..] {
-            left = left * 2 - i32::from(count);
-            if left < 0 {
-                return Err(Error::InvalidZlib);
-            }
-        }
-        // RFC 1951 permits a single one-bit literal/distance code. The code
-        // length alphabet must be complete; an empty distance alphabet is only
-        // usable when the block contains no back-references.
-        if left != 0 && !(allow_single && self.max_bits == 1 && self.counts[1] == 1) {
-            return Err(Error::InvalidZlib);
-        }
-        let mut offsets = [0_usize; 16];
-        for length in 1..15 {
-            offsets[length + 1] = offsets[length] + usize::from(self.counts[length]);
-        }
-        for (symbol, &length) in lengths.iter().enumerate() {
-            if length != 0 {
-                let offset = &mut offsets[usize::from(length)];
-                self.symbols[*offset] = symbol as u16;
-                *offset += 1;
-            }
-        }
-        let (mut code, mut index) = (0_u16, 0_usize);
-        for length in 1..=self.max_bits {
-            let count = self.counts[usize::from(length)];
-            if (1_usize << length) <= FAST {
-                for offset in 0..count {
-                    let prefix = usize::from((code + offset).reverse_bits() >> (16 - length));
-                    let value =
-                        (u16::from(length) << 9) | self.symbols[index + usize::from(offset)];
-                    for slot in (prefix..FAST).step_by(1 << length) {
-                        self.fast[slot] = value;
-                    }
-                }
-            }
-            index += usize::from(count);
-            // A complete 15-bit tree can exhaust u16 only after its last level.
-            code = code.wrapping_add(count).wrapping_mul(2);
-        }
-        Ok(())
-    }
-}
-
-struct Symbol {
-    code: u32,
-    first: u32,
-    index: usize,
-    length: u8,
-}
-
-impl Default for Symbol {
-    fn default() -> Self {
-        Self {
-            code: 0,
-            first: 0,
-            index: 0,
-            length: 1,
-        }
-    }
-}
-
-impl Symbol {
-    fn read<const N: usize, const FAST: usize>(
-        &mut self,
-        table: &Huffman<N, FAST>,
-        bits: &mut Bits,
-        input: &mut &[u8],
-    ) -> Result<Option<u16>> {
-        if self.length == 1 && table.max_bits != 0 {
-            // Fetch only when the scalar decoder also needs its first bit.
-            // Prefetching to fill the table index would alter ratio budgets and
-            // could consume bytes belonging to the next pack entry.
-            if bits.count == 0 {
-                let Some(byte) = bits.read(8, input)? else {
-                    return Ok(None);
-                };
-                bits.value = byte;
-                bits.count = 8;
-            }
-            let value = table.fast[bits.value as usize & (FAST - 1)];
-            let length = (value >> 9) as u8;
-            if length != 0 && length <= bits.count {
-                bits.value >>= length;
-                bits.count -= length;
-                return Ok(Some(value & 511));
-            }
-        }
-        while self.length <= table.max_bits {
-            let Some(bit) = bits.read(1, input)? else {
-                return Ok(None);
-            };
-            self.code |= bit;
-            let count = u32::from(table.counts[usize::from(self.length)]);
-            if self.code >= self.first && self.code - self.first < count {
-                let symbol = table.symbols[self.index + (self.code - self.first) as usize];
-                *self = Self::default();
-                return Ok(Some(symbol));
-            }
-            self.index += count as usize;
-            self.first = (self.first + count) << 1;
-            self.code <<= 1;
-            self.length += 1;
-        }
-        Err(Error::InvalidZlib)
-    }
 }

@@ -248,40 +248,10 @@ fn check_chunk_independent_limits(encoded: &[u8]) {
             ..LIMITS
         },
     ] {
-        let mut totals = Vec::new();
-        for (input_size, output_size) in [(1, 1), (3, 17), (encoded.len(), 200_000)] {
-            let mut window = [0; WINDOW_SIZE];
-            let mut inflater = Inflater::new(&mut window, limits);
-            let mut output = vec![0xcc; output_size];
-            let mut consumed = 0;
-            loop {
-                let end = encoded.len().min(consumed + input_size);
-                match inflater.update(&encoded[consumed..end], &mut output, end == encoded.len()) {
-                    Ok(progress) => {
-                        assert_ne!(
-                            progress.status,
-                            InflateStatus::Finished,
-                            "expected a budget failure"
-                        );
-                        consumed += progress.consumed;
-                    }
-                    Err(error) => {
-                        assert_eq!(error, Error::LimitExceeded);
-                        assert!(inflater.total_output() <= limits.max_output);
-                        assert!(
-                            inflater.total_output()
-                                <= inflater
-                                    .total_input()
-                                    .saturating_mul(u64::from(limits.max_ratio))
-                                    .saturating_add(limits.ratio_slack)
-                        );
-                        assert_eq!(inflater.update(&[], &mut [], false), Err(error));
-                        totals.push((inflater.total_input(), inflater.total_output()));
-                        break;
-                    }
-                }
-            }
-        }
+        let totals =
+            [(1, 1), (3, 17), (encoded.len(), 200_000)].map(|(input_size, output_size)| {
+                decode_until_limit(encoded, input_size, output_size, limits)
+            });
         assert!(totals.windows(2).all(|pair| pair[0] == pair[1]));
     }
     let limits = InflateLimits {
@@ -296,6 +266,45 @@ fn check_chunk_independent_limits(encoded: &[u8]) {
             .len(),
         100_000
     );
+}
+
+fn decode_until_limit(
+    encoded: &[u8],
+    input_size: usize,
+    output_size: usize,
+    limits: InflateLimits,
+) -> (u64, u64) {
+    let mut window = [0; WINDOW_SIZE];
+    let mut inflater = Inflater::new(&mut window, limits);
+    let mut output = vec![0xcc; output_size];
+    let mut consumed = 0;
+    loop {
+        let end = encoded.len().min(consumed + input_size);
+        let error =
+            match inflater.update(&encoded[consumed..end], &mut output, end == encoded.len()) {
+                Ok(progress) => {
+                    assert_ne!(
+                        progress.status,
+                        InflateStatus::Finished,
+                        "expected a budget failure"
+                    );
+                    consumed += progress.consumed;
+                    continue;
+                }
+                Err(error) => error,
+            };
+        assert_eq!(error, Error::LimitExceeded);
+        assert!(inflater.total_output() <= limits.max_output);
+        assert!(
+            inflater.total_output()
+                <= inflater
+                    .total_input()
+                    .saturating_mul(u64::from(limits.max_ratio))
+                    .saturating_add(limits.ratio_slack)
+        );
+        assert_eq!(inflater.update(&[], &mut [], false), Err(error));
+        return (inflater.total_input(), inflater.total_output());
+    }
 }
 
 #[test]
@@ -467,6 +476,44 @@ fn maximum_distance_overlap_and_reserved_fixed_codes() {
         bad.fixed_symbol(257);
         bad.bits(code.reverse_bits() >> 27, 5);
         assert_eq!(decode(&bad.bytes, 1, 1, LIMITS), Err(Error::InvalidZlib));
+    }
+}
+
+#[test]
+fn declared_window_bounds_distances_and_reset_restores_a_larger_window() {
+    let body = [b'a'; 515];
+    for (code, extra, extra_bits, allowed) in [(15_u32, 63, 6, true), (16, 0, 7, false)] {
+        let mut fixture = Deflate::fixed();
+        // A valid zlib wrapper declaring a 256-byte history window.
+        fixture.bytes[..2].copy_from_slice(&[0x08, 0x1d]);
+        for &byte in &body[..512] {
+            fixture.fixed_symbol(u16::from(byte));
+        }
+        fixture.fixed_symbol(257); // length 3
+        fixture.bits(code.reverse_bits() >> 27, 5);
+        fixture.bits(extra, extra_bits); // distances 256 and 257 respectively
+        fixture.fixed_symbol(256);
+        fixture.trailer(&body);
+        let expected = if allowed {
+            Ok(body.to_vec())
+        } else {
+            Err(Error::InvalidZlib)
+        };
+        for (input, output) in [(1, 1), (fixture.bytes.len(), body.len())] {
+            assert_eq!(decode(&fixture.bytes, input, output, LIMITS), expected);
+        }
+        // Retain the same storage and decoder across wrappers of different sizes.
+        let mut window = [0; WINDOW_SIZE];
+        let mut decoder = Inflater::new(&mut window, LIMITS);
+        let mut output = [0; 515];
+        let first = decoder.update(&fixture.bytes, &mut output, true);
+        assert_eq!(first.is_ok(), allowed);
+        decoder.reset(LIMITS);
+        fixture.bytes[..2].copy_from_slice(&[0x78, 0x01]);
+        let second = decoder.update(&fixture.bytes, &mut output, true).unwrap();
+        assert_eq!(second.status, InflateStatus::Finished);
+        assert_eq!(second.written, body.len());
+        assert_eq!(output, body);
     }
 }
 

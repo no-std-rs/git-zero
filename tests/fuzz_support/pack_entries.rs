@@ -1,7 +1,7 @@
 use super::MAX_INPUT;
 use git_zero::{
     Error, Object, ObjectKind,
-    pack::{self, DeltaLimits, Reader, ResolvedObject},
+    pack::{self, DeltaLimits, Entry, Reader, ResolvedObject},
     zlib::{InflateLimits, WINDOW_SIZE},
 };
 use sha1::{Digest, Sha1};
@@ -49,24 +49,8 @@ pub fn entries(data: &[u8]) {
         let before = reader.position();
         let size = reader.next_entry_size();
         assert_eq!(reader.position(), before);
-        match reader.read_entry(&mut inflated[..OUTPUT], &mut window, INFLATE) {
-            Ok(Some(entry)) => {
-                assert_eq!(size.unwrap(), Some(entry.data().len() as u64));
-                assert_eq!(entry.offset(), before);
-                assert!(entry.end_offset() > before);
-                assert_eq!(entry.end_offset(), reader.position());
-                assert!(entry.data().len() <= OUTPUT);
-                assert_eq!(
-                    entry.crc32(),
-                    pack::crc32(&bytes[entry.offset() as usize..entry.end_offset() as usize])
-                );
-                if let Some(object) = entry.object() {
-                    assert_eq!(object.delta_depth(), 0);
-                    assert_eq!(object.id(), object.object().id());
-                } else {
-                    let _ = entry.resolve_delta(&base, &mut output[..OUTPUT], DELTA);
-                }
-            }
+        let entry = match reader.read_entry(&mut inflated[..OUTPUT], &mut window, INFLATE) {
+            Ok(Some(entry)) => entry,
             Ok(None) => {
                 assert_eq!(size.unwrap(), None);
                 reader.finish().unwrap();
@@ -84,9 +68,28 @@ pub fn entries(data: &[u8]) {
                 assert_eq!(inflated[OUTPUT], 0xa5);
                 return;
             }
-        }
+        };
+        assert_eq!(size.unwrap(), Some(entry.data().len() as u64));
+        assert_eq!(entry.offset(), before);
+        assert!(entry.end_offset() > before);
+        assert_eq!(entry.end_offset(), reader.position());
+        check_object(&entry, bytes, &base, &mut output[..OUTPUT]);
         assert_eq!(inflated[OUTPUT], 0xa5);
         assert_eq!(output[OUTPUT], 0xa5);
     }
     panic!("pack entries failed to make bounded cursor progress");
+}
+
+fn check_object(entry: &Entry<'_>, bytes: &[u8], base: &ResolvedObject<'_>, output: &mut [u8]) {
+    assert!(entry.data().len() <= OUTPUT);
+    assert_eq!(
+        entry.crc32(),
+        pack::crc32(&bytes[entry.offset() as usize..entry.end_offset() as usize])
+    );
+    if let Some(object) = entry.object() {
+        assert_eq!(object.delta_depth(), 0);
+        assert_eq!(object.id(), object.object().id());
+    } else {
+        let _ = entry.resolve_delta(base, output, DELTA);
+    }
 }

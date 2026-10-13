@@ -46,16 +46,17 @@ def benchmark(name, decoder, fixture, expected, metadata, env, samples, warmup, 
     arguments = {"git": ["git", "-C", repository, "cat-file", "--batch"],
                  "zero": [decoder, mode, source, str(fixture / "objects.tsv")]}
     results = {implementation: [] for implementation in arguments}
-    for index in range(warmup + samples):
-        order = ("git", "zero") if index % 2 == 0 else ("zero", "git")
-        for implementation in order:
-            output, measurements = measure(arguments[implementation], env, time_binary,
-                                           request if implementation == "git" else b"")
-            assert output == expected_output, f"{implementation} object bodies/IDs differ"
-            measurements.update({"decoded_objects": len(ids), "decoded_body_bytes": metadata["raw_object_bytes"],
-                                 "output_bytes": len(output)})
-            if index >= warmup:
-                results[implementation].append(measurements)
+    # Rotate paired executions: Git/zero, then zero/Git, preserving warmup pairs.
+    order = ("git", "zero", "zero", "git")
+    for iteration in range(2 * (warmup + samples)):
+        implementation = order[iteration % 4]
+        output, measurements = measure(arguments[implementation], env, time_binary,
+                                       request if implementation == "git" else b"")
+        assert output == expected_output, f"{implementation} object bodies/IDs differ"
+        measurements.update({"decoded_objects": len(ids), "decoded_body_bytes": metadata["raw_object_bytes"],
+                             "output_bytes": len(output)})
+        if iteration >= 2 * warmup:
+            results[implementation].append(measurements)
     summaries = {implementation: summarize(values) for implementation, values in results.items()}
     return {"workload": name, "execution": "local-object-read", "samples": results, "summary": summaries,
             "equivalent_inputs": True, "compression_and_deltas": "Identical encoded files for both readers",
