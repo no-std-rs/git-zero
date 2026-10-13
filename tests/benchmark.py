@@ -70,6 +70,10 @@ def measure(arguments, env, time_binary, data=b""):
         assert process.returncode == 0, f"{arguments!r}: {stderr.read().decode(errors='replace')}"
         rss_kib = int(Path(rss.name).read_text().strip())
     return output, {"wall_s": elapsed, "cpu_s": usage.ru_utime + usage.ru_stime,
+                    "user_cpu_s": usage.ru_utime, "system_cpu_s": usage.ru_stime,
+                    "voluntary_context_switches": usage.ru_nvcsw,
+                    "involuntary_context_switches": usage.ru_nivcsw,
+                    "minor_page_faults": usage.ru_minflt, "major_page_faults": usage.ru_majflt,
                     "max_rss_kib": rss_kib, "host_load_1_5_15": host_load}
 
 
@@ -80,6 +84,9 @@ def summary(samples):
             "p95_wall_s": wall[(95 * len(wall) + 99) // 100 - 1],
             "median_cpu_s": statistics.median(sample["cpu_s"] for sample in samples),
             "median_max_rss_kib": statistics.median(sample["max_rss_kib"] for sample in samples)}
+    for key in ("user_cpu_s", "system_cpu_s", "voluntary_context_switches",
+                "involuntary_context_switches", "minor_page_faults", "major_page_faults"):
+        result["median_" + key] = statistics.median(sample[key] for sample in samples)
     if "server" not in samples[0]:
         return result
     for key in ("cpu_s", "frontend_cpu_s", "backend_children_cpu_s", "response_bytes", "request_count",
@@ -282,7 +289,9 @@ def main():
             report["decoder_budgets"] = {"max_objects": 8192, "max_raw_bytes": 64 * 1024 * 1024,
                                          "max_pack_slot_bytes": 128 * 1024 * 1024, "history_bytes": 32768,
                                          "entry_slot_capacity": capacity, "max_delta_depth": 4095,
-                                         "pack_slot_bytes": 2 * len(expected) * capacity}
+                                         "pack_slot_bytes": (metadata["decoder_pack"]["inflated_entry_bytes"] +
+                                                             metadata["decoder_pack"]["delta_objects"] * capacity)
+                                                            if "decoder_pack" in metadata else None}
         report["fixture"] = metadata
         report["fixture_directory"] = str(fixture) if args.fixture_dir else None
         print(f"Fixture: {metadata['objects']} objects, {metadata['raw_object_bytes']} raw bytes, HEAD {metadata['head']}", flush=True)

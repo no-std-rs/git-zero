@@ -189,6 +189,17 @@ impl<'a> Reader<'a> {
         self.pack_id
     }
 
+    /// Inspect the next entry's declared inflated body/instruction size without
+    /// advancing. Hosts must apply their own budget before allocating storage.
+    /// The declaration is checked against the actual stream by `read_entry`.
+    pub fn next_entry_size(&self) -> Result<Option<u64>> {
+        if self.remaining == 0 {
+            self.finish()?;
+            return Ok(None);
+        }
+        self.entry_header().map(|(_, size, _)| Some(size))
+    }
+
     /// Read the next entry. Declared size is the inflated body/instruction size.
     /// A staging-capacity or budget error preserves the cursor for retry.
     /// Other errors also preserve the cursor; staging bytes may have changed.
@@ -202,6 +213,40 @@ impl<'a> Reader<'a> {
             self.finish()?;
             return Ok(None);
         }
+        let start = self.position;
+        let (cursor, size, kind) = self.entry_header()?;
+        if size > limits.max_output {
+            return Err(Error::LimitExceeded);
+        }
+        let size = usize::try_from(size).map_err(|_| Error::BufferTooSmall)?;
+        let output = output.get_mut(..size).ok_or(Error::BufferTooSmall)?;
+        let progress = Inflater::new(window, limits)
+            .update(&self.bytes[cursor..], output, true)
+            .map_err(|error| match error {
+                Error::LimitExceeded => error,
+                _ => Error::CorruptPack,
+            })?;
+        if progress.status != InflateStatus::Finished || progress.written != size {
+            return Err(Error::CorruptPack);
+        }
+        let end = cursor + progress.consumed;
+        if self.remaining == 1 && end != self.bytes.len() {
+            return Err(Error::CorruptPack);
+        }
+        let crc = crc32(&self.bytes[start..end]);
+        self.position = end;
+        self.remaining -= 1;
+        Ok(Some(Entry {
+            offset: start as u64,
+            end_offset: end as u64,
+            crc,
+            kind,
+            data: output,
+            pack_id: self.pack_id,
+        }))
+    }
+
+    fn entry_header(&self) -> Result<(usize, u64, EntryKind)> {
         let start = self.position;
         let mut cursor = start;
         let first = byte(self.bytes, &mut cursor)?;
@@ -247,35 +292,7 @@ impl<'a> Reader<'a> {
             }
             _ => return Err(Error::CorruptPack),
         };
-        if size > limits.max_output {
-            return Err(Error::LimitExceeded);
-        }
-        let size = usize::try_from(size).map_err(|_| Error::BufferTooSmall)?;
-        let output = output.get_mut(..size).ok_or(Error::BufferTooSmall)?;
-        let progress = Inflater::new(window, limits)
-            .update(&self.bytes[cursor..], output, true)
-            .map_err(|error| match error {
-                Error::LimitExceeded => error,
-                _ => Error::CorruptPack,
-            })?;
-        if progress.status != InflateStatus::Finished || progress.written != size {
-            return Err(Error::CorruptPack);
-        }
-        let end = cursor + progress.consumed;
-        if self.remaining == 1 && end != self.bytes.len() {
-            return Err(Error::CorruptPack);
-        }
-        let crc = crc32(&self.bytes[start..end]);
-        self.position = end;
-        self.remaining -= 1;
-        Ok(Some(Entry {
-            offset: start as u64,
-            end_offset: end as u64,
-            crc,
-            kind,
-            data: output,
-            pack_id: self.pack_id,
-        }))
+        Ok((cursor, size, kind))
     }
 
     pub fn finish(&self) -> Result<()> {
@@ -405,16 +422,28 @@ fn variable(bytes: &mut &[u8]) -> Result<u64> {
 
 /// Standard reflected IEEE CRC-32 used by Git pack indexes (initial/final XOR).
 pub fn crc32(bytes: &[u8]) -> u32 {
-    const TABLE: [u32; 256] = crc_table();
+    const TABLE: [[u32; 256]; 8] = crc_tables();
     let mut crc = u32::MAX;
-    for &byte in bytes {
-        crc = (crc >> 8) ^ TABLE[usize::from(crc as u8 ^ byte)];
+    let mut chunks = bytes.chunks_exact(8);
+    for chunk in &mut chunks {
+        let low = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) ^ crc;
+        crc = TABLE[7][usize::from(low as u8)]
+            ^ TABLE[6][usize::from((low >> 8) as u8)]
+            ^ TABLE[5][usize::from((low >> 16) as u8)]
+            ^ TABLE[4][(low >> 24) as usize]
+            ^ TABLE[3][usize::from(chunk[4])]
+            ^ TABLE[2][usize::from(chunk[5])]
+            ^ TABLE[1][usize::from(chunk[6])]
+            ^ TABLE[0][usize::from(chunk[7])];
+    }
+    for &byte in chunks.remainder() {
+        crc = (crc >> 8) ^ TABLE[0][usize::from(crc as u8 ^ byte)];
     }
     !crc
 }
 
-const fn crc_table() -> [u32; 256] {
-    let mut table = [0; 256];
+const fn crc_tables() -> [[u32; 256]; 8] {
+    let mut table = [[0; 256]; 8];
     let mut index = 0;
     while index < 256 {
         let mut value = index as u32;
@@ -423,8 +452,18 @@ const fn crc_table() -> [u32; 256] {
             value = (value >> 1) ^ if value & 1 != 0 { 0xedb8_8320 } else { 0 };
             bit += 1;
         }
-        table[index] = value;
+        table[0][index] = value;
         index += 1;
+    }
+    let mut slice = 1;
+    while slice < 8 {
+        index = 0;
+        while index < 256 {
+            let previous = table[slice - 1][index];
+            table[slice][index] = (previous >> 8) ^ table[0][(previous & 255) as usize];
+            index += 1;
+        }
+        slice += 1;
     }
     table
 }

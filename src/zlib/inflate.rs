@@ -46,9 +46,9 @@ pub struct Inflater<'a> {
     limits: InflateLimits,
     bits: Bits,
     symbol: Symbol,
-    literal: Huffman<288>,
-    distance: Huffman<32>,
-    code: Huffman<19>,
+    literal: Huffman<288, 256>,
+    distance: Huffman<32, 32>,
+    code: Huffman<19, 16>,
     lengths: [u8; 320],
     state: State,
     final_block: bool,
@@ -202,6 +202,41 @@ impl<'a> Inflater<'a> {
                 }
                 State::Stored(0) => self.end_block(),
                 State::Stored(remaining) => {
+                    // Each stored byte consumes one input byte before its limit
+                    // check. With a positive integer ratio, an allowed first
+                    // byte guarantees the rest of this run's ratio checks.
+                    let next_input = self.bits.total.saturating_add(1);
+                    let ratio_limit = next_input
+                        .saturating_mul(u64::from(self.limits.max_ratio))
+                        .saturating_add(self.limits.ratio_slack);
+                    if self.bits.count == 0 && self.total_output < ratio_limit {
+                        let budget = if self.limits.max_ratio == 0 {
+                            self.limits.max_output.min(self.limits.ratio_slack)
+                        } else {
+                            self.limits.max_output
+                        };
+                        let count = usize::from(remaining)
+                            .min(input.len())
+                            .min(output.len() - written)
+                            .min(WINDOW_SIZE)
+                            .min(
+                                budget
+                                    .saturating_sub(self.total_output)
+                                    .min(u16::MAX as u64) as usize,
+                            )
+                            .min((u64::MAX - self.bits.total).min(u16::MAX as u64) as usize);
+                        if count != 0 {
+                            output[written..written + count].copy_from_slice(&input[..count]);
+                            self.bits.total += count as u64;
+                            *input = &input[count..];
+                            self.emit_slice(&output[written..written + count]);
+                            written += count;
+                            self.state = State::Stored(remaining - count as u16);
+                            continue;
+                        }
+                    }
+                    // Preserve the pending byte and failure position even when
+                    // a run ends at an output, input or budget boundary.
                     let byte = bits!(8) as u8;
                     self.state = State::Literal {
                         byte,
@@ -360,16 +395,35 @@ impl<'a> Inflater<'a> {
                     if written == output.len() {
                         return Ok((written, InflateStatus::NeedOutput));
                     }
-                    let position =
-                        (self.position + WINDOW_SIZE - usize::from(distance)) & (WINDOW_SIZE - 1);
-                    self.emit(self.window[position], &mut output[written])?;
-                    written += 1;
-                    self.state = if remaining == 1 {
+                    let count = usize::from(remaining)
+                        .min(output.len() - written)
+                        .min(self.output_budget().min(u16::MAX as u64) as usize);
+                    if count == 0 {
+                        return Err(Error::LimitExceeded);
+                    }
+                    let target = &mut output[written..written + count];
+                    let distance = usize::from(distance);
+                    let position = (self.position + WINDOW_SIZE - distance) & (WINDOW_SIZE - 1);
+                    let seed = count.min(distance);
+                    let first = seed.min(WINDOW_SIZE - position);
+                    target[..first].copy_from_slice(&self.window[position..position + first]);
+                    target[first..seed].copy_from_slice(&self.window[..seed - first]);
+                    // Expand overlapping copies from already produced bytes,
+                    // doubling the initialized prefix on each iteration.
+                    let mut initialized = seed;
+                    while initialized < count {
+                        let next = initialized.min(count - initialized);
+                        target.copy_within(..next, initialized);
+                        initialized += next;
+                    }
+                    self.emit_slice(target);
+                    written += count;
+                    self.state = if remaining == count as u16 {
                         State::Compressed
                     } else {
                         State::Copy {
-                            remaining: remaining - 1,
-                            distance,
+                            remaining: remaining - count as u16,
+                            distance: distance as u16,
                         }
                     };
                 }
@@ -393,13 +447,20 @@ impl<'a> Inflater<'a> {
         }
     }
 
-    fn emit(&mut self, byte: u8, output: &mut u8) -> Result<()> {
+    fn output_budget(&self) -> u64 {
         let ratio_limit = self
             .bits
             .total
             .saturating_mul(u64::from(self.limits.max_ratio))
             .saturating_add(self.limits.ratio_slack);
-        if self.total_output >= self.limits.max_output || self.total_output >= ratio_limit {
+        self.limits
+            .max_output
+            .min(ratio_limit)
+            .saturating_sub(self.total_output)
+    }
+
+    fn emit(&mut self, byte: u8, output: &mut u8) -> Result<()> {
+        if self.output_budget() == 0 {
             return Err(Error::LimitExceeded);
         }
         *output = byte;
@@ -415,6 +476,33 @@ impl<'a> Inflater<'a> {
             self.adler_pending = 0;
         }
         Ok(())
+    }
+
+    /// Commit an already budgeted run of at most one history window.
+    fn emit_slice(&mut self, bytes: &[u8]) {
+        let first = bytes.len().min(WINDOW_SIZE - self.position);
+        self.window[self.position..self.position + first].copy_from_slice(&bytes[..first]);
+        self.window[..bytes.len() - first].copy_from_slice(&bytes[first..]);
+        self.position = (self.position + bytes.len()) & (WINDOW_SIZE - 1);
+        self.total_output += bytes.len() as u64;
+        let (mut s1, mut s2) = (self.adler_s1, self.adler_s2);
+        let mut remaining = bytes;
+        while !remaining.is_empty() {
+            let count = remaining.len().min(5552 - usize::from(self.adler_pending));
+            for &byte in &remaining[..count] {
+                s1 += u32::from(byte);
+                s2 += s1;
+            }
+            self.adler_pending += count as u16;
+            if self.adler_pending == 5552 {
+                s1 %= 65521;
+                s2 %= 65521;
+                self.adler_pending = 0;
+            }
+            remaining = &remaining[count..];
+        }
+        self.adler_s1 = s1;
+        self.adler_s2 = s2;
     }
 
     fn end_block(&mut self) {
@@ -542,26 +630,29 @@ impl Bits {
     }
 }
 
-/// Canonical Huffman decoding takes at most 15 bit steps per symbol. Tables
-/// contain counts and sorted symbols, avoiding a large lookup table or scans.
-struct Huffman<const N: usize> {
+/// Small prefix tables handle short codes; canonical counts and sorted symbols
+/// handle longer codes in at most 15 bit steps without speculative input reads.
+struct Huffman<const N: usize, const FAST: usize> {
     counts: [u16; 16],
     symbols: [u16; N],
     max_bits: u8,
+    fast: [u16; FAST],
 }
 
-impl<const N: usize> Huffman<N> {
+impl<const N: usize, const FAST: usize> Huffman<N, FAST> {
     fn new() -> Self {
         Self {
             counts: [0; 16],
             symbols: [0; N],
             max_bits: 0,
+            fast: [0; FAST],
         }
     }
 
     fn build(&mut self, lengths: &[u8], allow_empty: bool, allow_single: bool) -> Result<()> {
         self.counts.fill(0);
         self.max_bits = 0;
+        self.fast.fill(0);
         for &length in lengths {
             if length > 15 {
                 return Err(Error::InvalidZlib);
@@ -602,6 +693,23 @@ impl<const N: usize> Huffman<N> {
                 *offset += 1;
             }
         }
+        let (mut code, mut index) = (0_u16, 0_usize);
+        for length in 1..=self.max_bits {
+            let count = self.counts[usize::from(length)];
+            if (1_usize << length) <= FAST {
+                for offset in 0..count {
+                    let prefix = usize::from((code + offset).reverse_bits() >> (16 - length));
+                    let value =
+                        (u16::from(length) << 9) | self.symbols[index + usize::from(offset)];
+                    for slot in (prefix..FAST).step_by(1 << length) {
+                        self.fast[slot] = value;
+                    }
+                }
+            }
+            index += usize::from(count);
+            // A complete 15-bit tree can exhaust u16 only after its last level.
+            code = code.wrapping_add(count).wrapping_mul(2);
+        }
         Ok(())
     }
 }
@@ -625,12 +733,31 @@ impl Default for Symbol {
 }
 
 impl Symbol {
-    fn read<const N: usize>(
+    fn read<const N: usize, const FAST: usize>(
         &mut self,
-        table: &Huffman<N>,
+        table: &Huffman<N, FAST>,
         bits: &mut Bits,
         input: &mut &[u8],
     ) -> Result<Option<u16>> {
+        if self.length == 1 && table.max_bits != 0 {
+            // Fetch only when the scalar decoder also needs its first bit.
+            // Prefetching to fill the table index would alter ratio budgets and
+            // could consume bytes belonging to the next pack entry.
+            if bits.count == 0 {
+                let Some(byte) = bits.read(8, input)? else {
+                    return Ok(None);
+                };
+                bits.value = byte;
+                bits.count = 8;
+            }
+            let value = table.fast[bits.value as usize & (FAST - 1)];
+            let length = (value >> 9) as u8;
+            if length != 0 && length <= bits.count {
+                bits.value >>= length;
+                bits.count -= length;
+                return Ok(Some(value & 511));
+            }
+        }
         while self.length <= table.max_bits {
             let Some(bit) = bits.read(1, input)? else {
                 return Ok(None);

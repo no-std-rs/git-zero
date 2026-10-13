@@ -137,6 +137,10 @@ fn stored_encoder_round_trip_and_incremental_operations_do_not_allocate() {
     zlib::write_parts(&mut writer, &[&body[..5551], &body[5551..]]).unwrap();
     let encoded = writer.as_bytes();
     assert_eq!(
+        decode(encoded, encoded.len(), body.len(), LIMITS).unwrap(),
+        body
+    );
+    assert_eq!(
         python(
             "import sys,zlib\nsys.stdout.buffer.write(zlib.decompress(sys.stdin.buffer.read()))",
             encoded,
@@ -209,7 +213,12 @@ fn exact_output_budget_empty_chunks_and_trailing_bytes() {
 
 #[test]
 fn limits_stop_before_the_first_excess_byte_and_are_chunk_independent() {
-    let encoded = compress(&[b'a'; 100_000], "9", "0");
+    for level in ["0", "9"] {
+        check_chunk_independent_limits(&compress(&[b'a'; 100_000], level, "0"));
+    }
+}
+
+fn check_chunk_independent_limits(encoded: &[u8]) {
     for limits in [
         InflateLimits {
             max_output: 100,
@@ -220,13 +229,22 @@ fn limits_stop_before_the_first_excess_byte_and_are_chunk_independent() {
             ..LIMITS
         },
         InflateLimits {
+            max_output: 99_999,
             max_ratio: 1,
             ratio_slack: 100,
-            ..LIMITS
         },
         InflateLimits {
             max_ratio: 0,
             ratio_slack: 99,
+            ..LIMITS
+        },
+        InflateLimits {
+            max_output: 32_769,
+            ..LIMITS
+        },
+        InflateLimits {
+            max_ratio: 0,
+            ratio_slack: 65_536,
             ..LIMITS
         },
     ] {
@@ -239,7 +257,14 @@ fn limits_stop_before_the_first_excess_byte_and_are_chunk_independent() {
             loop {
                 let end = encoded.len().min(consumed + input_size);
                 match inflater.update(&encoded[consumed..end], &mut output, end == encoded.len()) {
-                    Ok(progress) => consumed += progress.consumed,
+                    Ok(progress) => {
+                        assert_ne!(
+                            progress.status,
+                            InflateStatus::Finished,
+                            "expected a budget failure"
+                        );
+                        consumed += progress.consumed;
+                    }
                     Err(error) => {
                         assert_eq!(error, Error::LimitExceeded);
                         assert!(inflater.total_output() <= limits.max_output);
@@ -264,7 +289,13 @@ fn limits_stop_before_the_first_excess_byte_and_are_chunk_independent() {
         max_ratio: u32::MAX,
         ratio_slack: u64::MAX,
     };
-    assert_eq!(decode(&encoded, 1, 17, limits).unwrap().len(), 100_000);
+    assert_eq!(decode(encoded, 1, 17, limits).unwrap().len(), 100_000);
+    assert_eq!(
+        decode(encoded, encoded.len(), 100_000, limits)
+            .unwrap()
+            .len(),
+        100_000
+    );
 }
 
 #[test]

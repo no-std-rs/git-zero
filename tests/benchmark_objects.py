@@ -29,6 +29,7 @@ def prepare_pack(fixture, env, config):
     return {"repository": str(repository), "path": str(pack), "bytes": pack.stat().st_size,
             "sha256": hashlib.sha256(pack.read_bytes()).hexdigest(),
             "index_sha256": hashlib.sha256(index.read_bytes()).hexdigest(),
+            "inflated_entry_bytes": sum(int(row[2]) for row in rows if len(row) in (5, 7)),
             "delta_objects": len(deltas), "max_delta_depth": max((int(row[5]) for row in deltas), default=0)}
 
 

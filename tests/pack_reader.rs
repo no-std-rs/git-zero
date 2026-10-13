@@ -48,6 +48,25 @@ fn packed(entries: &[&[u8]], count: u32) -> Vec<u8> {
 }
 
 #[test]
+fn crc_matches_bitwise_reference_at_every_slice_and_tail_boundary() {
+    let bytes: Vec<_> = (0..1025)
+        .map(|index| (index * 71 + index / 7) as u8)
+        .collect();
+    for start in 0..8 {
+        let mut reference = u32::MAX;
+        for length in 0..=bytes.len() - start {
+            assert_eq!(pack::crc32(&bytes[start..start + length]), !reference);
+            if let Some(&byte) = bytes.get(start + length) {
+                reference ^= u32::from(byte);
+                for _ in 0..8 {
+                    reference = (reference >> 1) ^ if reference & 1 != 0 { 0xedb8_8320 } else { 0 };
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn entry_crcs_ids_and_two_delta_levels_use_only_caller_storage() {
     assert_eq!(pack::crc32(b""), 0);
     assert_eq!(pack::crc32(b"123456789"), 0xcbf4_3926);
@@ -201,11 +220,15 @@ fn malformed_pack_entries_counts_and_zlib_lengths_fail_without_advancing() {
     let mut storage = [0; 128];
     let bytes = packed(&[&plain], 1);
     let mut reader = Reader::new(&bytes).unwrap();
+    assert_eq!(reader.next_entry_size().unwrap(), Some(5));
+    assert_eq!(reader.next_entry_size().unwrap(), Some(5));
+    assert_eq!(reader.position(), 12);
     assert!(matches!(
         reader.read_entry(&mut storage[..4], &mut window, INFLATE),
         Err(Error::BufferTooSmall)
     ));
     assert_eq!(reader.position(), 12);
+    assert_eq!(reader.next_entry_size().unwrap(), Some(5));
     assert!(matches!(
         reader.read_entry(
             &mut storage,

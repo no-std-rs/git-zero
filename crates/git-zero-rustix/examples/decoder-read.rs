@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ratio_slack: 32768,
     };
     let mut window = [0; WINDOW_SIZE];
-    let mut output = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut output = std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout().lock());
     if args[1] == "loose" {
         let mut storage = vec![0; capacity];
         for id in ids {
@@ -83,10 +83,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         // Host-owned slots keep each base/body alive; they are deliberately
         // included in process RSS rather than attributed to the no_std core.
-        let mut staging: Vec<_> = ids.iter().map(|_| vec![0; capacity]).collect();
-        let mut reconstructed: Vec<_> = ids.iter().map(|_| vec![0; capacity]).collect();
+        let mut staging: Vec<_> = ids.iter().map(|_| Vec::new()).collect();
         let mut entries = Vec::new();
         for storage in &mut staging {
+            let size = reader
+                .next_entry_size()
+                .map_err(core_error)?
+                .ok_or("missing entry")?;
+            if size > capacity as u64 {
+                return Err("entry exceeds staging capacity".into());
+            }
+            storage.resize(size as usize, 0);
             entries.push(
                 reader
                     .read_entry(storage, &mut window, limits)
@@ -95,10 +102,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         reader.finish().map_err(core_error)?;
+        let mut reconstructed: Vec<_> = entries
+            .iter()
+            .map(|entry| match entry.kind() {
+                EntryKind::Object(_) => None,
+                _ => Some(vec![0; capacity]),
+            })
+            .collect();
         let mut resolved: Vec<_> = entries.iter().map(|entry| entry.object()).collect();
+        let mut by_id = std::collections::BTreeMap::new();
+        for (index, object) in resolved.iter().enumerate() {
+            if let Some(object) = object {
+                by_id.insert(object.id(), index);
+            }
+        }
         let mut buffers: Vec<_> = reconstructed
             .iter_mut()
-            .map(|buffer| Some(buffer.as_mut_slice()))
+            .map(|buffer| buffer.as_deref_mut())
             .collect();
         let delta_limits = DeltaLimits {
             max_output: largest as u64,
@@ -113,11 +133,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let base = match entry.kind() {
                     EntryKind::OffsetDelta { base_offset } => entries
-                        .iter()
-                        .position(|entry| entry.offset() == base_offset),
-                    EntryKind::ReferenceDelta { base_id } => resolved
-                        .iter()
-                        .position(|base| base.as_ref().is_some_and(|base| base.id() == base_id)),
+                        .binary_search_by_key(&base_offset, |entry| entry.offset())
+                        .ok(),
+                    EntryKind::ReferenceDelta { base_id } => by_id.get(&base_id).copied(),
                     EntryKind::Object(_) => return Err("unresolved plain entry".into()),
                 };
                 let Some(base) = base.and_then(|index| resolved[index].as_ref()) else {
@@ -130,6 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         delta_limits,
                     )
                     .map_err(core_error)?;
+                by_id.insert(object.id(), index);
                 resolved[index] = Some(object);
                 progress = true;
             }

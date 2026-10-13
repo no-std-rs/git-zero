@@ -47,8 +47,11 @@ pub fn entries(data: &[u8]) {
     for _ in 0..=MAX_INPUT {
         inflated.fill(0xa5);
         let before = reader.position();
+        let size = reader.next_entry_size();
+        assert_eq!(reader.position(), before);
         match reader.read_entry(&mut inflated[..OUTPUT], &mut window, INFLATE) {
             Ok(Some(entry)) => {
+                assert_eq!(size.unwrap(), Some(entry.data().len() as u64));
                 assert_eq!(entry.offset(), before);
                 assert!(entry.end_offset() > before);
                 assert_eq!(entry.end_offset(), reader.position());
@@ -65,10 +68,14 @@ pub fn entries(data: &[u8]) {
                 }
             }
             Ok(None) => {
+                assert_eq!(size.unwrap(), None);
                 reader.finish().unwrap();
                 return;
             }
             Err(error) => {
+                if let Err(header_error) = size {
+                    assert_eq!(header_error, error);
+                }
                 assert_eq!(reader.position(), before);
                 assert!(matches!(
                     error,
