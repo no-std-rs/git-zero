@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 from urllib.parse import quote
-from release_packages import PACKAGES, require
+from release_packages import PACKAGES, release_version, require
 
 
 def gh(arguments):
@@ -18,9 +18,7 @@ def gh(arguments):
 
 def attach(repository, tag, directory):
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository), "expected OWNER/REPOSITORY")
-    require(re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag),
-            "expected a stable git-zero release tag")
-    version = tag.removeprefix("v")
+    version = release_version(tag, tag=True)
     files = [Path(directory) / f"{name}-{version}.cargo-upload" for name in PACKAGES] + [Path(directory) / "SHA256SUMS"]
     release = json.loads(gh(["api", f"repos/{repository}/releases/tags/{quote(tag, safe='')}"]))
     require(release["tag_name"] == tag and not release["draft"] and not release["prerelease"],

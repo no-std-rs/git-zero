@@ -6,10 +6,9 @@ from pathlib import Path
 import re
 import sys
 import tomllib
-from release_packages import PACKAGES, require
+from release_packages import PACKAGES, release_version, require
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
 
 
 def replace_one(source, pattern, replacement, label):
@@ -44,8 +43,7 @@ def lock_version(version):
 
 
 def prepare(tag):
-    require(re.fullmatch("v" + VERSION, tag), "expected a stable vMAJOR.MINOR.PATCH release tag")
-    version = tag.removeprefix("v")
+    version = release_version(tag, tag=True)
     require(ROOT.joinpath("version.txt").read_text().strip() == version, "tag differs from version.txt")
     updates = {ROOT / relative: manifest_version(relative, version) for relative in PACKAGES.values()}
     updates[ROOT / "Cargo.lock"] = lock_version(version)

@@ -12,7 +12,6 @@ import hmac
 import http.server
 import json
 import os
-import re
 from pathlib import Path
 import secrets
 import struct
@@ -21,7 +20,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
-from release_packages import PACKAGES, require
+from release_packages import PACKAGES, release_version, require
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +38,8 @@ def index_path(name):
     return name[:2] + "/" + name[2:4] + "/" + name
 
 
-def parse_upload(body, expected_name, version):
+def unpack_upload(body):
+    """Decode both length-prefixed Cargo upload segments with complete framing."""
     require(8 <= len(body) <= MAX_UPLOAD, "invalid Cargo upload size")
     metadata_size = struct.unpack_from("<I", body)[0]
     require(0 < metadata_size <= 128 * 1024 and len(body) >= 8 + metadata_size,
@@ -48,9 +48,14 @@ def parse_upload(body, expected_name, version):
     archive_size = struct.unpack_from("<I", body, 4 + metadata_size)[0]
     require(0 < archive_size <= MAX_UPLOAD and len(body) == 8 + metadata_size + archive_size,
             "invalid Cargo archive size")
+    archive = body[8 + metadata_size :]
+    return metadata, archive
+
+
+def parse_upload(body, expected_name, version):
+    metadata, archive = unpack_upload(body)
     require(metadata.get("name") == expected_name and metadata.get("vers") == version,
             "Cargo package identity differs from release")
-    archive = body[8 + metadata_size :]
     dependencies = [
         {
             "name": item.get("explicit_name_in_toml") or item["name"],
@@ -130,7 +135,7 @@ class LocalRegistry(http.server.ThreadingHTTPServer):
         asset = self.output / f"{name}-{version}.cargo-upload"
         if name in PACKAGES and version == self.version and asset.is_file():
             body = asset.read_bytes()
-            return body[8 + struct.unpack_from("<I", body)[0]:]
+            return unpack_upload(body)[1]
         return fetch(f"https://static.crates.io/crates/{name}/{name}-{version}.crate", MAX_UPLOAD, 503)
 
     def capture(self, body):
@@ -214,9 +219,7 @@ def capture_packages(server):
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: package-registry-uploads.py OUTPUT_DIRECTORY")
-    version = ROOT.joinpath("version.txt").read_text().strip()
-    if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
-        raise SystemExit("version.txt must contain a stable semantic version")
+    version = release_version(ROOT.joinpath("version.txt").read_text().strip())
     output = Path(sys.argv[1]).resolve()
     output.mkdir(parents=True, exist_ok=True)
     with registry(output, version) as server:
@@ -229,4 +232,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
