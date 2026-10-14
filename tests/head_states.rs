@@ -1,3 +1,5 @@
+#![cfg(all(feature = "read", feature = "server"))]
+
 #[path = "common/allocations.rs"]
 mod allocations;
 

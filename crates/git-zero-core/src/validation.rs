@@ -4,8 +4,8 @@ use core::cmp::Ordering;
 use crate::{
     Error, Head, Object, ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader, Repository,
     Result,
+    names::{cmp_tree_names, validate_name},
     repository::validate_refs,
-    snapshot::{cmp_tree_names, validate_name},
 };
 
 /// Cached identity and size of a validated object, in enumeration order.

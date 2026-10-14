@@ -83,6 +83,7 @@ pub struct ObjectInfo {
 impl ObjectInfo {
     /// Parse one complete canonical Git header, including its terminating NUL.
     /// Sizes use unsigned decimal without leading zeros and fit in 64 bits.
+    #[cfg(feature = "read")]
     pub fn from_header(header: &[u8]) -> Result<Self> {
         let header = header.strip_suffix(&[0]).ok_or(Error::InvalidObject)?;
         let space = header
@@ -125,6 +126,7 @@ impl<'a> Object<'a> {
     /// Validate already inflated loose bytes before exposing a borrowed body.
     /// Header syntax, exact body length and the expected SHA-1 must all match.
     /// This checks the object's envelope, not its commit/tree/tag semantics.
+    #[cfg(feature = "read")]
     pub fn from_loose(bytes: &'a [u8], expected: ObjectId) -> Result<Self> {
         let end = bytes
             .iter()

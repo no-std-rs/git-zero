@@ -3,12 +3,16 @@ name = "git-zero"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
-description = "Allocation-free Git HTTP client and server building blocks"
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Allocation-free Git HTTP client and server building blocks"
 readme = "README.md"
+include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*"]
 
 [workspace]
-members = ["crates/git-zero-rustix", "examples/cloudflare-worker/wasm"]
+members = ["crates/git-zero-core", "crates/git-zero-client", "crates/git-zero-server", "crates/git-zero-rustix", "examples/cloudflare-worker/wasm"]
 default-members = [".", "crates/git-zero-rustix"]
 resolver = "3"
 
@@ -16,8 +20,23 @@ resolver = "3"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/no-std-rs/git-zero"
+keywords = ["git", "no-std", "http", "embedded"]
+categories = ["no-std::no-alloc", "development-tools", "network-programming"]
+
+[features]
+default = ["read", "write", "client", "server"]
+read = ["git-zero-core/read", "git-zero-server?/read"]
+write = ["git-zero-core/write"]
+client = ["read", "dep:git-zero-client"]
+server = ["write", "dep:git-zero-server"]
 
 [dependencies]
+git-zero-core = { version = "0.1.0", path = "crates/git-zero-core", default-features = false }
+git-zero-client = { version = "0.1.0", path = "crates/git-zero-client", optional = true }
+git-zero-server = { version = "0.1.0", path = "crates/git-zero-server", optional = true }
+
+[dev-dependencies]
 sha1 = { version = "0.10.7", default-features = false }
 
 [profile.release]
@@ -28,6 +47,9 @@ opt-level = "s"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

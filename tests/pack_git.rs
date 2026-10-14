@@ -1,3 +1,5 @@
+#![cfg(feature = "write")]
+
 #[path = "common/streamed.rs"]
 mod streamed;
 

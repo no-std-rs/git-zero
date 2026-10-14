@@ -1,0 +1,14 @@
+# git-zero-rustix
+
+Allocation-free `no_std` rustix adapters for git-zero. The host owns buffers,
+object manifests and file descriptors.
+
+- `client`: blocking IPv4 HTTP/1.0 transport.
+- `server`: loopback listener, request parsing and response framing.
+- `storage`: immutable raw file objects and verified prepacked responses.
+- `cli`: the `git-zero` demonstration binary; enables all adapters and validation.
+
+All features are enabled by default. Disable defaults to select adapters.
+The library uses no `std` or `alloc`; the CLI uses `std` for process startup.
+
+See [git-zero](https://github.com/no-std-rs/git-zero) for usage and limitations.

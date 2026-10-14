@@ -8,7 +8,16 @@ matrix. Network isolation must permit local loopback sockets.
 ```sh
 cargo test --workspace --locked
 python3 -m unittest discover -s tests -p 'test_*.py'
+RUSTFLAGS=-Dwarnings python3 scripts/check-features.py
+python3 scripts/check-public-packages.py
 ```
+
+The feature matrix checks 39 separate builds, including empty features and
+client-only/server-only consumers, so workspace feature unification cannot hide
+a missing feature gate. Tests declare their required features and run when
+those capabilities are selected. Release tests check version alignment across
+all public crates, Cargo upload framing, sparse-index feature preservation and
+immutable release asset retries.
 
 Core tests run under Cargo's normal parallel runner. The integration test invokes
 `interop.py`, which runs these independent cases with one worker per available CPU:

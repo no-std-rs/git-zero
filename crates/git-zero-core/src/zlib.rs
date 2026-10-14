@@ -5,8 +5,9 @@
 //! and [RFC 1951](https://www.rfc-editor.org/rfc/rfc1951).
 //!
 //! ```
-//! use git_zero::{io::{SliceWriter, Write}, zlib::{Inflater, InflateLimits, InflateStatus, WINDOW_SIZE}};
-//! # fn example() -> git_zero::Result<()> {
+//! # #[cfg(feature = "read")] {
+//! use git_zero_core::{io::{SliceWriter, Write}, zlib::{Inflater, InflateLimits, InflateStatus, WINDOW_SIZE}};
+//! # fn example() -> git_zero_core::Result<()> {
 //! let mut input: &[u8] = &[120, 156, 203, 72, 205, 201, 201, 7, 0, 6, 44, 2, 21];
 //! let mut window = [0; WINDOW_SIZE];
 //! let limits = InflateLimits { max_output: 5, max_ratio: 16, ratio_slack: 0 };
@@ -24,14 +25,20 @@
 //! assert!(input.is_empty());
 //! # Ok(()) }
 //! # example().unwrap();
+//! # }
 //! ```
 mod adler;
+#[cfg(feature = "read")]
 mod inflate;
+#[cfg(feature = "read")]
 pub use inflate::{InflateLimits, InflateProgress, InflateStatus, Inflater, WINDOW_SIZE};
 
+#[cfg(feature = "write")]
 use crate::{Error, ObjectReader, Repository, Result, io::Write};
+#[cfg(feature = "write")]
 use adler::Adler32;
 
+#[cfg(feature = "write")]
 pub fn write_parts(output: &mut impl Write, parts: &[&[u8]]) -> Result<()> {
     let mut encoder = Encoder::new(output)?;
     for part in parts {
@@ -42,6 +49,7 @@ pub fn write_parts(output: &mut impl Write, parts: &[&[u8]]) -> Result<()> {
 
 /// Encode an optional loose-object header and a body, keeping block boundaries
 /// identical to `write_parts` regardless of scratch size or provider short reads.
+#[cfg(feature = "write")]
 pub(crate) fn write_reader<R: Repository + ?Sized>(
     output: &mut impl Write,
     header: &[u8],
@@ -67,11 +75,13 @@ pub(crate) fn write_reader<R: Repository + ?Sized>(
     encoder.finish()
 }
 
+#[cfg(feature = "write")]
 struct Encoder<'a, W> {
     output: &'a mut W,
     adler: Adler32,
 }
 
+#[cfg(feature = "write")]
 impl<'a, W: Write> Encoder<'a, W> {
     fn new(output: &'a mut W) -> Result<Self> {
         output.write_all(&[0x78, 0x01])?;

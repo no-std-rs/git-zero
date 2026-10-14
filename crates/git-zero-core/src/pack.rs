@@ -1,17 +1,25 @@
+#[cfg(feature = "write")]
+use crate::ObjectId;
+#[cfg(any(feature = "read", feature = "write"))]
+use crate::{Error, Result};
+#[cfg(feature = "write")]
 use crate::{
-    Error, Object, ObjectId, ObjectInfo, ObjectReader, Repository, Result, io::Write,
-    reader::DEFAULT_READ_BUFFER_SIZE, zlib,
+    Object, ObjectInfo, ObjectReader, Repository, io::Write, reader::DEFAULT_READ_BUFFER_SIZE, zlib,
 };
 use sha1::{Digest, Sha1};
 
+#[cfg(feature = "read")]
 mod decode;
+#[cfg(feature = "read")]
 pub use decode::{DeltaLimits, Entry, EntryKind, Reader, ResolvedObject, apply_delta, crc32};
 
+#[cfg(feature = "write")]
 struct HashWriter<'a, W> {
     output: &'a mut W,
     hash: Sha1,
 }
 
+#[cfg(feature = "write")]
 impl<W: Write> Write for HashWriter<'_, W> {
     fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
         self.output.write_all(bytes)?;
@@ -22,6 +30,7 @@ impl<W: Write> Write for HashWriter<'_, W> {
 
 /// Generate a complete version-2 pack with no deltas, without buffering the pack.
 /// Reserves 1 KiB of read scratch on the stack for streaming-only providers.
+#[cfg(feature = "write")]
 pub fn write(repository: &impl Repository, output: &mut impl Write) -> Result<ObjectId> {
     write_with_scratch(repository, &mut [0; DEFAULT_READ_BUFFER_SIZE], output)
 }
@@ -31,6 +40,7 @@ pub fn write(repository: &impl Repository, output: &mut impl Write) -> Result<Ob
 /// Output is independent of the buffer size, preserving pack/cache identities.
 /// Errors invalidate partial output. Scratch is reused for each object; encoder
 /// and SHA-1 state are inline and independent of object/pack sizes.
+#[cfg(feature = "write")]
 pub fn write_with_scratch(
     repository: &impl Repository,
     scratch: &mut [u8],
@@ -43,6 +53,7 @@ pub fn write_with_scratch(
 /// must be valid and unique; violations fail before any output. Use a validated
 /// repository's `select_objects` result for an exact reachable closure. Encoder
 /// and read budgets match `write_with_scratch`; no pack-sized buffer is needed.
+#[cfg(feature = "write")]
 pub fn write_selected_with_scratch(
     repository: &impl Repository,
     indices: &[usize],
@@ -61,6 +72,7 @@ pub fn write_selected_with_scratch(
     write_order(repository, indices.iter().copied(), scratch, output)
 }
 
+#[cfg(feature = "write")]
 fn write_order(
     repository: &impl Repository,
     order: impl ExactSizeIterator<Item = usize>,
@@ -90,6 +102,7 @@ fn write_order(
     Ok(checksum)
 }
 
+#[cfg(feature = "write")]
 fn write_entry_header(info: ObjectInfo, output: &mut impl Write) -> Result<()> {
     let mut size = info.size;
     let mut byte = ((info.kind as u8) << 4) | (size as u8 & 15);
@@ -104,6 +117,7 @@ fn write_entry_header(info: ObjectInfo, output: &mut impl Write) -> Result<()> {
     }
 }
 
+#[cfg(feature = "write")]
 pub fn write_loose(object: Object<'_>, output: &mut impl Write) -> Result<()> {
     let mut storage = [0; 32];
     zlib::write_parts(output, &[object.header(&mut storage)?, object.data])
@@ -112,6 +126,7 @@ pub fn write_loose(object: Object<'_>, output: &mut impl Write) -> Result<()> {
 /// Stream a loose object by index. Borrowed bodies use `write_loose` directly;
 /// other providers need nonempty scratch for nonempty bodies. Output is identical
 /// for every scratch size. Discard partial output on error.
+#[cfg(feature = "write")]
 pub fn write_loose_with_scratch(
     repository: &impl Repository,
     index: usize,
@@ -129,6 +144,7 @@ pub fn write_loose_with_scratch(
 
 /// Check the framing and checksum of a downloaded pack. Object/delta validation
 /// and indexing are separate responsibilities; this does not decode objects.
+#[cfg(feature = "read")]
 pub fn validate(bytes: &[u8]) -> Result<()> {
     if bytes.len() < 32
         || &bytes[..4] != b"PACK"

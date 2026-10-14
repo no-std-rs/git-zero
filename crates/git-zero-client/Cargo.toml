@@ -1,0 +1,21 @@
+[package]
+name = "git-zero-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Allocation-free transport-independent Git HTTP client"
+readme = "README.md"
+include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*"]
+
+[dependencies]
+git-zero-core = { version = "0.1.0", path = "../git-zero-core", default-features = false, features = ["read"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

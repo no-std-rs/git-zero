@@ -1,3 +1,5 @@
+#![cfg(all(feature = "read", feature = "server"))]
+
 #[path = "common/short_reads.rs"]
 mod short_reads;
 use short_reads::Streamed;

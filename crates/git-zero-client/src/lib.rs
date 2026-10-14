@@ -1,9 +1,12 @@
 //! Bounded HTTP fetch primitives. The host supplies transport and storage.
 //! Smart fetch returns a validated raw pack; dumb fetch returns a zlib loose
 //! object. Bounded loose-object decoding validates headers, lengths and IDs;
-//! `crate::zlib` also provides standalone inflation, and `crate::pack` provides
+//! `git_zero_core::zlib` also provides standalone inflation, and `git_zero_core::pack` provides
 //! entry/delta decoding. Graph traversal, checkout and pack indexing remain work.
-use crate::{
+#![no_std]
+#![forbid(unsafe_code)]
+
+use git_zero_core::{
     Error, Object, ObjectId, Result,
     http::Request,
     io::{SliceWriter, Write},

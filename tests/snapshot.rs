@@ -1,3 +1,5 @@
+#![cfg(all(feature = "client", feature = "server"))]
+
 mod common;
 
 use git_zero::{

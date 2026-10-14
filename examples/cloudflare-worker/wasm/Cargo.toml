@@ -10,7 +10,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-git-zero = { path = "../../.." }
+git-zero = { path = "../../..", default-features = false, features = ["read", "server"] }
 
 [lints]
 workspace = true

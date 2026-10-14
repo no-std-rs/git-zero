@@ -1,3 +1,5 @@
+#![cfg(feature = "write")]
+
 use git_zero::{io::SliceWriter, zlib};
 
 fn checksum(parts: &[&[u8]]) -> u32 {

@@ -291,7 +291,9 @@ impl<'index, 'objects, R: Repository + ?Sized> IndexedRepository<'index, 'object
     /// object returns `ObjectNotFound`; discard partial arrays after an error.
     ///
     /// ```
-    /// use git_zero::{File, IndexedRepository, Repository, Snapshot};
+    /// # #[cfg(feature = "write")]
+    /// # fn example() -> git_zero_core::Result<()> {
+    /// use git_zero_core::{File, IndexedRepository, Repository, Snapshot};
     ///
     /// let files = [File { name: "hello", contents: b"hello\n" }];
     /// let mut tree = [0; 128];
@@ -301,8 +303,11 @@ impl<'index, 'objects, R: Repository + ?Sized> IndexedRepository<'index, 'object
     /// let mut by_id = [0; 3];
     /// let indexed = IndexedRepository::new(&snapshot, &mut objects, &mut by_id)?;
     /// assert_eq!(indexed.find(indexed.head()).unwrap().kind,
-    ///            git_zero::ObjectKind::Commit);
-    /// # Ok::<(), git_zero::Error>(())
+    ///            git_zero_core::ObjectKind::Commit);
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(feature = "write")]
+    /// # example().unwrap();
     /// ```
     pub fn new(
         repository: &'objects R,
@@ -521,7 +526,7 @@ fn reference_index(repository: &(impl Repository + ?Sized), name: &str) -> Optio
 }
 
 /// Complete-pack HEAD keys are safe only when every ref aliases that HEAD.
-pub(crate) fn uses_only_head(repository: &(impl Repository + ?Sized)) -> bool {
+pub fn uses_only_head(repository: &(impl Repository + ?Sized)) -> bool {
     (0..repository.reference_count())
         .all(|index| repository.reference_id(index) == repository.head_state().id())
 }
