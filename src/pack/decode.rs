@@ -1,7 +1,7 @@
-//! Bounded SHA-1 pack consumption, based on Git's pack-format specification:
+//! Bounded SHA-1/SHA-256 pack consumption, based on Git's pack specification:
 //! https://git-scm.com/docs/pack-format. No recursion or allocation is used.
 use crate::{
-    Error, Object, ObjectId, ObjectKind, Result,
+    Error, Object, ObjectFormat, ObjectId, ObjectKind, Result,
     zlib::{InflateLimits, InflateStatus, Inflater, WINDOW_SIZE},
 };
 
@@ -41,7 +41,7 @@ impl<'a> Entry<'a> {
     }
 
     /// Compare the entry's wire CRC with a trusted pack-index CRC. Packs do not
-    /// carry per-entry CRCs themselves; the complete pack SHA-1 is also checked.
+    /// carry per-entry CRCs themselves; the complete pack hash is also checked.
     pub fn verify_crc32(&self, expected: u32) -> Result<()> {
         if self.crc == expected {
             Ok(())
@@ -62,6 +62,7 @@ impl<'a> Entry<'a> {
             },
             Some((self.pack_id, self.offset)),
             0,
+            self.pack_id.format(),
         ))
     }
 
@@ -97,6 +98,7 @@ impl<'a> Entry<'a> {
             object,
             Some((self.pack_id, self.offset)),
             base.depth + 1,
+            self.pack_id.format(),
         ))
     }
 }
@@ -111,9 +113,14 @@ pub struct ResolvedObject<'a> {
 }
 
 impl<'a> ResolvedObject<'a> {
-    fn new(object: Object<'a>, location: Option<(ObjectId, u64)>, depth: u32) -> Self {
+    fn new(
+        object: Object<'a>,
+        location: Option<(ObjectId, u64)>,
+        depth: u32,
+        format: ObjectFormat,
+    ) -> Self {
         Self {
-            id: object.id(),
+            id: object.id_with_format(format),
             object,
             location,
             depth,
@@ -121,7 +128,10 @@ impl<'a> ResolvedObject<'a> {
     }
     /// Use a canonical object from host storage as a reference-delta base.
     pub fn external(object: Object<'a>) -> Self {
-        Self::new(object, None, 0)
+        Self::external_with_format(object, ObjectFormat::Sha1)
+    }
+    pub fn external_with_format(object: Object<'a>, format: ObjectFormat) -> Self {
+        Self::new(object, None, 0, format)
     }
     pub fn object(&self) -> Object<'a> {
         self.object
@@ -144,8 +154,8 @@ impl<'a> ResolvedObject<'a> {
     }
 }
 
-/// Reader over one complete downloaded SHA-1 pack. Construction verifies its
-/// framing and SHA-1; entries are then inflated/length-checked one at a time.
+/// Reader over one complete downloaded pack. Construction verifies its
+/// framing and hash; entries are then inflated/length-checked one at a time.
 /// Each call borrows caller staging storage and a reusable 32 KiB zlib window.
 /// Call `finish` (or read through `None`) to verify count and exact pack closure.
 /// Forward reference deltas require host base lookup; thin-pack bases may be
@@ -160,10 +170,13 @@ pub struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     pub fn new(pack: &'a [u8]) -> Result<Self> {
-        super::validate(pack)?;
-        let end = pack.len() - 20;
+        Self::new_with_format(pack, ObjectFormat::Sha1)
+    }
+    pub fn new_with_format(pack: &'a [u8], format: ObjectFormat) -> Result<Self> {
+        super::validate_with_format(pack, format)?;
+        let end = pack.len() - format.id_length();
         let count = u32::from_be_bytes(pack[8..12].try_into().map_err(|_| Error::CorruptPack)?);
-        let pack_id = ObjectId(pack[end..].try_into().map_err(|_| Error::CorruptPack)?);
+        let pack_id = ObjectId::from_bytes(format, &pack[end..]).map_err(|_| Error::CorruptPack)?;
         if count == 0 && end != 12 {
             return Err(Error::CorruptPack);
         }
@@ -265,11 +278,14 @@ impl<'a> Reader<'a> {
                 base_offset: offset_base(self.bytes, &mut cursor, start as u64)?,
             },
             7 => {
-                let end = cursor.checked_add(20).ok_or(Error::CorruptPack)?;
+                let format = self.pack_id.format();
+                let end = cursor
+                    .checked_add(format.id_length())
+                    .ok_or(Error::CorruptPack)?;
                 let id = self.bytes.get(cursor..end).ok_or(Error::CorruptPack)?;
                 cursor = end;
                 EntryKind::ReferenceDelta {
-                    base_id: ObjectId(id.try_into().map_err(|_| Error::CorruptPack)?),
+                    base_id: ObjectId::from_bytes(format, id).map_err(|_| Error::CorruptPack)?,
                 }
             }
             _ => return Err(Error::CorruptPack),

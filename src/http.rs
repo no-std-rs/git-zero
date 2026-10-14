@@ -1,6 +1,7 @@
 //! Routing for paths relative to the repository URL; HTTP framing belongs to the host.
 use crate::{
-    Error, Head, ObjectId, Repository, Result, ValidatedRepository, ValidationMetadata,
+    Error, Head, ObjectFormat, ObjectId, Repository, Result, ValidatedRepository,
+    ValidationMetadata,
     io::Write,
     pack,
     pktline::{self, Packet},
@@ -56,7 +57,7 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
         return serve_with_scratch(repository, request, storage.read, output);
     }
     let mut count = 0;
-    let done = upload_request(request.body, |id| {
+    let done = upload_request(request.body, repository.object_format(), |id| {
         if !advertised(repository, id) {
             return Err(Error::InvalidRequest);
         }
@@ -177,7 +178,7 @@ pub fn serve_with_pack<W: Write>(
                 return Err(Error::Unsupported);
             }
             let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
-            if upload_request(request.body, |id| {
+            if upload_request(request.body, repository.object_format(), |id| {
                 if id == head {
                     Ok(())
                 } else {
@@ -215,13 +216,15 @@ pub fn serve_with_pack<W: Write>(
         }
         ("GET", _) if path.starts_with("objects/") => {
             let object_path = &path.as_bytes()[8..];
-            if object_path.len() != 41 || object_path[2] != b'/' {
+            let format = repository.object_format();
+            if object_path.len() != format.hex_length() + 1 || object_path[2] != b'/' {
                 response.status = 404;
             } else {
-                let mut hex = [0; 40];
+                let mut storage = [0; 64];
+                let hex = &mut storage[..format.hex_length()];
                 hex[..2].copy_from_slice(&object_path[..2]);
                 hex[2..].copy_from_slice(&object_path[3..]);
-                if let Ok(id) = ObjectId::from_hex(&hex) {
+                if let Ok(id) = ObjectId::from_hex(hex) {
                     if let Some(index) = repository.find_index(id) {
                         response.content_type = "application/x-git-loose-object";
                         pack::write_loose_with_scratch(repository, index, scratch, output)?;
@@ -269,7 +272,8 @@ fn service(query: Option<&str>) -> Option<&str> {
 
 fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {
     let head = repository.head_state();
-    let id = head.id().unwrap_or(ObjectId([0; 20])).to_hex();
+    let format = repository.object_format();
+    let id = head.id().unwrap_or(format.zero_id()).to_hex();
     let name = if head.id().is_some() {
         b" HEAD\0".as_slice()
     } else {
@@ -283,10 +287,18 @@ fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Resu
         };
         pktline::write_parts(
             output,
-            &[&id, name, b"symref=HEAD:", target.as_bytes(), b"\n"],
+            &[
+                &id,
+                name,
+                b"symref=HEAD:",
+                target.as_bytes(),
+                b" ",
+                format.capability(),
+                b"\n",
+            ],
         )
     } else {
-        pktline::write_parts(output, &[&id, name, b"\n"])
+        pktline::write_parts(output, &[&id, name, format.capability(), b"\n"])
     }
 }
 
@@ -317,6 +329,7 @@ fn reference_line(
     capabilities: bool,
     output: &mut impl Write,
 ) -> Result<()> {
+    let format = id.format();
     let id = id.to_hex();
     if smart {
         pktline::write_parts(
@@ -327,6 +340,11 @@ fn reference_line(
                 name.as_bytes(),
                 suffix,
                 if capabilities { b"\0" } else { b"" },
+                if capabilities {
+                    format.capability()
+                } else {
+                    b""
+                },
                 b"\n",
             ],
         )
@@ -339,7 +357,48 @@ fn reference_line(
     }
 }
 
-fn upload_request(mut bytes: &[u8], mut want: impl FnMut(ObjectId) -> Result<()>) -> Result<bool> {
+fn want_id(bytes: &[u8], first: bool, format: ObjectFormat) -> Result<ObjectId> {
+    let split = bytes.iter().position(|&byte| byte == b' ');
+    if !first && split.is_some() {
+        return Err(Error::InvalidRequest);
+    }
+    let (hex, capabilities) = split.map_or((bytes, None), |position| {
+        (&bytes[..position], Some(&bytes[position + 1..]))
+    });
+    if first {
+        // Git's v0 client selects the advertised format but does not repeat
+        // object-format on its first want. Enforce it when explicitly supplied.
+        let mut selected = format;
+        if let Some(capabilities) = capabilities {
+            let mut seen = false;
+            for capability in capabilities.split(|&byte| byte == b' ') {
+                if seen || capability.is_empty() {
+                    return Err(Error::InvalidRequest);
+                }
+                selected = match capability {
+                    b"object-format=sha1" => ObjectFormat::Sha1,
+                    b"object-format=sha256" => ObjectFormat::Sha256,
+                    _ => return Err(Error::Unsupported),
+                };
+                seen = true;
+            }
+        }
+        if selected != format {
+            return Err(Error::InvalidRequest);
+        }
+    }
+    let id = ObjectId::from_hex(hex)?;
+    if id.format() != format {
+        return Err(Error::InvalidRequest);
+    }
+    Ok(id)
+}
+
+fn upload_request(
+    mut bytes: &[u8],
+    format: ObjectFormat,
+    mut want: impl FnMut(ObjectId) -> Result<()>,
+) -> Result<bool> {
     let mut wanted = false;
     let mut done = false;
     while let Some(packet) = pktline::read(&mut bytes)? {
@@ -351,13 +410,12 @@ fn upload_request(mut bytes: &[u8], mut want: impl FnMut(ObjectId) -> Result<()>
             return Err(Error::InvalidRequest);
         }
         if let Some(id) = line.strip_prefix(b"want ") {
-            if id.len() != 40 {
-                return Err(Error::InvalidRequest);
-            }
-            want(ObjectId::from_hex(id)?)?;
+            want(want_id(id, !wanted, format)?)?;
             wanted = true;
         } else if let Some(have) = line.strip_prefix(b"have ") {
-            ObjectId::from_hex(have)?;
+            if ObjectId::from_hex(have)?.format() != format {
+                return Err(Error::InvalidRequest);
+            }
         } else if line == b"done" {
             done = true;
         } else {

@@ -27,11 +27,11 @@ function frame(parts, target, body = Buffer.alloc(0)) {
   return Buffer.concat([lengths, ...files, targetLength, path, body]);
 }
 
-function call(exports, input, method = 0) {
+function call(exports, input, method = 0, format = null) {
   assert.ok(input.length <= INPUT_BYTES);
   const memory = exports.memory.buffer;
   new Uint8Array(memory, exports.input_ptr(), input.length).set(input);
-  const length = exports.serve(input.length, method);
+  const length = format === null ? exports.serve(input.length, method) : exports.serve_with_format(input.length, method, format);
   assert.equal(exports.memory.buffer, memory, "serve grew or replaced linear memory");
   if (length < 0) return length;
   assert.ok(length >= 3 && length <= OUTPUT_BYTES, "response exceeds the output budget");
@@ -76,6 +76,37 @@ test("Wasm keeps fixed memory across repeated discovery, pack and loose-object r
     assert.deepEqual(loose, expectedLoose);
   }
   assert.equal(exports.memory.buffer, memory);
+});
+
+test("SHA-256 Wasm snapshots match independent IDs and retain fixed memory", () => {
+  const exports = instance();
+  const oid = (kind, data) => createHash("sha256").update(Buffer.from(`${kind} ${data.length}\0`)).update(data).digest();
+  const files = ["cf.json", "headers.json", "vars.json", "runtime.json"].map((name, index) => [name, Buffer.from(parts[index])]);
+  files.sort(([left], [right]) => left < right ? -1 : 1);
+  const tree = Buffer.concat(files.map(([name, data]) => Buffer.concat([Buffer.from(`100644 ${name}\0`), oid("blob", data)])));
+  const commit = Buffer.from(`tree ${oid("tree", tree).toString("hex")}\nauthor git-zero <git-zero@example.invalid> 0 +0000\ncommitter git-zero <git-zero@example.invalid> 0 +0000\n\nIn-memory snapshot\n`);
+  const expected = oid("commit", commit).toString("hex");
+  const discovery = call(exports, frame(parts, "info/refs?service=git-upload-pack"), 0, 1);
+  const head = /([0-9a-f]{64}) HEAD\0/.exec(discovery.body.toString())[1];
+  assert.equal(head, expected);
+  assert.ok(discovery.body.includes(Buffer.from("object-format=sha256")));
+  const target = `objects/${head.slice(0, 2)}/${head.slice(2)}`;
+  for (const capability of ["", " object-format=sha256"]) {
+    const upload = Buffer.concat([packet(`want ${head}${capability}\n`), Buffer.from("0000"), packet("done\n")]);
+    for (let round = 0; round < 32; round++) {
+      const pack = call(exports, frame(parts, "git-upload-pack", upload), 1, 1);
+      assert.equal(pack.status, 200);
+      const bytes = pack.body.subarray(8);
+      assert.deepEqual(createHash("sha256").update(bytes.subarray(0, -32)).digest(), bytes.subarray(-32));
+      const loose = call(exports, frame(parts, target), 0, 1);
+      assert.deepEqual(inflateSync(loose.body), Buffer.concat([Buffer.from(`commit ${commit.length}\0`), commit]));
+      assert.deepEqual(call(exports, frame(parts, "info/refs?service=git-upload-pack"), 0, 1), discovery);
+    }
+  }
+  const mismatch = Buffer.concat([packet(`want ${head} object-format=sha1\n`), Buffer.from("0000"), packet("done\n")]);
+  assert.equal(call(exports, frame(parts, "git-upload-pack", mismatch), 1, 1), -2);
+  assert.equal(call(exports, frame(parts, "HEAD"), 0, 2), -2);
+  assert.deepEqual(call(exports, frame(parts, "HEAD")), call(exports, frame(parts, "HEAD"), 0, 0));
 });
 
 test("Wasm serves a full input frame within its memory and response budgets", () => {

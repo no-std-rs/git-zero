@@ -338,7 +338,7 @@ pub fn run() -> Result<()> {
     }
     // Backend-only processes keep unused Rust repository state out of Git's RSS.
     let (head, object_files) = if enabled == "git" {
-        (ObjectId([0; 20]), Vec::new())
+        (ObjectId::Sha1([0; 20]), Vec::new())
     } else {
         objects(root)?
     };

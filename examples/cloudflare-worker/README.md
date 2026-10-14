@@ -78,6 +78,10 @@ enforce a 24-page (1.5 MiB) initial linear-memory ceiling and no memory growth
 across repeated discovery/pack/loose requests, full-capacity inputs, malformed
 frames and independent instances. The 64 KiB input and 128 KiB output capacities
 are asserted separately; JavaScript allocation is outside this Wasm budget.
+The raw ABI's `serve_with_format(length, method, format)` accepts format 0 for
+SHA-1 and 1 for SHA-256; `serve` and the Worker use SHA-1. SHA-256 tests compare
+independently computed snapshot IDs, pack trailers and loose objects, and reject
+format mismatches while retaining the same memory ceiling.
 The dry run validates
 Wrangler packaging without deploying.
 

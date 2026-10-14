@@ -85,8 +85,8 @@ fn indexed_reads_use_metadata_without_reentering_the_source() {
                 assert_eq!(object.data.as_ptr(), expected.data.as_ptr());
             }
         }
-        assert!(indexed.find(ObjectId([0; 20])).is_none());
-        assert!(indexed.find(ObjectId([255; 20])).is_none());
+        assert!(indexed.find(ObjectId::Sha1([0; 20])).is_none());
+        assert!(indexed.find(ObjectId::Sha1([255; 20])).is_none());
         for index in [indexed.object_count(), usize::MAX] {
             assert!(indexed.metadata(index).is_none());
             assert!(indexed.object(index).is_none());
@@ -184,7 +184,7 @@ struct Objects<'a>(&'a [Option<Object<'a>>]);
 
 impl Repository for Objects<'_> {
     fn head(&self) -> ObjectId {
-        self.object_id(0).unwrap_or(ObjectId([0; 20]))
+        self.object_id(0).unwrap_or(ObjectId::Sha1([0; 20]))
     }
 
     fn object_count(&self) -> usize {
@@ -249,7 +249,7 @@ fn indexing_handles_empty_sources_and_reuses_storage_after_missing_objects() {
     assert_eq!(indexed.object_count(), 0);
     assert!(indexed.object(0).is_none());
     assert!(indexed.object_id(0).is_none());
-    assert!(indexed.find(ObjectId([0; 20])).is_none());
+    assert!(indexed.find(ObjectId::Sha1([0; 20])).is_none());
 
     let object = Some(Object {
         kind: ObjectKind::Blob,
@@ -304,5 +304,5 @@ fn shuffled_ids_lookup_every_kind_without_reordering_objects() {
         assert_eq!(found.kind, expected.kind);
         assert_eq!(found.data, expected.data);
     }
-    assert!(indexed.find(ObjectId([0; 20])).is_none());
+    assert!(indexed.find(ObjectId::Sha1([0; 20])).is_none());
 }

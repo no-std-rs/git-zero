@@ -18,7 +18,7 @@ struct WithHead<'a, R> {
 
 impl<R: Repository> Repository for WithHead<'_, R> {
     fn head(&self) -> ObjectId {
-        self.state.id().unwrap_or(ObjectId([0; 20]))
+        self.state.id().unwrap_or(ObjectId::Sha1([0; 20]))
     }
     fn head_state(&self) -> Head<'_> {
         self.state
@@ -78,7 +78,7 @@ fn empty_repository_advertises_unborn_head() {
     );
     assert_eq!(pktline::read(&mut packets), Ok(Some(Packet::Flush)));
     assert_eq!(pktline::read(&mut packets), Ok(Some(Packet::Data(
-        b"0000000000000000000000000000000000000000 capabilities^{}\0symref=HEAD:refs/heads/new\n"
+        b"0000000000000000000000000000000000000000 capabilities^{}\0symref=HEAD:refs/heads/new object-format=sha1\n"
     ))));
     assert_eq!(pktline::read(&mut packets), Ok(Some(Packet::Flush)));
     assert!(packets.is_empty());
@@ -87,7 +87,7 @@ fn empty_repository_advertises_unborn_head() {
 #[test]
 fn empty_repository_rejects_all_wants_before_output() {
     let repository = EmptyRepository::new("refs/heads/main").unwrap();
-    for id in [ObjectId([0; 20]), ObjectId([1; 20])] {
+    for id in [ObjectId::Sha1([0; 20]), ObjectId::Sha1([1; 20])] {
         let request = format!("0032want {id}\n00000009done\n").into_bytes();
         let mut storage = [0; 128];
         let mut output = SliceWriter::new(&mut storage);
@@ -220,7 +220,7 @@ fn inconsistent_head_states_fail_explicitly() {
     let empty = EmptyRepository::new("refs/heads/main").unwrap();
     for (state, refs, expected) in [
         (
-            Head::Detached(ObjectId([0; 20])),
+            Head::Detached(ObjectId::Sha1([0; 20])),
             &[][..],
             Error::InvalidObject,
         ),
@@ -232,7 +232,7 @@ fn inconsistent_head_states_fail_explicitly() {
         (
             Head::Symbolic {
                 target: "refs/heads/main",
-                id: ObjectId([1; 20]),
+                id: ObjectId::Sha1([1; 20]),
             },
             &[][..],
             Error::InvalidReference,
