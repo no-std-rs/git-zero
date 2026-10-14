@@ -462,18 +462,7 @@ pub fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
             .ok_or(Error::InvalidReference)?;
         validate_reference(repository, index, name, head, format)?;
         found |= Some(name) == head.target();
-        for previous in 0..index {
-            let previous = repository
-                .reference_name(previous)
-                .ok_or(Error::InvalidReference)?;
-            if previous >= name
-                || name
-                    .strip_prefix(previous)
-                    .is_some_and(|suffix| suffix.starts_with('/'))
-            {
-                return Err(Error::InvalidReference);
-            }
-        }
+        validate_reference_order(repository, index, name)?;
     }
     if matches!(head, Head::Symbolic { .. }) && !found {
         return Err(Error::InvalidReference);
@@ -481,6 +470,27 @@ pub fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
     if let Head::Symbolic { target, .. } = head {
         let (target, _) = resolve_reference(repository, target)?;
         if target.len() > head_ref_limit(format) {
+            return Err(Error::InvalidReference);
+        }
+    }
+    Ok(())
+}
+
+// The manifest must be byte-sorted and free of duplicate or conflicting paths.
+fn validate_reference_order(
+    repository: &(impl Repository + ?Sized),
+    index: usize,
+    name: &str,
+) -> Result<()> {
+    for previous in 0..index {
+        let previous = repository
+            .reference_name(previous)
+            .ok_or(Error::InvalidReference)?;
+        if previous >= name
+            || name
+                .strip_prefix(previous)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+        {
             return Err(Error::InvalidReference);
         }
     }

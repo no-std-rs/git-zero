@@ -41,20 +41,7 @@ pub fn accept(socket: &impl AsFd) -> Result<OwnedFd> {
 }
 
 pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Request<'a>> {
-    let mut length = 0;
-    let end = loop {
-        if let Some(end) = header_end(&storage[..length]) {
-            break end;
-        }
-        if length == storage.len() {
-            return Err(Error::BufferTooSmall);
-        }
-        let count = receive(socket, &mut storage[length..])?;
-        if count == 0 {
-            return Err(Error::InvalidRequest);
-        }
-        length += count;
-    };
+    let (end, mut length) = read_header(socket, storage)?;
     let header = core::str::from_utf8(&storage[..end]).map_err(|_| Error::InvalidRequest)?;
     let body_length = content_length(header)?.unwrap_or(0);
     let total = end
@@ -69,6 +56,25 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
         length += count;
     }
     parse_request(&storage[..total], end)
+}
+
+// Keep any body bytes received with the header for the subsequent bounded read.
+fn read_header(socket: &impl AsFd, storage: &mut [u8]) -> Result<(usize, usize)> {
+    let mut length = 0;
+    let end = loop {
+        if let Some(end) = header_end(&storage[..length]) {
+            break end;
+        }
+        if length == storage.len() {
+            return Err(Error::BufferTooSmall);
+        }
+        let count = receive(socket, &mut storage[length..])?;
+        if count == 0 {
+            return Err(Error::InvalidRequest);
+        }
+        length += count;
+    };
+    Ok((end, length))
 }
 
 // Parsing borrows only the complete request, after all socket reads have finished.
