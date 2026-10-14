@@ -54,6 +54,10 @@ pub struct MaterializeLimits {
     pub max_passes: u32,
     /// Counts every inflated entry on each pass, even already-resolved entries.
     pub max_decoded_bytes_per_pass: u64,
+    /// Maximum index slots inspected for delta bases across all passes.
+    pub max_base_probes: u64,
+    /// Encoded tree bytes read, including alias rescans, across the whole import.
+    pub max_tree_validation_bytes: u64,
 }
 
 /// An immutable, ID-sorted index and materialized bodies. The input pack and
@@ -106,9 +110,10 @@ pub fn find_materialized(index: &[MaterializedEntry], id: ObjectId) -> Option<&M
 /// limits are explicit; missing/external bases fail rather than doing I/O.
 ///
 /// The ID index uses iterative heap sort, with constant stack space. Resolution
-/// uses bounded quadratic metadata probes and may reinflate entries across
-/// passes. Discard partial index/arena/scratch on error; a retry reinitializes
-/// the index. No allocation, recursion or platform I/O is used.
+/// charges every metadata probe and tree-validation read against explicit work
+/// budgets, and may reinflate entries across passes. Discard partial storage on
+/// error; a retry reinitializes the index. No allocation, recursion or platform
+/// I/O is used.
 ///
 /// ```
 /// use git_zero::{Snapshot, ObjectKind, object::Commit, io::SliceWriter, pack,
@@ -129,6 +134,8 @@ pub fn find_materialized(index: &[MaterializedEntry], id: ObjectId) -> Option<&M
 ///     delta: pack::DeltaLimits { max_output: 512, max_instructions: 512, max_depth: 64 },
 ///     max_passes: 65,
 ///     max_decoded_bytes_per_pass: 1024,
+///     max_base_probes: 4096,
+///     max_tree_validation_bytes: 4096,
 /// };
 /// let objects = pack::materialize(output.as_bytes(), &mut index, &mut arena,
 ///     &mut scratch, &mut window, limits)?;
@@ -156,6 +163,8 @@ pub fn materialize<'a>(
     }
     let mut used = 0;
     let mut remaining = count;
+    let mut base_probes = limits.max_base_probes;
+    let mut tree_bytes = limits.max_tree_validation_bytes;
     for _ in 0..limits.max_passes {
         let mut reader = Reader::new(pack)?;
         let mut progress = false;
@@ -172,17 +181,23 @@ pub fn materialize<'a>(
             if index[i].kind != 0 {
                 continue;
             }
-            let base = match entry.kind() {
-                EntryKind::Object(_) => None,
-                EntryKind::OffsetDelta { base_offset } => index
-                    .iter()
-                    .find(|o| o.kind != 0 && o.pack_offset == base_offset)
-                    .copied(),
-                EntryKind::ReferenceDelta { base_id } => index
-                    .iter()
-                    .find(|o| o.kind != 0 && o.id == base_id.0)
-                    .copied(),
-            };
+            let mut base = None;
+            if !matches!(entry.kind(), EntryKind::Object(_)) && remaining != count {
+                for candidate in index.iter() {
+                    base_probes = base_probes.checked_sub(1).ok_or(Error::LimitExceeded)?;
+                    let matches = match entry.kind() {
+                        EntryKind::OffsetDelta { base_offset } => {
+                            candidate.pack_offset == base_offset
+                        }
+                        EntryKind::ReferenceDelta { base_id } => candidate.id == base_id.0,
+                        EntryKind::Object(_) => false,
+                    };
+                    if candidate.kind != 0 && matches {
+                        base = Some(*candidate);
+                        break;
+                    }
+                }
+            }
             if !matches!(entry.kind(), EntryKind::Object(_)) && base.is_none() {
                 continue;
             }
@@ -219,7 +234,7 @@ pub fn materialize<'a>(
                 (Object { kind, data: output }, 0)
             };
             if object.kind == ObjectKind::Tree {
-                Tree::parse(object.data)?;
+                Tree::parse_with_budget(object.data, &mut tree_bytes)?;
             }
             index[i] = MaterializedEntry {
                 id: object.id().0,

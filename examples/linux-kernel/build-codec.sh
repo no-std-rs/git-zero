@@ -39,6 +39,6 @@ RUSTC_BOOTSTRAP=1 RUSTFLAGS="$flags" CARGO_PROFILE_RELEASE_OPT_LEVEL=3 cargo bui
 "$linker" -r --gc-sections \
     -u gitfs_decode_loose -u gitfs_loose_wire_size -u gitfs_commit_tree -u gitfs_commit_message -u gitfs_tree_next -u gitfs_tag_target \
     -u gitfs_tls_size -u gitfs_tls_open -u gitfs_tls_read -u gitfs_tls_write \
-    -u gitfs_smart_head -u gitfs_smart_ref_next -u gitfs_smart_validate_want -u gitfs_smart_request -u gitfs_smart_pack -u gitfs_pack_import -u gitfs_pack_find \
+    -u gitfs_smart_discover -u gitfs_smart_ref_next -u gitfs_smart_validate_want -u gitfs_smart_request -u gitfs_smart_pack -u gitfs_pack_import -u gitfs_pack_find \
     -o "$obj/codec.o" "$obj/build/target/gitfs-target/release/libgit_zero_kernel_codec.a"
 "$objcopy" --remove-section=.llvmbc --remove-section=.llvmcmd "$obj/codec.o"

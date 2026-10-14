@@ -74,6 +74,10 @@ def fixture(root):
     large_tree = tree([(b"100644", b"blob", large_id, b"large.bin")])
     large_commit = git("commit-tree", large_tree.decode(), data=b"wire size test\n")
     (root / "fixture/large-revision").write_bytes(large_commit)
+    repeated = blob(b"a" * (32 * 1024 * 1024))
+    repeated_tree = tree([(b"100644", b"blob", repeated, b"repeated.bin")])
+    repeated_commit = git("commit-tree", repeated_tree.decode(), data=b"compression ratio test\n")
+    (root / "fixture/repeated-revision").write_bytes(repeated_commit)
 
 
 def initramfs(root, destination):

@@ -135,7 +135,7 @@ int gitfs_tls_open(void *state, u8 *read, u8 *write, struct gitfs_socket_io io,
 		   const u8 *host, size_t host_length);
 ssize_t gitfs_tls_read(void *state, u8 *output, size_t length);
 ssize_t gitfs_tls_write(void *state, const u8 *input, size_t length);
-int gitfs_smart_head(const u8 *data, size_t length, u8 *head);
+int gitfs_smart_discover(const u8 *data, size_t length, u8 *head);
 int gitfs_smart_validate_want(const u8 *data, size_t length, const u8 *id);
 int gitfs_smart_request(const u8 *ids, size_t count, u32 capabilities,
 			u8 *output, size_t capacity, size_t *length);

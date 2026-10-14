@@ -72,14 +72,16 @@ pub unsafe extern "C" fn gitfs_decode_loose(
     };
     let limits = InflateLimits {
         max_output: capacity as u64,
-        max_ratio: 1024,
-        ratio_slack: 65536,
+        max_ratio: 0,
+        ratio_slack: capacity as u64,
     };
     let output_address = output.as_ptr() as usize;
     match client::decode_loose(wire, id, output, window, limits) {
         Ok(object) => {
-            if object.kind == git_zero::ObjectKind::Tree && validate_tree(object.data).is_err() {
-                return EBADMSG;
+            if object.kind == git_zero::ObjectKind::Tree {
+                if let Err(error) = validate_tree(object.data) {
+                    return errno(error);
+                }
             }
             // SAFETY: `result` is a valid exclusive output struct.
             unsafe {
@@ -140,9 +142,18 @@ pub unsafe extern "C" fn gitfs_commit_message(
 }
 
 fn validate_tree(data: &[u8]) -> Result<(), Error> {
-    let tree = Tree::parse(data)?;
-    if tree.entries().any(|entry| entry.name.len() > 255) {
-        return Err(Error::InvalidFileName);
+    Tree::parse(data)?;
+    validate_tree_names(data)
+}
+
+// Pack materialization has already checked ordering and aliases. The adapter
+// only adds Linux's component limit, without repeating alias validation.
+fn validate_tree_names(data: &[u8]) -> Result<(), Error> {
+    let mut offset = 0;
+    while let Some(entry) = git_zero::object::TreeEntry::read(data, &mut offset)? {
+        if entry.name.len() > 255 {
+            return Err(Error::InvalidFileName);
+        }
     }
     Ok(())
 }
@@ -220,6 +231,29 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 mod tests {
     use super::*;
     use git_zero::{Object, ObjectKind, io::SliceWriter, zlib};
+
+    #[test]
+    fn smart_discovery_reports_capabilities_without_requiring_head() {
+        for name in ["HEAD", "refs/heads/main"] {
+            let mut storage = [0; 512];
+            let mut wire = SliceWriter::new(&mut storage);
+            git_zero::pktline::write(&mut wire, b"# service=git-upload-pack\n").unwrap();
+            git_zero::io::Write::write_all(&mut wire, b"0000").unwrap();
+            let reference = format!(
+                "{} {name}\0shallow ofs-delta no-progress\n",
+                ObjectId([7; 20])
+            );
+            git_zero::pktline::write(&mut wire, reference.as_bytes()).unwrap();
+            git_zero::io::Write::write_all(&mut wire, b"0000").unwrap();
+            let mut head = [5; 20];
+            let bytes = wire.as_bytes();
+            let result = unsafe {
+                smart::gitfs_smart_discover(bytes.as_ptr(), bytes.len(), head.as_mut_ptr())
+            };
+            assert_eq!(result, if name == "HEAD" { 15 } else { 7 });
+            assert_eq!(head, if name == "HEAD" { [7; 20] } else { [5; 20] });
+        }
+    }
 
     #[test]
     fn commit_messages_preserve_exact_bytes_and_require_header_separator() {

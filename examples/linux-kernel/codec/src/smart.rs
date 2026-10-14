@@ -1,5 +1,5 @@
 //! C ABI and Linux name limits for the shared Git client and pack importer.
-use crate::{Decoded, errno, validate_tree};
+use crate::{Decoded, errno, validate_tree_names};
 use git_zero::{Error, ObjectId, ObjectKind, client, io::SliceWriter, pack, zlib::InflateLimits};
 
 pub type PackObject = pack::MaterializedEntry;
@@ -24,11 +24,16 @@ fn vfs_ref_name(name: &str) -> Result<(), Error> {
     }
 }
 
-/// Validate smart discovery, returning supported shallow/OFS/no-progress bits.
+/// Validate discovery. Bits 0-2 report shallow/OFS/no-progress; bit 3 reports
+/// advertised HEAD. Missing HEAD is valid and leaves the output untouched.
 /// # Safety
 /// Data is valid for length bytes; head is a disjoint 20-byte output.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn gitfs_smart_head(data: *const u8, length: usize, head: *mut u8) -> i32 {
+pub unsafe extern "C" fn gitfs_smart_discover(
+    data: *const u8,
+    length: usize,
+    head: *mut u8,
+) -> i32 {
     // SAFETY: C owns the complete response and exclusive output.
     let data = unsafe { core::slice::from_raw_parts(data, length) };
     let parsed = (|| {
@@ -40,13 +45,17 @@ pub unsafe extern "C" fn gitfs_smart_head(data: *const u8, length: usize, head: 
         let capabilities = i32::from(options.shallow_depth.is_some())
             | (i32::from(options.ofs_delta) << 1)
             | (i32::from(options.no_progress) << 2);
-        Ok((advertisement.head()?, capabilities))
+        Ok((advertisement.head().ok(), capabilities))
     })();
     match parsed {
         Ok((id, capabilities)) => {
-            // SAFETY: Head has 20 writable bytes disjoint from the response.
-            unsafe { core::ptr::copy_nonoverlapping(id.0.as_ptr(), head, 20) };
-            capabilities
+            if let Some(id) = id {
+                // SAFETY: Head has 20 writable bytes disjoint from the response.
+                unsafe { core::ptr::copy_nonoverlapping(id.0.as_ptr(), head, 20) };
+                capabilities | 8
+            } else {
+                capabilities
+            }
         }
         Err(e) => errno(e),
     }
@@ -181,8 +190,8 @@ pub unsafe extern "C" fn gitfs_pack_import(
     let limits = pack::MaterializeLimits {
         inflate: InflateLimits {
             max_output: object_limit as u64,
-            max_ratio: 1024,
-            ratio_slack: 65536,
+            max_ratio: 0,
+            ratio_slack: object_limit as u64,
         },
         delta: pack::DeltaLimits {
             max_output: object_limit as u64,
@@ -191,13 +200,15 @@ pub unsafe extern "C" fn gitfs_pack_import(
         },
         max_passes: 65,
         max_decoded_bytes_per_pass: (arena_length as u64).saturating_mul(8),
+        max_base_probes: 16 * 1024 * 1024,
+        max_tree_validation_bytes: 64 * 1024 * 1024,
     };
     let result = (|| {
         let store = pack::materialize(pack, index, arena, scratch, window, limits)?;
         for i in 0..store.entries().len() {
             let object = store.object(i).ok_or(Error::InvalidObject)?;
             if object.kind == ObjectKind::Tree {
-                validate_tree(object.data)?;
+                validate_tree_names(object.data)?;
             }
         }
         Ok(store.bytes_used())

@@ -96,20 +96,27 @@ impl<'a> TreeEntry<'a> {
 /// A structurally valid tree, including Git ordering and unique byte names.
 /// Validation uses constant storage. File/directory aliases can be separated
 /// by other names in Git order, so checking them may reread earlier entries.
+/// Every read, including these rescans, consumes an encoded-byte work budget.
 #[derive(Clone, Copy, Debug)]
 pub struct Tree<'a> {
     data: &'a [u8],
 }
 
 impl<'a> Tree<'a> {
+    /// Validate using a 64 MiB encoded-byte work budget. Hosts importing multiple
+    /// trees can share a different budget through parse_with_budget.
     pub fn parse(data: &'a [u8]) -> Result<Self> {
+        Self::parse_with_budget(data, &mut (64 * 1024 * 1024))
+    }
+
+    /// Charge encoded bytes read, including duplicate-name rescans, against a
+    /// caller-owned budget. LimitExceeded stops before reading beyond it. Budget
+    /// already spent is retained on error; the tree remains borrowed/immutable.
+    pub fn parse_with_budget(data: &'a [u8], budget: &mut u64) -> Result<Self> {
         let mut offset = 0;
         let mut previous: Option<TreeEntry<'_>> = None;
-        loop {
-            let start = offset;
-            let Some(entry) = TreeEntry::read(data, &mut offset)? else {
-                break;
-            };
+        let mut last_file_end = 0;
+        while let Some(entry) = read_budgeted(data, &mut offset, budget)? {
             if let Some(previous) = previous {
                 if cmp_tree_names(
                     previous.name,
@@ -123,13 +130,17 @@ impl<'a> Tree<'a> {
             }
             if entry.mode == 0o040000 {
                 let mut earlier = 0;
-                while earlier < start {
-                    if TreeEntry::read(data, &mut earlier)?
+                // Directories cannot alias each other after the order check.
+                // Only the prefix containing earlier files needs a rescan.
+                while earlier < last_file_end {
+                    if read_budgeted(data, &mut earlier, budget)?
                         .is_some_and(|other| other.name == entry.name)
                     {
                         return Err(Error::UnsortedFiles);
                     }
                 }
+            } else {
+                last_file_end = offset;
             }
             previous = Some(entry);
         }
@@ -142,6 +153,28 @@ impl<'a> Tree<'a> {
             offset: 0,
         }
     }
+}
+
+fn read_budgeted<'a>(
+    data: &'a [u8],
+    offset: &mut usize,
+    budget: &mut u64,
+) -> Result<Option<TreeEntry<'a>>> {
+    if *offset == data.len() {
+        return Ok(None);
+    }
+    if *budget == 0 {
+        return Err(Error::LimitExceeded);
+    }
+    let start = *offset;
+    let available = usize::try_from(*budget).unwrap_or(usize::MAX);
+    let end = start.saturating_add(available).min(data.len());
+    let result = TreeEntry::read(&data[..end], offset);
+    if result.is_err() && end < data.len() {
+        return Err(Error::LimitExceeded);
+    }
+    *budget -= (*offset - start) as u64;
+    result
 }
 
 pub struct TreeEntries<'a> {

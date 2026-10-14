@@ -68,6 +68,9 @@ Slashes in branch names form directories: `topic/demo/tree/file` works.
 HEAD is available at `.refs/HEAD`, and tags at `.refs/tags/<tag>`; other ref
 namespaces use `.refs/<namespace>`. Annotated tags are peeled to their target.
 Refs to a tree or blob expose `tree` as a directory or file and have no `msg`.
+An origin with branches or tags but an unborn default branch can still be
+mounted with `refs`; `.refs/HEAD` is present only when HEAD was advertised.
+Single-snapshot mounts require HEAD unless an explicit allowed commit is selected.
 
 Discovery pins all advertised refs. One upload-pack request fetches their
 distinct targets, sharing objects across branches. Ref directories, messages,
@@ -185,6 +188,12 @@ validated. TLS state and record buffers live in kernel-owned memory and are
 wiped on close.
 
 Smart mounts support SHA-1 packs with up to 32,768 objects and delta depth 64.
+Imports permit 16,777,216 delta-base index probes and 64 MiB of encoded tree
+validation reads, including duplicate-name rescans, across the complete pack.
+Loose trees use the same 64 MiB validation-work limit per object. These work
+budgets are independent of body sizes; exceeding one fails with `EFBIG`.
+Directory-only trees are validated in one pass. Inflation uses the absolute
+object limit and accepts high-ratio DEFLATE streams within that limit.
 The refs view permits up to 4,096 namespace/ref nodes, UTF-8 ref names with
 components up to 255 bytes, and eight annotated-tag links. Ref metadata counts
 toward `cache_mb`. Conflicting or malformed ref paths fail the mount.
@@ -227,7 +236,8 @@ aliases, nested branch names, annotated and non-commit tags, exact messages,
 cache limits, directory rewind and reads with the guest NIC down. `--github`
 mounts `octocat/Hello-World` and `no-std-rs/git-zero` using kernel DNS, checks
 their source bytes, and lists git-zero's branches, commit message and subtrees.
-Regression cases cover a 32 MiB incompressible loose object, missing optional
-capabilities, discovery above 1 MiB and rejected unadvertised smart wants.
+Regression cases cover 32 MiB incompressible and highly compressed objects,
+refs with an unborn default branch, missing optional capabilities, discovery
+above 1 MiB and rejected unadvertised smart wants.
 The userspace origins are only test fixtures. Logs go to
 `build/qemu.log`.

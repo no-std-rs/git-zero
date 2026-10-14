@@ -11,7 +11,7 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 	struct gitfs_decoded pack;
 	struct gitfs_ref_entry entry;
 	struct gitfs_ref *ref;
-	size_t length, count, index_bytes, arena_length, request_length, want_count = 1;
+	size_t length, count, index_bytes, arena_length, request_length, want_count = 0;
 	size_t offset = 0, request_capacity;
 	u8 head[20];
 	int capabilities, error;
@@ -27,14 +27,19 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 			       wire, mount->pack_limit, &length);
 	if (error)
 		goto out;
-	capabilities = gitfs_smart_head(wire, length, head);
+	capabilities = gitfs_smart_discover(wire, length, head);
 	if (capabilities < 0) {
 		error = capabilities;
 		goto out;
 	}
-	if (!mount->explicit_commit)
-		memcpy(mount->commit, head, 20);
-	else {
+	if (!mount->explicit_commit) {
+		if (capabilities & 8)
+			memcpy(mount->commit, head, 20);
+		else if (!mount->ref_view) {
+			error = -ENOENT;
+			goto out;
+		}
+	} else {
 		error = gitfs_smart_validate_want(wire, length, mount->commit);
 		if (error)
 			goto out;
@@ -55,11 +60,16 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 		error = -ENOMEM;
 		goto out;
 	}
-	memcpy(wants, mount->commit, 20);
+	if (!mount->ref_view)
+		memcpy(wants + want_count++ * 20, mount->commit, 20);
 	list_for_each_entry(ref, &mount->refs, allocation) {
 		if (!ref->leaf)
 			continue;
 		memcpy(wants + want_count++ * 20, ref->id, 20);
+	}
+	if (!want_count) {
+		error = -ENOENT;
+		goto out;
 	}
 	error = gitfs_smart_request(wants, want_count, capabilities, request, request_capacity, &request_length);
 	if (error)

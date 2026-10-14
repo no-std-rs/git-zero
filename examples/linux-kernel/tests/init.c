@@ -271,6 +271,16 @@ static void set_network_up(int up)
 		route.rt_flags = RTF_UP | RTF_GATEWAY;
 		route.rt_dev = "eth0";
 		check(!ioctl(fd, SIOCADDRT, &route) || errno == EEXIST, "restore default route");
+		unsigned attempt;
+		for (attempt = 0; attempt < 500; attempt++) {
+			if (ioctl(fd, SIOCGIFFLAGS, &interface))
+				check(0, "read restored NIC carrier");
+			if (interface.ifr_flags & IFF_RUNNING)
+				break;
+			usleep(10000);
+		}
+		printf("guest NIC carrier after %u polls\n", attempt);
+		check(interface.ifr_flags & IFF_RUNNING, "restored NIC carrier ready");
 	}
 	close(fd);
 }
@@ -340,6 +350,27 @@ static void https_tests(void)
 	      "mount origin without ofs-delta or no-progress capabilities");
 	expect_file("/mnt/README.md", "hello from kernel gitfs\n");
 	check(!umount("/mnt"), "unmount restricted-capability origin");
+	snprintf(url, sizeof(url), "https://localhost:%s/headless.git", port);
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY, "addr=10.0.2.2,timeout_ms=60000") == -1 && errno == ENOENT,
+	      "single-snapshot mount requires HEAD without an explicit commit");
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "refs,addr=10.0.2.2,timeout_ms=60000"),
+	      "mount refs with an unborn default branch and no advertised HEAD");
+	expect_file("/mnt/main/msg", "current snapshot\n");
+	expect_file("/mnt/old/tree/README.md", "old revision\n");
+	check(stat("/mnt/.refs/HEAD", &st) == -1 && errno == ENOENT, "headless refs do not invent HEAD");
+	check(!umount("/mnt"), "unmount headless refs view");
+	snprintf(url, sizeof(url), "https://localhost:%s/compressed.git", port);
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY,
+		     "addr=10.0.2.2,object_mb=32,timeout_ms=60000"), "mount maximally compressed smart object");
+	fd = open("/mnt/repeated.bin", O_RDONLY);
+	check(fd >= 0 && !fstat(fd, &st) && st.st_size == 32*1024*1024, "compressed smart object fits its absolute body budget");
+	check(read(fd, buffer, sizeof(buffer)) == (ssize_t)sizeof(buffer), "read compressed smart object");
+	int correct = 1;
+	for (size_t i = 0; i < sizeof(buffer); i++)
+		correct &= buffer[i] == 'a';
+	check(correct, "compressed smart bytes");
+	close(fd);
+	check(!umount("/mnt"), "unmount compressed smart object");
 	snprintf(url, sizeof(url), "https://localhost:%s/manyrefs.git", port);
 	check(mount(url, "/mnt", "gitfs", MS_RDONLY, "addr=10.0.2.2,pack_mb=1,timeout_ms=60000") == -1 && errno == EFBIG,
 	      "discovery respects a small configured response budget");
@@ -384,7 +415,7 @@ static void https_tests(void)
 	set_network_up(1);
 	if (!access("/fixture/test-github", F_OK)) {
 		check(!mount("https://github.com/octocat/Hello-World", "/mnt", "gitfs", MS_RDONLY,
-			     "dns=10.0.2.3,timeout_ms=60000"),
+			     "timeout_ms=60000"),
 		      "mount live GitHub repository through kernel DNS and no_std HTTPS");
 		fd = open("/mnt/README", O_RDONLY);
 		check(fd >= 0, "GitHub checkout README");
@@ -394,7 +425,7 @@ static void https_tests(void)
 		missing_probes();
 		check(!umount("/mnt"), "unmount GitHub checkout");
 		check(!mount("https://github.com/no-std-rs/git-zero", "/mnt", "gitfs", MS_RDONLY,
-			     "refs,dns=10.0.2.3,timeout_ms=60000"), "mount git-zero refs from GitHub");
+			     "refs,timeout_ms=60000"), "mount git-zero refs from GitHub");
 		set_network_up(0);
 		expect_prefix("/mnt/main/tree/README.md", "# git-zero\n");
 		expect_prefix("/mnt/main/tree/src/lib.rs", "//! Allocation-free");
@@ -517,6 +548,17 @@ int main(void)
 	check(lseek(fd, -4, SEEK_END) == st.st_size-4 && read(fd, data, 4) == 4 && !memcmp(data, "last", 4), "large object suffix");
 	close(fd);
 	check(!umount("/mnt"), "unmount large loose object");
+	memset(revision, 0, sizeof(revision));
+	fd = open("/fixture/repeated-revision", O_RDONLY);
+	check(fd >= 0 && read(fd, revision, 40) == 40, "compressed loose-object revision");
+	close(fd);
+	snprintf(options, sizeof(options), "commit=%s,cache_mb=64,object_mb=32,timeout_ms=60000", revision);
+	check(!mount("http://127.0.0.1:8080/repo.git", "/mnt", "gitfs", MS_RDONLY, options), "mount maximally compressed loose object");
+	fd = open("/mnt/repeated.bin", O_RDONLY);
+	check(fd >= 0 && !fstat(fd, &st) && st.st_size == 32*1024*1024, "compressed loose object fits its absolute body budget");
+	check(lseek(fd, -4, SEEK_END) == st.st_size-4 && read(fd, data, 4) == 4 && !memcmp(data, "aaaa", 4), "compressed loose object suffix");
+	close(fd);
+	check(!umount("/mnt"), "unmount compressed loose object");
 	kill(server, SIGTERM);
 	waitpid(server, NULL, 0);
 	https_tests();

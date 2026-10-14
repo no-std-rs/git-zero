@@ -43,6 +43,15 @@ def fixture(root):
     command("git", "-C", str(source), "tag", "tree", "HEAD^{tree}")
     command("git", "-C", str(source), "tag", "blob", "HEAD:README.md")
     command("git", "clone", "--bare", str(source), str(root / "fixture/smart.git"))
+    headless = root / "fixture/headless.git"
+    command("git", "clone", "--bare", str(source), str(headless))
+    command("git", "--git-dir", str(headless), "symbolic-ref", "HEAD", "refs/heads/unborn")
+    advertised = command("git", "upload-pack", "--stateless-rpc", "--advertise-refs", str(headless))
+    assert b" HEAD" not in advertised and b" refs/heads/main" in advertised
+    (source / "repeated.bin").write_bytes(b"a" * (32 * 1024 * 1024))
+    command("git", "-C", str(source), "add", "repeated.bin", env=env)
+    command("git", "-C", str(source), "commit", "-m", "compressed object", env=env)
+    command("git", "clone", "--bare", str(source), str(root / "fixture/compressed.git"))
     certs = root.parent / "certs"
     certs.mkdir()
     command("openssl", "req", "-x509", "-newkey", "ec",

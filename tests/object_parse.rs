@@ -88,6 +88,53 @@ fn malformed_trees_and_nonadjacent_file_directory_aliases_are_rejected() {
 }
 
 #[test]
+fn tree_validation_charges_alias_rescans_and_reads_directory_only_trees_once() {
+    let mut directories = Vec::new();
+    for i in 0..20_000 {
+        directories.extend_from_slice(&tree(&[(b"40000", format!("d{i:05}").as_bytes())]));
+    }
+    allocations::without_allocations(|| {
+        let mut budget = directories.len() as u64;
+        assert_eq!(
+            Tree::parse_with_budget(&directories, &mut budget)
+                .unwrap()
+                .entries()
+                .count(),
+            20_000
+        );
+        assert_eq!(budget, 0);
+    });
+    let prefix = tree(&[(b"100644", b"a"), (b"100644", b"a.txt")]);
+    let bytes = tree(&[(b"100644", b"a"), (b"100644", b"a.txt"), (b"40000", b"b")]);
+    let required = (bytes.len() + prefix.len()) as u64;
+    let mut budget = required;
+    assert!(Tree::parse_with_budget(&bytes, &mut budget).is_ok());
+    assert_eq!(budget, 0);
+    assert_eq!(
+        Tree::parse_with_budget(&bytes, &mut (required - 1)).unwrap_err(),
+        Error::LimitExceeded
+    );
+    let mut mixed = Vec::new();
+    for i in 0..5000 {
+        mixed.extend_from_slice(&tree(&[
+            (b"100644", format!("{i:05}.txt").as_bytes()),
+            (b"40000", format!("{i:05}").as_bytes()),
+        ]));
+    }
+    allocations::without_allocations(|| {
+        assert_eq!(
+            Tree::parse_with_budget(&mixed, &mut 4096).unwrap_err(),
+            Error::LimitExceeded
+        );
+    });
+    assert!(Tree::parse_with_budget(&[], &mut 0).is_ok());
+    assert_eq!(
+        Tree::parse_with_budget(&bytes, &mut 1).unwrap_err(),
+        Error::LimitExceeded
+    );
+}
+
+#[test]
 fn commits_preserve_empty_binary_and_multiline_messages() {
     for message in [
         &b""[..],

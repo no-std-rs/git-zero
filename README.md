@@ -137,13 +137,15 @@ complete non-thin pack, including forward reference deltas, into a
 `MaterializedPack`. The host supplies metadata slots and a byte arena; neither
 the compressed pack nor scratch is retained. Lookup uses the sorted object ID
 index. Inflation, delta depth/instructions, pass count and decoded bytes per
-pass are bounded by `MaterializeLimits`. Index sorting uses an iterative heap
-sort with constant stack space. Failed imports invalidate partial storage.
+pass, delta-base metadata probes, and total tree-validation reads are bounded by
+`MaterializeLimits`. Index sorting uses an iterative heap sort with constant
+stack space. Failed imports invalidate partial storage.
 This checks pack/object/tree structure; graph closure is a separate operation.
 
 `object::Commit::parse` exposes the root tree and exact message bytes.
 `object::Tree::parse` checks modes, byte-string names, ordering and duplicates,
-then exposes borrowed entries. `object::Tag::parse` extracts an annotated tag's
+then exposes borrowed entries. `Tree::parse_with_budget` bounds reads and alias
+rescans; `Tree::parse` uses a 64 MiB validation budget. `object::Tag::parse` extracts an annotated tag's
 target and declared kind. Host filesystem limits stay in the adapters; use
 `ValidatedRepository` for stronger graph and reference validation.
 
