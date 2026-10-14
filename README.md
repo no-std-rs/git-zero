@@ -43,21 +43,27 @@ for checks and repository connection requirements.
 - Bounded multiple-want selection and packing of just the requested closures,
   using caller-owned traversal arrays, scratch and a graph-read byte limit.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
-  and checksum-validates smart packs, and fetches dumb loose objects.
+  and checksum-validates smart packs, fetches several tips with optional shallow
+  negotiation, and fetches dumb loose objects.
 - Incremental zlib inflation with caller-owned history/output buffers, stored/
   fixed/dynamic DEFLATE support, Adler-32 validation and output/expansion limits.
 - Loose-object envelope validation before body exposure, plus a pack entry
   reader with wire CRCs, canonical object IDs and bounded offset/reference deltas.
+- Complete pack materialization into caller-owned bodies and a sorted ID index,
+  plus borrowed commit messages, tree entries and annotated-tag targets.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
 - A loopback IPv4 server/client adapter and a Cloudflare Workers Wasm demo.
 - Native file-backed raw objects and verified prepacked responses, with positional
   reads and caller-owned scratch, using `rustix` without `std` or `alloc`.
 - Parallel interoperability tests mixing real Git and git-zero clients/servers.
 
-The client returns wire objects: raw packs for smart HTTP and zlib objects for
-dumb HTTP. It does not yet index complete fetched packs, traverse a dumb
-repository, or create a checkout. Push, shallow/filter requests, protocol v2,
-and the standalone `git://` transport remain future work.
+The client downloads wire objects: raw packs for smart HTTP and zlib objects for
+dumb HTTP. Hosts can decode them and materialize complete packs with shared core
+APIs; the kernel example uses these to expose cached snapshots and refs. A dumb
+repository walker and a native checkout writer remain work. Push, filter
+requests, protocol v2, and standalone `git://` transport
+remain future work. Shallow fetch is supported by the client; this library's
+server still serves complete selected packs.
 
 ## Object formats
 
@@ -163,9 +169,40 @@ a canonical body and ID. `verify_id` compares it with a trusted expected ID.
 The reader needs the complete compressed pack plus staging for one inflated
 body/instruction stream and one 32 KiB history window. Delta application also
 needs its canonical base and caller-bounded result storage. No recursion or
-allocation occurs. Forward-base lookup, caller-owned indexes, object sinks and
-complete fetch orchestration are the next storage layer; the native `fetch`
-command retains its existing wire-output behavior.
+allocation occurs. The native `fetch` command retains its wire-output behavior.
+
+`pack::materialize(pack, index, arena, scratch, window, limits)` resolves a
+complete non-thin SHA-1 pack, including forward reference deltas, into a
+`MaterializedPack`. The host supplies metadata slots and a byte arena; neither
+the compressed pack nor scratch is retained. Lookup uses the sorted object ID
+index. Inflation, delta depth/instructions, pass count and decoded bytes per
+pass, delta-base metadata probes, and total tree-validation reads are bounded by
+`MaterializeLimits`. Index sorting uses an iterative heap sort with constant
+stack space. Failed imports invalidate partial storage.
+This checks pack/object/tree structure; graph closure is a separate operation.
+
+`object::Commit::parse` exposes the root tree and exact message bytes.
+`object::Tree::parse` checks modes, byte-string names, ordering and duplicates,
+then exposes borrowed entries. `Tree::parse_with_budget` bounds reads and alias
+rescans; `Tree::parse` uses a 64 MiB validation budget. `object::Tag::parse` extracts an annotated tag's
+target and declared kind. Commit and tree parsers default to SHA-1; their
+`*_with_format` methods accept SHA-256, and `Tree::parse_with_budget_and_format`
+combines the format with a caller-owned read budget. Tags infer their target ID
+format from its hexadecimal width. Host filesystem limits stay in the adapters; use
+`ValidatedRepository` for stronger graph and reference validation.
+
+`client::SmartAdvertisement::parse` and `read_smart_reference` handle a downloaded
+protocol-v0 advertisement without I/O. Its `fetch_options` selects advertised
+capabilities and `validate_want` checks permission to request an explicit ID.
+`write_fetch_request` deduplicates wanted IDs and encodes optional shallow/offset-delta negotiation.
+SHA-256 wants include their object-format capability; mixed-format wants are
+rejected before emitting output. `write_fetch_request_iter` accepts a cloneable
+iterator so adapters can retain their own ID representation.
+`fetch_pack_with_options` combines this with the host transport, and
+`read_pack_response` handles shallow negotiation before authenticating a raw
+pack; `read_pack_response_with_format` checks SHA-256 boundaries and checksums.
+All these APIs use caller-owned storage without `std`, `alloc` or unsafe
+code.
 
 ## Workspace
 
@@ -178,6 +215,7 @@ command retains its existing wire-output behavior.
 | `crates/git-zero-rustix/` | `no_std` file/socket adapters; small `std` process wrapper |
 | `examples/cloudflare-worker/wasm/` | `no_std` raw Wasm ABI with fixed buffers |
 | `examples/cloudflare-worker/src/` | JavaScript host for Cloudflare metadata and HTTP |
+| `examples/linux-kernel/` | Kernel VFS/socket adapter and `no_std` Rust codec for mounting Git snapshots |
 | `tests/` | Core checks, real Git pack validation, parallel HTTP matrix |
 
 The core and native adapter libraries never enable `std` or `alloc`. The native
@@ -223,6 +261,13 @@ All five public crates share a release version. See [RELEASING.md](RELEASING.md)
 for Runnerless release-please and crates.io publishing.
 
 ## Native demo
+
+For an entirely kernel-side client, see the
+[Linux filesystem module example](examples/linux-kernel/README.md). It mounts
+a pinned Git commit from GitHub over handshake-only `no_std` HTTPS, or from an
+ordinary HTTP origin, with bounded object caching, negative lookups and the
+Linux page cache. Its `refs` view exposes each branch's commit message and tree,
+for example `main/msg` and `main/tree/src/lib.rs`. No userspace mount helper is needed.
 
 Use Rust 1.85 or newer, Git with HTTP support, and Python 3 for tests.
 

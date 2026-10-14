@@ -28,6 +28,20 @@
 //! # }
 //! ```
 mod adler;
+
+/// zlib compressBound for its default window/memory settings (as used by Git).
+/// Includes wrapper/checksum overhead, with checked arithmetic. This is not a
+/// bound on arbitrarily padded streams or other deflate settings.
+/// https://github.com/madler/zlib/blob/master/compress.c
+pub fn compress_bound(length: u64) -> crate::Result<u64> {
+    length
+        .checked_add(length >> 12)
+        .and_then(|size| size.checked_add(length >> 14))
+        .and_then(|size| size.checked_add(length >> 25))
+        .and_then(|size| size.checked_add(13))
+        .ok_or(crate::Error::LimitExceeded)
+}
+
 #[cfg(feature = "read")]
 mod inflate;
 #[cfg(feature = "read")]

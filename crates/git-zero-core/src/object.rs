@@ -4,6 +4,11 @@ use sha2::Sha256;
 
 use crate::{Error, Result, io::SliceWriter};
 
+#[cfg(feature = "read")]
+mod parse;
+#[cfg(feature = "read")]
+pub use parse::{Commit, Tag, Tree, TreeEntries, TreeEntry};
+
 /// One repository's object/hash encoding. Object formats cannot be mixed.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash)]
 pub enum ObjectFormat {

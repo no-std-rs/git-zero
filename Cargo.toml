@@ -12,7 +12,7 @@ readme = "README.md"
 include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*"]
 
 [workspace]
-members = ["crates/git-zero-core", "crates/git-zero-client", "crates/git-zero-server", "crates/git-zero-rustix", "examples/cloudflare-worker/wasm"]
+members = ["crates/git-zero-core", "crates/git-zero-client", "crates/git-zero-server", "crates/git-zero-rustix", "examples/cloudflare-worker/wasm", "examples/linux-kernel/codec"]
 default-members = [".", "crates/git-zero-rustix"]
 resolver = "3"
 
@@ -81,6 +81,14 @@ name = "loose"
 required-features = ["client", "write"]
 
 [[test]]
+name = "materialize"
+required-features = ["read", "write"]
+
+[[test]]
+name = "object_parse"
+required-features = ["read"]
+
+[[test]]
 name = "pack_git"
 required-features = ["write"]
 
@@ -103,6 +111,10 @@ required-features = ["client", "server"]
 [[test]]
 name = "upload"
 required-features = ["read", "server"]
+
+[[test]]
+name = "smart_client"
+required-features = ["client"]
 
 [[test]]
 name = "validation"
