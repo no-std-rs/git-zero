@@ -71,31 +71,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         validate_refs(repository)?;
         let objects = &mut object_storage[..count];
         let by_id = &mut index_storage[..count];
-        for (index, slot) in objects.iter_mut().enumerate() {
-            let info = repository.object_info(index)?;
-            let id = repository.object_id(index).ok_or(Error::ObjectNotFound)?;
-            if ObjectHasher::new(repository, index)?.finish(read_scratch)? != id
-                || repository
-                    .object(index)
-                    .is_some_and(|object| object.info() != info || object.id() != id)
-            {
-                return Err(Error::InvalidObject);
-            }
-            *slot = Some(ValidationMetadata {
-                id,
-                info,
-                reached: false,
-                checked: false,
-            });
-            by_id[index] = index;
-        }
-        by_id.sort_unstable_by_key(|&index| metadata(objects, index).id);
-        if by_id
-            .windows(2)
-            .any(|pair| metadata(objects, pair[0]).id == metadata(objects, pair[1]).id)
-        {
-            return Err(Error::InvalidObject);
-        }
+        initialize_index(repository, objects, by_id, read_scratch)?;
         let head = repository.head();
         if let Some(id) = repository.head_state().id() {
             reach(objects, by_id, id, ObjectKind::Commit)?;
@@ -242,6 +218,41 @@ impl<R: Repository + ?Sized> Repository for ValidatedRepository<'_, '_, R> {
     fn reference_peeled(&self, index: usize) -> Option<ObjectId> {
         self.repository.reference_peeled(index)
     }
+}
+
+// Hash and index the stable enumeration before traversing any graph edges.
+fn initialize_index(
+    repository: &(impl Repository + ?Sized),
+    objects: &mut [Option<ValidationMetadata>],
+    by_id: &mut [usize],
+    read_scratch: &mut [u8],
+) -> Result<()> {
+    for (index, slot) in objects.iter_mut().enumerate() {
+        let info = repository.object_info(index)?;
+        let id = repository.object_id(index).ok_or(Error::ObjectNotFound)?;
+        if ObjectHasher::new(repository, index)?.finish(read_scratch)? != id
+            || repository
+                .object(index)
+                .is_some_and(|object| object.info() != info || object.id() != id)
+        {
+            return Err(Error::InvalidObject);
+        }
+        *slot = Some(ValidationMetadata {
+            id,
+            info,
+            reached: false,
+            checked: false,
+        });
+        by_id[index] = index;
+    }
+    by_id.sort_unstable_by_key(|&index| metadata(objects, index).id);
+    if by_id
+        .windows(2)
+        .any(|pair| metadata(objects, pair[0]).id == metadata(objects, pair[1]).id)
+    {
+        return Err(Error::InvalidObject);
+    }
+    Ok(())
 }
 
 fn walk(
