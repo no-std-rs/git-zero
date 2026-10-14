@@ -37,6 +37,24 @@ before output, validate empty/detached graphs and preserve state through indexes
 without allocation. `http-backend` emits an empty raw `/HEAD` for unborn refs;
 git-zero serves the symbolic HEAD file, matching Git's static dumb repository.
 
+The native `references` suite compares symbolic, detached and unborn HEAD with
+independent branches, merge histories, symbolic chains (including HEAD through
+a lightweight commit tag), annotated/nested tags,
+and tree/blob targets over smart and dumb HTTP. `server_references.py` generates
+the oracle using Git's commands and exports immutable raw bodies to the native
+file provider. Discovery, raw ref files, clone/fetch refs, checkouts and every
+object's ID/kind/body are compared, with strict fsck. Single-branch clones and
+matched raw upload requests verify selected object closures; duplicate/multiple
+wants share objects. Git's reference smart client can request `include-tag` even
+with `--no-tags`, so its clone may receive extra tags peeling to the selected
+closure; matched requests without that capability require exact physical objects
+on both servers. This suite runs across the same Git/platform CI matrix and
+retains fixtures, packets, curl traces, HTTP logs and downloaded packs on failure.
+Core `references` tests cover wrong/missing peels, symbolic cycles, malformed
+tags, advertised-want policy, capacities, byte-read exhaustion, retries, independent
+request storage and rejection of unsafe HEAD-key cache/whole-pack reuse. Allocation
+tracking covers ref construction, graph validation, selection and HTTP serving.
+
 `tests/inflate.rs` compares the core zlib decoder with Python's standard zlib
 and a real Git-created loose object. Stored, fixed, dynamic and mixed blocks run
 with one-byte input/output, overlapping copies, a 32768-byte back-reference,

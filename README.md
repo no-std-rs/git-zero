@@ -36,7 +36,10 @@ for checks and repository connection requirements.
 - Bounded readers and resumable hashing for large/generated objects, with
   caller-sized scratch for pack and loose-object responses.
 - Opt-in validation and indexing of custom repositories, checking object IDs,
-  tree order and links, commit parents, and exact reachability from HEAD.
+  tree order and links, commit parents, tag targets, and exact reachability from
+  HEAD and independent refs. Symbolic ref chains and final peeled tags are supported.
+- Bounded multiple-want selection and packing of just the requested closures,
+  using caller-owned traversal arrays, scratch and a graph-read byte limit.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
   and checksum-validates smart packs, and fetches dumb loose objects.
 - Incremental zlib inflation with caller-owned history/output buffers, stored/
@@ -316,9 +319,10 @@ can also omit the empty-tree object from disk (observed with Git 2.53), causing
 needing a complete disk object store must explicitly fetch that object or use
 smart HTTP. See [tests/README.md](tests/README.md) for the interoperability check.
 
-A custom `Repository` implementation must expose a stable, complete reachable
-object set and a commit `HEAD` for its URL, or an empty unborn repository.
-Its refs are aliases of the resolved commit.
+A custom `Repository` implementation must expose a stable, complete object set
+reachable from HEAD and its refs. A resolved HEAD and branch refs must name
+commits; other refs may name commits, trees, blobs or tags. An unborn HEAD can
+coexist with other refs and their objects.
 Bodies can be borrowed slices or generated/read from storage by offset.
 
 `Repository::head_state` distinguishes `Head::Symbolic { target, id }`,
@@ -327,8 +331,9 @@ to a symbolic HEAD using `head_ref()` and `head()`. For an unborn HEAD, `head()`
 returns the all-zero sentinel; use `head_state().id()` to distinguish absence.
 `EmptyRepository::new("refs/heads/main")` validates the target and serves an
 empty ref list, the v0 `capabilities^{}` marker, and symbolic dumb HTTP `HEAD`.
-Unborn repositories contain no objects or advertised refs; upload-pack rejects
-every want, including the zero ID, before writing output. V0 does not negotiate
+This empty repository rejects every want, including the zero ID, before writing
+output. An unborn repository with other refs advertises those refs without HEAD
+or the empty-repository marker. V0 does not negotiate
 an unborn default branch: Git's smart empty clone may use its own initial branch,
 matching the reference server. Dumb `HEAD` preserves the configured target.
 
@@ -336,8 +341,19 @@ For a detached file-backed repository, use
 `FileRepository::with_detached_head(&refs)`; `refs` may be empty. HTTP `HEAD`
 returns the direct commit ID, and smart discovery omits the HEAD symref.
 `with_refs` switches back to a symbolic HEAD. Indexing and graph validation
-preserve all three HEAD states. Independent ref tips and annotated tags remain
-roadmap work.
+preserve all three HEAD states.
+
+`RefRepository::new(&provider, head, &references)` overlays caller-owned ref and
+HEAD metadata on any stable object provider. Each `Reference` carries a resolved
+ID, an optional raw `symbolic_target`, and an optional final non-tag `peeled` ID.
+Use `Reference::direct(name, id)` for ordinary branches or lightweight tags.
+Symbolic chains must resolve to an existing ref with the same ID. A symbolic HEAD
+can follow branch aliases to a lightweight commit tag. Ref names must
+be sorted, unique and free of file/directory conflicts. Peeled names reserve
+three extra packet bytes for `^{}`. `ValidatedRepository` checks annotated tags,
+including nested tags and tree/blob targets, against the supplied final peel.
+The default `Repository` ref methods preserve legacy HEAD aliases; wrappers must
+forward the new ID, symbolic-target and peeled metadata.
 
 For repeated requests, wrap a snapshot or custom repository in `IndexedRepository`:
 
@@ -377,7 +393,7 @@ let repository = ValidatedRepository::new(
 
 Both arrays need one slot per enumerated object. Empty repositories need no
 scratch. For nonempty bodies, read scratch needs at least one byte; parse scratch
-must fit each commit header line without its LF and
+must fit each commit/tag header line without its LF and
 twice each tree name without its NUL. Object bodies can exceed both buffers.
 The scratch buffers are reusable after construction; only the arrays and provider
 remain borrowed. `metadata` exposes each validated ID, kind and 64-bit size;
@@ -387,10 +403,10 @@ bytes, and delegates body reads to the provider, which must remain stable.
 Validation hashes every body and rejects mismatched IDs, duplicate object IDs,
 missing links, incorrect target kinds, malformed commit headers/tree records,
 noncanonical tree modes, invalid names, unsorted/duplicate tree names, and extra
-objects unreachable from HEAD. It follows parent commits and shared subtrees
+objects unreachable from every advertised root and HEAD. It follows parent
+commits, tags and shared subtrees
 without recursion. Gitlinks (`160000`) name external commits and are not followed.
-All advertised refs still alias the same commit, so annotated tag objects are
-unreachable and rejected. This checks the repository graph contract; identity
+This checks the repository graph contract; identity
 semantics, platform-specific filename aliases and special-file policies such as
 `.gitmodules` need separate validation to match every Git `fsck` check.
 
@@ -402,6 +418,41 @@ Hashing is linear in body bytes. Pending-object scans and directory/file duplica
 checks can take quadratic work; the latter reread earlier tree entries to avoid
 an unbounded name set. Validation does not use the provider's `find_index`, so a
 bad lookup implementation cannot hide missing or mismatched graph links.
+
+For independent refs, use `http::serve_with_selection` with the validated provider:
+
+```rust
+use git_zero::{ObjectId, http};
+
+let mut wants = [ObjectId([0; 20]); 8];
+let mut objects = [None; 64];
+let mut indices = [0; 64];
+let mut read = [0; 1024];
+let mut parse = [0; 512];
+let mut storage = http::SelectionStorage {
+    wants: &mut wants, objects: &mut objects, indices: &mut indices,
+    read: &mut read, parse: &mut parse, graph_read_limit: 1 << 20,
+};
+let response = http::serve_with_selection(&repository, request, &mut storage, &mut output)?;
+```
+
+Both selection arrays need one slot per provider object. Wants need one slot per
+distinct requested ID. Scratch follows validation's header/tree-name limits;
+`graph_read_limit` caps actual structural read bytes, including buffered reads and
+rereads. Selection uses no body-sized buffer or allocation. Only advertised HEAD,
+ref and peeled IDs are accepted; unknown or merely reachable IDs are rejected.
+Duplicate and overlapping wants produce each object once. Requests without `done`
+return NAK without traversal. Selection failures occur before response output,
+and the same storage can be reused on retry. Haves are parsed but do not prune
+objects; ACK, sideband and include-tag capabilities remain unadvertised.
+
+`ValidatedRepository::select_objects` also accepts any present root for host use;
+`pack::write_selected_with_scratch` emits the resulting unique object indices.
+The legacy `http::serve`, `serve_with_scratch`, `serve_with_pack` and HEAD-key
+`cache::write` support complete HEAD closures whose refs all alias HEAD.
+Independent roots require selection; legacy upload-pack/cache paths return
+`Unsupported` before invoking pack/cache backends. Requested-closure cache keys
+and prepacked reuse remain roadmap work.
 
 For bodies that cannot fit in a borrowed slice, implement `Repository::object_info`,
 `read_object`, and `object_id`. `object_info` reports the kind and exact 64-bit body

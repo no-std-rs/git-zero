@@ -36,7 +36,38 @@ pub fn write_with_scratch(
     scratch: &mut [u8],
     output: &mut impl Write,
 ) -> Result<ObjectId> {
-    let count = u32::try_from(repository.object_count()).map_err(|_| Error::Unsupported)?;
+    write_order(repository, 0..repository.object_count(), scratch, output)
+}
+
+/// Write exactly the chosen object indices, in caller-specified order. Indices
+/// must be valid and unique; violations fail before any output. Use a validated
+/// repository's `select_objects` result for an exact reachable closure. Encoder
+/// and read budgets match `write_with_scratch`; no pack-sized buffer is needed.
+pub fn write_selected_with_scratch(
+    repository: &impl Repository,
+    indices: &[usize],
+    scratch: &mut [u8],
+    output: &mut impl Write,
+) -> Result<ObjectId> {
+    let ordered = indices.windows(2).all(|pair| pair[0] < pair[1]);
+    for (position, &index) in indices.iter().enumerate() {
+        if index >= repository.object_count() {
+            return Err(Error::ObjectNotFound);
+        }
+        if !ordered && indices[..position].contains(&index) {
+            return Err(Error::InvalidObject);
+        }
+    }
+    write_order(repository, indices.iter().copied(), scratch, output)
+}
+
+fn write_order(
+    repository: &impl Repository,
+    order: impl ExactSizeIterator<Item = usize>,
+    scratch: &mut [u8],
+    output: &mut impl Write,
+) -> Result<ObjectId> {
+    let count = u32::try_from(order.len()).map_err(|_| Error::Unsupported)?;
     let mut output = HashWriter {
         output,
         hash: Sha1::new(),
@@ -44,7 +75,7 @@ pub fn write_with_scratch(
     output.write_all(b"PACK")?;
     output.write_all(&2_u32.to_be_bytes())?;
     output.write_all(&count.to_be_bytes())?;
-    for index in 0..count as usize {
+    for index in order {
         if let Some(object) = repository.object(index) {
             write_entry_header(object.info(), &mut output)?;
             zlib::write_parts(&mut output, &[object.data])?;

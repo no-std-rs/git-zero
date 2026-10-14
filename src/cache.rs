@@ -1,5 +1,5 @@
 use crate::{
-    ObjectId, Repository, Result,
+    Error, ObjectId, Repository, Result,
     io::{SliceWriter, Write},
     pack,
 };
@@ -31,12 +31,19 @@ impl PackCache for NoCache {
 
 /// Hits stream directly. Misses generate into caller scratch before insertion.
 /// Cache failures propagate; use `pack::write` when caching is unnecessary.
+/// Independent ref roots return `Unsupported` before accessing the backend:
+/// a HEAD-only key cannot identify their union or a selected closure.
 pub fn write(
     repository: &impl Repository,
     cache: &mut impl PackCache,
     scratch: &mut [u8],
     output: &mut impl Write,
 ) -> Result<()> {
+    // A multi-ref union may change while HEAD stays fixed. These legacy keys
+    // cannot identify it; reject before consulting or modifying the cache.
+    if !crate::repository::uses_only_head(repository) {
+        return Err(Error::Unsupported);
+    }
     let key = Key {
         head: repository.head(),
         encoder_version: 1,

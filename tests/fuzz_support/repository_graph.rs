@@ -1,11 +1,15 @@
 use super::MAX_INPUT;
-use git_zero::{Object, ObjectId, ObjectKind, Repository, Result, ValidatedRepository};
+use git_zero::{
+    Head, Object, ObjectId, ObjectKind, RefRepository, Reference, Repository, Result,
+    ValidatedRepository,
+};
 #[path = "../common/short_reads.rs"]
 mod short_reads;
 use short_reads::Streamed;
 
 struct Graph<'a> {
     objects: [Object<'a>; 3],
+    count: usize,
 }
 
 impl Repository for Graph<'_> {
@@ -13,7 +17,7 @@ impl Repository for Graph<'_> {
         self.objects[0].id()
     }
     fn object_count(&self) -> usize {
-        self.objects.len()
+        self.count
     }
     fn object(&self, index: usize) -> Option<Object<'_>> {
         self.objects.get(index).copied()
@@ -22,12 +26,13 @@ impl Repository for Graph<'_> {
 
 /// Compare borrowed and short-read validation of one mutated object record.
 ///
-/// Byte zero chooses a tree (even) or commit (odd); byte one sets a read limit of
-/// 1..=64 bytes. Remaining bytes replace that record in a three-object snapshot
-/// containing a fixed blob. Tree mutations rebuild their enclosing commit with
-/// the new tree ID so failures reach structural parsing. Both providers use three metadata/index
-/// slots, 64-byte read scratch, and 128-byte parse scratch. Their results must
-/// match, including errors; successful graphs preserve HEAD and all objects.
+/// Bit one of byte zero selects a tag/blob graph; otherwise bit zero chooses
+/// a tree or commit mutation in a three-object snapshot. Byte one sets a read
+/// limit of 1..=64 bytes. Remaining bytes replace that record. Tree mutations
+/// rebuild their enclosing commit so failures reach structural parsing. Both
+/// providers use three metadata/index slots, 64-byte read scratch, and 128-byte
+/// parse scratch. Results must match, including errors; successful graphs also
+/// select their complete closure using fresh caller-owned traversal storage.
 pub fn graph(data: &[u8]) {
     if !(2..=MAX_INPUT).contains(&data.len()) {
         return;
@@ -36,6 +41,10 @@ pub fn graph(data: &[u8]) {
         kind: ObjectKind::Blob,
         data: b"seed\n",
     };
+    if data[0] & 2 != 0 {
+        tagged(data, blob);
+        return;
+    }
     let mutate_tree = data[0] & 1 == 0;
     // The independent tree seed supplies the canonical tree for commit mutations.
     let tree_storage = &include_bytes!("../../fuzz/corpus/graph/tree")[2..];
@@ -68,12 +77,37 @@ pub fn graph(data: &[u8]) {
         tree,
         blob,
     ];
-    let repository = Graph { objects };
+    let repository = Graph { objects, count: 3 };
     let streamed = Streamed {
         source: &repository,
         limit: usize::from(data[1] % 64) + 1,
     };
     assert_eq!(validate(&repository), validate(&streamed));
+}
+
+fn tagged(data: &[u8], blob: Object<'_>) {
+    let tag = Object {
+        kind: ObjectKind::Tag,
+        data: &data[2..],
+    };
+    let source = Graph {
+        objects: [tag, blob, blob],
+        count: 2,
+    };
+    let refs = [Reference {
+        name: "refs/tags/fuzz",
+        id: tag.id(),
+        symbolic_target: None,
+        peeled: Some(blob.id()),
+    }];
+    let borrowed = RefRepository::new(&source, Head::Unborn("refs/heads/main"), &refs).unwrap();
+    let streamed_source = Streamed {
+        source: &source,
+        limit: usize::from(data[1] % 64) + 1,
+    };
+    let streamed =
+        RefRepository::new(&streamed_source, Head::Unborn("refs/heads/main"), &refs).unwrap();
+    assert_eq!(validate(&borrowed), validate(&streamed));
 }
 
 fn validate(repository: &dyn Repository) -> Result<()> {
@@ -87,7 +121,24 @@ fn validate(repository: &dyn Repository) -> Result<()> {
     .map(|validated| {
         assert_eq!(
             (validated.head(), validated.object_count()),
-            (repository.head(), 3)
+            (repository.head(), repository.object_count())
         );
+        let root = validated
+            .head_state()
+            .id()
+            .or_else(|| validated.reference_id(0))
+            .unwrap();
+        let selected = validated
+            .select_objects(
+                &[root],
+                &mut [None; 3],
+                &mut [0; 3],
+                &mut [0; 64],
+                &mut [0; 128],
+                8192,
+            )
+            .unwrap()
+            .len();
+        assert_eq!(selected, repository.object_count());
     })
 }

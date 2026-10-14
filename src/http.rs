@@ -1,13 +1,14 @@
 //! Routing for paths relative to the repository URL; HTTP framing belongs to the host.
 use crate::{
-    Error, Head, ObjectId, Repository, Result,
+    Error, Head, ObjectId, Repository, Result, ValidatedRepository, ValidationMetadata,
     io::Write,
     pack,
     pktline::{self, Packet},
     reader::DEFAULT_READ_BUFFER_SIZE,
+    repository::{resolve_reference, uses_only_head},
 };
 
-/// Default HEAD body. The server writes `Repository::head_ref` dynamically.
+/// Default HEAD body. The server writes `Repository::head_state` dynamically.
 pub const HEAD: &[u8] = b"ref: refs/heads/main\n";
 
 #[derive(Clone, Copy)]
@@ -23,6 +24,74 @@ pub struct Request<'a> {
 pub struct Response {
     pub status: u16,
     pub content_type: &'static str,
+}
+
+/// Independent per-request storage for bounded reachable-object selection.
+/// `wants` bounds distinct wanted IDs. `objects` and `indices` each need the
+/// repository's complete object count; their extra slots remain untouched.
+/// Read/parse scratch budgets match `ValidatedRepository::select_objects`.
+pub struct SelectionStorage<'a> {
+    pub wants: &'a mut [ObjectId],
+    pub objects: &'a mut [Option<ValidationMetadata>],
+    pub indices: &'a mut [usize],
+    pub read: &'a mut [u8],
+    pub parse: &'a mut [u8],
+    /// Maximum structural bytes read while traversing a request's graph.
+    pub graph_read_limit: u64,
+}
+
+/// Serve independent refs, tags and multiple wanted IDs with caller-owned
+/// selection storage. Accept only advertised ref/peeled/HEAD IDs, rejecting
+/// arbitrary or merely reachable wants. Select the exact union before writing
+/// the NAK or pack. No-done requests receive only NAK. Haves are parsed but do
+/// not remove objects: ACK/delta negotiation remains unadvertised. Errors
+/// invalidate all output; selection failures produce no output at all.
+pub fn serve_with_selection<R: Repository + ?Sized>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    request: Request<'_>,
+    storage: &mut SelectionStorage<'_>,
+    output: &mut impl Write,
+) -> Result<Response> {
+    if request.method != "POST" || request.path.trim_start_matches('/') != "git-upload-pack" {
+        return serve_with_scratch(repository, request, storage.read, output);
+    }
+    let mut count = 0;
+    let done = upload_request(request.body, |id| {
+        if !advertised(repository, id) {
+            return Err(Error::InvalidRequest);
+        }
+        if !storage.wants[..count].contains(&id) {
+            *storage.wants.get_mut(count).ok_or(Error::BufferTooSmall)? = id;
+            count += 1;
+        }
+        Ok(())
+    })?;
+    if done {
+        let indices = repository.select_objects(
+            &storage.wants[..count],
+            storage.objects,
+            storage.indices,
+            storage.read,
+            storage.parse,
+            storage.graph_read_limit,
+        )?;
+        pktline::write(output, b"NAK\n")?;
+        pack::write_selected_with_scratch(repository, indices, storage.read, output)?;
+    } else {
+        pktline::write(output, b"NAK\n")?;
+    }
+    Ok(Response {
+        status: 200,
+        content_type: "application/x-git-upload-pack-result",
+    })
+}
+
+fn advertised(repository: &impl Repository, id: ObjectId) -> bool {
+    repository.head_state().id() == Some(id)
+        || (0..repository.reference_count()).any(|index| {
+            repository.reference_id(index) == Some(id)
+                || repository.reference_peeled(index) == Some(id)
+        })
 }
 
 /// Always send `Cache-Control: no-store` for discovery and upload-pack responses.
@@ -59,6 +128,8 @@ pub fn serve_with_scratch(
 /// a valid upload-pack request ending in `done`, after writing the NAK packet.
 /// The writer must emit a complete checksummed pack containing exactly this
 /// repository's objects, and respect the repository's stability contract.
+/// All refs must alias HEAD; independent roots return `Unsupported` before
+/// output or invoking the writer. Use `serve_with_selection` for those roots.
 /// Other routes and no-done requests use the ordinary core behavior. On any
 /// error discard the entire partial response, including the NAK.
 pub fn serve_with_pack<W: Write>(
@@ -88,32 +159,31 @@ pub fn serve_with_pack<W: Write>(
                 response.content_type = "application/x-git-upload-pack-advertisement";
                 pktline::write(output, b"# service=git-upload-pack\n")?;
                 output.write_all(b"0000")?;
-                advertise_head(repository.head_state(), output)?;
-                let head = repository.head().to_hex();
-                for index in 0..repository.reference_count() {
-                    let name = repository
-                        .reference_name(index)
-                        .ok_or(Error::InvalidReference)?;
-                    pktline::write_parts(output, &[&head, b" ", name.as_bytes(), b"\n"])?;
+                let head = repository.head_state();
+                if head.id().is_some() || repository.reference_count() == 0 {
+                    advertise_head(repository, output)?;
                 }
+                advertise_references(repository, true, output)?;
                 output.write_all(b"0000")?;
             }
             None => {
-                for index in 0..repository.reference_count() {
-                    let name = repository
-                        .reference_name(index)
-                        .ok_or(Error::InvalidReference)?;
-                    output.write_all(&repository.head().to_hex())?;
-                    output.write_all(b"\t")?;
-                    output.write_all(name.as_bytes())?;
-                    output.write_all(b"\n")?;
-                }
+                advertise_references(repository, false, output)?;
             }
             _ => response.status = 403,
         },
         ("POST", "git-upload-pack") => {
             response.content_type = "application/x-git-upload-pack-result";
-            if upload_request(repository.head_state().id(), request.body)? {
+            if !uses_only_head(repository) {
+                return Err(Error::Unsupported);
+            }
+            let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
+            if upload_request(request.body, |id| {
+                if id == head {
+                    Ok(())
+                } else {
+                    Err(Error::InvalidRequest)
+                }
+            })? {
                 pktline::write(output, b"NAK\n")?;
                 write_pack(scratch, output)?;
             } else {
@@ -122,12 +192,22 @@ pub fn serve_with_pack<W: Write>(
         }
         ("GET", "objects/info/packs") => {}
         ("GET", _) if path.starts_with("refs/") => {
-            if (0..repository.reference_count()).any(|index| {
+            if let Some(index) = (0..repository.reference_count()).find(|&index| {
                 repository
                     .reference_name(index)
                     .is_some_and(|name| ref_path_matches(path, name))
             }) {
-                output.write_all(&repository.head().to_hex())?;
+                if let Some(target) = repository.reference_symbolic_target(index) {
+                    output.write_all(b"ref: ")?;
+                    output.write_all(target.as_bytes())?;
+                } else {
+                    output.write_all(
+                        &repository
+                            .reference_id(index)
+                            .ok_or(Error::InvalidObject)?
+                            .to_hex(),
+                    )?;
+                }
                 output.write_all(b"\n")?;
             } else {
                 response.status = 404;
@@ -187,7 +267,8 @@ fn service(query: Option<&str>) -> Option<&str> {
         .find_map(|field| field.strip_prefix("service="))
 }
 
-fn advertise_head(head: Head<'_>, output: &mut impl Write) -> Result<()> {
+fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {
+    let head = repository.head_state();
     let id = head.id().unwrap_or(ObjectId([0; 20])).to_hex();
     let name = if head.id().is_some() {
         b" HEAD\0".as_slice()
@@ -195,6 +276,11 @@ fn advertise_head(head: Head<'_>, output: &mut impl Write) -> Result<()> {
         b" capabilities^{}\0"
     };
     if let Some(target) = head.target() {
+        let target = if matches!(head, Head::Symbolic { .. }) {
+            resolve_reference(repository, target)?.0
+        } else {
+            target
+        };
         pktline::write_parts(
             output,
             &[&id, name, b"symref=HEAD:", target.as_bytes(), b"\n"],
@@ -204,8 +290,56 @@ fn advertise_head(head: Head<'_>, output: &mut impl Write) -> Result<()> {
     }
 }
 
-fn upload_request(head: Option<ObjectId>, mut bytes: &[u8]) -> Result<bool> {
-    let head = head.ok_or(Error::InvalidRequest)?;
+fn advertise_references(
+    repository: &impl Repository,
+    smart: bool,
+    output: &mut impl Write,
+) -> Result<()> {
+    for index in 0..repository.reference_count() {
+        let name = repository
+            .reference_name(index)
+            .ok_or(Error::InvalidReference)?;
+        let id = repository.reference_id(index).ok_or(Error::InvalidObject)?;
+        let capabilities = smart && index == 0 && repository.head_state().id().is_none();
+        reference_line(id, name, b"", smart, capabilities, output)?;
+        if let Some(peeled) = repository.reference_peeled(index) {
+            reference_line(peeled, name, b"^{}", smart, false, output)?;
+        }
+    }
+    Ok(())
+}
+
+fn reference_line(
+    id: ObjectId,
+    name: &str,
+    suffix: &[u8],
+    smart: bool,
+    capabilities: bool,
+    output: &mut impl Write,
+) -> Result<()> {
+    let id = id.to_hex();
+    if smart {
+        pktline::write_parts(
+            output,
+            &[
+                &id,
+                b" ",
+                name.as_bytes(),
+                suffix,
+                if capabilities { b"\0" } else { b"" },
+                b"\n",
+            ],
+        )
+    } else {
+        output.write_all(&id)?;
+        output.write_all(b"\t")?;
+        output.write_all(name.as_bytes())?;
+        output.write_all(suffix)?;
+        output.write_all(b"\n")
+    }
+}
+
+fn upload_request(mut bytes: &[u8], mut want: impl FnMut(ObjectId) -> Result<()>) -> Result<bool> {
     let mut wanted = false;
     let mut done = false;
     while let Some(packet) = pktline::read(&mut bytes)? {
@@ -216,10 +350,11 @@ fn upload_request(head: Option<ObjectId>, mut bytes: &[u8]) -> Result<bool> {
         if done {
             return Err(Error::InvalidRequest);
         }
-        if let Some(want) = line.strip_prefix(b"want ") {
-            if want.len() != 40 || ObjectId::from_hex(want)? != head {
+        if let Some(id) = line.strip_prefix(b"want ") {
+            if id.len() != 40 {
                 return Err(Error::InvalidRequest);
             }
+            want(ObjectId::from_hex(id)?)?;
             wanted = true;
         } else if let Some(have) = line.strip_prefix(b"have ") {
             ObjectId::from_hex(have)?;
