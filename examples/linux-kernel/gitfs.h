@@ -92,12 +92,14 @@ struct gitfs_inode {
 };
 
 void __noreturn gitfs_codec_panic(void);
+size_t gitfs_loose_wire_size(size_t body_limit);
 
 int gitfs_decode_loose(const u8 *wire, size_t length, const u8 *id,
 		       u8 *output, size_t capacity, u8 *window,
 		       struct gitfs_decoded *result);
 int gitfs_commit_tree(const u8 *data, size_t length, u8 *id);
 int gitfs_commit_message(const u8 *data, size_t length, struct gitfs_decoded *result);
+int gitfs_tag_target(const u8 *data, size_t length, u8 *id, u32 *kind);
 int gitfs_tree_next(const u8 *data, size_t length, size_t *offset,
 		   struct gitfs_tree_entry *entry);
 
@@ -134,6 +136,9 @@ int gitfs_tls_open(void *state, u8 *read, u8 *write, struct gitfs_socket_io io,
 ssize_t gitfs_tls_read(void *state, u8 *output, size_t length);
 ssize_t gitfs_tls_write(void *state, const u8 *input, size_t length);
 int gitfs_smart_head(const u8 *data, size_t length, u8 *head);
+int gitfs_smart_validate_want(const u8 *data, size_t length, const u8 *id);
+int gitfs_smart_request(const u8 *ids, size_t count, u32 capabilities,
+			u8 *output, size_t capacity, size_t *length);
 int gitfs_smart_ref_next(const u8 *data, size_t length, size_t *offset,
 			struct gitfs_ref_entry *entry);
 int gitfs_smart_pack(const u8 *data, size_t length, struct gitfs_decoded *result);

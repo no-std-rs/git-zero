@@ -1,7 +1,11 @@
 //! Small C ABI for the Linux example; Linux owns every buffer and all I/O.
 #![cfg_attr(feature = "kernel", no_std)]
 
-use git_zero::{Error, ObjectId, client, zlib::InflateLimits};
+use git_zero::{
+    Error, ObjectId, client,
+    object::{Commit, Tag, Tree},
+    zlib::InflateLimits,
+};
 
 mod smart;
 mod tls;
@@ -9,6 +13,16 @@ mod tls;
 const EINVAL: i32 = -22;
 const EFBIG: i32 = -27;
 const EBADMSG: i32 = -74;
+
+fn errno(error: Error) -> i32 {
+    match error {
+        Error::BufferTooSmall | Error::LimitExceeded => EFBIG,
+        Error::ObjectNotFound => -2,
+        Error::InvalidRequest => EINVAL,
+        Error::Unsupported => -95,
+        _ => EBADMSG,
+    }
+}
 
 #[repr(C)]
 pub struct Decoded {
@@ -23,6 +37,12 @@ pub struct TreeEntry {
     pub name_length: usize,
     pub mode: u32,
     pub id: [u8; 20],
+}
+
+/// Select a default-zlib wire budget including the canonical object header.
+#[unsafe(no_mangle)]
+pub extern "C" fn gitfs_loose_wire_size(body_limit: usize) -> usize {
+    client::loose_wire_capacity(body_limit).unwrap_or(0)
 }
 
 /// Decode and hash-check one complete loose object before exposing its body.
@@ -84,22 +104,14 @@ pub unsafe extern "C" fn gitfs_decode_loose(
 pub unsafe extern "C" fn gitfs_commit_tree(data: *const u8, length: usize, id: *mut u8) -> i32 {
     // SAFETY: The module supplies a verified commit and a valid output array.
     let data = unsafe { core::slice::from_raw_parts(data, length) };
-    match commit_tree(data) {
+    match Commit::root_tree(data) {
         Ok(tree) => {
             // SAFETY: `id` points to 20 writable bytes and is disjoint from data.
             unsafe { core::ptr::copy_nonoverlapping(tree.0.as_ptr(), id, 20) };
             0
         }
-        Err(()) => EBADMSG,
+        Err(_) => EBADMSG,
     }
-}
-
-fn commit_tree(data: &[u8]) -> Result<ObjectId, ()> {
-    let line = data.get(..46).ok_or(())?;
-    if !line.starts_with(b"tree ") || line[45] != b'\n' {
-        return Err(());
-    }
-    ObjectId::from_hex(&line[5..45]).map_err(|_| ())
 }
 
 /// Locate the exact commit message, preserving arbitrary bytes and newlines.
@@ -113,79 +125,24 @@ pub unsafe extern "C" fn gitfs_commit_message(
 ) -> i32 {
     // SAFETY: C supplies a live object and exclusive output.
     let data = unsafe { core::slice::from_raw_parts(data, length) };
-    if commit_tree(data).is_err() {
-        return EBADMSG;
-    }
-    let Some(separator) = data.windows(2).position(|bytes| bytes == b"\n\n") else {
+    let Ok(commit) = Commit::parse(data) else {
         return EBADMSG;
     };
     // SAFETY: The caller owns the output; offset is inside the commit body.
     unsafe {
         *result = Decoded {
-            offset: separator + 2,
-            length: length - separator - 2,
+            offset: commit.message_offset(),
+            length: commit.message().len(),
             kind: git_zero::ObjectKind::Commit as u32,
         };
     }
     0
 }
 
-struct Entry<'a> {
-    name: &'a [u8],
-    mode: u32,
-    id: &'a [u8; 20],
-}
-
-fn tree_entry<'a>(data: &'a [u8], offset: &mut usize) -> Result<Option<Entry<'a>>, ()> {
-    let tail = data.get(*offset..).ok_or(())?;
-    if tail.is_empty() {
-        return Ok(None);
-    }
-    let space = tail.iter().position(|&b| b == b' ').ok_or(())?;
-    let mode = match &tail[..space] {
-        b"40000" => 0o040000,
-        b"100644" => 0o100644,
-        b"100755" => 0o100755,
-        b"120000" => 0o120000,
-        b"160000" => 0o160000,
-        _ => return Err(()),
-    };
-    let rest = &tail[space + 1..];
-    let nul = rest.iter().position(|&b| b == 0).ok_or(())?;
-    let name = &rest[..nul];
-    if name.is_empty() || name.len() > 255 || name == b"." || name == b".." || name.contains(&b'/')
-    {
-        return Err(());
-    }
-    let id = rest
-        .get(nul + 1..nul + 21)
-        .ok_or(())?
-        .try_into()
-        .map_err(|_| ())?;
-    *offset += space + 1 + nul + 21;
-    Ok(Some(Entry { name, mode, id }))
-}
-
-fn validate_tree(data: &[u8]) -> Result<(), ()> {
-    let mut offset = 0;
-    let mut previous: Option<Entry<'_>> = None;
-    while let Some(entry) = tree_entry(data, &mut offset)? {
-        if let Some(previous) = &previous {
-            let left = previous
-                .name
-                .iter()
-                .copied()
-                .chain((previous.mode == 0o040000).then_some(b'/'));
-            let right = entry
-                .name
-                .iter()
-                .copied()
-                .chain((entry.mode == 0o040000).then_some(b'/'));
-            if left.cmp(right) != core::cmp::Ordering::Less || previous.name == entry.name {
-                return Err(());
-            }
-        }
-        previous = Some(entry);
+fn validate_tree(data: &[u8]) -> Result<(), Error> {
+    let tree = Tree::parse(data)?;
+    if tree.entries().any(|entry| entry.name.len() > 255) {
+        return Err(Error::InvalidFileName);
     }
     Ok(())
 }
@@ -205,22 +162,48 @@ pub unsafe extern "C" fn gitfs_tree_next(
 ) -> i32 {
     // SAFETY: These pointers refer to the module's live cache and local outputs.
     let (data, offset) = unsafe { (core::slice::from_raw_parts(data, length), &mut *offset) };
-    match tree_entry(data, offset) {
+    match git_zero::object::TreeEntry::read(data, offset) {
         Ok(Some(entry)) => {
+            if entry.name.len() > 255 {
+                return EINVAL;
+            }
             // SAFETY: `result` is a valid exclusive struct output pointer.
             unsafe {
                 *result = TreeEntry {
                     name: entry.name.as_ptr(),
                     name_length: entry.name.len(),
                     mode: entry.mode,
-                    id: *entry.id,
+                    id: entry.id.0,
                 };
             }
             1
         }
         Ok(None) => 0,
-        Err(()) => EINVAL,
+        Err(_) => EINVAL,
     }
+}
+
+/// Read an annotated tag target using the shared object parser.
+/// # Safety
+/// Data is valid for length bytes; id and kind are disjoint writable outputs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gitfs_tag_target(
+    data: *const u8,
+    length: usize,
+    id: *mut u8,
+    kind: *mut u32,
+) -> i32 {
+    // SAFETY: C owns a live object and both exclusive output ranges.
+    let data = unsafe { core::slice::from_raw_parts(data, length) };
+    let Ok(tag) = Tag::parse(data) else {
+        return EBADMSG;
+    };
+    // SAFETY: Outputs have the documented size and alignment.
+    unsafe {
+        core::ptr::copy_nonoverlapping(tag.target.0.as_ptr(), id, 20);
+        *kind = tag.target_kind as u32;
+    }
+    0
 }
 
 #[cfg(feature = "kernel")]
@@ -275,71 +258,6 @@ mod tests {
             unsafe { gitfs_commit_message(malformed.as_ptr(), malformed.len(), &mut result) },
             EBADMSG
         );
-    }
-
-    fn encoded_tree(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        for (mode, name) in entries {
-            bytes.extend_from_slice(mode);
-            bytes.push(b' ');
-            bytes.extend_from_slice(name);
-            bytes.push(0);
-            bytes.extend_from_slice(&[7; 20]);
-        }
-        bytes
-    }
-
-    #[test]
-    fn git_order_modes_and_non_utf8_names() {
-        let tree = encoded_tree(&[
-            (b"100644", b"a.txt"),
-            (b"40000", b"a"),
-            (b"100755", b"bin"),
-            (b"120000", b"link"),
-            (b"160000", b"submodule"),
-            (b"100644", b"\xff"),
-        ]);
-        validate_tree(&tree).unwrap();
-        let mut offset = 0;
-        let mut count = 0;
-        while tree_entry(&tree, &mut offset).unwrap().is_some() {
-            count += 1;
-        }
-        assert_eq!(count, 6);
-        assert_eq!(offset, tree.len());
-    }
-
-    #[test]
-    fn malformed_trees_never_expose_entries() {
-        for entries in [
-            vec![(b"100644".as_slice(), b"..".as_slice())],
-            vec![(b"100644".as_slice(), b"a/b".as_slice())],
-            vec![(b"100644".as_slice(), b"".as_slice())],
-            vec![(b"0100644".as_slice(), b"a".as_slice())],
-            vec![(b"100644".as_slice(), b"z".as_slice()), (b"40000", b"a")],
-            vec![(b"100644".as_slice(), b"a".as_slice()), (b"100755", b"a")],
-        ] {
-            assert!(validate_tree(&encoded_tree(&entries)).is_err());
-        }
-        let valid = encoded_tree(&[(b"100644", b"a")]);
-        for end in 1..valid.len() {
-            assert!(validate_tree(&valid[..end]).is_err());
-        }
-        assert!(tree_entry(&valid, &mut (valid.len() + 1)).is_err());
-    }
-
-    #[test]
-    fn commit_requires_exact_root_line() {
-        let id = ObjectId([9; 20]);
-        let commit = format!("tree {id}\nauthor test\n\nmessage\n");
-        assert_eq!(commit_tree(commit.as_bytes()), Ok(id));
-        for bad in [
-            b"tree 123\n".as_slice(),
-            b"tree zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n",
-            b"blob x",
-        ] {
-            assert!(commit_tree(bad).is_err());
-        }
     }
 
     #[test]

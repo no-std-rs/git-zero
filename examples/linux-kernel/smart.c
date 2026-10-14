@@ -7,15 +7,14 @@
 int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 {
 	u8 *wire = NULL, *scratch = NULL, *window = NULL;
+	u8 *request = NULL, *wants = NULL;
 	struct gitfs_decoded pack;
 	struct gitfs_ref_entry entry;
-	struct gitfs_ref *ref, *previous;
-	char *request = NULL, hex[41], want[96];
-	size_t length, count, index_bytes, arena_length, request_length, want_length;
+	struct gitfs_ref *ref;
+	size_t length, count, index_bytes, arena_length, request_length, want_count = 1;
 	size_t offset = 0, request_capacity;
 	u8 head[20];
-	bool duplicate;
-	int shallow, error;
+	int capabilities, error;
 
 	wire = kvmalloc(mount->pack_limit, GFP_KERNEL);
 	scratch = kvmalloc(mount->object_limit, GFP_KERNEL);
@@ -25,16 +24,21 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 		goto out;
 	}
 	error = gitfs_http_get(mount, "info/refs?service=git-upload-pack",
-			       wire, min_t(size_t, mount->pack_limit, 1 << 20), &length);
+			       wire, mount->pack_limit, &length);
 	if (error)
 		goto out;
-	shallow = gitfs_smart_head(wire, length, head);
-	if (shallow < 0) {
-		error = shallow;
+	capabilities = gitfs_smart_head(wire, length, head);
+	if (capabilities < 0) {
+		error = capabilities;
 		goto out;
 	}
 	if (!mount->explicit_commit)
 		memcpy(mount->commit, head, 20);
+	else {
+		error = gitfs_smart_validate_want(wire, length, mount->commit);
+		if (error)
+			goto out;
+	}
 	if (mount->ref_view) {
 		while ((error = gitfs_smart_ref_next(wire, length, &offset, &entry)) > 0) {
 			error = gitfs_refs_add(mount, &entry);
@@ -46,36 +50,20 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 	}
 	request_capacity = mount->ref_count * 50 + 192;
 	request = kvmalloc(request_capacity, GFP_KERNEL);
-	if (!request) {
+	wants = kvmalloc((mount->ref_count + 1) * 20, GFP_KERNEL);
+	if (!request || !wants) {
 		error = -ENOMEM;
 		goto out;
 	}
-	bin2hex(hex, mount->commit, 20);
-	hex[40] = 0;
-	want_length = scnprintf(want, sizeof(want), "want %s ofs-delta no-progress%s\n",
-				 hex, shallow ? " shallow" : "");
-	request_length = scnprintf(request, request_capacity, "%04zx%s", want_length + 4, want);
+	memcpy(wants, mount->commit, 20);
 	list_for_each_entry(ref, &mount->refs, allocation) {
-		if (!ref->leaf || !memcmp(ref->id, mount->commit, 20))
+		if (!ref->leaf)
 			continue;
-		duplicate = false;
-		list_for_each_entry(previous, &mount->refs, allocation) {
-			if (previous == ref)
-				break;
-			if (previous->leaf && !memcmp(previous->id, ref->id, 20)) {
-				duplicate = true;
-				break;
-			}
-		}
-		if (duplicate)
-			continue;
-		bin2hex(hex, ref->id, 20);
-		request_length += scnprintf(request + request_length, request_capacity - request_length,
-					    "0032want %s\n", hex);
+		memcpy(wants + want_count++ * 20, ref->id, 20);
 	}
-	if (shallow)
-		request_length += scnprintf(request + request_length, request_capacity - request_length, "000ddeepen 1\n");
-	request_length += scnprintf(request + request_length, request_capacity - request_length, "00000009done\n");
+	error = gitfs_smart_request(wants, want_count, capabilities, request, request_capacity, &request_length);
+	if (error)
+		goto out;
 	error = gitfs_http_post(mount, "git-upload-pack", request, request_length,
 				wire, mount->pack_limit, &length);
 	if (error)
@@ -121,5 +109,6 @@ out:
 	kvfree(scratch);
 	kvfree(window);
 	kvfree(request);
+	kvfree(wants);
 	return error;
 }

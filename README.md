@@ -41,21 +41,27 @@ for checks and repository connection requirements.
 - Bounded multiple-want selection and packing of just the requested closures,
   using caller-owned traversal arrays, scratch and a graph-read byte limit.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
-  and checksum-validates smart packs, and fetches dumb loose objects.
+  and checksum-validates smart packs, fetches several tips with optional shallow
+  negotiation, and fetches dumb loose objects.
 - Incremental zlib inflation with caller-owned history/output buffers, stored/
   fixed/dynamic DEFLATE support, Adler-32 validation and output/expansion limits.
 - Loose-object envelope validation before body exposure, plus a SHA-1 pack entry
   reader with wire CRCs, canonical object IDs and bounded offset/reference deltas.
+- Complete pack materialization into caller-owned bodies and a sorted ID index,
+  plus borrowed commit messages, tree entries and annotated-tag targets.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
 - A loopback IPv4 server/client adapter and a Cloudflare Workers Wasm demo.
 - Native file-backed raw objects and verified prepacked responses, with positional
   reads and caller-owned scratch, using `rustix` without `std` or `alloc`.
 - Parallel interoperability tests mixing real Git and git-zero clients/servers.
 
-The client returns wire objects: raw packs for smart HTTP and zlib objects for
-dumb HTTP. It does not yet index complete fetched packs, traverse a dumb
-repository, or create a checkout. Push, shallow/filter requests, protocol v2,
-SHA-256 repositories, and the standalone `git://` transport remain future work.
+The client downloads wire objects: raw packs for smart HTTP and zlib objects for
+dumb HTTP. Hosts can decode them and materialize complete packs with shared core
+APIs; the kernel example uses these to expose cached snapshots and refs. A dumb
+repository walker and a native checkout writer remain work. Push, filter
+requests, protocol v2, SHA-256 repositories, and standalone `git://` transport
+remain future work. Shallow fetch is supported by the client; this library's
+server still serves complete selected packs.
 
 ## Incremental zlib inflation
 
@@ -124,9 +130,31 @@ a canonical body and ID. `verify_id` compares it with a trusted expected ID.
 The reader needs the complete compressed pack plus staging for one inflated
 body/instruction stream and one 32 KiB history window. Delta application also
 needs its canonical base and caller-bounded result storage. No recursion or
-allocation occurs. Forward-base lookup, caller-owned indexes, object sinks and
-complete fetch orchestration are the next storage layer; the native `fetch`
-command retains its existing wire-output behavior.
+allocation occurs. The native `fetch` command retains its wire-output behavior.
+
+`pack::materialize(pack, index, arena, scratch, window, limits)` resolves a
+complete non-thin pack, including forward reference deltas, into a
+`MaterializedPack`. The host supplies metadata slots and a byte arena; neither
+the compressed pack nor scratch is retained. Lookup uses the sorted object ID
+index. Inflation, delta depth/instructions, pass count and decoded bytes per
+pass are bounded by `MaterializeLimits`. Index sorting uses an iterative heap
+sort with constant stack space. Failed imports invalidate partial storage.
+This checks pack/object/tree structure; graph closure is a separate operation.
+
+`object::Commit::parse` exposes the root tree and exact message bytes.
+`object::Tree::parse` checks modes, byte-string names, ordering and duplicates,
+then exposes borrowed entries. `object::Tag::parse` extracts an annotated tag's
+target and declared kind. Host filesystem limits stay in the adapters; use
+`ValidatedRepository` for stronger graph and reference validation.
+
+`client::SmartAdvertisement::parse` and `read_smart_reference` handle a downloaded
+protocol-v0 advertisement without I/O. Its `fetch_options` selects advertised
+capabilities and `validate_want` checks permission to request an explicit ID.
+`write_fetch_request` deduplicates wanted IDs and encodes optional shallow/offset-delta negotiation.
+`fetch_pack_with_options` combines this with the host transport, and
+`read_pack_response` handles shallow negotiation before authenticating a raw
+pack. All these APIs use caller-owned storage without `std`, `alloc` or unsafe
+code.
 
 ## Workspace
 

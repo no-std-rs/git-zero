@@ -36,7 +36,7 @@ struct gitfs_object *gitfs_object_get(struct gitfs_mount *mount, const u8 *id)
 	struct gitfs_decoded decoded;
 	u8 *wire = NULL, *staging = NULL, *window = NULL;
 	char hex[41], path[50];
-	size_t length, charge;
+	size_t length, charge, wire_capacity = gitfs_loose_wire_size(mount->object_limit);
 	u32 key = jhash(id, 20, 0);
 	int error;
 
@@ -70,14 +70,14 @@ struct gitfs_object *gitfs_object_get(struct gitfs_mount *mount, const u8 *id)
 	bin2hex(hex, id, 20);
 	hex[40] = 0;
 	snprintf(path, sizeof(path), "objects/%.2s/%s", hex, hex + 2);
-	wire = kvmalloc(mount->object_limit + 4096, GFP_KERNEL);
+	wire = kvmalloc(wire_capacity, GFP_KERNEL);
 	staging = kvmalloc(mount->object_limit + 32, GFP_KERNEL);
 	window = kvzalloc(32768, GFP_KERNEL);
 	if (!wire || !staging || !window) {
 		error = -ENOMEM;
 		goto out;
 	}
-	error = gitfs_http_get(mount, path, wire, mount->object_limit + 4096, &length);
+	error = gitfs_http_get(mount, path, wire, wire_capacity, &length);
 	if (error)
 		goto out;
 	error = gitfs_decode_loose(wire, length, id, staging,

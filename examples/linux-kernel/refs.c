@@ -83,22 +83,27 @@ int gitfs_refs_prepare(struct gitfs_mount *mount)
 	struct gitfs_object *object;
 	struct gitfs_decoded message;
 	u8 id[20];
+	u32 expected_kind;
 	int depth, error;
 
 	list_for_each_entry(ref, &mount->refs, allocation) {
 		if (!ref->leaf)
 			continue;
 		memcpy(id, ref->id, 20);
+		expected_kind = 0;
 		for (depth = 0; ; depth++) {
 			object = gitfs_object_get(mount, id);
 			if (IS_ERR(object))
 				return PTR_ERR(object);
+			if (expected_kind && object->kind != expected_kind)
+				return -EBADMSG;
 			if (object->kind != GITFS_TAG)
 				break;
-			if (depth == 8 || object->length < 48 ||
-			    memcmp(object->data, "object ", 7) || object->data[47] != '\n' ||
-			    hex2bin(id, object->data + 7, 20))
+			if (depth == 8)
 				return -EBADMSG;
+			error = gitfs_tag_target(object->data, object->length, id, &expected_kind);
+			if (error)
+				return error;
 		}
 		memcpy(ref->id, id, 20);
 		if (object->kind == GITFS_COMMIT) {

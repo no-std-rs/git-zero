@@ -32,6 +32,19 @@ pub use inflate::{InflateLimits, InflateProgress, InflateStatus, Inflater, WINDO
 use crate::{Error, ObjectReader, Repository, Result, io::Write};
 use adler::Adler32;
 
+/// zlib compressBound for its default window/memory settings (as used by Git).
+/// Includes wrapper/checksum overhead, with checked arithmetic. This is not a
+/// bound on arbitrarily padded streams or other deflate settings.
+/// https://github.com/madler/zlib/blob/master/compress.c
+pub fn compress_bound(length: u64) -> Result<u64> {
+    length
+        .checked_add(length >> 12)
+        .and_then(|size| size.checked_add(length >> 14))
+        .and_then(|size| size.checked_add(length >> 25))
+        .and_then(|size| size.checked_add(13))
+        .ok_or(Error::LimitExceeded)
+}
+
 pub fn write_parts(output: &mut impl Write, parts: &[&[u8]]) -> Result<()> {
     let mut encoder = Encoder::new(output)?;
     for part in parts {

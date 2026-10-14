@@ -35,6 +35,8 @@ milestone after the read-only server gate.
 - [x] Pluggable complete-pack cache interface and uncached operation.
 - [x] Client ref discovery, smart pack download/checksum validation, dumb loose
   object fetch, and transport interface with caller-owned response buffers.
+- [x] Shared shallow/multi-tip fetch encoding, borrowed commit/tree/tag views,
+  and bounded complete pack materialization with a caller-owned ID index.
 - [x] Native `rustix` libraries and local CLI examples for both roles.
 - [x] Allocator-free Wasm build and stateless Cloudflare metadata snapshot demo.
 - [x] Parallel real-Git interoperability matrix and Wasm clone tests.

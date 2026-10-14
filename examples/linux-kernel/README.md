@@ -7,10 +7,12 @@ HTTP/HTTPS, ref resolution, object fetching, decompression, SHA-1 validation, tr
 traversal, and caching all run **inside the module**. There is no daemon,
 FUSE connection, subprocess, userspace upcall, or local checkout.
 
-C implements VFS, kernel sockets, DNS and buffer ownership. A small Rust ABI links
-TLS 1.3 and the existing allocation-free `git-zero` decoder and SHA-1 into the
-module. Linux allocates the buffers; the kernel Rust build uses neither `std`
-nor `alloc`.
+C implements VFS, kernel sockets, DNS and buffer ownership. The Rust example
+contains TLS 1.3 and thin C ABI wrappers calling `git-zero` for smart discovery,
+fetch encoding, pack materialization/index lookup, and commit/tree/tag parsing.
+Git parsing and delta resolution live in the shared, safe Rust core. The adapter
+adds Linux name limits and errno conversion. Linux allocates the buffers; the
+kernel Rust build uses neither `std` nor `alloc`.
 
 ## Build and mount
 
@@ -95,8 +97,8 @@ The server is an ordinary repository origin, with no special relationship to
 the mount. A static HTTP server exposing a bare repository's loose objects also
 works.
 
-By default, the module resolves `HEAD` once and pins that commit. To select a
-commit directly and skip ref requests:
+By default, the module resolves `HEAD` once and pins that commit. For ordinary
+HTTP, select a commit directly and skip ref requests:
 
 ```sh
 sudo mount -t gitfs -o ro,commit=0123456789abcdef0123456789abcdef01234567 \
@@ -106,6 +108,10 @@ sudo mount -t gitfs -o ro,commit=0123456789abcdef0123456789abcdef01234567 \
 Replace the example SHA-1 with an existing commit's full ID. The resolved ID
 appears in `/proc/mounts`. Upstream branch updates do not change existing mounts;
 unmount and mount again to see a new revision. Read-write remounts are rejected.
+Smart mounts still perform discovery and validate explicit wants against it.
+An unadvertised commit requires an `allow-*-sha1-in-want` capability; the server
+decides whether the requested ID is an allowed hidden tip or reachable object.
+Without that capability, the module rejects the mount before upload-pack.
 
 ## Caching
 
@@ -148,6 +154,11 @@ SHA-1 checks pass. Identical blobs share bytes across paths and file modes.
 | `pack_mb` | 64 | 1–1024 MiB maximum smart HTTP response |
 | `dns` | `1.1.1.1` | IPv4 DNS server; a bounded UDP A query, without resolver upcalls |
 | `addr` | Resolve hostname | Explicit IPv4 destination; TLS sends the URL hostname as SNI |
+
+`pack_mb` bounds both smart discovery and upload-pack responses. The client
+requests offset deltas, no-progress and shallow fetch only when advertised.
+Loose-object wire buffers use the shared zlib compression bound, including the
+canonical Git header, so incompressible objects near `object_mb` fit their budget.
 
 The LRU counts payload bytes and entry structs, excluding allocator overhead.
 Fetching additionally uses bounded wire, staging and final-body buffers, plus
@@ -216,5 +227,7 @@ aliases, nested branch names, annotated and non-commit tags, exact messages,
 cache limits, directory rewind and reads with the guest NIC down. `--github`
 mounts `octocat/Hello-World` and `no-std-rs/git-zero` using kernel DNS, checks
 their source bytes, and lists git-zero's branches, commit message and subtrees.
+Regression cases cover a 32 MiB incompressible loose object, missing optional
+capabilities, discovery above 1 MiB and rejected unadvertised smart wants.
 The userspace origins are only test fixtures. Logs go to
 `build/qemu.log`.

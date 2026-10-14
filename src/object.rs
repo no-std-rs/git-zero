@@ -3,7 +3,11 @@ use sha1::{Digest, Sha1};
 
 use crate::{Error, Result, io::SliceWriter};
 
+mod parse;
+pub use parse::{Commit, Tag, Tree, TreeEntries, TreeEntry};
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
+#[repr(transparent)]
 pub struct ObjectId(pub [u8; 20]);
 
 impl ObjectId {

@@ -2,14 +2,18 @@
 //! Smart fetch returns a validated raw pack; dumb fetch returns a zlib loose
 //! object. Bounded loose-object decoding validates headers, lengths and IDs;
 //! `crate::zlib` also provides standalone inflation, and `crate::pack` provides
-//! entry/delta decoding. Graph traversal, checkout and pack indexing remain work.
+//! entry/delta decoding and bounded materialized indexes. The host owns storage
+//! and checkout policy.
 use crate::{
     Error, Object, ObjectId, Result,
     http::Request,
     io::{SliceWriter, Write},
-    pack,
-    pktline::{self, Packet},
     zlib::{InflateLimits, InflateStatus, Inflater, WINDOW_SIZE},
+};
+
+mod smart;
+pub use smart::{
+    FetchOptions, SmartAdvertisement, read_pack_response, read_smart_reference, write_fetch_request,
 };
 
 pub trait Transport {
@@ -17,6 +21,14 @@ pub trait Transport {
     /// bytes percent-encoded. Return status and body length.
     /// Decode HTTP transfer framing before returning. Do not enable protocol v2.
     fn request(&mut self, request: Request<'_>, response: &mut [u8]) -> Result<(u16, usize)>;
+}
+
+/// Wire capacity for a default-zlib loose object at the given body limit,
+/// including up to 32 bytes of canonical Git header. Non-default encoders may
+/// need a separate wire budget; the inflater's output budget is independent.
+pub fn loose_wire_capacity(body_limit: usize) -> Result<usize> {
+    let source = body_limit.checked_add(32).ok_or(Error::LimitExceeded)?;
+    usize::try_from(crate::zlib::compress_bound(source as u64)?).map_err(|_| Error::LimitExceeded)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,6 +49,23 @@ pub struct Discovery<'a> {
 }
 
 impl<'a> Discovery<'a> {
+    /// Parse a complete response without performing transport I/O.
+    pub fn parse(data: &'a [u8]) -> Result<Self> {
+        let (protocol, bytes) = if data
+            .get(4..)
+            .is_some_and(|tail| tail.starts_with(b"# service="))
+        {
+            SmartAdvertisement::parse(data)?;
+            (Protocol::Smart, smart::advertisement_body(data)?)
+        } else {
+            (Protocol::Dumb, data)
+        };
+        let discovery = Self { protocol, bytes };
+        for reference in discovery.references() {
+            reference?;
+        }
+        Ok(discovery)
+    }
     pub fn references(&self) -> References<'a> {
         References {
             protocol: self.protocol,
@@ -73,27 +102,13 @@ impl<'a> Iterator for References<'a> {
             return None;
         }
         let line = match self.protocol {
-            Protocol::Smart => loop {
-                match pktline::read(&mut self.bytes) {
-                    Ok(Some(Packet::Data(line))) => {
-                        // An empty v0 repository advertises capabilities using
-                        // a zero ID and this pseudo-ref. Git ls-remote omits it.
-                        let reference = line.split(|&byte| byte == 0).next().unwrap_or_default();
-                        let reference = reference.strip_suffix(b"\n").unwrap_or(reference);
-                        if reference == b"0000000000000000000000000000000000000000 capabilities^{}"
-                        {
-                            continue;
-                        }
-                        break line;
-                    }
-                    Ok(Some(Packet::Flush)) => continue,
-                    Ok(None) => return None,
-                    Err(error) => {
-                        self.failed = true;
-                        return Some(Err(error));
-                    }
+            Protocol::Smart => {
+                let result = smart::next_reference(&mut self.bytes);
+                if !matches!(result, Ok(Some(_))) {
+                    self.failed = true;
                 }
-            },
+                return result.transpose();
+            }
             Protocol::Dumb => {
                 if self.bytes.is_empty() {
                     return None;
@@ -145,19 +160,7 @@ pub fn discover<'a>(
     if status != 200 {
         return Err(Error::Backend);
     }
-    let mut bytes = storage.get(..length).ok_or(Error::BufferTooSmall)?;
-    let protocol = if bytes.starts_with(b"001e# service=git-upload-pack\n0000") {
-        bytes = &bytes[34..];
-        Protocol::Smart
-    } else {
-        Protocol::Dumb
-    };
-    let discovery = Discovery { protocol, bytes };
-    // Validate every advertised ref now, rather than silently accepting truncation.
-    for reference in discovery.references() {
-        reference?;
-    }
-    Ok(discovery)
+    Discovery::parse(storage.get(..length).ok_or(Error::BufferTooSmall)?)
 }
 
 pub fn read_head(
@@ -202,15 +205,26 @@ pub fn fetch_pack<'a>(
     request_storage: &mut [u8],
     response_storage: &'a mut [u8],
 ) -> Result<&'a [u8]> {
+    fetch_pack_with_options(
+        transport,
+        &[want],
+        FetchOptions::default(),
+        request_storage,
+        response_storage,
+    )
+}
+
+/// Fetch several wanted tips using optional shallow and offset-delta support.
+/// Caller storage and the transport's limits bound the request and response.
+pub fn fetch_pack_with_options<'a>(
+    transport: &mut impl Transport,
+    wants: &[ObjectId],
+    options: FetchOptions,
+    request_storage: &mut [u8],
+    response_storage: &'a mut [u8],
+) -> Result<&'a [u8]> {
     let mut request = SliceWriter::new(request_storage);
-    let mut line_storage = [0; 64];
-    let mut line = SliceWriter::new(&mut line_storage);
-    line.write_all(b"want ")?;
-    line.write_all(&want.to_hex())?;
-    line.write_all(b"\n")?;
-    pktline::write(&mut request, line.as_bytes())?;
-    request.write_all(b"0000")?;
-    pktline::write(&mut request, b"done\n")?;
+    write_fetch_request(wants, options, &mut request)?;
     let (status, length) = transport.request(
         Request {
             method: "POST",
@@ -223,15 +237,10 @@ pub fn fetch_pack<'a>(
     if status != 200 {
         return Err(Error::Backend);
     }
-    let mut bytes = response_storage
+    let bytes = response_storage
         .get(..length)
         .ok_or(Error::BufferTooSmall)?;
-    match pktline::read(&mut bytes)? {
-        Some(Packet::Data(b"NAK\n")) => {}
-        _ => return Err(Error::InvalidPacket),
-    }
-    pack::validate(bytes)?;
-    Ok(bytes)
+    read_pack_response(bytes)
 }
 
 /// Fetch a loose object's zlib bytes from an ordinary HTTP repository.

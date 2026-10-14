@@ -65,15 +65,39 @@ def origin(root, certs):
 
         def handle_git(self):
             target = urlsplit(self.path)
+            restricted = target.path.startswith("/restricted.git/")
+            many_refs = target.path.startswith("/manyrefs.git/")
+            path = target.path
+            if restricted or many_refs:
+                path = "/smart.git/" + target.path.split("/", 2)[2]
             env = {**os.environ, "GIT_PROJECT_ROOT": str(root / "fixture"),
-                   "GIT_HTTP_EXPORT_ALL": "1", "PATH_INFO": target.path,
+                   "GIT_HTTP_EXPORT_ALL": "1", "PATH_INFO": path,
                    "QUERY_STRING": target.query, "REQUEST_METHOD": self.command,
                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
                    "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
                    "SERVER_PROTOCOL": "HTTP/1.1"}
             body = self.rfile.read(int(env["CONTENT_LENGTH"]))
+            if restricted and any(cap in body for cap in (b" ofs-delta", b" no-progress")):
+                self.send_error(400, "requested an unadvertised capability")
+                return
             response = command("git", "http-backend", input=body, env=env)
             headers, payload = response.split(b"\r\n\r\n", 1)
+            if self.command == "GET" and target.query == "service=git-upload-pack":
+                first_length = int(payload[34:38], 16)
+                first = payload[38:34+first_length]
+                if restricted:
+                    reference, capabilities = first.split(b"\0", 1)
+                    capabilities = b" ".join(cap for cap in capabilities.split()
+                                             if cap not in (b"ofs-delta", b"no-progress"))
+                    first = reference + b"\0" + capabilities + b"\n"
+                    payload = payload[:34] + f"{len(first)+4:04x}".encode() + first + payload[34+first_length:]
+                if many_refs:
+                    aliases = bytearray()
+                    for i in range(16000):
+                        ref = first[:40] + f" refs/heads/generated/ref-{i:05}\n".encode()
+                        aliases.extend(f"{len(ref)+4:04x}".encode() + ref)
+                    payload = payload[:-4] + aliases + b"0000"
+                    assert len(payload) > 1024*1024
             status = 200
             for line in headers.split(b"\r\n"):
                 if line.lower().startswith(b"status:"):

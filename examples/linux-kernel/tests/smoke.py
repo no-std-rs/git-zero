@@ -6,6 +6,7 @@ import lzma
 import os
 from pathlib import Path
 import re
+import random
 import shutil
 import stat
 import subprocess
@@ -63,6 +64,16 @@ def fixture(root):
     revision = git("commit-tree", root_tree.decode(), data=b"kernel mount test\n")
     git("update-ref", "refs/heads/main", revision.decode())
     (root / "fixture/revision").write_bytes(revision)
+    large = bytearray(random.Random(42).randbytes(32*1024*1024))
+    large[:5] = b"first"
+    large[-4:] = b"last"
+    large_id = blob(large)
+    hex_id = large_id.decode()
+    compressed = repo / "objects" / hex_id[:2] / hex_id[2:]
+    assert compressed.stat().st_size > len(large)+4096, "fixture must exceed the old wire budget"
+    large_tree = tree([(b"100644", b"blob", large_id, b"large.bin")])
+    large_commit = git("commit-tree", large_tree.decode(), data=b"wire size test\n")
+    (root / "fixture/large-revision").write_bytes(large_commit)
 
 
 def initramfs(root, destination):

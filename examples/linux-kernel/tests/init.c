@@ -335,6 +335,22 @@ static void https_tests(void)
 	check(!stat("/mnt/run", &st) && (st.st_mode & 0111), "HTTPS executable mode");
 	missing_probes();
 	check(!umount("/mnt"), "unmount HTTPS snapshot");
+	snprintf(url, sizeof(url), "https://localhost:%s/restricted.git", port);
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "addr=10.0.2.2,timeout_ms=60000"),
+	      "mount origin without ofs-delta or no-progress capabilities");
+	expect_file("/mnt/README.md", "hello from kernel gitfs\n");
+	check(!umount("/mnt"), "unmount restricted-capability origin");
+	snprintf(url, sizeof(url), "https://localhost:%s/manyrefs.git", port);
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY, "addr=10.0.2.2,pack_mb=1,timeout_ms=60000") == -1 && errno == EFBIG,
+	      "discovery respects a small configured response budget");
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "addr=10.0.2.2,pack_mb=2,timeout_ms=60000"),
+	      "mount discovery larger than 1 MiB with pack_mb=2");
+	expect_file("/mnt/README.md", "hello from kernel gitfs\n");
+	check(!umount("/mnt"), "unmount many-ref origin");
+	snprintf(url, sizeof(url), "https://localhost:%s/smart.git", port);
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY,
+		    "addr=10.0.2.2,commit=0123456789abcdef0123456789abcdef01234567,timeout_ms=60000") == -1 && errno == EINVAL,
+	      "reject an unadvertised smart want before upload-pack");
 	check(mount(url, "/mnt", "gitfs", MS_RDONLY,
 		    "refs,addr=10.0.2.2,timeout_ms=60000,cache_mb=2,object_mb=1") == -1 &&
 	      errno == EFBIG, "refs snapshot rejects an insufficient cache budget");
@@ -489,6 +505,18 @@ int main(void)
 	}
 	check(mount("ftp://127.0.0.1/repo.git", "/mnt", "gitfs", MS_RDONLY, options) == -1 && errno == EPROTONOSUPPORT, "reject unsupported URL");
 	check(mount("http://127.0.0.1:8080/repo.git", "/mnt", "gitfs", MS_RDONLY, "cache_mb=1,object_mb=1") == -1 && errno == EINVAL, "reject undersized cache");
+	memset(revision, 0, sizeof(revision));
+	fd = open("/fixture/large-revision", O_RDONLY);
+	check(fd >= 0 && read(fd, revision, 40) == 40, "large loose-object revision");
+	close(fd);
+	snprintf(options, sizeof(options), "commit=%s,cache_mb=64,object_mb=32,timeout_ms=60000", revision);
+	check(!mount("http://127.0.0.1:8080/repo.git", "/mnt", "gitfs", MS_RDONLY, options), "mount large loose object");
+	fd = open("/mnt/large.bin", O_RDONLY);
+	check(fd >= 0 && !fstat(fd, &st) && st.st_size == 32*1024*1024, "incompressible object fits configured body limit");
+	check(read(fd, data, 5) == 5 && !memcmp(data, "first", 5), "large object prefix");
+	check(lseek(fd, -4, SEEK_END) == st.st_size-4 && read(fd, data, 4) == 4 && !memcmp(data, "last", 4), "large object suffix");
+	close(fd);
+	check(!umount("/mnt"), "unmount large loose object");
 	kill(server, SIGTERM);
 	waitpid(server, NULL, 0);
 	https_tests();

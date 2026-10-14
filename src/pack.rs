@@ -6,6 +6,10 @@ use sha1::{Digest, Sha1};
 
 mod decode;
 pub use decode::{DeltaLimits, Entry, EntryKind, Reader, ResolvedObject, apply_delta, crc32};
+mod materialize;
+pub use materialize::{
+    MaterializeLimits, MaterializedEntry, MaterializedPack, find_materialized, materialize,
+};
 
 struct HashWriter<'a, W> {
     output: &'a mut W,

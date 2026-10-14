@@ -1,96 +1,8 @@
-//! Bounded smart-HTTP discovery and materialized SHA-1 packs.
-use crate::validate_tree;
-use git_zero::{
-    Error, Object, ObjectId, ObjectKind,
-    pack::{self, EntryKind},
-    pktline::{self, Packet},
-    zlib::InflateLimits,
-};
+//! C ABI and Linux name limits for the shared Git client and pack importer.
+use crate::{Decoded, errno, validate_tree};
+use git_zero::{Error, ObjectId, ObjectKind, client, io::SliceWriter, pack, zlib::InflateLimits};
 
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct PackObject {
-    pub id: [u8; 20],
-    pub kind: u32,
-    pub pack_offset: u64,
-    pub offset: usize,
-    pub length: usize,
-    pub depth: u32,
-}
-
-fn errno(error: Error) -> i32 {
-    match error {
-        Error::BufferTooSmall | Error::LimitExceeded => -27,
-        _ => -74,
-    }
-}
-
-fn reference(line: &[u8]) -> Result<(ObjectId, &[u8], bool), Error> {
-    let mut split = line.splitn(2, |&b| b == 0);
-    let reference = split.next().ok_or(Error::InvalidReference)?;
-    let shallow = split.next().is_some_and(|capabilities| {
-        capabilities
-            .split(|b| b.is_ascii_whitespace())
-            .any(|c| c == b"shallow")
-    });
-    let reference = reference.strip_suffix(b"\n").unwrap_or(reference);
-    if reference.len() < 42 || reference[40] != b' ' {
-        return Err(Error::InvalidReference);
-    }
-    let id = ObjectId::from_hex(&reference[..40])?;
-    let name = &reference[41..];
-    if name != b"HEAD" {
-        let plain = name.strip_suffix(b"^{}").unwrap_or(name);
-        let text = core::str::from_utf8(plain).map_err(|_| Error::InvalidReference)?;
-        git_zero::repository::validate_ref_name(text)?;
-        if plain.split(|&b| b == b'/').any(|part| part.len() > 255) {
-            return Err(Error::InvalidReference);
-        }
-    }
-    Ok((id, name, shallow))
-}
-
-fn discovery(mut bytes: &[u8], head: &mut [u8; 20]) -> Result<bool, Error> {
-    match pktline::read(&mut bytes)? {
-        Some(Packet::Data(b"# service=git-upload-pack\n")) => {}
-        _ => return Err(Error::InvalidPacket),
-    }
-    if !matches!(pktline::read(&mut bytes)?, Some(Packet::Flush)) {
-        return Err(Error::InvalidPacket);
-    }
-    let mut found = false;
-    let mut shallow = false;
-    let mut finished = false;
-    while let Some(packet) = pktline::read(&mut bytes)? {
-        match packet {
-            Packet::Flush => {
-                if !bytes.is_empty() {
-                    return Err(Error::InvalidPacket);
-                }
-                finished = true;
-                break;
-            }
-            Packet::Data(line) => {
-                let (id, name, supports_shallow) = reference(line)?;
-                shallow |= supports_shallow;
-                if name == b"HEAD" {
-                    if found {
-                        return Err(Error::InvalidReference);
-                    }
-                    *head = id.0;
-                    found = true;
-                }
-            }
-        }
-    }
-    if !finished {
-        return Err(Error::InvalidPacket);
-    }
-    if !found {
-        return Err(Error::ObjectNotFound);
-    }
-    Ok(shallow)
-}
+pub type PackObject = pack::MaterializedEntry;
 
 #[repr(C)]
 pub struct RefEntry {
@@ -99,11 +11,74 @@ pub struct RefEntry {
     id: [u8; 20],
 }
 
-/// Iterate an advertisement already validated by gitfs_smart_head.
-/// Peeled tag pseudo-refs are skipped; tag objects are fetched and peeled later.
+fn vfs_ref_name(name: &str) -> Result<(), Error> {
+    if name
+        .strip_suffix("^{}")
+        .unwrap_or(name)
+        .split('/')
+        .any(|part| part.len() > 255)
+    {
+        Err(Error::InvalidReference)
+    } else {
+        Ok(())
+    }
+}
+
+/// Validate smart discovery, returning supported shallow/OFS/no-progress bits.
 /// # Safety
-/// Data is live for length bytes. Offset and entry are exclusive aligned outputs
-/// disjoint from data and each other; offset starts at zero.
+/// Data is valid for length bytes; head is a disjoint 20-byte output.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gitfs_smart_head(data: *const u8, length: usize, head: *mut u8) -> i32 {
+    // SAFETY: C owns the complete response and exclusive output.
+    let data = unsafe { core::slice::from_raw_parts(data, length) };
+    let parsed = (|| {
+        let advertisement = client::SmartAdvertisement::parse(data)?;
+        for reference in advertisement.references() {
+            vfs_ref_name(reference?.name)?;
+        }
+        let options = advertisement.fetch_options(Some(1));
+        let capabilities = i32::from(options.shallow_depth.is_some())
+            | (i32::from(options.ofs_delta) << 1)
+            | (i32::from(options.no_progress) << 2);
+        Ok((advertisement.head()?, capabilities))
+    })();
+    match parsed {
+        Ok((id, capabilities)) => {
+            // SAFETY: Head has 20 writable bytes disjoint from the response.
+            unsafe { core::ptr::copy_nonoverlapping(id.0.as_ptr(), head, 20) };
+            capabilities
+        }
+        Err(e) => errno(e),
+    }
+}
+
+/// Check an explicit want against discovery before any upload-pack request.
+/// # Safety
+/// Data is live for length bytes and ID is a disjoint live 20-byte input.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gitfs_smart_validate_want(
+    data: *const u8,
+    length: usize,
+    id: *const u8,
+) -> i32 {
+    // SAFETY: C keeps both immutable inputs live.
+    let (data, id) = unsafe {
+        (
+            core::slice::from_raw_parts(data, length),
+            ObjectId(*id.cast::<[u8; 20]>()),
+        )
+    };
+    match client::SmartAdvertisement::parse(data)
+        .and_then(|advertisement| advertisement.validate_want(id))
+    {
+        Ok(()) => 0,
+        Err(e) => errno(e),
+    }
+}
+
+/// Iterate validated discovery, omitting peeled tag pseudo-refs.
+/// # Safety
+/// Data is live for length bytes; offset and entry are aligned, disjoint outputs.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gitfs_smart_ref_next(
     data: *const u8,
@@ -111,225 +86,74 @@ pub unsafe extern "C" fn gitfs_smart_ref_next(
     offset: *mut usize,
     entry: *mut RefEntry,
 ) -> i32 {
-    // SAFETY: C owns each range for this synchronous call.
+    // SAFETY: C keeps every buffer live for this synchronous call.
     let (data, offset) = unsafe { (core::slice::from_raw_parts(data, length), &mut *offset) };
-    let parsed = (|| {
-        let mut bytes = data.get(*offset..).ok_or(Error::InvalidPacket)?;
-        if *offset == 0
-            && (!matches!(
-                pktline::read(&mut bytes)?,
-                Some(Packet::Data(b"# service=git-upload-pack\n"))
-            ) || !matches!(pktline::read(&mut bytes)?, Some(Packet::Flush)))
-        {
-            return Err(Error::InvalidPacket);
-        }
-        loop {
-            match pktline::read(&mut bytes)? {
-                Some(Packet::Data(line)) => {
-                    let (id, name, _) = reference(line)?;
-                    if name.ends_with(b"^{}") {
-                        continue;
+    loop {
+        match client::read_smart_reference(data, offset) {
+            Ok(Some(reference)) => {
+                if reference.name.ends_with("^{}") {
+                    continue;
+                }
+                if vfs_ref_name(reference.name).is_err() {
+                    return -74;
+                }
+                // SAFETY: The name remains borrowed from C's live response.
+                unsafe {
+                    *entry = RefEntry {
+                        name: reference.name.as_ptr(),
+                        name_length: reference.name.len(),
+                        id: reference.id.0,
                     }
-                    *offset = length - bytes.len();
-                    return Ok(Some((id, name)));
-                }
-                Some(Packet::Flush) | None if bytes.is_empty() => {
-                    *offset = length;
-                    return Ok(None);
-                }
-                _ => return Err(Error::InvalidPacket),
+                };
+                return 1;
             }
+            Ok(None) => return 0,
+            Err(e) => return errno(e),
         }
-    })();
-    match parsed {
-        Ok(Some((id, name))) => {
-            // SAFETY: The output borrows the caller's live advertisement.
-            unsafe {
-                *entry = RefEntry {
-                    name: name.as_ptr(),
-                    name_length: name.len(),
-                    id: id.0,
-                }
-            };
-            1
-        }
-        Ok(None) => 0,
-        Err(e) => errno(e),
     }
 }
 
-/// Read a protocol-v0 smart advertisement, returning 1 if shallow is supported.
+/// Encode deduplicated wants with the shared protocol-v0 request builder.
 /// # Safety
-/// Data is valid for length bytes; head is a disjoint 20-byte output.
+/// IDs contains count consecutive 20-byte IDs. Output has capacity exclusive
+/// writable bytes; length is an aligned output. Every range is nonnull/disjoint.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn gitfs_smart_head(data: *const u8, length: usize, head: *mut u8) -> i32 {
-    // SAFETY: C owns both live, disjoint buffers.
-    let (data, head) = unsafe {
+pub unsafe extern "C" fn gitfs_smart_request(
+    ids: *const u8,
+    count: usize,
+    capabilities: u32,
+    output: *mut u8,
+    capacity: usize,
+    length: *mut usize,
+) -> i32 {
+    // SAFETY: ObjectId is transparent over [u8;20], aligned to one, with all
+    // bit patterns valid. C supplies the documented live disjoint allocations.
+    let (ids, output) = unsafe {
         (
-            core::slice::from_raw_parts(data, length),
-            &mut *head.cast::<[u8; 20]>(),
+            core::slice::from_raw_parts(ids.cast::<ObjectId>(), count),
+            core::slice::from_raw_parts_mut(output, capacity),
         )
     };
-    match discovery(data, head) {
-        Ok(shallow) => i32::from(shallow),
-        Err(Error::ObjectNotFound) => -2,
+    let mut writer = SliceWriter::new(output);
+    let options = client::FetchOptions {
+        shallow_depth: (capabilities & 1 != 0).then_some(1),
+        ofs_delta: capabilities & 2 != 0,
+        no_progress: capabilities & 4 != 0,
+    };
+    match client::write_fetch_request(ids, options, &mut writer) {
+        Ok(()) => {
+            // SAFETY: C owns the exclusive aligned output.
+            unsafe { *length = writer.len() };
+            0
+        }
         Err(e) => errno(e),
     }
 }
 
-// core's recursive quicksort can exhaust a kernel stack on a realistic pack.
-// Heap sort uses constant stack space and keeps the ID lookup index ordered.
-fn sort_index(index: &mut [PackObject]) {
-    fn sift(index: &mut [PackObject], mut root: usize, length: usize) {
-        loop {
-            let left = root * 2 + 1;
-            if left >= length {
-                return;
-            }
-            let larger = if left + 1 < length && index[left].id < index[left + 1].id {
-                left + 1
-            } else {
-                left
-            };
-            if index[root].id >= index[larger].id {
-                return;
-            }
-            index.swap(root, larger);
-            root = larger;
-        }
-    }
-    for root in (0..index.len() / 2).rev() {
-        sift(index, root, index.len());
-    }
-    for end in (1..index.len()).rev() {
-        index.swap(0, end);
-        sift(index, 0, end);
-    }
-}
-
-fn import(
-    pack: &[u8],
-    index: &mut [PackObject],
-    arena: &mut [u8],
-    scratch: &mut [u8],
-    window: &mut [u8; 32768],
-    object_limit: usize,
-) -> Result<usize, Error> {
-    let count = pack::Reader::new(pack)?.object_count() as usize;
-    if count != index.len() {
-        return Err(Error::BufferTooSmall);
-    }
-    index.fill(PackObject::default());
-    let mut used = 0;
-    let mut remaining = count;
-    for _ in 0..65 {
-        let mut reader = pack::Reader::new(pack)?;
-        let mut progress = false;
-        let mut decoded_bytes = 0_u64;
-        for i in 0..count {
-            decoded_bytes =
-                decoded_bytes.saturating_add(reader.next_entry_size()?.ok_or(Error::CorruptPack)?);
-            if decoded_bytes > (arena.len() as u64).saturating_mul(8) {
-                return Err(Error::LimitExceeded);
-            }
-            let entry = reader
-                .read_entry(
-                    scratch,
-                    window,
-                    InflateLimits {
-                        max_output: object_limit as u64,
-                        max_ratio: 1024,
-                        ratio_slack: 65536,
-                    },
-                )?
-                .ok_or(Error::CorruptPack)?;
-            if index[i].kind != 0 {
-                continue;
-            }
-            let base = match entry.kind() {
-                EntryKind::Object(_) => None,
-                EntryKind::OffsetDelta { base_offset } => index
-                    .iter()
-                    .find(|o| o.kind != 0 && o.pack_offset == base_offset)
-                    .copied(),
-                EntryKind::ReferenceDelta { base_id } => index
-                    .iter()
-                    .find(|o| o.kind != 0 && o.id == base_id.0)
-                    .copied(),
-            };
-            if !matches!(entry.kind(), EntryKind::Object(_)) && base.is_none() {
-                continue;
-            }
-            let (previous, output) = arena.split_at_mut(used);
-            let output_len = output.len().min(object_limit);
-            let (object, depth) = if let Some(base) = base {
-                if base.depth >= 64 {
-                    return Err(Error::LimitExceeded);
-                }
-                let kind = match base.kind {
-                    1 => ObjectKind::Commit,
-                    2 => ObjectKind::Tree,
-                    3 => ObjectKind::Blob,
-                    4 => ObjectKind::Tag,
-                    _ => return Err(Error::CorruptPack),
-                };
-                let body = previous
-                    .get(base.offset..base.offset + base.length)
-                    .ok_or(Error::CorruptPack)?;
-                (
-                    pack::apply_delta(
-                        Object { kind, data: body },
-                        entry.data(),
-                        &mut output[..output_len],
-                        pack::DeltaLimits {
-                            max_output: object_limit as u64,
-                            max_instructions: object_limit as u64,
-                            max_depth: 64,
-                        },
-                    )?,
-                    base.depth + 1,
-                )
-            } else {
-                let EntryKind::Object(kind) = entry.kind() else {
-                    return Err(Error::CorruptPack);
-                };
-                let output = output
-                    .get_mut(..entry.data().len())
-                    .ok_or(Error::BufferTooSmall)?;
-                output.copy_from_slice(entry.data());
-                (Object { kind, data: output }, 0)
-            };
-            if object.kind == ObjectKind::Tree && validate_tree(object.data).is_err() {
-                return Err(Error::InvalidObject);
-            }
-            index[i] = PackObject {
-                id: object.id().0,
-                kind: object.kind as u32,
-                pack_offset: entry.offset(),
-                offset: used,
-                length: object.data.len(),
-                depth,
-            };
-            used += object.data.len();
-            remaining -= 1;
-            progress = true;
-        }
-        reader.finish()?;
-        if remaining == 0 {
-            sort_index(index);
-            return Ok(used);
-        }
-        if !progress {
-            return Err(Error::CorruptPack);
-        }
-    }
-    Err(Error::LimitExceeded)
-}
-
-/// Materialize a checksummed pack, including bounded offset/reference deltas.
+/// Materialize a pack through git-zero, then apply Linux component limits.
 /// # Safety
-/// All ranges are live and disjoint, including index_count initialized entries,
-/// a 32768-byte window, scratch_length bytes and an aligned used output.
+/// All ranges are live/disjoint, including index_count initialized entries,
+/// arena_length bytes, scratch_length bytes, a 32768-byte window and used output.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gitfs_pack_import(
     pack: *const u8,
@@ -344,301 +168,107 @@ pub unsafe extern "C" fn gitfs_pack_import(
     object_limit: usize,
     used: *mut usize,
 ) -> i32 {
-    // SAFETY: C allocates every range and keeps it live through this synchronous call.
-    let result = unsafe {
-        import(
+    // SAFETY: Linux owns each allocation for the full duration of this call.
+    let (pack, index, arena, scratch, window) = unsafe {
+        (
             core::slice::from_raw_parts(pack, pack_length),
             core::slice::from_raw_parts_mut(index, index_count),
             core::slice::from_raw_parts_mut(arena, arena_length),
             core::slice::from_raw_parts_mut(scratch, scratch_length),
             &mut *window.cast::<[u8; 32768]>(),
-            object_limit,
         )
     };
+    let limits = pack::MaterializeLimits {
+        inflate: InflateLimits {
+            max_output: object_limit as u64,
+            max_ratio: 1024,
+            ratio_slack: 65536,
+        },
+        delta: pack::DeltaLimits {
+            max_output: object_limit as u64,
+            max_instructions: object_limit as u64,
+            max_depth: 64,
+        },
+        max_passes: 65,
+        max_decoded_bytes_per_pass: (arena_length as u64).saturating_mul(8),
+    };
+    let result = (|| {
+        let store = pack::materialize(pack, index, arena, scratch, window, limits)?;
+        for i in 0..store.entries().len() {
+            let object = store.object(i).ok_or(Error::InvalidObject)?;
+            if object.kind == ObjectKind::Tree {
+                validate_tree(object.data)?;
+            }
+        }
+        Ok(store.bytes_used())
+    })();
     match result {
         Ok(length) => {
-            unsafe {
-                *used = length;
-            }
+            // SAFETY: The used output is exclusive and disjoint from all storage.
+            unsafe { *used = length };
             0
         }
         Err(e) => errno(e),
     }
 }
 
-/// Find an object in an imported, sorted snapshot index.
+/// Lookup metadata through the shared, imported ID index.
 /// # Safety
-/// Index is a validated immutable index; id has 20 bytes; result is disjoint.
+/// Index is initialized and sorted by import; ID has 20 bytes; result is disjoint.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gitfs_pack_find(
     index: *const PackObject,
     count: usize,
     id: *const u8,
-    result: *mut crate::Decoded,
+    result: *mut Decoded,
 ) -> i32 {
-    // SAFETY: C retains the validated index and supplies live outputs.
+    // SAFETY: C retains immutable index storage and supplies a live ID/output.
     let (index, id) = unsafe {
         (
             core::slice::from_raw_parts(index, count),
-            &*id.cast::<[u8; 20]>(),
+            ObjectId(*id.cast::<[u8; 20]>()),
         )
     };
-    let Ok(position) = index.binary_search_by_key(id, |o| o.id) else {
+    let Some(entry) = pack::find_materialized(index, id) else {
         return -2;
     };
-    let object = index[position];
-    // SAFETY: result is an exclusive output struct.
+    let Ok(kind) = entry.kind() else {
+        return -74;
+    };
+    // SAFETY: Result is an exclusive aligned struct output.
     unsafe {
-        *result = crate::Decoded {
-            offset: object.offset,
-            length: object.length,
-            kind: object.kind,
-        };
-    }
+        *result = Decoded {
+            offset: entry.offset(),
+            length: entry.length(),
+            kind: kind as u32,
+        }
+    };
     0
 }
 
-/// Strip shallow negotiation from a non-sideband upload-pack response.
+/// Expose a raw pack after shared shallow-response and checksum validation.
 /// # Safety
-/// Data is a complete HTTP body; result is a disjoint output struct.
+/// Data is live for length bytes; result is a disjoint aligned output.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gitfs_smart_pack(
     data: *const u8,
     length: usize,
-    result: *mut crate::Decoded,
+    result: *mut Decoded,
 ) -> i32 {
-    // SAFETY: The caller supplies a live complete body.
-    let mut bytes = unsafe { core::slice::from_raw_parts(data, length) };
-    let parsed = (|| {
-        loop {
-            match pktline::read(&mut bytes)? {
-                Some(Packet::Data(b"NAK\n")) => break,
-                Some(Packet::Data(line)) if line.starts_with(b"shallow ") => {
-                    ObjectId::from_hex(
-                        line.strip_suffix(b"\n")
-                            .unwrap_or(line)
-                            .get(8..)
-                            .ok_or(Error::InvalidPacket)?,
-                    )?;
-                }
-                Some(Packet::Flush) => {}
-                _ => return Err(Error::InvalidPacket),
-            }
-        }
-        pack::validate(bytes)?;
-        Ok(())
-    })();
-    match parsed {
-        Ok(()) => {
+    // SAFETY: C supplies a complete live HTTP response body.
+    let data = unsafe { core::slice::from_raw_parts(data, length) };
+    match client::read_pack_response(data) {
+        Ok(pack) => {
+            // SAFETY: Result is writable; pack is a subslice of data.
             unsafe {
-                *result = crate::Decoded {
-                    offset: length - bytes.len(),
-                    length: bytes.len(),
+                *result = Decoded {
+                    offset: length - pack.len(),
+                    length: pack.len(),
                     kind: 0,
-                };
-            }
+                }
+            };
             0
         }
         Err(e) => errno(e),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use git_zero::{io::SliceWriter, zlib};
-    use sha1::{Digest, Sha1};
-
-    #[test]
-    fn iterative_sort_orders_large_indexes_with_duplicates() {
-        for count in [0, 1, 2, 32768] {
-            let mut index: Vec<_> = (0..count)
-                .map(|i| {
-                    let mut id = [0; 20];
-                    id[..4].copy_from_slice(&(((i * 7919) % 10007) as u32).to_be_bytes());
-                    PackObject {
-                        id,
-                        ..PackObject::default()
-                    }
-                })
-                .collect();
-            let mut expected: Vec<_> = index.iter().map(|object| object.id).collect();
-            expected.sort_unstable();
-            sort_index(&mut index);
-            assert_eq!(
-                index.iter().map(|object| object.id).collect::<Vec<_>>(),
-                expected
-            );
-        }
-    }
-
-    fn append_zlib(bytes: &mut Vec<u8>, body: &[u8]) {
-        let mut storage = [0; 256];
-        let mut writer = SliceWriter::new(&mut storage);
-        zlib::write_parts(&mut writer, &[body]).unwrap();
-        bytes.extend_from_slice(writer.as_bytes());
-    }
-
-    fn delta_pack(forward: bool) -> Vec<u8> {
-        let base = Object {
-            kind: ObjectKind::Blob,
-            data: b"hello",
-        };
-        let mut bytes = b"PACK\0\0\0\x02\0\0\0\x02".to_vec();
-        let delta = b"\x05\x05\x05world";
-        if forward {
-            bytes.push(0x78);
-            bytes.extend_from_slice(&base.id().0);
-            append_zlib(&mut bytes, delta);
-            bytes.push(0x35);
-            append_zlib(&mut bytes, base.data);
-        } else {
-            bytes.push(0x35);
-            append_zlib(&mut bytes, base.data);
-            let distance = bytes.len() - 12;
-            assert!(distance < 128);
-            bytes.extend_from_slice(&[0x68, distance as u8]);
-            append_zlib(&mut bytes, delta);
-        }
-        let checksum = Sha1::digest(&bytes);
-        bytes.extend_from_slice(&checksum);
-        bytes
-    }
-
-    #[test]
-    fn forward_reference_and_offset_deltas_materialize_identically() {
-        for forward in [true, false] {
-            let pack = delta_pack(forward);
-            let mut index = [PackObject::default(); 2];
-            let mut arena = [0; 128];
-            let mut scratch = [0; 128];
-            let mut window = [0; 32768];
-            assert_eq!(
-                import(
-                    &pack,
-                    &mut index,
-                    &mut arena,
-                    &mut scratch,
-                    &mut window,
-                    128
-                ),
-                Ok(10)
-            );
-            let object = Object {
-                kind: ObjectKind::Blob,
-                data: b"world",
-            };
-            let entry = index
-                .iter()
-                .find(|entry| entry.id == object.id().0)
-                .unwrap();
-            assert_eq!(entry.depth, 1);
-            assert_eq!(
-                &arena[entry.offset..entry.offset + entry.length],
-                object.data
-            );
-            assert!(index[0].id < index[1].id);
-        }
-    }
-
-    #[test]
-    fn pack_corruption_and_memory_limits_fail_closed() {
-        let mut pack = delta_pack(false);
-        let mut index = [PackObject::default(); 2];
-        let mut arena = [0; 2];
-        let mut scratch = [0; 128];
-        let mut window = [0; 32768];
-        assert_eq!(
-            import(
-                &pack,
-                &mut index,
-                &mut arena,
-                &mut scratch,
-                &mut window,
-                128
-            ),
-            Err(Error::BufferTooSmall)
-        );
-        pack[12] ^= 1;
-        assert_eq!(
-            import(
-                &pack,
-                &mut index,
-                &mut arena,
-                &mut scratch,
-                &mut window,
-                128
-            ),
-            Err(Error::CorruptPack)
-        );
-    }
-
-    #[test]
-    fn discovery_requires_head_and_final_flush() {
-        let id = ObjectId([7; 20]);
-        let mut storage = [0; 512];
-        let mut writer = SliceWriter::new(&mut storage);
-        pktline::write(&mut writer, b"# service=git-upload-pack\n").unwrap();
-        use git_zero::io::Write;
-        writer.write_all(b"0000").unwrap();
-        let reference = format!("{id} HEAD\0shallow ofs-delta\n");
-        pktline::write(&mut writer, reference.as_bytes()).unwrap();
-        let mut head = [0; 20];
-        assert!(discovery(writer.as_bytes(), &mut head).is_err());
-        writer.write_all(b"0000").unwrap();
-        assert_eq!(discovery(writer.as_bytes(), &mut head), Ok(true));
-        assert_eq!(head, id.0);
-    }
-
-    #[test]
-    fn refs_iterator_preserves_names_and_skips_peeled_pseudo_refs() {
-        let mut storage = [0; 1024];
-        let mut writer = SliceWriter::new(&mut storage);
-        use git_zero::io::Write;
-        pktline::write(&mut writer, b"# service=git-upload-pack\n").unwrap();
-        writer.write_all(b"0000").unwrap();
-        for name in [
-            "HEAD",
-            "refs/heads/topic/demo",
-            "refs/tags/v1",
-            "refs/tags/v1^{}",
-        ] {
-            pktline::write(
-                &mut writer,
-                format!("{} {name}\n", ObjectId([7; 20])).as_bytes(),
-            )
-            .unwrap();
-        }
-        writer.write_all(b"0000").unwrap();
-        let data = writer.as_bytes();
-        let mut offset = 0;
-        let mut entry = RefEntry {
-            name: core::ptr::null(),
-            name_length: 0,
-            id: [0; 20],
-        };
-        for expected in ["HEAD", "refs/heads/topic/demo", "refs/tags/v1"] {
-            assert_eq!(
-                unsafe { gitfs_smart_ref_next(data.as_ptr(), data.len(), &mut offset, &mut entry) },
-                1
-            );
-            assert_eq!(
-                unsafe { core::slice::from_raw_parts(entry.name, entry.name_length) },
-                expected.as_bytes()
-            );
-            assert_eq!(entry.id, [7; 20]);
-        }
-        assert_eq!(
-            unsafe { gitfs_smart_ref_next(data.as_ptr(), data.len(), &mut offset, &mut entry) },
-            0
-        );
-        assert_eq!(offset, data.len());
-        for invalid in [
-            "refs/heads/../bad",
-            "refs/heads/bad\nname",
-            "refs/heads/.hidden",
-        ] {
-            assert!(reference(format!("{} {invalid}\n", ObjectId([7; 20])).as_bytes()).is_err());
-        }
     }
 }
