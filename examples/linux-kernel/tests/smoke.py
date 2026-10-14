@@ -152,7 +152,7 @@ def main():
                     raise SystemExit(f"VM timed out; inspect {args.log}")
         output = args.log.read_text(errors="replace")
         print("\n".join(line for line in output.splitlines()
-                        if line.startswith(("ok:", "GITFS_TEST_", "gitfs:"))))
+                        if line.startswith(("ok:", "GITFS_TEST_", "gitfs:", "entry:", "git-zero main commit:"))))
         if completed.returncode or "GITFS_TEST_PASS" not in output:
             raise SystemExit(f"Kernel smoke test failed; inspect {args.log}")
         if re.search(r"BUG:|WARNING:|Oops:|Kernel panic|stack frame", output):

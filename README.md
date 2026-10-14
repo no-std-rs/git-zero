@@ -150,7 +150,8 @@ For an entirely kernel-side client, see the
 [Linux filesystem module example](examples/linux-kernel/README.md). It mounts
 a pinned Git commit from GitHub over handshake-only `no_std` HTTPS, or from an
 ordinary HTTP origin, with bounded object caching, negative lookups and the
-Linux page cache. No userspace mount helper is needed.
+Linux page cache. Its `refs` view exposes each branch's commit message and tree,
+for example `main/msg` and `main/tree/src/lib.rs`. No userspace mount helper is needed.
 
 Use Rust 1.85 or newer, Git with HTTP support, and Python 3 for tests.
 

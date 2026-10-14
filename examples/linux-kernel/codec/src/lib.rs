@@ -102,6 +102,34 @@ fn commit_tree(data: &[u8]) -> Result<ObjectId, ()> {
     ObjectId::from_hex(&line[5..45]).map_err(|_| ())
 }
 
+/// Locate the exact commit message, preserving arbitrary bytes and newlines.
+/// # Safety
+/// Data is live for length bytes and result is a disjoint, aligned output.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gitfs_commit_message(
+    data: *const u8,
+    length: usize,
+    result: *mut Decoded,
+) -> i32 {
+    // SAFETY: C supplies a live object and exclusive output.
+    let data = unsafe { core::slice::from_raw_parts(data, length) };
+    if commit_tree(data).is_err() {
+        return EBADMSG;
+    }
+    let Some(separator) = data.windows(2).position(|bytes| bytes == b"\n\n") else {
+        return EBADMSG;
+    };
+    // SAFETY: The caller owns the output; offset is inside the commit body.
+    unsafe {
+        *result = Decoded {
+            offset: separator + 2,
+            length: length - separator - 2,
+            kind: git_zero::ObjectKind::Commit as u32,
+        };
+    }
+    0
+}
+
 struct Entry<'a> {
     name: &'a [u8],
     mode: u32,
@@ -209,6 +237,45 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 mod tests {
     use super::*;
     use git_zero::{Object, ObjectKind, io::SliceWriter, zlib};
+
+    #[test]
+    fn commit_messages_preserve_exact_bytes_and_require_header_separator() {
+        for message in [
+            &b""[..],
+            &b"subject\n\nbody\n"[..],
+            &b"binary\0message\xff\n"[..],
+        ] {
+            let mut commit =
+                b"tree 0123456789abcdef0123456789abcdef01234567\nauthor example\n\n".to_vec();
+            let start = commit.len();
+            commit.extend_from_slice(message);
+            let mut result = Decoded {
+                offset: 0,
+                length: 0,
+                kind: 0,
+            };
+            assert_eq!(
+                unsafe { gitfs_commit_message(commit.as_ptr(), commit.len(), &mut result) },
+                0
+            );
+            assert_eq!(result.offset, start);
+            assert_eq!(result.length, message.len());
+            assert_eq!(
+                &commit[result.offset..result.offset + result.length],
+                message
+            );
+        }
+        let malformed = b"tree 0123456789abcdef0123456789abcdef01234567\nno separator";
+        let mut result = Decoded {
+            offset: 0,
+            length: 0,
+            kind: 0,
+        };
+        assert_eq!(
+            unsafe { gitfs_commit_message(malformed.as_ptr(), malformed.len(), &mut result) },
+            EBADMSG
+        );
+    }
 
     fn encoded_tree(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
         let mut bytes = Vec::new();

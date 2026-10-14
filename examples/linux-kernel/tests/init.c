@@ -249,6 +249,70 @@ static void setup_network(void)
 	sleep(1);
 }
 
+static void set_network_up(int up)
+{
+	struct ifreq interface = { .ifr_name = "eth0" };
+	struct rtentry route = {};
+	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+	check(fd >= 0, "network state socket");
+	check(!ioctl(fd, SIOCGIFFLAGS, &interface), "read NIC flags");
+	if (up)
+		interface.ifr_flags |= IFF_UP;
+	else
+		interface.ifr_flags &= ~IFF_UP;
+	check(!ioctl(fd, SIOCSIFFLAGS, &interface), up ? "restore NIC" : "take NIC offline");
+	if (up) {
+		((struct sockaddr_in *)&route.rt_dst)->sin_family = AF_INET;
+		((struct sockaddr_in *)&route.rt_genmask)->sin_family = AF_INET;
+		struct sockaddr_in *gateway = (struct sockaddr_in *)&route.rt_gateway;
+		gateway->sin_family = AF_INET;
+		inet_pton(AF_INET, "10.0.2.2", &gateway->sin_addr);
+		route.rt_flags = RTF_UP | RTF_GATEWAY;
+		route.rt_dev = "eth0";
+		check(!ioctl(fd, SIOCADDRT, &route) || errno == EEXIST, "restore default route");
+	}
+	close(fd);
+}
+
+static void expect_prefix(const char *path, const char *prefix)
+{
+	char buffer[128];
+	int fd = open(path, O_RDONLY);
+	ssize_t size;
+
+	check(fd >= 0, path);
+	size = read(fd, buffer, sizeof(buffer));
+	check(size >= (ssize_t)strlen(prefix) && !memcmp(buffer, prefix, strlen(prefix)),
+	      "checkout file prefix");
+	close(fd);
+}
+
+static unsigned list_directory(const char *path)
+{
+	DIR *directory = opendir(path);
+	struct dirent *entry;
+	unsigned count = 0;
+
+	check(directory != NULL, path);
+	errno = 0;
+	while ((entry = readdir(directory))) {
+		if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+			continue;
+		printf("entry: %s/%s\n", path, entry->d_name);
+		count++;
+	}
+	check(!errno, "directory iteration reaches EOF");
+	rewinddir(directory);
+	unsigned repeated = 0;
+	while ((entry = readdir(directory)))
+		if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, ".."))
+			repeated++;
+	check(!errno && repeated == count, "rewind directory");
+	closedir(directory);
+	return count;
+}
+
 static void https_tests(void)
 {
 	char port[16] = {}, url[256], buffer[128];
@@ -271,6 +335,37 @@ static void https_tests(void)
 	check(!stat("/mnt/run", &st) && (st.st_mode & 0111), "HTTPS executable mode");
 	missing_probes();
 	check(!umount("/mnt"), "unmount HTTPS snapshot");
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY,
+		    "refs,addr=10.0.2.2,timeout_ms=60000,cache_mb=2,object_mb=1") == -1 &&
+	      errno == EFBIG, "refs snapshot rejects an insufficient cache budget");
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY,
+		    "refs,addr=10.0.2.2,commit=0123456789abcdef0123456789abcdef01234567") == -1 &&
+	      errno == EINVAL, "refs view rejects an explicit single commit");
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY,
+		     "refs,addr=10.0.2.2,timeout_ms=60000"), "mount pinned refs view");
+	set_network_up(0);
+	expect_file("/mnt/main/msg", "current snapshot\n");
+	expect_file("/mnt/main/tree/README.md", "hello from kernel gitfs\n");
+	expect_file("/mnt/main/tree/dir/note.txt", "nested\n");
+	expect_big("/mnt/main/tree/big-c");
+	expect_file("/mnt/alias/msg", "current snapshot\n");
+	expect_file("/mnt/old/msg", "old revision\n");
+	expect_file("/mnt/old/tree/README.md", "old revision\n");
+	expect_file("/mnt/topic/demo/msg", "old revision\n");
+	expect_file("/mnt/.refs/HEAD/msg", "current snapshot\n");
+	expect_file("/mnt/.refs/tags/v1/msg", "current snapshot\n");
+	expect_file("/mnt/.refs/tags/tree/tree/dir/note.txt", "nested\n");
+	expect_file("/mnt/.refs/tags/blob/tree", "hello from kernel gitfs\n");
+	check(stat("/mnt/.refs/tags/blob/msg", &st) == -1 && errno == ENOENT,
+	      "non-commit ref has no commit message");
+	check(!stat("/mnt/main/tree/run", &st) && (st.st_mode & 0111), "refs executable mode");
+	expect_file("/mnt/main/tree/link", "hello from kernel gitfs\n");
+	check(list_directory("/mnt") == 5, "list refs and namespace directories");
+	check(list_directory("/mnt/main") == 2, "list commit message and tree");
+	check(list_directory("/mnt/topic") == 1, "list nested ref namespace");
+	missing_probes();
+	check(!umount("/mnt"), "unmount offline refs view");
+	set_network_up(1);
 	if (!access("/fixture/test-github", F_OK)) {
 		check(!mount("https://github.com/octocat/Hello-World", "/mnt", "gitfs", MS_RDONLY,
 			     "dns=10.0.2.3,timeout_ms=60000"),
@@ -282,6 +377,24 @@ static void https_tests(void)
 		check(before == 13 && !memcmp(buffer, "Hello World!\n", 13), "GitHub checkout bytes");
 		missing_probes();
 		check(!umount("/mnt"), "unmount GitHub checkout");
+		check(!mount("https://github.com/no-std-rs/git-zero", "/mnt", "gitfs", MS_RDONLY,
+			     "refs,dns=10.0.2.3,timeout_ms=60000"), "mount git-zero refs from GitHub");
+		set_network_up(0);
+		expect_prefix("/mnt/main/tree/README.md", "# git-zero\n");
+		expect_prefix("/mnt/main/tree/src/lib.rs", "//! Allocation-free");
+		fd = open("/mnt/main/msg", O_RDONLY);
+		check(fd >= 0, "git-zero main commit message");
+		ssize_t size = read(fd, buffer, sizeof(buffer) - 1);
+		close(fd);
+		check(size > 0, "git-zero commit message is nonempty");
+		buffer[size] = 0;
+		printf("git-zero main commit: %s\n", buffer);
+		check(list_directory("/mnt") > 1, "list git-zero branch refs");
+		check(list_directory("/mnt/main/tree") > 1, "list git-zero tree objects");
+		check(list_directory("/mnt/main/tree/src") > 1, "list git-zero subtree objects");
+		missing_probes();
+		check(!umount("/mnt"), "unmount git-zero refs");
+		set_network_up(1);
 	}
 }
 

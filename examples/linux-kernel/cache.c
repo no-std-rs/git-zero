@@ -18,11 +18,16 @@ static void gitfs_object_free(struct gitfs_mount *mount, struct gitfs_object *ob
 void gitfs_cache_destroy(struct gitfs_mount *mount)
 {
 	struct gitfs_object *object, *next;
+	struct gitfs_ref *ref, *following;
 
 	list_for_each_entry_safe(object, next, &mount->lru, lru)
 		gitfs_object_free(mount, object);
 	kvfree(mount->snapshot_index);
 	kvfree(mount->snapshot_data);
+	list_for_each_entry_safe(ref, following, &mount->refs, allocation) {
+		list_del(&ref->allocation);
+		kfree(ref);
+	}
 }
 
 struct gitfs_object *gitfs_object_get(struct gitfs_mount *mount, const u8 *id)

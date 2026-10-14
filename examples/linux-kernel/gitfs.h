@@ -13,6 +13,8 @@
 #define GITFS_COMMIT 1
 #define GITFS_TREE 2
 #define GITFS_BLOB 3
+#define GITFS_TAG 4
+#define GITFS_MESSAGE 0100001
 #define GITFS_BUCKET_BITS 8
 #define GITFS_URL_MAX 1024
 #define GITFS_HTTP_HEADERS 8192
@@ -27,6 +29,21 @@ struct gitfs_tree_entry {
 	size_t name_length;
 	u32 mode;
 	u8 id[20];
+};
+
+struct gitfs_ref_entry {
+	const u8 *name;
+	size_t name_length;
+	u8 id[20];
+};
+
+struct gitfs_ref {
+	struct list_head allocation;
+	struct gitfs_ref *children, *next;
+	u8 id[20], tree[20];
+	u32 tree_mode;
+	bool leaf, message;
+	char name[];
 };
 
 struct gitfs_object {
@@ -47,7 +64,10 @@ struct gitfs_mount {
 	char hostname[254];
 	char path[GITFS_URL_MAX];
 	u8 commit[20];
-	bool explicit_commit, https, smart, address_known;
+	bool explicit_commit, https, smart, address_known, ref_view;
+	struct gitfs_ref *ref_root;
+	struct list_head refs;
+	size_t ref_count, refs_bytes;
 	__be32 dns;
 	size_t pack_limit;
 	void *snapshot_index;
@@ -66,6 +86,9 @@ struct gitfs_mount {
 struct gitfs_inode {
 	u8 id[20];
 	bool gitlink;
+	u32 kind;
+	size_t offset;
+	struct gitfs_ref *ref;
 };
 
 void __noreturn gitfs_codec_panic(void);
@@ -74,6 +97,7 @@ int gitfs_decode_loose(const u8 *wire, size_t length, const u8 *id,
 		       u8 *output, size_t capacity, u8 *window,
 		       struct gitfs_decoded *result);
 int gitfs_commit_tree(const u8 *data, size_t length, u8 *id);
+int gitfs_commit_message(const u8 *data, size_t length, struct gitfs_decoded *result);
 int gitfs_tree_next(const u8 *data, size_t length, size_t *offset,
 		   struct gitfs_tree_entry *entry);
 
@@ -85,6 +109,11 @@ int gitfs_http_post(struct gitfs_mount *mount, const char *path,
 		    const u8 *request, size_t request_length,
 		    u8 *body, size_t capacity, size_t *length);
 int gitfs_fetch_snapshot(struct gitfs_mount *mount);
+int gitfs_refs_add(struct gitfs_mount *mount, const struct gitfs_ref_entry *entry);
+int gitfs_refs_prepare(struct gitfs_mount *mount);
+struct inode *gitfs_alloc_inode(struct super_block *sb);
+struct inode *gitfs_new_inode(struct super_block *sb, const u8 *id, u32 mode);
+struct inode *gitfs_refs_inode(struct super_block *sb, struct gitfs_ref *ref);
 
 struct gitfs_socket_io {
 	void *context;
@@ -105,6 +134,8 @@ int gitfs_tls_open(void *state, u8 *read, u8 *write, struct gitfs_socket_io io,
 ssize_t gitfs_tls_read(void *state, u8 *output, size_t length);
 ssize_t gitfs_tls_write(void *state, const u8 *input, size_t length);
 int gitfs_smart_head(const u8 *data, size_t length, u8 *head);
+int gitfs_smart_ref_next(const u8 *data, size_t length, size_t *offset,
+			struct gitfs_ref_entry *entry);
 int gitfs_smart_pack(const u8 *data, size_t length, struct gitfs_decoded *result);
 int gitfs_pack_import(const u8 *pack, size_t length,
 		      struct gitfs_pack_object *index, size_t count,

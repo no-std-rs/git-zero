@@ -8,9 +8,13 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 {
 	u8 *wire = NULL, *scratch = NULL, *window = NULL;
 	struct gitfs_decoded pack;
-	char request[192], hex[41], want[96];
+	struct gitfs_ref_entry entry;
+	struct gitfs_ref *ref, *previous;
+	char *request = NULL, hex[41], want[96];
 	size_t length, count, index_bytes, arena_length, request_length, want_length;
+	size_t offset = 0, request_capacity;
 	u8 head[20];
+	bool duplicate;
 	int shallow, error;
 
 	wire = kvmalloc(mount->pack_limit, GFP_KERNEL);
@@ -31,14 +35,47 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 	}
 	if (!mount->explicit_commit)
 		memcpy(mount->commit, head, 20);
+	if (mount->ref_view) {
+		while ((error = gitfs_smart_ref_next(wire, length, &offset, &entry)) > 0) {
+			error = gitfs_refs_add(mount, &entry);
+			if (error)
+				goto out;
+		}
+		if (error)
+			goto out;
+	}
+	request_capacity = mount->ref_count * 50 + 192;
+	request = kvmalloc(request_capacity, GFP_KERNEL);
+	if (!request) {
+		error = -ENOMEM;
+		goto out;
+	}
 	bin2hex(hex, mount->commit, 20);
 	hex[40] = 0;
 	want_length = scnprintf(want, sizeof(want), "want %s ofs-delta no-progress%s\n",
 				 hex, shallow ? " shallow" : "");
-	request_length = scnprintf(request, sizeof(request), "%04zx%s", want_length + 4, want);
+	request_length = scnprintf(request, request_capacity, "%04zx%s", want_length + 4, want);
+	list_for_each_entry(ref, &mount->refs, allocation) {
+		if (!ref->leaf || !memcmp(ref->id, mount->commit, 20))
+			continue;
+		duplicate = false;
+		list_for_each_entry(previous, &mount->refs, allocation) {
+			if (previous == ref)
+				break;
+			if (previous->leaf && !memcmp(previous->id, ref->id, 20)) {
+				duplicate = true;
+				break;
+			}
+		}
+		if (duplicate)
+			continue;
+		bin2hex(hex, ref->id, 20);
+		request_length += scnprintf(request + request_length, request_capacity - request_length,
+					    "0032want %s\n", hex);
+	}
 	if (shallow)
-		request_length += scnprintf(request + request_length, sizeof(request) - request_length, "000ddeepen 1\n");
-	request_length += scnprintf(request + request_length, sizeof(request) - request_length, "00000009done\n");
+		request_length += scnprintf(request + request_length, request_capacity - request_length, "000ddeepen 1\n");
+	request_length += scnprintf(request + request_length, request_capacity - request_length, "00000009done\n");
 	error = gitfs_http_post(mount, "git-upload-pack", request, request_length,
 				wire, mount->pack_limit, &length);
 	if (error)
@@ -52,11 +89,11 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 		goto out;
 	}
 	index_bytes = count * sizeof(struct gitfs_pack_object);
-	if (index_bytes >= mount->cache_limit) {
+	if (index_bytes >= mount->cache_limit - mount->refs_bytes) {
 		error = -EFBIG;
 		goto out;
 	}
-	arena_length = mount->cache_limit - index_bytes;
+	arena_length = mount->cache_limit - mount->refs_bytes - index_bytes;
 	mount->snapshot_index = kvzalloc(index_bytes, GFP_KERNEL);
 	mount->snapshot_data = kvmalloc(arena_length, GFP_KERNEL);
 	if (!mount->snapshot_index || !mount->snapshot_data) {
@@ -77,11 +114,12 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 			mount->snapshot_data = compact;
 		}
 		mount->snapshot_count = count;
-		mount->cache_used = mount->snapshot_used + index_bytes;
+		mount->cache_used = mount->snapshot_used + index_bytes + mount->refs_bytes;
 	}
 out:
 	kvfree(wire);
 	kvfree(scratch);
 	kvfree(window);
+	kvfree(request);
 	return error;
 }

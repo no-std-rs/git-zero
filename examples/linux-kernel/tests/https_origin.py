@@ -36,6 +36,12 @@ def fixture(root):
             bytes((i + seed) % 251 for i in range(700000)))
     command("git", "-C", str(source), "add", ".", env=env)
     command("git", "-C", str(source), "commit", "-m", "current snapshot", env=env)
+    command("git", "-C", str(source), "branch", "old", "HEAD~1")
+    command("git", "-C", str(source), "branch", "topic/demo", "HEAD~1")
+    command("git", "-C", str(source), "branch", "alias", "HEAD")
+    command("git", "-C", str(source), "tag", "-a", "v1", "-m", "annotated tag", env=env)
+    command("git", "-C", str(source), "tag", "tree", "HEAD^{tree}")
+    command("git", "-C", str(source), "tag", "blob", "HEAD:README.md")
     command("git", "clone", "--bare", str(source), str(root / "fixture/smart.git"))
     certs = root.parent / "certs"
     certs.mkdir()

@@ -36,11 +36,12 @@ static int gitfs_read_folio(struct file *file, struct folio *folio)
 	object = gitfs_object_get(mount, node->id);
 	if (IS_ERR(object)) {
 		error = PTR_ERR(object);
-	} else if (object->kind != GITFS_BLOB || object->length != i_size_read(inode)) {
+	} else if (object->kind != node->kind ||
+		   object->length != node->offset + i_size_read(inode)) {
 		error = -EBADMSG;
-	} else if (position < object->length) {
-		copied = min_t(size_t, folio_size(folio), object->length - position);
-		memcpy_to_folio(folio, 0, object->data + position, copied);
+	} else if (position < i_size_read(inode)) {
+		copied = min_t(size_t, folio_size(folio), i_size_read(inode) - position);
+		memcpy_to_folio(folio, 0, object->data + node->offset + position, copied);
 	}
 	mutex_unlock(&mount->lock);
 	folio_zero_range(folio, copied, folio_size(folio) - copied);
@@ -63,13 +64,11 @@ static const struct inode_operations gitfs_symlink_ops = {
 	.get_link = simple_get_link,
 };
 
-static struct inode *gitfs_new_inode(struct super_block *sb, const u8 *id, u32 mode)
+struct inode *gitfs_alloc_inode(struct super_block *sb)
 {
 	struct gitfs_mount *mount = sb->s_fs_info;
 	struct gitfs_inode *node;
-	struct gitfs_object *object;
 	struct inode *inode;
-	int error;
 
 	lockdep_assert_held(&mount->lock);
 	inode = new_inode(sb);
@@ -80,7 +79,6 @@ static struct inode *gitfs_new_inode(struct super_block *sb, const u8 *id, u32 m
 		iput(inode);
 		return ERR_PTR(-ENOMEM);
 	}
-	memcpy(node->id, id, 20);
 	inode->i_private = node;
 	inode->i_ino = atomic64_inc_return(&mount->next_ino);
 	inode->i_uid = GLOBAL_ROOT_UID;
@@ -88,6 +86,23 @@ static struct inode *gitfs_new_inode(struct super_block *sb, const u8 *id, u32 m
 	inode_set_atime(inode, 0, 0);
 	inode_set_mtime(inode, 0, 0);
 	inode_set_ctime(inode, 0, 0);
+	return inode;
+}
+
+struct inode *gitfs_new_inode(struct super_block *sb, const u8 *id, u32 mode)
+{
+	struct gitfs_mount *mount = sb->s_fs_info;
+	struct inode *inode = gitfs_alloc_inode(sb);
+	struct gitfs_inode *node;
+	struct gitfs_object *object;
+	struct gitfs_decoded message;
+	int error;
+
+	if (IS_ERR(inode))
+		return inode;
+	node = inode->i_private;
+	memcpy(node->id, id, 20);
+	node->kind = mode == GITFS_MESSAGE ? GITFS_COMMIT : GITFS_BLOB;
 	if (mode == 040000 || mode == 0160000) {
 		node->gitlink = mode == 0160000;
 		inode->i_mode = S_IFDIR | 0555;
@@ -101,12 +116,19 @@ static struct inode *gitfs_new_inode(struct super_block *sb, const u8 *id, u32 m
 		error = PTR_ERR(object);
 		goto fail;
 	}
-	if (object->kind != GITFS_BLOB) {
+	if (object->kind != node->kind) {
 		error = -EBADMSG;
 		goto fail;
 	}
 	i_size_write(inode, object->length);
-	inode->i_blocks = (object->length + 511) >> 9;
+	if (mode == GITFS_MESSAGE) {
+		error = gitfs_commit_message(object->data, object->length, &message);
+		if (error)
+			goto fail;
+		node->offset = message.offset;
+		i_size_write(inode, message.length);
+	}
+	inode->i_blocks = (i_size_read(inode) + 511) >> 9;
 	if (mode == 0120000) {
 		if (!object->length || object->length >= PATH_MAX ||
 		    memchr(object->data, 0, object->length)) {
@@ -262,6 +284,8 @@ static int gitfs_show_options(struct seq_file *seq, struct dentry *root)
 		   jiffies_to_msecs(mount->timeout), jiffies_to_msecs(mount->error_ttl));
 	if (mount->smart)
 		seq_printf(seq, ",smart,pack_mb=%zu", mount->pack_limit >> 20);
+	if (mount->ref_view)
+		seq_puts(seq, ",refs");
 	return 0;
 }
 
@@ -362,6 +386,13 @@ static int gitfs_fill_super(struct super_block *sb, struct fs_context *fc)
 		if (error)
 			goto out;
 	}
+	if (mount->ref_view) {
+		error = gitfs_refs_prepare(mount);
+		if (error)
+			goto out;
+		inode = gitfs_refs_inode(sb, mount->ref_root);
+		goto make_root;
+	}
 	object = gitfs_object_get(mount, mount->commit);
 	if (IS_ERR(object)) {
 		error = PTR_ERR(object);
@@ -384,6 +415,7 @@ static int gitfs_fill_super(struct super_block *sb, struct fs_context *fc)
 		goto out;
 	}
 	inode = gitfs_new_inode(sb, tree, 040000);
+make_root:
 	if (IS_ERR(inode)) {
 		error = PTR_ERR(inode);
 		goto out;
@@ -397,7 +429,7 @@ out:
 }
 
 enum { Opt_commit, Opt_cache, Opt_object, Opt_timeout, Opt_error_ttl,
-       Opt_smart, Opt_pack, Opt_dns, Opt_address };
+       Opt_smart, Opt_pack, Opt_dns, Opt_address, Opt_refs };
 
 static const struct fs_parameter_spec gitfs_parameters[] = {
 	fsparam_string("commit", Opt_commit),
@@ -409,6 +441,7 @@ static const struct fs_parameter_spec gitfs_parameters[] = {
 	fsparam_u32("pack_mb", Opt_pack),
 	fsparam_string("dns", Opt_dns),
 	fsparam_string("addr", Opt_address),
+	fsparam_flag("refs", Opt_refs),
 	{}
 };
 
@@ -453,6 +486,10 @@ static int gitfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	case Opt_smart:
 		mount->smart = true;
 		break;
+	case Opt_refs:
+		mount->ref_view = true;
+		mount->smart = true;
+		break;
 	case Opt_pack:
 		if (!result.uint_32 || result.uint_32 > 1024)
 			return -EINVAL;
@@ -478,6 +515,8 @@ static int gitfs_get_tree(struct fs_context *fc)
 	int error;
 
 	if (!fc->source)
+		return -EINVAL;
+	if (mount->ref_view && mount->explicit_commit)
 		return -EINVAL;
 	/* Every allowed object, including its entry, must fit in the cache. */
 	if (mount->cache_limit <= mount->object_limit + sizeof(struct gitfs_object))
@@ -534,6 +573,7 @@ static int gitfs_init_context(struct fs_context *fc)
 	mutex_init(&mount->lock);
 	hash_init(mount->objects);
 	INIT_LIST_HEAD(&mount->lru);
+	INIT_LIST_HEAD(&mount->refs);
 	atomic64_set(&mount->next_ino, 0);
 	fc->s_fs_info = mount;
 	fc->ops = &gitfs_context_ops;

@@ -2,7 +2,7 @@
 
 > Not because we asked if we should, but because we could. :)
 
-`gitfs.ko` mounts a Git commit as a read-only Linux filesystem. TCP sockets,
+`gitfs.ko` mounts Git commits and refs as a read-only Linux filesystem. TCP sockets,
 HTTP/HTTPS, ref resolution, object fetching, decompression, SHA-1 validation, tree
 traversal, and caching all run **inside the module**. There is no daemon,
 FUSE connection, subprocess, userspace upcall, or local checkout.
@@ -47,6 +47,30 @@ depth-one pack when the origin supports shallow fetch. Offset and reference delt
 into a bounded snapshot cache before the mount becomes visible. Reading the
 mounted snapshot needs no further network access. The GitHub URL's `.git` suffix
 is optional.
+
+To browse this repository's branches, commit messages and trees:
+
+```sh
+sudo mount -t gitfs -o ro,refs https://github.com/no-std-rs/git-zero /mnt/git
+ls /mnt/git
+cat /mnt/git/main/msg
+ls /mnt/git/main/tree
+cat /mnt/git/main/tree/src/lib.rs
+sudo umount /mnt/git
+```
+
+The `refs` view exposes each advertised branch as `<branch>/msg` and
+`<branch>/tree`. `msg` contains the commit's exact message bytes, including
+newlines. `tree` exposes files and subtrees through the usual VFS operations.
+Slashes in branch names form directories: `topic/demo/tree/file` works.
+HEAD is available at `.refs/HEAD`, and tags at `.refs/tags/<tag>`; other ref
+namespaces use `.refs/<namespace>`. Annotated tags are peeled to their target.
+Refs to a tree or blob expose `tree` as a directory or file and have no `msg`.
+
+Discovery pins all advertised refs. One upload-pack request fetches their
+distinct targets, sharing objects across branches. Ref directories, messages,
+trees and missing-name lookups then work with the network offline. The view
+does not fetch commit history, and `refs` cannot be combined with `commit`.
 
 For a small origin, run the existing server in another terminal:
 
@@ -120,6 +144,7 @@ SHA-1 checks pass. Identical blobs share bytes across paths and file modes.
 | `timeout_ms` | 5000 | 1–60000 ms total deadline per HTTP request |
 | `error_ttl_ms` | 5000 | 0–60000 ms; zero disables failure retention |
 | `smart` | Automatic for HTTPS | Enable smart upload-pack for plain HTTP too |
+| `refs` | Disabled | Browse advertised refs, messages and trees; enables smart HTTP |
 | `pack_mb` | 64 | 1–1024 MiB maximum smart HTTP response |
 | `dns` | `1.1.1.1` | IPv4 DNS server; a bounded UDP A query, without resolver upcalls |
 | `addr` | Resolve hostname | Explicit IPv4 destination; TLS sends the URL hostname as SNI |
@@ -149,6 +174,9 @@ validated. TLS state and record buffers live in kernel-owned memory and are
 wiped on close.
 
 Smart mounts support SHA-1 packs with up to 32,768 objects and delta depth 64.
+The refs view permits up to 4,096 namespace/ref nodes, UTF-8 ref names with
+components up to 255 bytes, and eight annotated-tag links. Ref metadata counts
+toward `cache_mb`. Conflicting or malformed ref paths fail the mount.
 The snapshot must fit the cache budget. Ordinary HTTP still requires loose
 objects at its origin. SHA-256 Git, persistent disk caching and background
 refresh remain extensions.
@@ -183,7 +211,10 @@ executable modes, pinned commits, offline warm reads, LRU eviction/refetch,
 rejected writes/remounts, malformed HTTP/objects, failed-mount cleanup,
 unmount and unload. HTTPS coverage includes a real Git smart backend, fragmented
 chunks, handshake-only TLS with a self-signed certificate for a different
-hostname, shallow packs and deltas. `--github` mounts
-`octocat/Hello-World` using kernel DNS and verifies its README bytes.
+hostname, shallow packs and deltas. Ref-view tests cover distinct branches,
+aliases, nested branch names, annotated and non-commit tags, exact messages,
+cache limits, directory rewind and reads with the guest NIC down. `--github`
+mounts `octocat/Hello-World` and `no-std-rs/git-zero` using kernel DNS, checks
+their source bytes, and lists git-zero's branches, commit message and subtrees.
 The userspace origins are only test fixtures. Logs go to
 `build/qemu.log`.

@@ -1,6 +1,6 @@
 ifneq ($(KERNELRELEASE),)
 obj-m := gitfs.o
-gitfs-y := vfs.o http.o dns.o smart.o cache.o codec.o
+gitfs-y := vfs.o refs.o http.o dns.o smart.o cache.o codec.o
 ccflags-y := -Werror
 
 quiet_cmd_gitfs_codec = CARGO   $@

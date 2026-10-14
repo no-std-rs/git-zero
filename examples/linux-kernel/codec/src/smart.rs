@@ -25,6 +25,31 @@ fn errno(error: Error) -> i32 {
     }
 }
 
+fn reference(line: &[u8]) -> Result<(ObjectId, &[u8], bool), Error> {
+    let mut split = line.splitn(2, |&b| b == 0);
+    let reference = split.next().ok_or(Error::InvalidReference)?;
+    let shallow = split.next().is_some_and(|capabilities| {
+        capabilities
+            .split(|b| b.is_ascii_whitespace())
+            .any(|c| c == b"shallow")
+    });
+    let reference = reference.strip_suffix(b"\n").unwrap_or(reference);
+    if reference.len() < 42 || reference[40] != b' ' {
+        return Err(Error::InvalidReference);
+    }
+    let id = ObjectId::from_hex(&reference[..40])?;
+    let name = &reference[41..];
+    if name != b"HEAD" {
+        let plain = name.strip_suffix(b"^{}").unwrap_or(name);
+        let text = core::str::from_utf8(plain).map_err(|_| Error::InvalidReference)?;
+        git_zero::repository::validate_ref_name(text)?;
+        if plain.split(|&b| b == b'/').any(|part| part.len() > 255) {
+            return Err(Error::InvalidReference);
+        }
+    }
+    Ok((id, name, shallow))
+}
+
 fn discovery(mut bytes: &[u8], head: &mut [u8; 20]) -> Result<bool, Error> {
     match pktline::read(&mut bytes)? {
         Some(Packet::Data(b"# service=git-upload-pack\n")) => {}
@@ -46,19 +71,12 @@ fn discovery(mut bytes: &[u8], head: &mut [u8; 20]) -> Result<bool, Error> {
                 break;
             }
             Packet::Data(line) => {
-                let mut split = line.splitn(2, |&b| b == 0);
-                let reference = split.next().ok_or(Error::InvalidReference)?;
-                if let Some(capabilities) = split.next() {
-                    shallow = capabilities
-                        .split(|b| b.is_ascii_whitespace())
-                        .any(|c| c == b"shallow");
-                }
-                let reference = reference.strip_suffix(b"\n").unwrap_or(reference);
-                if reference.len() < 42 || reference[40] != b' ' {
-                    return Err(Error::InvalidReference);
-                }
-                let id = ObjectId::from_hex(&reference[..40])?;
-                if &reference[41..] == b"HEAD" {
+                let (id, name, supports_shallow) = reference(line)?;
+                shallow |= supports_shallow;
+                if name == b"HEAD" {
+                    if found {
+                        return Err(Error::InvalidReference);
+                    }
                     *head = id.0;
                     found = true;
                 }
@@ -72,6 +90,72 @@ fn discovery(mut bytes: &[u8], head: &mut [u8; 20]) -> Result<bool, Error> {
         return Err(Error::ObjectNotFound);
     }
     Ok(shallow)
+}
+
+#[repr(C)]
+pub struct RefEntry {
+    name: *const u8,
+    name_length: usize,
+    id: [u8; 20],
+}
+
+/// Iterate an advertisement already validated by gitfs_smart_head.
+/// Peeled tag pseudo-refs are skipped; tag objects are fetched and peeled later.
+/// # Safety
+/// Data is live for length bytes. Offset and entry are exclusive aligned outputs
+/// disjoint from data and each other; offset starts at zero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gitfs_smart_ref_next(
+    data: *const u8,
+    length: usize,
+    offset: *mut usize,
+    entry: *mut RefEntry,
+) -> i32 {
+    // SAFETY: C owns each range for this synchronous call.
+    let (data, offset) = unsafe { (core::slice::from_raw_parts(data, length), &mut *offset) };
+    let parsed = (|| {
+        let mut bytes = data.get(*offset..).ok_or(Error::InvalidPacket)?;
+        if *offset == 0
+            && (!matches!(
+                pktline::read(&mut bytes)?,
+                Some(Packet::Data(b"# service=git-upload-pack\n"))
+            ) || !matches!(pktline::read(&mut bytes)?, Some(Packet::Flush)))
+        {
+            return Err(Error::InvalidPacket);
+        }
+        loop {
+            match pktline::read(&mut bytes)? {
+                Some(Packet::Data(line)) => {
+                    let (id, name, _) = reference(line)?;
+                    if name.ends_with(b"^{}") {
+                        continue;
+                    }
+                    *offset = length - bytes.len();
+                    return Ok(Some((id, name)));
+                }
+                Some(Packet::Flush) | None if bytes.is_empty() => {
+                    *offset = length;
+                    return Ok(None);
+                }
+                _ => return Err(Error::InvalidPacket),
+            }
+        }
+    })();
+    match parsed {
+        Ok(Some((id, name))) => {
+            // SAFETY: The output borrows the caller's live advertisement.
+            unsafe {
+                *entry = RefEntry {
+                    name: name.as_ptr(),
+                    name_length: name.len(),
+                    id: id.0,
+                }
+            };
+            1
+        }
+        Ok(None) => 0,
+        Err(e) => errno(e),
+    }
 }
 
 /// Read a protocol-v0 smart advertisement, returning 1 if shallow is supported.
@@ -90,6 +174,36 @@ pub unsafe extern "C" fn gitfs_smart_head(data: *const u8, length: usize, head: 
         Ok(shallow) => i32::from(shallow),
         Err(Error::ObjectNotFound) => -2,
         Err(e) => errno(e),
+    }
+}
+
+// core's recursive quicksort can exhaust a kernel stack on a realistic pack.
+// Heap sort uses constant stack space and keeps the ID lookup index ordered.
+fn sort_index(index: &mut [PackObject]) {
+    fn sift(index: &mut [PackObject], mut root: usize, length: usize) {
+        loop {
+            let left = root * 2 + 1;
+            if left >= length {
+                return;
+            }
+            let larger = if left + 1 < length && index[left].id < index[left + 1].id {
+                left + 1
+            } else {
+                left
+            };
+            if index[root].id >= index[larger].id {
+                return;
+            }
+            index.swap(root, larger);
+            root = larger;
+        }
+    }
+    for root in (0..index.len() / 2).rev() {
+        sift(index, root, index.len());
+    }
+    for end in (1..index.len()).rev() {
+        index.swap(0, end);
+        sift(index, 0, end);
     }
 }
 
@@ -202,7 +316,7 @@ fn import(
         }
         reader.finish()?;
         if remaining == 0 {
-            index.sort_unstable_by_key(|o| o.id);
+            sort_index(index);
             return Ok(used);
         }
         if !progress {
@@ -335,6 +449,29 @@ mod tests {
     use git_zero::{io::SliceWriter, zlib};
     use sha1::{Digest, Sha1};
 
+    #[test]
+    fn iterative_sort_orders_large_indexes_with_duplicates() {
+        for count in [0, 1, 2, 32768] {
+            let mut index: Vec<_> = (0..count)
+                .map(|i| {
+                    let mut id = [0; 20];
+                    id[..4].copy_from_slice(&(((i * 7919) % 10007) as u32).to_be_bytes());
+                    PackObject {
+                        id,
+                        ..PackObject::default()
+                    }
+                })
+                .collect();
+            let mut expected: Vec<_> = index.iter().map(|object| object.id).collect();
+            expected.sort_unstable();
+            sort_index(&mut index);
+            assert_eq!(
+                index.iter().map(|object| object.id).collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
     fn append_zlib(bytes: &mut Vec<u8>, body: &[u8]) {
         let mut storage = [0; 256];
         let mut writer = SliceWriter::new(&mut storage);
@@ -451,5 +588,57 @@ mod tests {
         writer.write_all(b"0000").unwrap();
         assert_eq!(discovery(writer.as_bytes(), &mut head), Ok(true));
         assert_eq!(head, id.0);
+    }
+
+    #[test]
+    fn refs_iterator_preserves_names_and_skips_peeled_pseudo_refs() {
+        let mut storage = [0; 1024];
+        let mut writer = SliceWriter::new(&mut storage);
+        use git_zero::io::Write;
+        pktline::write(&mut writer, b"# service=git-upload-pack\n").unwrap();
+        writer.write_all(b"0000").unwrap();
+        for name in [
+            "HEAD",
+            "refs/heads/topic/demo",
+            "refs/tags/v1",
+            "refs/tags/v1^{}",
+        ] {
+            pktline::write(
+                &mut writer,
+                format!("{} {name}\n", ObjectId([7; 20])).as_bytes(),
+            )
+            .unwrap();
+        }
+        writer.write_all(b"0000").unwrap();
+        let data = writer.as_bytes();
+        let mut offset = 0;
+        let mut entry = RefEntry {
+            name: core::ptr::null(),
+            name_length: 0,
+            id: [0; 20],
+        };
+        for expected in ["HEAD", "refs/heads/topic/demo", "refs/tags/v1"] {
+            assert_eq!(
+                unsafe { gitfs_smart_ref_next(data.as_ptr(), data.len(), &mut offset, &mut entry) },
+                1
+            );
+            assert_eq!(
+                unsafe { core::slice::from_raw_parts(entry.name, entry.name_length) },
+                expected.as_bytes()
+            );
+            assert_eq!(entry.id, [7; 20]);
+        }
+        assert_eq!(
+            unsafe { gitfs_smart_ref_next(data.as_ptr(), data.len(), &mut offset, &mut entry) },
+            0
+        );
+        assert_eq!(offset, data.len());
+        for invalid in [
+            "refs/heads/../bad",
+            "refs/heads/bad\nname",
+            "refs/heads/.hidden",
+        ] {
+            assert!(reference(format!("{} {invalid}\n", ObjectId([7; 20])).as_bytes()).is_err());
+        }
     }
 }
