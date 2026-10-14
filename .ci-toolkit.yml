@@ -1,0 +1,10 @@
+api_version: ci-toolkit/v1alpha1
+
+releases:
+  uses: toolkit.release-please@v1
+  with:
+    version_file: version.txt
+    changelog_path: CHANGELOG.md
+    include_component_in_tag: false
+    include_v_in_tag: true
+    bump_minor_pre_major: true

@@ -432,6 +432,7 @@ static void https_tests(void)
 		set_network_up(0);
 		expect_prefix("/mnt/main/tree/README.md", "# git-zero\n");
 		expect_prefix("/mnt/main/tree/src/lib.rs", "//! Allocation-free");
+		expect_prefix("/mnt/main/tree/crates/git-zero-core/src/lib.rs", "//! Allocation-free Git objects");
 		fd = open("/mnt/main/msg", O_RDONLY);
 		check(fd >= 0, "git-zero main commit message");
 		ssize_t size = read(fd, buffer, sizeof(buffer) - 1);
@@ -441,7 +442,7 @@ static void https_tests(void)
 		printf("git-zero main commit: %s\n", buffer);
 		check(list_directory("/mnt") > 1, "list git-zero branch refs");
 		check(list_directory("/mnt/main/tree") > 1, "list git-zero tree objects");
-		check(list_directory("/mnt/main/tree/src") > 1, "list git-zero subtree objects");
+		check(list_directory("/mnt/main/tree/crates/git-zero-core/src") > 1, "list git-zero subtree objects");
 		missing_probes();
 		check(!umount("/mnt"), "unmount git-zero refs");
 		set_network_up(1);

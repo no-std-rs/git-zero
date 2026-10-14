@@ -1,13 +1,7 @@
+//! Streaming pack and loose-object encoding.
 use crate::{
-    Error, Object, ObjectFormat, ObjectId, ObjectInfo, ObjectReader, Repository, Result, io::Write,
-    object::Hash, reader::DEFAULT_READ_BUFFER_SIZE, zlib,
-};
-
-mod decode;
-pub use decode::{DeltaLimits, Entry, EntryKind, Reader, ResolvedObject, apply_delta, crc32};
-mod materialize;
-pub use materialize::{
-    MaterializeLimits, MaterializedEntry, MaterializedPack, find_materialized, materialize,
+    Error, Object, ObjectId, ObjectInfo, ObjectReader, Repository, Result, io::Write, object::Hash,
+    reader::DEFAULT_READ_BUFFER_SIZE, zlib,
 };
 
 struct HashWriter<'a, W> {
@@ -128,25 +122,4 @@ pub fn write_loose_with_scratch(
     let mut header = [0; 32];
     let header = reader.info().header(&mut header)?;
     zlib::write_reader(output, header, &mut reader, scratch)
-}
-
-/// Check the framing and checksum of a downloaded pack. Object/delta validation
-/// and indexing are separate responsibilities; this does not decode objects.
-pub fn validate(bytes: &[u8]) -> Result<()> {
-    validate_with_format(bytes, ObjectFormat::Sha1)
-}
-
-pub fn validate_with_format(bytes: &[u8], format: ObjectFormat) -> Result<()> {
-    if bytes.len() < 12 + format.id_length()
-        || &bytes[..4] != b"PACK"
-        || !matches!(&bytes[4..8], [0, 0, 0, 2] | [0, 0, 0, 3])
-    {
-        return Err(Error::CorruptPack);
-    }
-    let trailer = bytes.len() - format.id_length();
-    let actual = format.digest(&bytes[..trailer]);
-    if actual.as_bytes() != &bytes[trailer..] {
-        return Err(Error::CorruptPack);
-    }
-    Ok(())
 }

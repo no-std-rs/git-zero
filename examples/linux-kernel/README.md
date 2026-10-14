@@ -10,6 +10,9 @@ FUSE connection, subprocess, userspace upcall, or local checkout.
 C implements VFS, kernel sockets, DNS and buffer ownership. The Rust example
 contains TLS 1.3 and thin C ABI wrappers calling `git-zero` for smart discovery,
 fetch encoding, pack materialization/index lookup, and commit/tree/tag parsing.
+The shared implementation lives in `git-zero-core` and `git-zero-client`; the
+kernel codec enables the facade's client feature, with encoding enabled only for
+its host-side tests.
 Git parsing and delta resolution live in the shared, safe Rust core. The adapter
 adds Linux name limits and errno conversion. Linux allocates the buffers; the
 kernel Rust build uses neither `std` nor `alloc`.

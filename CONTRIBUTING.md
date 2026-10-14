@@ -103,3 +103,16 @@ infrastructure allowlist. Repository automation settings require a recent sign-i
 Runnerless reads PR programs from the trusted base revision. Changes to this file
 take effect after merging and apply to subsequent PRs. All three Runnerless checks
 were verified on a live PR before being added to protection.
+
+## Crate boundaries and releases
+
+Keep shared object and wire types in `git-zero-core`. Client and server crates
+must depend on the core rather than on one another. New decoding/validation APIs
+belong behind `read`; snapshot construction and encoding APIs belong behind
+`write`. Keep default-disabled builds warning-free and allocation-free.
+
+Run `python3 scripts/check-features.py` to compile each feature combination
+independently; a workspace-wide build can unify features and hide missing gates.
+Run `python3 scripts/check-public-packages.py` to verify publishable metadata and
+dependency ordering. Release helper tests run with the existing Python suite.
+See [RELEASING.md](RELEASING.md) for the release lifecycle and local package capture.

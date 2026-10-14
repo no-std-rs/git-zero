@@ -119,9 +119,10 @@ pub fn find_materialized(index: &[MaterializedEntry], id: ObjectId) -> Option<&M
 /// I/O is used.
 ///
 /// ```
-/// use git_zero::{Snapshot, ObjectKind, object::Commit, io::SliceWriter, pack,
+/// # #[cfg(feature = "write")]
+/// # fn example() -> git_zero_core::Result<()> {
+/// use git_zero_core::{Snapshot, ObjectKind, object::Commit, io::SliceWriter, pack,
 ///     zlib::{InflateLimits, WINDOW_SIZE}};
-/// # fn main() -> git_zero::Result<()> {
 /// let mut tree = [0; 256];
 /// let mut commit = [0; 512];
 /// let source = Snapshot::new(&[], &mut tree, &mut commit)?;
@@ -146,6 +147,8 @@ pub fn find_materialized(index: &[MaterializedEntry], id: ObjectId) -> Option<&M
 /// let commit = Commit::parse(objects.find(head.id()).unwrap().data)?;
 /// assert_eq!(objects.find(commit.tree()).unwrap().kind, ObjectKind::Tree);
 /// # Ok(()) }
+/// # #[cfg(feature = "write")]
+/// # example().unwrap();
 /// ```
 pub fn materialize<'a>(
     pack: &[u8],

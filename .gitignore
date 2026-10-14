@@ -7,3 +7,4 @@ examples/cloudflare-worker/build/
 *.log
 __pycache__/
 /interop-artifacts/
+/dist/

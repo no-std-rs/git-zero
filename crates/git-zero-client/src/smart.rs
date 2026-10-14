@@ -1,6 +1,6 @@
 //! Protocol-v0 discovery, bounded fetch negotiation and raw-pack responses.
 use super::{Protocol, Reference, References};
-use crate::{
+use git_zero_core::{
     Error, ObjectFormat, ObjectId, Result,
     io::{SliceWriter, Write},
     pack,
@@ -129,7 +129,7 @@ pub(super) fn next_reference<'a>(
                     continue;
                 }
                 if reference.name != "HEAD" {
-                    crate::repository::validate_ref_name(
+                    git_zero_core::repository::validate_ref_name(
                         reference.name.strip_suffix("^{}").unwrap_or(reference.name),
                     )?;
                 }

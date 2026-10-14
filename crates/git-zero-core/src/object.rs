@@ -4,7 +4,9 @@ use sha2::Sha256;
 
 use crate::{Error, Result, io::SliceWriter};
 
+#[cfg(feature = "read")]
 mod parse;
+#[cfg(feature = "read")]
 pub use parse::{Commit, Tag, Tree, TreeEntries, TreeEntry};
 
 /// One repository's object/hash encoding. Object formats cannot be mixed.
@@ -49,6 +51,7 @@ impl ObjectFormat {
             Self::Sha256 => Hash::Sha256(Sha256::new()),
         }
     }
+    #[cfg(feature = "read")]
     pub(crate) fn digest(self, bytes: &[u8]) -> ObjectId {
         let mut hash = self.hash();
         hash.update(bytes);
@@ -212,6 +215,7 @@ pub struct ObjectInfo {
 impl ObjectInfo {
     /// Parse one complete canonical Git header, including its terminating NUL.
     /// Sizes use unsigned decimal without leading zeros and fit in 64 bits.
+    #[cfg(feature = "read")]
     pub fn from_header(header: &[u8]) -> Result<Self> {
         let header = header.strip_suffix(&[0]).ok_or(Error::InvalidObject)?;
         let space = header
@@ -254,6 +258,7 @@ impl<'a> Object<'a> {
     /// Validate already inflated loose bytes before exposing a borrowed body.
     /// Header syntax, exact body length and the expected ID's hash must all match.
     /// This checks the object's envelope, not its commit/tree/tag semantics.
+    #[cfg(feature = "read")]
     pub fn from_loose(bytes: &'a [u8], expected: ObjectId) -> Result<Self> {
         let end = bytes
             .iter()

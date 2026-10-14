@@ -12,6 +12,12 @@ jobs:
           targets: wasm32-unknown-unknown, riscv32imac-unknown-none-elf
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Isolated crate feature combinations
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: python3 scripts/check-features.py
+      - name: Public package metadata and dependency order
+        run: python3 scripts/check-public-packages.py
       - run: cargo test --workspace --locked
       - run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Shared Rust benchmark host correctness and resource smoke test

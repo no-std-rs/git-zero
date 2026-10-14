@@ -1,12 +1,11 @@
 //! Raw object bodies in immutable regular files, read by offset with rustix.
 use core::ffi::CStr;
+#[cfg(feature = "server")]
+use git_zero::http::{self, Request, Response};
 
 use git_zero::{
-    Error, Head, ObjectFormat, ObjectId, ObjectInfo, ObjectKind, Repository, Result,
-    http::{self, Request, Response},
-    io::Write,
-    pack,
-    repository::validate_refs,
+    Error, Head, ObjectFormat, ObjectId, ObjectInfo, ObjectKind, Repository, Result, io::Write,
+    pack, repository::validate_refs,
 };
 use rustix::{
     fd::{AsFd, OwnedFd},
@@ -190,6 +189,7 @@ impl<'a> FileRepository<'a> {
     /// Core HTTP routes with verified prepacked reuse for upload-pack responses.
     /// Dumb loose objects continue to be encoded from their raw file bodies.
     /// Use core http::serve_with_pack to pair this writer with a validated index.
+    #[cfg(feature = "server")]
     pub fn serve_with_scratch(
         &self,
         request: Request<'_>,

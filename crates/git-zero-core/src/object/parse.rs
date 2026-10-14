@@ -1,5 +1,5 @@
 //! Borrowed structural views of commit, tree and annotated-tag bodies.
-use crate::{Error, ObjectFormat, ObjectId, ObjectKind, Result, snapshot::cmp_tree_names};
+use crate::{Error, ObjectFormat, ObjectId, ObjectKind, Result, names::cmp_tree_names};
 
 /// A commit's root tree and exact message bytes. This checks the root header
 /// and header/message separator, not identity semantics or graph reachability.

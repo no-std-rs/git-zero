@@ -1,10 +1,13 @@
 //! Bounded HTTP fetch primitives. The host supplies transport and storage.
 //! Smart fetch returns a validated raw pack; dumb fetch returns a zlib loose
 //! object. Bounded loose-object decoding validates headers, lengths and IDs;
-//! `crate::zlib` also provides standalone inflation, and `crate::pack` provides
+//! `git_zero_core::zlib` also provides standalone inflation, and `git_zero_core::pack` provides
 //! entry/delta decoding and bounded materialized indexes. The host owns storage
 //! and checkout policy.
-use crate::{
+#![no_std]
+#![forbid(unsafe_code)]
+
+use git_zero_core::{
     Error, Object, ObjectFormat, ObjectId, Result,
     http::Request,
     io::{SliceWriter, Write},
@@ -28,7 +31,8 @@ pub trait Transport {
 /// Non-default encoders can need a separate budget; output limits are independent.
 pub fn loose_wire_capacity(body_limit: usize) -> Result<usize> {
     let source = body_limit.checked_add(32).ok_or(Error::LimitExceeded)?;
-    usize::try_from(crate::zlib::compress_bound(source as u64)?).map_err(|_| Error::LimitExceeded)
+    usize::try_from(git_zero_core::zlib::compress_bound(source as u64)?)
+        .map_err(|_| Error::LimitExceeded)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -5,7 +5,8 @@ ccflags-y := -Werror
 
 quiet_cmd_gitfs_codec = CARGO   $@
       cmd_gitfs_codec = $(CONFIG_SHELL) $(src)/build-codec.sh "$(src)" "$(obj)" "$(srctree)" "$(LD)" "$(OBJCOPY)"
-gitfs_core_sources := $(shell rg --files "$(src)/../../src" -g '*.rs')
+gitfs_core_sources := $(shell rg --files "$(src)/../../src" "$(src)/../../crates/git-zero-core" \
+                       "$(src)/../../crates/git-zero-client" -g '*.rs' -g Cargo.toml)
 
 $(obj)/codec.o: $(wildcard $(src)/codec/src/*.rs) $(src)/codec/Cargo.toml $(src)/build-codec.sh \
                $(src)/../../Cargo.toml $(src)/../../Cargo.lock $(gitfs_core_sources) FORCE
