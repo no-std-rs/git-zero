@@ -80,6 +80,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-zero-kernel-codec"
+version = "0.1.0"
+dependencies = [
+ "git-zero",
+ "sha1",
+]
+
+[[package]]
 name = "git-zero-rustix"
 version = "0.1.0"
 dependencies = [

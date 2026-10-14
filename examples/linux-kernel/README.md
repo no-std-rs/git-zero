@@ -1,0 +1,139 @@
+# Kernel Git filesystem example
+
+`gitfs.ko` mounts a Git commit as a read-only Linux filesystem. TCP sockets,
+HTTP, ref resolution, object fetching, decompression, SHA-1 validation, tree
+traversal, and caching all run **inside the module**. There is no daemon,
+FUSE connection, subprocess, userspace upcall, or local checkout.
+
+C implements VFS, networking and buffer ownership. A small Rust ABI links the
+existing allocation-free `git-zero` decoder and SHA-1 into the module. Linux
+allocates the buffers; the kernel Rust build uses neither `std` nor `alloc`.
+
+## Build and mount
+
+This example targets **x86-64 Linux 6.17**, tested on 6.17.7. It needs a
+configured kernel development tree with `CONFIG_RUST=y`, `CONFIG_INET=y` and
+`scripts/target.json`, a C compiler, binutils, Make, ripgrep, and a recent Rust
+toolchain with `rust-src`. The tested Rust compiler is 1.97.1.
+
+```sh
+rustup component add rust-src
+make -C examples/linux-kernel
+# Or select another prepared kernel build:
+make -C examples/linux-kernel KDIR=/path/to/kernel/build
+```
+
+The build rebuilds `core` and `compiler_builtins` for the kernel target ABI.
+It disables SIMD, red zones and jump tables, enables configured return thunks
+and IBT, and selects software SHA-1. `RUSTC_BOOTSTRAP=1` enables the unstable
+compiler controls used for this build; a host userspace `libcore` is not linked.
+
+For a small origin, run the existing server in another terminal:
+
+```sh
+cargo run -p git-zero-rustix --bin git-zero -- serve 8080
+```
+
+Load and mount:
+
+```sh
+sudo insmod examples/linux-kernel/gitfs.ko
+sudo mkdir -p /mnt/git
+sudo mount -t gitfs -o ro,cache_mb=64,object_mb=8 \
+  http://127.0.0.1:8080/repo.git /mnt/git
+ls -la /mnt/git
+cat /mnt/git/README.md
+sudo umount /mnt/git
+sudo rmmod gitfs
+```
+
+The server is an ordinary repository origin, with no special relationship to
+the mount. A static HTTP server exposing a bare repository's loose objects also
+works.
+
+By default, the module resolves `HEAD` once and pins that commit. To select a
+commit directly and skip ref requests:
+
+```sh
+sudo mount -t gitfs -o ro,commit=0123456789abcdef0123456789abcdef01234567 \
+  http://192.0.2.10:8080/repo.git /mnt/git
+```
+
+Replace the example SHA-1 with an existing commit's full ID. The resolved ID
+appears in `/proc/mounts`. Upstream branch updates do not change existing mounts;
+unmount and mount again to see a new revision. Read-write remounts are rejected.
+
+## Caching
+
+Each mount has a hash table keyed by the complete object ID and a byte-budgeted
+LRU. Objects enter it only after zlib, canonical envelope, length and expected
+SHA-1 checks pass. Identical blobs share bytes across paths and file modes.
+
+- Mounting `HEAD` normally requests `HEAD`, its branch ref, the commit and the
+  root tree. An explicit commit normally needs two requests.
+- Directory listing fetches its tree, never child blobs. File lookup/stat fetches
+  its blob once to learn its size; Git trees do not store file sizes.
+- Missing names come from the directory tree and become negative dentries.
+  Editor/build-tool probes do not request nonexistent objects while that tree
+  is cached.
+- Linux's page cache handles repeated reads, mmap and splice. The object cache
+  supplies a reclaimed page without another HTTP request.
+- A per-mount mutex covers fetch/insertion to prevent duplicate downloads.
+  This small example also serializes unrelated misses.
+- Failed HTTP/object validation results have a short retry TTL. Interruption
+  and allocation failures are not cached.
+- Eviction permits refetch. Successful entries have no TTL because objects are
+  immutable and the commit is pinned. Cache data is released on unmount.
+
+| Option | Default | Range / meaning |
+| --- | --- | --- |
+| `commit` | Resolve `HEAD` | Full SHA-1 of a commit, not an annotated tag |
+| `cache_mb` | 64 | 1–1024 MiB, strictly larger than the object limit plus an entry |
+| `object_mb` | 8 | 1–64 MiB maximum uncompressed object body |
+| `timeout_ms` | 5000 | 1–60000 ms total deadline per HTTP request |
+| `error_ttl_ms` | 5000 | 0–60000 ms; zero disables failure retention |
+
+The LRU counts payload bytes and entry structs, excluding allocator overhead.
+Fetching additionally uses bounded wire, staging and final-body buffers, plus
+32 KiB of decoder history. The inode/dentry/page caches have their normal
+independent accounting and reclamation. Unmount logs request/hit/miss/eviction
+and retained-byte counters.
+
+## Current scope
+
+The transport uses Git's
+[ordinary HTTP loose-object layout](https://git-scm.com/docs/http-protocol).
+It accepts `http://IPv4[:port]/repository-path` and bounded HTTP/1.0 or HTTP/1.1
+responses with Content-Length or connection-close framing. It rejects chunked
+transfer encoding, compressed HTTP framing, redirects, DNS, TLS and
+authentication. GitHub's HTTPS smart endpoint is outside this example's scope.
+
+Packed-only origins need loose objects exposed. Smart upload-pack, pack
+indexes/deltas, persistent disk caching, prefetch and HTTPS remain extensions.
+
+Files, executables, symlinks, nested/empty trees and byte-string filenames are
+supported. Invalid VFS components and names over 255 bytes are rejected.
+Gitlinks appear as empty directories; submodule repositories are not fetched.
+Ownership is root, timestamps are zero, and directory link counts are two.
+
+## Tests
+
+```sh
+cargo test -p git-zero-kernel-codec --locked
+make -C examples/linux-kernel
+python3 examples/linux-kernel/tests/smoke.py
+# For another matching kernel:
+python3 examples/linux-kernel/tests/smoke.py --kernel /path/to/bzImage
+```
+
+The smoke test creates objects with real Git, generates an initramfs and loads
+the module in an **unprivileged QEMU VM** using software emulation. It does not
+load the module into the host. It requires QEMU, Python 3, Git, a C compiler,
+`ldd` and a bootable image matching the module.
+
+Coverage includes HEAD/commit mounts, request counts, concurrent blob deduplication,
+100 missing-name probes, failure TTL/retry, directory iteration, symlinks,
+executable modes, pinned commits, offline warm reads, LRU eviction/refetch,
+rejected writes/remounts, malformed HTTP/objects, failed-mount cleanup,
+unmount and unload. The userspace origin is only a test fixture. Logs go to
+`build/qemu.log`.

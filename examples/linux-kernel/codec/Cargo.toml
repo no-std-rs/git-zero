@@ -1,0 +1,21 @@
+[package]
+name = "git-zero-kernel-codec"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+kernel = []
+
+[dependencies]
+git-zero = { path = "../../.." }
+# Kernel code must never use SIMD or userspace CPU feature detection.
+sha1 = { version = "0.10.7", default-features = false, features = ["force-soft"] }
+
+[lints]
+workspace = true

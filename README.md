@@ -136,6 +136,7 @@ command retains its existing wire-output behavior.
 | `crates/git-zero-rustix/` | `no_std` file/socket adapters; small `std` process wrapper |
 | `examples/cloudflare-worker/wasm/` | `no_std` raw Wasm ABI with fixed buffers |
 | `examples/cloudflare-worker/src/` | JavaScript host for Cloudflare metadata and HTTP |
+| `examples/linux-kernel/` | Kernel VFS/socket adapter and `no_std` Rust codec for mounting Git snapshots |
 | `tests/` | Core checks, real Git pack validation, parallel HTTP matrix |
 
 The core and native adapter libraries never enable `std` or `alloc`. The native
@@ -144,6 +145,11 @@ test harnesses use their host runtimes' memory management; the no-allocation
 guarantee applies to Rust core/adapter operations, not the surrounding platform.
 
 ## Native demo
+
+For an entirely kernel-side client, see the
+[Linux filesystem module example](examples/linux-kernel/README.md). It mounts
+a pinned Git commit over ordinary HTTP with verified object LRU caching,
+negative lookups and the Linux page cache. No userspace mount helper is needed.
 
 Use Rust 1.85 or newer, Git with HTTP support, and Python 3 for tests.
 
