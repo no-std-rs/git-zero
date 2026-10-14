@@ -125,3 +125,67 @@ fn discovery_accepts_consistent_formats_with_or_without_capabilities() {
         Ok(id)
     );
 }
+
+#[test]
+fn dumb_head_matches_discovered_format_or_infers_it_without_refs() {
+    struct DumbRepository {
+        refs: Vec<u8>,
+        head: Vec<u8>,
+    }
+    impl Transport for DumbRepository {
+        fn request(
+            &mut self,
+            request: Request<'_>,
+            output: &mut [u8],
+        ) -> git_zero::Result<(u16, usize)> {
+            let body = match request.path {
+                "info/refs" => &self.refs,
+                "HEAD" => &self.head,
+                _ => panic!("unexpected request"),
+            };
+            output[..body.len()].copy_from_slice(body);
+            Ok((200, body.len()))
+        }
+    }
+    for refs_format in [None, Some(ObjectFormat::Sha1), Some(ObjectFormat::Sha256)] {
+        for head_format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+            let id =
+                ObjectId::from_bytes(head_format, &[1; 32][..head_format.id_length()]).unwrap();
+            for symbolic in [false, true] {
+                let mut transport = DumbRepository {
+                    refs: refs_format
+                        .map(|format| {
+                            let id = ObjectId::from_bytes(format, &[1; 32][..format.id_length()])
+                                .unwrap();
+                            format!("{id}\trefs/heads/main\n").into_bytes()
+                        })
+                        .unwrap_or_default(),
+                    head: if symbolic {
+                        b"ref: refs/heads/main\n".to_vec()
+                    } else {
+                        format!("{id}\n").into_bytes()
+                    },
+                };
+                let mut storage = [0; 256];
+                let mut response = [0; 128];
+                allocations::without_allocations(|| {
+                    let discovery = client::discover(&mut transport, &mut storage).unwrap();
+                    let expected = match (refs_format, symbolic) {
+                        (None, true) => Err(Error::ObjectNotFound),
+                        (Some(format), true) => {
+                            ObjectId::from_bytes(format, &[1; 32][..format.id_length()])
+                        }
+                        (Some(format), false) if format != head_format => {
+                            Err(Error::InvalidRequest)
+                        }
+                        _ => Ok(id),
+                    };
+                    assert_eq!(
+                        client::read_head(&mut transport, &discovery, &mut response),
+                        expected
+                    );
+                });
+            }
+        }
+    }
+}

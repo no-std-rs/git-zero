@@ -34,6 +34,7 @@ pub struct Reference<'a> {
 pub struct Discovery<'a> {
     pub protocol: Protocol,
     bytes: &'a [u8],
+    format: Option<ObjectFormat>,
 }
 
 impl<'a> Discovery<'a> {
@@ -42,7 +43,7 @@ impl<'a> Discovery<'a> {
             protocol: self.protocol,
             bytes: self.bytes,
             failed: false,
-            format: None,
+            format: self.format,
         }
     }
 
@@ -183,11 +184,17 @@ pub fn discover<'a>(
     } else {
         Protocol::Dumb
     };
-    let discovery = Discovery { protocol, bytes };
+    let mut discovery = Discovery {
+        protocol,
+        bytes,
+        format: None,
+    };
     // Validate every advertised ref now, rather than silently accepting truncation.
-    for reference in discovery.references() {
+    let mut references = discovery.references();
+    for reference in references.by_ref() {
         reference?;
     }
+    discovery.format = references.format;
     Ok(discovery)
 }
 
@@ -222,7 +229,11 @@ pub fn read_head(
         }
         Err(Error::ObjectNotFound)
     } else {
-        ObjectId::from_hex(line)
+        let id = ObjectId::from_hex(line)?;
+        if discovery.format.is_some_and(|format| format != id.format()) {
+            return Err(Error::InvalidRequest);
+        }
+        Ok(id)
     }
 }
 
