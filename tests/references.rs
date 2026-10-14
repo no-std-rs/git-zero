@@ -297,6 +297,17 @@ fn common_commit_closures_exclude_shared_merge_history_and_reset_between_request
     validated(&graph.repository(), |repository| {
         let mut work = [None; CAPACITY];
         let mut indices = [0; CAPACITY];
+        assert_eq!(
+            repository.select_missing_objects(
+                &[graph.ids.merge.unwrap()],
+                [Err(Error::Backend)],
+                &mut work,
+                &mut indices,
+                (&mut [0; 1], &mut [0; 128]),
+                8192,
+            ),
+            Err(Error::Backend)
+        );
         for common in [
             vec![graph.ids.base.unwrap()],
             vec![graph.ids.main.unwrap(), graph.ids.side.unwrap()],
@@ -322,7 +333,7 @@ fn common_commit_closures_exclude_shared_merge_history_and_reset_between_request
                 repository
                     .select_missing_objects(
                         &[graph.ids.merge.unwrap()],
-                        common.iter().copied(),
+                        common.iter().copied().map(Ok),
                         &mut work,
                         &mut indices,
                         (&mut [0; 1], &mut [0; 128]),

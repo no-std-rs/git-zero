@@ -2,7 +2,7 @@
 mod allocations;
 
 use git_zero::{
-    Error, File, ObjectFormat, ObjectId, Repository, Snapshot, ValidatedRepository,
+    Error, File, ObjectFormat, ObjectId, ObjectInfo, Repository, Snapshot, ValidatedRepository,
     http::{self, Request, SelectionStorage},
     io::SliceWriter,
     pack,
@@ -12,6 +12,51 @@ use git_zero::{
 fn packet(body: &mut Vec<u8>, line: &[u8]) {
     body.extend_from_slice(format!("{:04x}", line.len() + 4).as_bytes());
     body.extend_from_slice(line);
+}
+
+struct FailedMetadata<'a>(&'a dyn Repository);
+
+impl Repository for FailedMetadata<'_> {
+    fn head(&self) -> ObjectId {
+        self.0.head()
+    }
+    fn object_count(&self) -> usize {
+        self.0.object_count()
+    }
+    fn object_id(&self, index: usize) -> Option<ObjectId> {
+        self.0.object_id(index)
+    }
+    fn find_index(&self, id: ObjectId) -> Option<usize> {
+        self.0.find_index(id)
+    }
+    fn object_info(&self, _index: usize) -> git_zero::Result<ObjectInfo> {
+        Err(Error::Backend)
+    }
+}
+
+#[test]
+fn have_metadata_failures_propagate_in_every_ack_mode_before_pack_writers_run() {
+    let mut tree = [0; 128];
+    let mut commit = [0; 512];
+    let snapshot = Snapshot::new(&[], &mut tree, &mut commit).unwrap();
+    let repository = FailedMetadata(&snapshot);
+    for caps in ["", " multi_ack", " multi_ack_detailed"] {
+        for done in [false, true] {
+            let body = body(snapshot.head(), caps, &[snapshot.head()], done);
+            let mut bytes = [0; 4096];
+            let mut output = SliceWriter::new(&mut bytes);
+            let mut called = false;
+            let result = allocations::without_allocations(|| {
+                http::serve_with_pack(&repository, request(&body), &mut [], &mut output, |_, _| {
+                    called = true;
+                    Ok(())
+                })
+            });
+            assert!(matches!(result, Err(Error::Backend)));
+            assert!(!called);
+            assert!(output.is_empty());
+        }
+    }
 }
 
 fn body(head: ObjectId, caps: &str, haves: &[ObjectId], done: bool) -> Vec<u8> {

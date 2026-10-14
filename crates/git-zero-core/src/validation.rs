@@ -148,11 +148,12 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
     /// Common roots must be present, and are trusted to describe complete client
     /// history (shallow clients must be rejected by the protocol layer). Both
     /// traversals share one graph-read budget and the same caller-owned arrays.
-    /// Unknown roots fail; retries reset exclusions as well as traversal state.
+    /// Common-root iteration may fail (for example, a host metadata read); errors
+    /// propagate. Unknown roots fail; retries reset exclusions and traversal state.
     pub fn select_missing_objects<'selected>(
         &self,
         roots: &[ObjectId],
-        common: impl IntoIterator<Item = ObjectId>,
+        common: impl IntoIterator<Item = Result<ObjectId>>,
         work: &mut [Option<ValidationMetadata>],
         selected: &'selected mut [usize],
         scratch: (&mut [u8], &mut [u8]),
@@ -174,6 +175,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             object.checked = false;
         }
         for id in common {
+            let id = id?;
             let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
             reach(work, self.by_id, id, metadata(work, index).info.kind)?;
         }

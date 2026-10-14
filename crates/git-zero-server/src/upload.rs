@@ -144,7 +144,7 @@ impl<'a> UploadRequest<'a> {
     pub fn common<'r>(
         &'r self,
         repository: &'r impl Repository,
-    ) -> impl Iterator<Item = ObjectId> + 'r {
+    ) -> impl Iterator<Item = Result<ObjectId>> + 'r {
         let mut bytes = self.haves;
         core::iter::from_fn(move || {
             loop {
@@ -155,12 +155,12 @@ impl<'a> UploadRequest<'a> {
                     continue;
                 };
                 let id = ObjectId::from_hex(hex.strip_suffix(b"\n").unwrap_or(hex)).ok()?;
-                if repository.find_index(id).is_some_and(|index| {
-                    repository
-                        .object_info(index)
-                        .is_ok_and(|info| info.kind == ObjectKind::Commit)
-                }) {
-                    return Some(id);
+                if let Some(index) = repository.find_index(id) {
+                    match repository.object_info(index) {
+                        Ok(info) if info.kind == ObjectKind::Commit => return Some(Ok(id)),
+                        Ok(_) => {}
+                        Err(error) => return Some(Err(error)),
+                    }
                 }
             }
         })
@@ -169,6 +169,7 @@ impl<'a> UploadRequest<'a> {
     pub fn acknowledge(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
         let mut last = None;
         for id in self.common(repository) {
+            let id = id?;
             if self.capabilities.ack == 0 {
                 pktline::write_parts(output, &[b"ACK ", &id.to_hex(), b"\n"])?;
                 return Ok(());
