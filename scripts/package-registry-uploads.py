@@ -6,6 +6,7 @@ crates.io and adds packages captured earlier in this run, so packages can be
 prepared using the same dependency index Cargo uses for crates.io.
 """
 
+from contextlib import contextmanager
 import hashlib
 import hmac
 import http.server
@@ -79,6 +80,24 @@ def parse_upload(body, expected_name, version):
     return (json.dumps(record, separators=(",", ":")) + "\n").encode()
 
 
+class RegistryError(Exception):
+    def __init__(self, status):
+        self.status = status
+
+
+def fetch(url, maximum, error_status=None):
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:
+            data = response.read(maximum + 1)
+    except urllib.error.HTTPError as error:
+        raise RegistryError(error_status or error.code) from error
+    except (OSError, TimeoutError) as error:
+        raise RegistryError(503) from error
+    if len(data) > maximum:
+        raise RegistryError(413)
+    return data
+
+
 class LocalRegistry(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
@@ -91,63 +110,54 @@ class LocalRegistry(http.server.ThreadingHTTPServer):
         self.error = None
         self.token = secrets.token_hex(32)
 
+    def read(self, path):
+        if path == "/index/config.json":
+            origin = f"http://127.0.0.1:{self.server_port}"
+            return json.dumps({"dl": origin + "/crates", "api": origin}).encode()
+        if path.startswith("/index/"):
+            key = path.removeprefix("/index/")
+            if key in self.index:
+                return self.index[key]
+            return fetch("https://index.crates.io/" + key, MAX_INDEX)
+        if path.startswith("/crates/"):
+            return self.crate(path)
+        raise RegistryError(404)
+
+    def crate(self, path):
+        parts = path.split("/")
+        if len(parts) != 5 or parts[4] != "download":
+            raise RegistryError(404)
+        name, version = parts[2:4]
+        asset = self.output / f"{name}-{version}.cargo-upload"
+        if name in PACKAGES and version == self.version and asset.is_file():
+            body = asset.read_bytes()
+            return body[8 + struct.unpack_from("<I", body)[0]:]
+        return fetch(f"https://static.crates.io/crates/{name}/{name}-{version}.crate", MAX_UPLOAD, 503)
+
+    def capture(self, body):
+        record = parse_upload(body, self.expected, self.version)
+        key = index_path(self.expected)
+        if key in self.index:
+            raise ValueError("duplicate Cargo upload")
+        self.output.joinpath(f"{self.expected}-{self.version}.cargo-upload").write_bytes(body)
+        self.index[key] = record
+
 
 class RegistryHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/index/config.json":
-            data = json.dumps(
-                {
-                    "dl": f"http://127.0.0.1:{self.server.server_port}/crates",
-                    "api": f"http://127.0.0.1:{self.server.server_port}",
-                }
-            ).encode()
-        elif self.path.startswith("/crates/"):
-            parts = self.path.split("/")
-            if len(parts) != 5 or parts[4] != "download":
-                self.send_error(404)
-                return
-            name, version = parts[2:4]
-            asset = self.server.output / f"{name}-{version}.cargo-upload"
-            if name in PACKAGES and version == self.server.version and asset.is_file():
-                body = asset.read_bytes()
-                offset = 8 + struct.unpack_from("<I", body)[0]
-                data = body[offset:]
-            else:
-                try:
-                    with urllib.request.urlopen(f"https://static.crates.io/crates/{name}/{name}-{version}.crate", timeout=20) as response:
-                        data = response.read(MAX_UPLOAD + 1)
-                except (OSError, TimeoutError):
-                    self.send_error(503)
-                    return
-                if len(data) > MAX_UPLOAD:
-                    self.send_error(413)
-                    return
-        elif self.path.startswith("/index/"):
-            item = self.path.removeprefix("/index/")
-            data = self.server.index.get(item)
-            if data is None:
-                try:
-                    with urllib.request.urlopen(
-                        "https://index.crates.io/" + item, timeout=20
-                    ) as response:
-                        data = response.read(MAX_INDEX + 1)
-                except urllib.error.HTTPError as error:
-                    self.send_error(error.code)
-                    return
-                except (OSError, TimeoutError):
-                    self.send_error(503)
-                    return
-                if len(data) > MAX_INDEX:
-                    self.send_error(413)
-                    return
-        else:
-            self.send_error(404)
-            return
+    def send_data(self, data):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def do_GET(self):
+        try:
+            data = self.server.read(self.path)
+        except RegistryError as error:
+            self.send_error(error.status)
+            return
+        self.send_data(data)
 
     def do_PUT(self):
         if self.path != "/api/v1/crates/new" or not self.server.expected:
@@ -160,25 +170,48 @@ class RegistryHandler(http.server.BaseHTTPRequestHandler):
             size = int(self.headers.get("Content-Length", "0"))
             if not 0 < size <= MAX_UPLOAD:
                 raise ValueError("invalid upload length")
-            body = self.rfile.read(size)
-            record = parse_upload(body, self.server.expected, self.server.version)
-            if index_path(self.server.expected) in self.server.index:
-                raise ValueError("duplicate Cargo upload")
-            self.server.output.joinpath(self.server.expected + "-" + self.server.version + ".cargo-upload").write_bytes(body)
-            self.server.index[index_path(self.server.expected)] = record
+            self.server.capture(self.rfile.read(size))
         except (ValueError, KeyError, TypeError, OSError) as error:
             self.server.error = str(error)
             self.send_error(422)
             return
-        data = b'{"warnings":{"invalid_categories":[],"invalid_badges":[],"other":[]}}'
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        self.send_data(b'{"warnings":{"invalid_categories":[],"invalid_badges":[],"other":[]}}')
 
     def log_message(self, _format, *_args):
         pass
+
+
+@contextmanager
+def registry(output, version):
+    server = LocalRegistry(output, version)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def capture_packages(server):
+    # Redirect both resolution and publication; credentials exist only locally.
+    index = f"sparse+http://127.0.0.1:{server.server_port}/index/"
+    environment = os.environ.copy()
+    environment["CARGO_REGISTRIES_RUNNERLESS_CAPTURE_INDEX"] = index
+    environment["CARGO_REGISTRIES_RUNNERLESS_CAPTURE_TOKEN"] = server.token
+    command = [
+        "cargo",
+        "--config", 'source.crates-io.replace-with="local-mirror"',
+        "--config", f'source.local-mirror.registry="{index}"',
+        "publish", "--registry", "runnerless-capture", "--allow-dirty", "--locked",
+    ]
+    for name in PACKAGES:
+        server.expected = name
+        result = subprocess.run(command + ["-p", name], cwd=ROOT, env=environment, timeout=120, check=False)
+        asset = server.output / f"{name}-{server.version}.cargo-upload"
+        if result.returncode or not asset.is_file() or server.error:
+            raise RuntimeError(f"could not package {name}: {server.error or result.returncode}")
 
 
 def main():
@@ -189,38 +222,13 @@ def main():
         raise SystemExit("version.txt must contain a stable semantic version")
     output = Path(sys.argv[1]).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    server = LocalRegistry(output, version)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        # Cargo's existing cache remains available; only these scoped config
-        # arguments redirect resolution and publication for this process.
-        index = f"sparse+http://127.0.0.1:{server.server_port}/index/"
-        environment = os.environ.copy()
-        environment["CARGO_REGISTRIES_RUNNERLESS_CAPTURE_INDEX"] = index
-        environment["CARGO_REGISTRIES_RUNNERLESS_CAPTURE_TOKEN"] = server.token
-        for name in PACKAGES:
-            server.expected = name
-            command = [
-                "cargo",
-                "--config", 'source.crates-io.replace-with="local-mirror"',
-                "--config", f'source.local-mirror.registry="{index}"',
-                "publish", "--registry", "runnerless-capture", "--allow-dirty", "--locked",
-                "-p", name,
-            ]
-            result = subprocess.run(command, cwd=ROOT, env=environment, timeout=120, check=False)
-            asset = output / f"{name}-{version}.cargo-upload"
-            if result.returncode or not asset.is_file() or server.error:
-                raise RuntimeError(f"could not package {name}: {server.error or result.returncode}")
-        digest_lines = [
-            f"{hashlib.sha256((output / f'{name}-{version}.cargo-upload').read_bytes()).hexdigest()}  {name}-{version}.cargo-upload"
-            for name in PACKAGES
-        ]
-        output.joinpath("SHA256SUMS").write_text("\n".join(digest_lines) + "\n")
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+    with registry(output, version) as server:
+        capture_packages(server)
+    digest_lines = [
+        f"{hashlib.sha256((output / f'{name}-{version}.cargo-upload').read_bytes()).hexdigest()}  {name}-{version}.cargo-upload"
+        for name in PACKAGES
+    ]
+    output.joinpath("SHA256SUMS").write_text("\n".join(digest_lines) + "\n")
 
 
 if __name__ == "__main__":

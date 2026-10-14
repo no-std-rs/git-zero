@@ -36,20 +36,23 @@ def attach(repository, tag, directory):
         if asset is None:
             missing.append(str(path))
             continue
-        expected = hashlib.sha256(local).hexdigest()
-        if asset["size"] != len(local):
-            raise ValueError(f"existing asset differs: {path.name}")
-        digest = asset.get("digest")
-        if digest is None:
-            # Older GitHub assets may lack the server-side digest field.
-            retained = gh(["api", f"repos/{repository}/releases/assets/{asset['id']}",
-                           "--header", "Accept: application/octet-stream"])
-            digest = "sha256:" + hashlib.sha256(retained).hexdigest()
-        if digest != "sha256:" + expected:
-            raise ValueError(f"existing asset differs: {path.name}")
+        verify_existing(repository, path, local, asset)
     if missing:
         gh(["release", "upload", tag, *missing, "--repo", repository])
     print(f"Release assets verified: {tag}")
+
+
+def verify_existing(repository, path, local, asset):
+    if asset["size"] != len(local):
+        raise ValueError(f"existing asset differs: {path.name}")
+    digest = asset.get("digest")
+    if digest is None:
+        # Older GitHub assets may lack the server-side digest field.
+        retained = gh(["api", f"repos/{repository}/releases/assets/{asset['id']}",
+                       "--header", "Accept: application/octet-stream"])
+        digest = "sha256:" + hashlib.sha256(retained).hexdigest()
+    if digest != "sha256:" + hashlib.sha256(local).hexdigest():
+        raise ValueError(f"existing asset differs: {path.name}")
 
 
 if __name__ == "__main__":

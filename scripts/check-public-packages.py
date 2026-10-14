@@ -28,27 +28,39 @@ def check(release=False):
     earlier = set()
     for name, relative in PACKAGES.items():
         package = public[name]
-        if Path(package["manifest_path"]) != ROOT / relative:
-            raise ValueError(f"unexpected manifest path for {name}")
-        for field in ("description", "license", "repository", "readme"):
-            if not package[field]:
-                raise ValueError(f"missing {field} for {name}")
-        for dependency in package["dependencies"]:
-            if dependency.get("path") and dependency["name"] not in PACKAGES:
-                raise ValueError(f"{name} depends on an unpublished local package")
-            if dependency["name"] in PACKAGES:
-                if dependency["name"] not in earlier:
-                    raise ValueError(f"{name}'s dependencies must be uploaded first")
-                if dependency["req"] != "^" + version:
-                    raise ValueError(f"{name}'s dependency version differs from the release")
-        manifest = tomllib.loads((ROOT / relative).read_text())
-        for license_name in ("LICENSE-MIT", "LICENSE-APACHE"):
-            if not (Path(package["manifest_path"]).parent / license_name).is_file():
-                raise ValueError(f"missing {license_name} for {name}")
-        if "include" not in manifest["package"]:
-            raise ValueError(f"missing package file allowlist for {name}")
+        check_metadata(package, relative)
+        check_dependencies(package, earlier, version)
         earlier.add(name)
     print(f"Public package metadata verified: {', '.join(PACKAGES)} ({version})")
+
+
+def check_metadata(package, relative):
+    name = package["name"]
+    if Path(package["manifest_path"]) != ROOT / relative:
+        raise ValueError(f"unexpected manifest path for {name}")
+    for field in ("description", "license", "repository", "readme"):
+        if not package[field]:
+            raise ValueError(f"missing {field} for {name}")
+    directory = Path(package["manifest_path"]).parent
+    for license_name in ("LICENSE-MIT", "LICENSE-APACHE"):
+        if not (directory / license_name).is_file():
+            raise ValueError(f"missing {license_name} for {name}")
+    manifest = tomllib.loads((ROOT / relative).read_text())
+    if "include" not in manifest["package"]:
+        raise ValueError(f"missing package file allowlist for {name}")
+
+
+def check_dependencies(package, earlier, version):
+    for dependency in package["dependencies"]:
+        name = dependency["name"]
+        if name not in PACKAGES:
+            if dependency.get("path"):
+                raise ValueError(f"{package['name']} depends on an unpublished local package")
+            continue
+        if name not in earlier:
+            raise ValueError(f"{package['name']}'s dependencies must be uploaded first")
+        if dependency["req"] != "^" + version:
+            raise ValueError(f"{package['name']}'s dependency version differs from the release")
 
 
 if __name__ == "__main__":
