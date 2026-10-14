@@ -1,8 +1,6 @@
-//! Bounded object reads and resumable SHA-1 hashing. State is stored inline;
+//! Bounded object reads and resumable repository-format hashing. State is inline;
 //! callers own the body buffer and can retain state between individual steps.
-use sha1::{Digest, Sha1};
-
-use crate::{Error, ObjectId, ObjectInfo, Repository, Result};
+use crate::{Error, ObjectFormat, ObjectId, ObjectInfo, Repository, Result, object::Hash};
 
 /// Stack scratch used by convenience pack/HTTP writers for streamed bodies.
 /// The `*_with_scratch` variants let callers choose another budget.
@@ -30,6 +28,10 @@ impl<'repo, R: Repository + ?Sized> ObjectReader<'repo, R> {
 
     pub fn info(&self) -> ObjectInfo {
         self.info
+    }
+
+    pub fn object_format(&self) -> ObjectFormat {
+        self.repository.object_format()
     }
 
     pub fn position(&self) -> u64 {
@@ -72,17 +74,17 @@ impl<'repo, R: Repository + ?Sized> ObjectReader<'repo, R> {
 }
 
 /// Resumable Git object hashing. Retain this value between `step` calls; it owns
-/// a cursor and SHA-1 state but no scratch. `size_of::<ObjectHasher<'_, R>>()`
+/// a cursor and hash state but no scratch. `size_of::<ObjectHasher<'_, R>>()`
 /// gives the exact inline state budget for a target. IDs include kind and size.
 pub struct ObjectHasher<'repo, R: Repository + ?Sized> {
     reader: ObjectReader<'repo, R>,
-    hash: Sha1,
+    hash: Hash,
 }
 
 impl<'repo, R: Repository + ?Sized> ObjectHasher<'repo, R> {
     pub fn new(repository: &'repo R, index: usize) -> Result<Self> {
         let reader = ObjectReader::new(repository, index)?;
-        let mut hash = Sha1::new();
+        let mut hash = repository.object_format().hash();
         let mut header = [0; 32];
         hash.update(reader.info().header(&mut header)?);
         Ok(Self { reader, hash })
@@ -100,7 +102,7 @@ impl<'repo, R: Repository + ?Sized> ObjectHasher<'repo, R> {
             let length = self.reader.read(scratch)?;
             self.hash.update(&scratch[..length]);
         }
-        Ok((self.reader.remaining() == 0).then(|| ObjectId(self.hash.clone().finalize().into())))
+        Ok((self.reader.remaining() == 0).then(|| self.hash.clone().finish()))
     }
 
     /// Hash the remaining body synchronously using only the supplied scratch.

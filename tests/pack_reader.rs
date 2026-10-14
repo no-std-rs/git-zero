@@ -196,7 +196,7 @@ fn offset_encoding_reference_bases_and_pack_identity_are_checked() {
         Err(Error::ObjectNotFound)
     ));
     let mut header = vec![0x75];
-    header.extend_from_slice(&base.id().0);
+    header.extend_from_slice(base.id().as_bytes());
     let reference = wire(&header, &[0x80, 2, 1, 1, b'X']);
     let ref_pack = packed(&[&reference], 1);
     let mut ref_reader = Reader::new(&ref_pack).unwrap();
@@ -581,7 +581,7 @@ fn index_rows(index: &[u8]) -> Vec<(ObjectId, u32, u64)> {
     ids.zip(crcs)
         .zip(offsets)
         .map(|((id, crc), offset)| {
-            let id = ObjectId(id.try_into().unwrap());
+            let id = ObjectId::Sha1(id.try_into().unwrap());
             let crc = u32::from_be_bytes(crc.try_into().unwrap());
             let offset = u32::from_be_bytes(offset.try_into().unwrap());
             assert_eq!(offset & 0x8000_0000, 0, "small fixture uses direct offsets");

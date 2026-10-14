@@ -1,7 +1,7 @@
 use core::cmp::Ordering;
 
 use crate::{
-    Error, Object, ObjectId, ObjectKind, Repository, Result,
+    Error, Object, ObjectFormat, ObjectId, ObjectKind, Repository, Result,
     io::{SliceWriter, Write},
     repository::validate_refs,
 };
@@ -203,11 +203,24 @@ impl<'storage, 'data: 'storage> SnapshotBuilder<'storage, 'data> {
     /// Consume the builder and serialize metadata into commit_storage. Options
     /// need not outlive the snapshot. Discard partial tree/commit bytes on error.
     pub fn finish_with_commit(self, options: CommitOptions<'_>) -> Result<Snapshot<'storage>> {
-        Snapshot::from_entries_with_commit(
+        self.finish_with_commit_and_format(options, ObjectFormat::Sha1)
+    }
+
+    pub fn finish_with_format(self, format: ObjectFormat) -> Result<Snapshot<'storage>> {
+        self.finish_with_commit_and_format(CommitOptions::default(), format)
+    }
+
+    pub fn finish_with_commit_and_format(
+        self,
+        options: CommitOptions<'_>,
+        format: ObjectFormat,
+    ) -> Result<Snapshot<'storage>> {
+        Snapshot::from_entries_with_commit_and_format(
             &self.entries[..self.length],
             self.tree_storage,
             self.commit_storage,
             options,
+            format,
         )
     }
 }
@@ -366,12 +379,44 @@ impl<'a> Snapshot<'a> {
         commit_storage: &'a mut [u8],
         options: CommitOptions<'_>,
     ) -> Result<Self> {
+        Self::new_with_commit_and_format(
+            files,
+            tree_storage,
+            commit_storage,
+            options,
+            ObjectFormat::Sha1,
+        )
+    }
+
+    pub fn new_with_format(
+        files: &'a [File<'a>],
+        tree_storage: &'a mut [u8],
+        commit_storage: &'a mut [u8],
+        format: ObjectFormat,
+    ) -> Result<Self> {
+        Self::new_with_commit_and_format(
+            files,
+            tree_storage,
+            commit_storage,
+            CommitOptions::default(),
+            format,
+        )
+    }
+
+    pub fn new_with_commit_and_format(
+        files: &'a [File<'a>],
+        tree_storage: &'a mut [u8],
+        commit_storage: &'a mut [u8],
+        options: CommitOptions<'_>,
+        format: ObjectFormat,
+    ) -> Result<Self> {
         Self::build(
             Input::Files(files),
             tree_storage,
             commit_storage,
             false,
             options,
+            format,
         )
     }
 
@@ -402,12 +447,44 @@ impl<'a> Snapshot<'a> {
         commit_storage: &'a mut [u8],
         options: CommitOptions<'_>,
     ) -> Result<Self> {
+        Self::from_entries_with_commit_and_format(
+            entries,
+            tree_storage,
+            commit_storage,
+            options,
+            ObjectFormat::Sha1,
+        )
+    }
+
+    pub fn from_entries_with_format(
+        entries: &'a [Entry<'a>],
+        tree_storage: &'a mut [u8],
+        commit_storage: &'a mut [u8],
+        format: ObjectFormat,
+    ) -> Result<Self> {
+        Self::from_entries_with_commit_and_format(
+            entries,
+            tree_storage,
+            commit_storage,
+            CommitOptions::default(),
+            format,
+        )
+    }
+
+    pub fn from_entries_with_commit_and_format(
+        entries: &'a [Entry<'a>],
+        tree_storage: &'a mut [u8],
+        commit_storage: &'a mut [u8],
+        options: CommitOptions<'_>,
+        format: ObjectFormat,
+    ) -> Result<Self> {
         Self::build(
             Input::Entries(entries),
             tree_storage,
             commit_storage,
             true,
             options,
+            format,
         )
     }
 
@@ -417,9 +494,10 @@ impl<'a> Snapshot<'a> {
         commit_storage: &'a mut [u8],
         framed: bool,
         options: CommitOptions<'_>,
+        format: ObjectFormat,
     ) -> Result<Self> {
         options.validate()?;
-        let length = write_tree(input, tree_storage, 0, framed)?;
+        let length = write_tree(input, tree_storage, 0, framed, format)?;
         let trees = &tree_storage[..length];
         let root = Trees {
             bytes: trees,
@@ -432,7 +510,7 @@ impl<'a> Snapshot<'a> {
             kind: ObjectKind::Tree,
             data: root,
         }
-        .id();
+        .id_with_format(format);
         let mut commit = SliceWriter::new(commit_storage);
         commit.write_all(b"tree ")?;
         commit.write_all(&tree_id.to_hex())?;
@@ -446,7 +524,7 @@ impl<'a> Snapshot<'a> {
             kind: ObjectKind::Commit,
             data: commit,
         }
-        .id();
+        .id_with_format(format);
         Ok(Self {
             input,
             trees,
@@ -496,7 +574,13 @@ pub(crate) fn validate_name(name: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn write_tree(input: Input<'_>, storage: &mut [u8], depth: usize, framed: bool) -> Result<usize> {
+fn write_tree(
+    input: Input<'_>,
+    storage: &mut [u8],
+    depth: usize,
+    framed: bool,
+    format: ObjectFormat,
+) -> Result<usize> {
     if depth >= MAX_TREE_DEPTH {
         return Err(Error::Unsupported);
     }
@@ -516,7 +600,7 @@ fn write_tree(input: Input<'_>, storage: &mut [u8], depth: usize, framed: bool) 
         length = length
             .checked_add(entry.kind.mode().len())
             .and_then(|length| length.checked_add(entry.name.len()))
-            .and_then(|length| length.checked_add(22))
+            .and_then(|length| length.checked_add(2 + format.id_length()))
             .ok_or(Error::BufferTooSmall)?;
     }
     let prefix = if framed { 4 } else { 0 };
@@ -538,7 +622,8 @@ fn write_tree(input: Input<'_>, storage: &mut [u8], depth: usize, framed: bool) 
         let object = match entry.kind {
             EntryKind::Tree(children) => {
                 let storage = &mut children_storage[children_length..];
-                let length = write_tree(Input::Entries(children), storage, depth + 1, true)?;
+                let length =
+                    write_tree(Input::Entries(children), storage, depth + 1, true, format)?;
                 children_length += length;
                 Object {
                     kind: ObjectKind::Tree,
@@ -562,12 +647,15 @@ fn write_tree(input: Input<'_>, storage: &mut [u8], depth: usize, framed: bool) 
         tree.write_all(b" ")?;
         tree.write_all(entry.name.as_bytes())?;
         tree.write_all(&[0])?;
-        tree.write_all(&object.id().0)?;
+        tree.write_all(object.id_with_format(format).as_bytes())?;
     }
     Ok(record_length + children_length)
 }
 
 impl Repository for Snapshot<'_> {
+    fn object_format(&self) -> ObjectFormat {
+        self.head.format()
+    }
     fn head(&self) -> ObjectId {
         self.head
     }

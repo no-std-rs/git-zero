@@ -268,7 +268,7 @@ fn sparse_files_support_offsets_above_four_gib_and_reject_invalid_ranges() {
         .unwrap();
     file.seek(SeekFrom::Start(offset)).unwrap();
     file.write_all(b"large-offset").unwrap();
-    let id = ObjectId([1; 20]);
+    let id = ObjectId::Sha1([1; 20]);
     let objects =
         [FileObject::from_fd(owned(file.try_clone().unwrap()), ObjectKind::Blob, id).unwrap()];
     let repository = FileRepository::new(id, &objects);
@@ -325,14 +325,14 @@ fn pinned_files_survive_replacement_and_unlink_but_report_truncation() {
         directory.fd(),
         c"object",
         ObjectKind::Blob,
-        ObjectId([1; 20]),
+        ObjectId::Sha1([1; 20]),
     )
     .unwrap();
     std::fs::rename(&path, directory.0.join("old")).unwrap();
     std::fs::write(&path, b"replacement").unwrap();
     std::fs::remove_file(directory.0.join("old")).unwrap();
     let objects = [object];
-    let repository = FileRepository::new(ObjectId([1; 20]), &objects);
+    let repository = FileRepository::new(ObjectId::Sha1([1; 20]), &objects);
     let mut scratch = [0; 20];
     assert_eq!(repository.read_object(0, 0, &mut scratch).unwrap(), 8);
     assert_eq!(&scratch[..8], b"original");
@@ -344,10 +344,10 @@ fn pinned_files_survive_replacement_and_unlink_but_report_truncation() {
     let objects = [FileObject::from_fd(
         owned(file.try_clone().unwrap()),
         ObjectKind::Blob,
-        ObjectId([1; 20]),
+        ObjectId::Sha1([1; 20]),
     )
     .unwrap()];
-    let repository = FileRepository::new(ObjectId([1; 20]), &objects);
+    let repository = FileRepository::new(ObjectId::Sha1([1; 20]), &objects);
     file.set_len(0).unwrap();
     assert_eq!(
         repository.read_object(0, 0, &mut scratch),

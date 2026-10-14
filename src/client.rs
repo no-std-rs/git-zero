@@ -4,7 +4,7 @@
 //! `crate::zlib` also provides standalone inflation, and `crate::pack` provides
 //! entry/delta decoding. Graph traversal, checkout and pack indexing remain work.
 use crate::{
-    Error, Object, ObjectId, Result,
+    Error, Object, ObjectFormat, ObjectId, Result,
     http::Request,
     io::{SliceWriter, Write},
     pack,
@@ -80,9 +80,13 @@ impl<'a> Iterator for References<'a> {
                         // a zero ID and this pseudo-ref. Git ls-remote omits it.
                         let reference = line.split(|&byte| byte == 0).next().unwrap_or_default();
                         let reference = reference.strip_suffix(b"\n").unwrap_or(reference);
-                        if reference == b"0000000000000000000000000000000000000000 capabilities^{}"
-                        {
-                            continue;
+                        if let Some(separator) = reference.iter().position(|&byte| byte == b' ') {
+                            if &reference[separator + 1..] == b"capabilities^{}" {
+                                match ObjectId::from_hex(&reference[..separator]) {
+                                    Ok(id) if id.is_zero() => continue,
+                                    _ => {}
+                                }
+                            }
                         }
                         break line;
                     }
@@ -114,12 +118,17 @@ impl<'a> Iterator for References<'a> {
                 .next()
                 .ok_or(Error::InvalidRequest)?;
             let line = line.strip_suffix(b"\n").unwrap_or(line);
-            if line.len() < 42 || !matches!(line[40], b' ' | b'\t') {
+            let separator = line
+                .iter()
+                .position(|&byte| matches!(byte, b' ' | b'\t'))
+                .ok_or(Error::InvalidRequest)?;
+            if line.len() < separator + 2 {
                 return Err(Error::InvalidRequest);
             }
             Ok(Reference {
-                id: ObjectId::from_hex(&line[..40])?,
-                name: core::str::from_utf8(&line[41..]).map_err(|_| Error::InvalidRequest)?,
+                id: ObjectId::from_hex(&line[..separator])?,
+                name: core::str::from_utf8(&line[separator + 1..])
+                    .map_err(|_| Error::InvalidRequest)?,
             })
         })();
         if result.is_err() {
@@ -203,10 +212,14 @@ pub fn fetch_pack<'a>(
     response_storage: &'a mut [u8],
 ) -> Result<&'a [u8]> {
     let mut request = SliceWriter::new(request_storage);
-    let mut line_storage = [0; 64];
+    let mut line_storage = [0; 128];
     let mut line = SliceWriter::new(&mut line_storage);
     line.write_all(b"want ")?;
     line.write_all(&want.to_hex())?;
+    if want.format() == ObjectFormat::Sha256 {
+        line.write_all(b" ")?;
+        line.write_all(want.format().capability())?;
+    }
     line.write_all(b"\n")?;
     pktline::write(&mut request, line.as_bytes())?;
     request.write_all(b"0000")?;
@@ -230,7 +243,7 @@ pub fn fetch_pack<'a>(
         Some(Packet::Data(b"NAK\n")) => {}
         _ => return Err(Error::InvalidPacket),
     }
-    pack::validate(bytes)?;
+    pack::validate_with_format(bytes, want.format())?;
     Ok(bytes)
 }
 
@@ -241,7 +254,7 @@ pub fn fetch_loose<'a>(
     response_storage: &'a mut [u8],
 ) -> Result<&'a [u8]> {
     let hex = id.to_hex();
-    let mut path_storage = [0; 49];
+    let mut path_storage = [0; 73];
     let mut path = SliceWriter::new(&mut path_storage);
     path.write_all(b"objects/")?;
     path.write_all(&hex[..2])?;

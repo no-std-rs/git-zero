@@ -25,7 +25,7 @@ impl GeneratedRepository {
         let mut repository = Self {
             size,
             max_read,
-            ids: [ObjectId([0; 20]); 3],
+            ids: [ObjectId::Sha1([0; 20]); 3],
             tree: [0; 128],
             tree_length: 0,
             commit: [0; 256],
@@ -38,7 +38,7 @@ impl GeneratedRepository {
             .unwrap();
         let mut tree = SliceWriter::new(&mut repository.tree);
         tree.write_all(b"100644 generated.bin\0").unwrap();
-        tree.write_all(&repository.ids[2].0).unwrap();
+        tree.write_all(repository.ids[2].as_bytes()).unwrap();
         repository.tree_length = tree.len();
         repository.ids[1] = ObjectHasher::new(&repository, 1)
             .unwrap()

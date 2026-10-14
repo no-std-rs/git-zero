@@ -41,7 +41,7 @@ impl Drop for Stop<'_> {
     }
 }
 
-fn python(root: &Path, phase: &str, state: &str, url: Option<&str>) {
+fn python(root: &Path, phase: &str, state: &str, object_format: &str, url: Option<&str>) {
     let mut command = Command::new("python3");
     command
         .arg(concat!(
@@ -52,7 +52,9 @@ fn python(root: &Path, phase: &str, state: &str, url: Option<&str>) {
         .arg("--root")
         .arg(root)
         .arg("--state")
-        .arg(state);
+        .arg(state)
+        .arg("--object-format")
+        .arg(object_format);
     if let Some(url) = url {
         command.arg("--zero-url").arg(url);
     }
@@ -123,7 +125,7 @@ fn serve<R: Repository + ?Sized>(
 ) {
     let mut request_storage = [0; 4096];
     let mut response_storage = [0; 262_144];
-    let mut wants = [ObjectId([0; 20]); 16];
+    let mut wants = [ObjectId::Sha1([0; 20]); 16];
     let mut metadata = [None; OBJECT_CAPACITY];
     let mut indices = [0; OBJECT_CAPACITY];
     let mut read = [0; 17];
@@ -170,6 +172,10 @@ fn serve<R: Repository + ?Sized>(
 }
 
 fn compare(state: &str) {
+    compare_format(state, "sha1");
+}
+
+fn compare_format(state: &str, object_format: &str) {
     static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
         "git-zero-refs-{}-{}",
@@ -178,7 +184,7 @@ fn compare(state: &str) {
     ));
     std::fs::create_dir(&root).unwrap();
     let _cleanup = Cleanup(root.clone());
-    python(&root, "prepare", state, None);
+    python(&root, "prepare", state, object_format, None);
     let objects = objects(&root);
     let refs_text = std::fs::read_to_string(root.join("refs.txt")).unwrap();
     let refs = references(&refs_text);
@@ -186,7 +192,7 @@ fn compare(state: &str) {
     let mut lines = head_text.lines();
     let id = ObjectId::from_hex(lines.next().unwrap().as_bytes()).unwrap();
     let target = lines.next().unwrap_or("");
-    let head = if id == ObjectId([0; 20]) {
+    let head = if id.is_zero() {
         Head::Unborn(target)
     } else if target.is_empty() {
         Head::Detached(id)
@@ -220,6 +226,7 @@ fn compare(state: &str) {
             &root,
             "compare",
             state,
+            object_format,
             Some(&format!("http://127.0.0.1:{port}/repo.git")),
         );
     });
@@ -243,4 +250,30 @@ fn real_git_detached_head_beyond_ref_closures_matches_git_servers() {
 #[test]
 fn real_git_unborn_head_with_other_refs_matches_git_servers() {
     compare("unborn");
+}
+
+#[test]
+fn real_git_sha256_symbolic_refs_tags_and_selected_closures_match_git_servers() {
+    compare_format("symbolic", "sha256");
+}
+
+#[test]
+fn real_git_sha256_symbolic_head_through_a_lightweight_tag_matches_git_servers() {
+    compare_format("symbolic-tag", "sha256");
+}
+
+#[test]
+fn real_git_sha256_detached_head_beyond_ref_closures_matches_git_servers() {
+    compare_format("detached", "sha256");
+}
+
+#[test]
+fn real_git_sha256_unborn_head_with_other_refs_matches_git_servers() {
+    compare_format("unborn", "sha256");
+}
+
+#[test]
+fn real_git_sha256_empty_repositories_match_git_servers() {
+    compare_format("empty", "sha256");
+    compare_format("empty-custom", "sha256");
 }

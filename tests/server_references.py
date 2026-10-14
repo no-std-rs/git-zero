@@ -29,9 +29,14 @@ def make_commit(bare, tree, parents, message, env):
     return git(bare, *args, env=env, data=(message + "\n").encode()).strip().decode()
 
 
-def fixture(root, state, env):
+def fixture(root, state, env, object_format="sha1"):
     bare = root / "repo.git"
-    run("git", "init", "-q", "--bare", "--object-format=sha1", "-b", "z-main", str(bare), env=env)
+    branch = "new/default" if state == "empty-custom" else "z-main"
+    run("git", "init", "-q", "--bare", "--object-format=" + object_format, "-b", branch, str(bare), env=env)
+    if state in ("empty", "empty-custom"):
+        git(bare, "update-server-info", env=env)
+        git(bare, "fsck", "--strict", env=env)
+        return bare, None
     blobs = [git(bare, "hash-object", "-w", "--stdin", env=env, data=data).strip().decode()
              for data in (b"base\0" + bytes(range(256)) * 16,
                           b"main\0" + bytes(range(255, -1, -1)) * 32,
@@ -44,21 +49,23 @@ def fixture(root, state, env):
     main = make_commit(bare, main_tree, (base,), "main", env)
     side = make_commit(bare, side_tree, (base,), "side", env)
     merged = make_commit(bare, merged_tree, (main, side), "merge", env)
-    for name, oid in (("a-side", side), ("z-main", main), ("z-merge", merged), ("release#%é+", main)):
+    # Put the merge tip in a lightweight tag. Avoid redundant tips so Git's
+    # clone request stays below its 1 KiB gzip threshold for this simple host.
+    for name, oid in (("a-side", side), ("z-main", main)):
         git(bare, "update-ref", "refs/heads/" + name, oid, env=env)
     git(bare, "symbolic-ref", "refs/heads/alias-next", "refs/heads/z-main", env=env)
-    git(bare, "symbolic-ref", "refs/heads/alias", "refs/heads/alias-next", env=env)
+    git(bare, "symbolic-ref", "refs/heads/alias#%é+", "refs/heads/alias-next", env=env)
     for name, oid in (("annotated", side), ("annotated-tree", base_tree), ("annotated-blob", blobs[3])):
         git(bare, "tag", "-a", "-m", "annotation", name, oid, env=env)
     git(bare, "tag", "-a", "-m", "nested annotation", "nested", "annotated", env=env)
     git(bare, "symbolic-ref", "refs/tags/alias-tag", "refs/tags/annotated", env=env)
-    for name, oid in (("light", base), ("tree", base_tree), ("blob", blobs[3])):
+    for name, oid in (("light", merged), ("tree", base_tree), ("blob", blobs[3])):
         git(bare, "update-ref", "refs/tags/" + name, oid, env=env)
     if state in ("symbolic", "symbolic-tag"):
         if state == "symbolic-tag":
             git(bare, "update-ref", "refs/tags/head", main, env=env)
             git(bare, "symbolic-ref", "refs/heads/alias-next", "refs/tags/head", env=env)
-        git(bare, "symbolic-ref", "HEAD", "refs/heads/alias", env=env)
+        git(bare, "symbolic-ref", "HEAD", "refs/heads/alias#%é+", env=env)
         head = main
     elif state == "detached":
         head = make_commit(bare, base_tree, (base,), "detached beyond every ref", env)
@@ -78,9 +85,9 @@ def complete_manifest(bare, head, env):
     return manifest
 
 
-def prepare(root, state):
+def prepare(root, state, object_format="sha1"):
     env = test_environment(root)
-    bare, head = fixture(root, state, env)
+    bare, head = fixture(root, state, env, object_format)
     manifest = complete_manifest(bare, head, env)
     objects = root / "raw"
     objects.mkdir()
@@ -88,7 +95,7 @@ def prepare(root, state):
     for oid, (kind, body) in sorted(manifest.items()):
         (objects / oid.decode()).write_bytes(body)
         rows.append(oid.decode() + "\t" + kind.decode())
-    (root / "objects.txt").write_text("\n".join(rows) + "\n")
+    (root / "objects.txt").write_text("".join(row + "\n" for row in rows))
     refs = []
     for line in git(bare, "for-each-ref", "--format=%(refname)\t%(objectname)", env=env).splitlines():
         name, oid = line.decode().split("\t")
@@ -97,10 +104,11 @@ def prepare(root, state):
         kind, _ = manifest[oid.encode()]
         peeled = git(bare, "rev-parse", name + "^{}", env=env).strip().decode() if kind == b"tag" else "-"
         refs.append("\t".join((name, oid, target, peeled)))
-    (root / "refs.txt").write_text("\n".join(refs) + "\n")
+    (root / "refs.txt").write_text("".join(row + "\n" for row in refs))
     raw_head = (bare / "HEAD").read_text().strip()
     target = raw_head.removeprefix("ref: ") if raw_head.startswith("ref: ") else ""
-    (root / "head.txt").write_text((head or "0" * 40) + "\n" + target + "\n")
+    (root / "head.txt").write_text((head or "0" * (64 if object_format == "sha256" else 40)) + "\n" + target + "\n")
+    (root / "format.txt").write_text(object_format)
 
 
 def get(url):
@@ -115,7 +123,8 @@ def compare_discovery(bare, reference, zero, smart, head, env):
     assert get(zero + "/HEAD") == (bare / "HEAD").read_bytes()
     if not smart:
         assert get(reference + "/HEAD") == get(zero + "/HEAD")
-        for name in ("refs/heads/alias", "refs/heads/alias-next", "refs/tags/alias-tag", "refs/heads/release#%é+"):
+        names = ("refs/heads/alias#%é+", "refs/heads/alias-next", "refs/tags/alias-tag") if git(bare, "for-each-ref", env=env) else ()
+        for name in names:
             path = urllib.parse.quote(name, safe="/")
             assert get(reference + "/" + path) == get(zero + "/" + path)
 
@@ -138,10 +147,12 @@ def clone_all(root, bare, head, urls, protocol, env):
             verify_checkout(bare, clone, head, env)
         else:
             assert command("git", "-C", str(clone), "rev-parse", "--verify", "HEAD", env=env).returncode != 0
-        git(clone, "fetch", "--no-tags", "origin", "refs/heads/a-side", env=env)
-        assert git(clone, "rev-parse", "FETCH_HEAD", env=env) == git(bare, "rev-parse", "refs/heads/a-side", env=env)
+        if git(bare, "for-each-ref", "refs/heads/a-side", env=env):
+            git(clone, "fetch", "--no-tags", "origin", "refs/heads/a-side", env=env)
+            assert git(clone, "rev-parse", "FETCH_HEAD", env=env) == git(bare, "rev-parse", "refs/heads/a-side", env=env)
         clones.append(clone)
     assert clone_state(clones[0], env) == clone_state(clones[1], env)
+    assert git(clones[0], "rev-parse", "--show-object-format", env=env) == git(clones[1], "rev-parse", "--show-object-format", env=env)
 
 
 def all_object_ids(repo, env):
@@ -175,7 +186,8 @@ def packet(line):
 
 
 def upload(url, roots):
-    body = b"".join(packet(b"want " + oid + b"\n") for oid in roots) + b"0000" + packet(b"done\n")
+    capability = b" object-format=sha256" if len(roots[0]) == 64 else b""
+    body = b"".join(packet(b"want " + oid + (capability if index == 0 else b"") + b"\n") for index, oid in enumerate(roots)) + b"0000" + packet(b"done\n")
     request = urllib.request.Request(url + "/git-upload-pack", data=body, headers={"Content-Type": "application/x-git-upload-pack-request"})
     with urllib.request.urlopen(request, timeout=10) as response:
         assert response.status == 200
@@ -198,7 +210,8 @@ def compare_wanted_pack(root, bare, url, label, roots, env):
     assert struct.unpack(">I", data[8:12])[0] == len(expected)
     (root / (label + ".pack")).write_bytes(data)
     imported = root / (label + ".git")
-    run("git", "init", "-q", "--bare", "--object-format=sha1", str(imported), env=env)
+    object_format = "sha256" if len(roots[0]) == 64 else "sha1"
+    run("git", "init", "-q", "--bare", "--object-format=" + object_format, str(imported), env=env)
     git(imported, "index-pack", "--strict", "--stdin", env=env, data=data)
     git(imported, "fsck", "--strict", env=env)
     assert all_object_ids(imported, env) == set(expected), "pack object set differs from the wanted closure"
@@ -207,7 +220,7 @@ def compare_wanted_pack(root, bare, url, label, roots, env):
 
 
 def compare_wants(root, bare, urls, env):
-    names = ("refs/heads/z-main", "refs/heads/a-side", "refs/heads/z-merge", "refs/tags/nested", "refs/tags/annotated-tree", "refs/tags/annotated-blob", "refs/tags/blob", "refs/tags/tree")
+    names = ("refs/heads/z-main", "refs/heads/a-side", "refs/tags/light", "refs/tags/nested", "refs/tags/annotated-tree", "refs/tags/annotated-blob", "refs/tags/blob", "refs/tags/tree")
     roots = [git(bare, "rev-parse", name, env=env).strip() for name in names]
     for name, url in urls:
         for index, oid in enumerate(roots):
@@ -217,7 +230,7 @@ def compare_wants(root, bare, urls, env):
         compare_wanted_pack(root, bare, url, name + "-wanted-peeled", (git(bare, "rev-parse", "nested^{}", env=env).strip(),), env)
     zero = urls[1][1]
     hidden = git(bare, "rev-parse", "z-main^{tree}", env=env).strip()
-    for oid in (b"0" * 40, b"f" * 40, hidden):
+    for oid in (b"0" * len(hidden), b"f" * len(hidden), hidden):
         try:
             upload(zero, (oid,))
         except urllib.error.HTTPError as error:
@@ -230,7 +243,7 @@ def compare_wants(root, bare, urls, env):
 def compare(root, zero, state):
     env = test_environment(root)
     bare = root / "repo.git"
-    head = None if state == "unborn" else git(bare, "rev-parse", "HEAD", env=env).strip().decode()
+    head = None if state in ("unborn", "empty", "empty-custom") else git(bare, "rev-parse", "HEAD", env=env).strip().decode()
     for smart in (True, False):
         client_env = dict(env, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="init.defaultBranch", GIT_CONFIG_VALUE_0="main")
         if not smart:
@@ -240,20 +253,22 @@ def compare(root, zero, state):
             urls = (("reference", reference), ("zero", zero))
             compare_discovery(bare, reference, zero, smart, head, client_env)
             clone_all(root, bare, head, urls, protocol, client_env)
-            clone_branch(root, bare, urls, protocol, "z-main", client_env)
-            clone_branch(root, bare, urls, protocol, "a-side", client_env)
-            if smart:
-                compare_wants(root, bare, urls, env)
+            if git(bare, "for-each-ref", env=env):
+                clone_branch(root, bare, urls, protocol, "z-main", client_env)
+                clone_branch(root, bare, urls, protocol, "a-side", client_env)
+                if smart:
+                    compare_wants(root, bare, urls, env)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("prepare", "compare"))
     parser.add_argument("--root", required=True, type=Path)
-    parser.add_argument("--state", required=True, choices=("symbolic", "symbolic-tag", "detached", "unborn"))
+    parser.add_argument("--state", required=True, choices=("symbolic", "symbolic-tag", "detached", "unborn", "empty", "empty-custom"))
+    parser.add_argument("--object-format", default="sha1", choices=("sha1", "sha256"))
     parser.add_argument("--zero-url")
     args = parser.parse_args()
     if args.phase == "prepare":
-        prepare(args.root, args.state)
+        prepare(args.root, args.state, args.object_format)
     else:
         compare(args.root, args.zero_url, args.state)

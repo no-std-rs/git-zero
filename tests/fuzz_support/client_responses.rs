@@ -41,7 +41,7 @@ pub fn responses(data: &[u8]) {
         let _ = discovery.head();
         let _ = client::read_head(&mut transport, &discovery, &mut response);
     }
-    let id = ObjectId([1; 20]);
+    let id = ObjectId::Sha1([1; 20]);
     if let Ok(bytes) = client::fetch_pack(&mut transport, id, &mut request, &mut response) {
         assert!(bytes.len() <= data.len());
         pack::validate(bytes).unwrap();
