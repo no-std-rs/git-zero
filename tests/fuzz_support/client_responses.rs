@@ -38,6 +38,11 @@ pub fn responses(data: &[u8]) {
     let mut transport = Reply { data, extra: 0 };
     if let Ok(discovery) = client::discover(&mut transport, &mut storage) {
         assert!(discovery.references().count() <= data.len());
+        let mut format = None;
+        for reference in discovery.references() {
+            let id = reference.unwrap().id;
+            assert_eq!(*format.get_or_insert(id.format()), id.format());
+        }
         let _ = discovery.head();
         let _ = client::read_head(&mut transport, &discovery, &mut response);
     }

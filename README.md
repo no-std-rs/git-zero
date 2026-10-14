@@ -88,6 +88,8 @@ selects the advertised
 format without repeating it on wants, so omission also uses the repository's
 format. Every want/have still requires the correct ID width. Dumb refs and loose
 paths use 40 or 64 digits. Independent real-Git clone/fetch tests cover both.
+Client discovery rejects mixed ID formats and capabilities that conflict with
+the advertised IDs, including the empty-repository marker.
 Packs use a 20-byte SHA-1 or 32-byte SHA-256 trailer; HEAD cache keys include the
 ID's format. This does not translate objects between formats.
 

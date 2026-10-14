@@ -42,6 +42,7 @@ impl<'a> Discovery<'a> {
             protocol: self.protocol,
             bytes: self.bytes,
             failed: false,
+            format: None,
         }
     }
 
@@ -64,6 +65,51 @@ pub struct References<'a> {
     protocol: Protocol,
     bytes: &'a [u8],
     failed: bool,
+    format: Option<ObjectFormat>,
+}
+
+impl<'a> References<'a> {
+    fn parse(&mut self, line: &'a [u8]) -> Result<Reference<'a>> {
+        let mut parts = line.splitn(2, |&byte| byte == 0);
+        let reference = parts.next().ok_or(Error::InvalidRequest)?;
+        let reference = reference.strip_suffix(b"\n").unwrap_or(reference);
+        let separator = reference
+            .iter()
+            .position(|&byte| matches!(byte, b' ' | b'\t'))
+            .ok_or(Error::InvalidRequest)?;
+        if reference.len() < separator + 2 {
+            return Err(Error::InvalidRequest);
+        }
+        let id = ObjectId::from_hex(&reference[..separator])?;
+        let advertised = if self.protocol == Protocol::Smart {
+            parts.next().and_then(|capabilities| {
+                capabilities
+                    .strip_suffix(b"\n")
+                    .unwrap_or(capabilities)
+                    .split(|&byte| byte == b' ')
+                    .find_map(|capability| capability.strip_prefix(b"object-format="))
+            })
+        } else {
+            None
+        };
+        let format = match advertised {
+            Some(b"sha1") => ObjectFormat::Sha1,
+            Some(b"sha256") => ObjectFormat::Sha256,
+            Some(_) => return Err(Error::Unsupported),
+            None => id.format(),
+        };
+        // The first advertised algorithm encodes the refs. Without a capability,
+        // infer it from the first ID (including the empty capabilities marker).
+        let expected = *self.format.get_or_insert(format);
+        if format != expected || id.format() != expected {
+            return Err(Error::InvalidRequest);
+        }
+        Ok(Reference {
+            id,
+            name: core::str::from_utf8(&reference[separator + 1..])
+                .map_err(|_| Error::InvalidRequest)?,
+        })
+    }
 }
 
 impl<'a> Iterator for References<'a> {
@@ -72,69 +118,45 @@ impl<'a> Iterator for References<'a> {
         if self.failed {
             return None;
         }
-        let line = match self.protocol {
-            Protocol::Smart => loop {
-                match pktline::read(&mut self.bytes) {
-                    Ok(Some(Packet::Data(line))) => {
-                        // An empty v0 repository advertises capabilities using
-                        // a zero ID and this pseudo-ref. Git ls-remote omits it.
-                        let reference = line.split(|&byte| byte == 0).next().unwrap_or_default();
-                        let reference = reference.strip_suffix(b"\n").unwrap_or(reference);
-                        if let Some(separator) = reference.iter().position(|&byte| byte == b' ') {
-                            if &reference[separator + 1..] == b"capabilities^{}" {
-                                match ObjectId::from_hex(&reference[..separator]) {
-                                    Ok(id) if id.is_zero() => continue,
-                                    _ => {}
-                                }
-                            }
-                        }
-                        break line;
-                    }
+        loop {
+            let line = match self.protocol {
+                Protocol::Smart => match pktline::read(&mut self.bytes) {
+                    Ok(Some(Packet::Data(line))) => line,
                     Ok(Some(Packet::Flush)) => continue,
                     Ok(None) => return None,
                     Err(error) => {
                         self.failed = true;
                         return Some(Err(error));
                     }
+                },
+                Protocol::Dumb => {
+                    if self.bytes.is_empty() {
+                        return None;
+                    }
+                    let end = self
+                        .bytes
+                        .iter()
+                        .position(|&byte| byte == b'\n')
+                        .unwrap_or(self.bytes.len());
+                    let line = &self.bytes[..end];
+                    self.bytes = self.bytes.get(end + 1..).unwrap_or_default();
+                    line
                 }
-            },
-            Protocol::Dumb => {
-                if self.bytes.is_empty() {
-                    return None;
+            };
+            let result = self.parse(line);
+            if let Ok(reference) = &result {
+                if self.protocol == Protocol::Smart
+                    && reference.id.is_zero()
+                    && reference.name == "capabilities^{}"
+                {
+                    continue;
                 }
-                let end = self
-                    .bytes
-                    .iter()
-                    .position(|&byte| byte == b'\n')
-                    .unwrap_or(self.bytes.len());
-                let line = &self.bytes[..end];
-                self.bytes = self.bytes.get(end + 1..).unwrap_or_default();
-                line
             }
-        };
-        let result = (|| {
-            let line = line
-                .split(|&byte| byte == 0)
-                .next()
-                .ok_or(Error::InvalidRequest)?;
-            let line = line.strip_suffix(b"\n").unwrap_or(line);
-            let separator = line
-                .iter()
-                .position(|&byte| matches!(byte, b' ' | b'\t'))
-                .ok_or(Error::InvalidRequest)?;
-            if line.len() < separator + 2 {
-                return Err(Error::InvalidRequest);
+            if result.is_err() {
+                self.failed = true;
             }
-            Ok(Reference {
-                id: ObjectId::from_hex(&line[..separator])?,
-                name: core::str::from_utf8(&line[separator + 1..])
-                    .map_err(|_| Error::InvalidRequest)?,
-            })
-        })();
-        if result.is_err() {
-            self.failed = true;
+            return Some(result);
         }
-        Some(result)
     }
 }
 
