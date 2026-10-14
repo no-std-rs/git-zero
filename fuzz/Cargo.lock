@@ -95,6 +95,22 @@ dependencies = [
 name = "git-zero"
 version = "0.1.0"
 dependencies = [
+ "git-zero-client",
+ "git-zero-core",
+ "git-zero-server",
+]
+
+[[package]]
+name = "git-zero-client"
+version = "0.1.0"
+dependencies = [
+ "git-zero-core",
+]
+
+[[package]]
+name = "git-zero-core"
+version = "0.1.0"
+dependencies = [
  "sha1",
  "sha2",
 ]
@@ -107,6 +123,13 @@ dependencies = [
  "libfuzzer-sys",
  "sha1",
  "sha2",
+]
+
+[[package]]
+name = "git-zero-server"
+version = "0.1.0"
+dependencies = [
+ "git-zero-core",
 ]
 
 [[package]]

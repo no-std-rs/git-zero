@@ -125,7 +125,7 @@ call can modify its output buffer. Malformed/truncated data returns
 `InvalidZlib`, exhausted expansion budgets return `LimitExceeded`, and preset
 dictionaries return `Unsupported`. Errors are terminal until `reset(limits)`.
 The standalone inflater leaves Git envelope validation to the object decoder.
-See the [API example](src/zlib.rs) for a complete bounded loop.
+See the [API example](crates/git-zero-core/src/zlib.rs) for a complete bounded loop.
 
 ## Validated client objects and pack entries
 
@@ -171,7 +171,10 @@ command retains its existing wire-output behavior.
 
 | Location | Responsibility |
 | --- | --- |
-| `src/` | Safe, allocation-free objects, snapshots, pack/cache, HTTP client/server |
+| `src/` | `git-zero` facade with optional client/server reexports |
+| `crates/git-zero-core/` | Objects, repositories, packet lines; `read` and `write` features |
+| `crates/git-zero-client/` | Transport-independent HTTP discovery and fetching |
+| `crates/git-zero-server/` | Smart/dumb HTTP repository routing |
 | `crates/git-zero-rustix/` | `no_std` file/socket adapters; small `std` process wrapper |
 | `examples/cloudflare-worker/wasm/` | `no_std` raw Wasm ABI with fixed buffers |
 | `examples/cloudflare-worker/src/` | JavaScript host for Cloudflare metadata and HTTP |
@@ -181,6 +184,43 @@ The core and native adapter libraries never enable `std` or `alloc`. The native
 CLI uses `std` for startup arguments, stdout, and diagnostics. JavaScript and the
 test harnesses use their host runtimes' memory management; the no-allocation
 guarantee applies to Rust core/adapter operations, not the surrounding platform.
+
+## Crates and features
+
+Use `git-zero` for the combined API, or depend on `git-zero-core`,
+`git-zero-client` and `git-zero-server` directly. All library crates are safe
+`no_std` Rust without `alloc`. Their default features preserve the existing API.
+
+| Feature on `git-zero` | Enables |
+| --- | --- |
+| `read` | Zlib inflation, pack/delta decoding and repository validation |
+| `write` | Snapshot creation, pack/loose/zlib encoding and pack caching |
+| `client` | `git_zero::client`; enables `read` and the client crate |
+| `server` | `git_zero::http` routing; enables `write` and the server crate |
+
+`git-zero-core` has `read` and `write` features, both enabled by default.
+Object IDs, borrowed object types, repository traits, object readers, packet lines,
+I/O and HTTP request/response values are shared and always available. The client
+crate depends on the core with `read`; the server crate uses `write`. A server
+that validates custom repositories or serves independent refs through
+`serve_with_selection` should also enable `read`. The facade forwards this
+feature to the server crate when it is selected. `write` creates
+and encodes objects; Git receive-pack/push remains future work.
+
+```toml
+[dependencies]
+# Fetch and decode objects without server routing or object encoding.
+git-zero = { version = "0.1.0", default-features = false, features = ["client"] }
+```
+
+For server-only use, select `features = ["server"]`; add `"read"` for
+`ValidatedRepository`. For offline decoding/encoding, select `"read"`/`"write"`
+on the facade or core. `git-zero-rustix` separately exposes `client`, `server`,
+`storage` and `cli`; all are enabled by default. The CLI requires all adapters
+and repository validation. The Worker example selects only `read` and `server`.
+
+All five public crates share a release version. See [RELEASING.md](RELEASING.md)
+for Runnerless release-please and crates.io publishing.
 
 ## Native demo
 

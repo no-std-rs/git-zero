@@ -1,3 +1,4 @@
+use crate::names::{cmp_tree_names, validate_name};
 use core::cmp::Ordering;
 
 use crate::{
@@ -59,19 +60,6 @@ impl Entry<'_> {
             matches!(other.kind, EntryKind::Tree(_)),
         )
     }
-}
-
-pub(crate) fn cmp_tree_names(
-    left: &[u8],
-    left_tree: bool,
-    right: &[u8],
-    right_tree: bool,
-) -> Ordering {
-    let terminator = |tree| if tree { b'/' } else { 0 };
-    left.iter()
-        .copied()
-        .chain([terminator(left_tree)])
-        .cmp(right.iter().copied().chain([terminator(right_tree)]))
 }
 
 /// One commit identity and its recorded time. The offset does not adjust seconds.
@@ -561,17 +549,6 @@ fn write_identity(
     output.write_all(identity.email.as_bytes())?;
     writeln!(output, "> {} {}", identity.timestamp, identity.timezone)
         .map_err(|_| Error::BufferTooSmall)
-}
-
-pub(crate) fn validate_name(name: &[u8]) -> Result<()> {
-    if name.is_empty()
-        || matches!(name, b"." | b"..")
-        || name.eq_ignore_ascii_case(b".git")
-        || name.iter().any(|byte| matches!(byte, 0 | b'/' | b'\\'))
-    {
-        return Err(Error::InvalidFileName);
-    }
-    Ok(())
 }
 
 fn write_tree(

@@ -1,0 +1,25 @@
+[package]
+name = "git-zero-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Allocation-free Git smart and dumb HTTP server routing"
+readme = "README.md"
+include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*"]
+
+[features]
+default = []
+read = ["git-zero-core/read"]
+
+[dependencies]
+git-zero-core = { version = "0.1.0", path = "../git-zero-core", default-features = false, features = ["write"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

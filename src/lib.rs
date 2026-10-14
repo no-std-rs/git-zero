@@ -1,49 +1,18 @@
-//! Allocation-free, transport-independent, read-only Git HTTP primitives.
+//! Allocation-free Git objects and HTTP client/server building blocks.
 //!
-//! Storage and I/O belong to the caller. There is no `std`, `alloc`, allocator,
-//! global state, filesystem, or socket dependency in this crate.
+//! Select `read`, `write`, `client` and `server` independently. The defaults
+//! preserve the complete API. All library operations remain `no_std`/no-alloc.
 #![no_std]
 #![forbid(unsafe_code)]
 
-pub mod cache;
-pub mod client;
-pub mod http;
-pub mod io;
-pub mod object;
-pub mod pack;
-pub mod pktline;
-pub mod reader;
-pub mod repository;
-pub mod snapshot;
-pub mod validation;
-pub mod zlib;
+pub use git_zero_core::*;
 
-pub use object::{HexId, Object, ObjectFormat, ObjectId, ObjectInfo, ObjectKind};
-pub use reader::{ObjectHasher, ObjectReader};
-pub use repository::{
-    EmptyRepository, Head, IndexedRepository, ObjectMetadata, RefRepository, Reference, Repository,
-};
-pub use snapshot::{
-    CommitIdentity, CommitOptions, Entry, EntryKind, File, Snapshot, SnapshotBuilder,
-};
-pub use validation::{ValidatedRepository, ValidationMetadata};
+#[cfg(feature = "client")]
+pub use git_zero_client as client;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Error {
-    BufferTooSmall,
-    InvalidObjectId,
-    InvalidObject,
-    InvalidPacket,
-    InvalidRequest,
-    InvalidFileName,
-    UnsortedFiles,
-    InvalidReference,
-    ObjectNotFound,
-    Unsupported,
-    Backend,
-    CorruptPack,
-    InvalidZlib,
-    LimitExceeded,
+/// HTTP values and, with `server`, repository routing.
+pub mod http {
+    pub use git_zero_core::http::*;
+    #[cfg(feature = "server")]
+    pub use git_zero_server::*;
 }
-
-pub type Result<T> = core::result::Result<T, Error>;

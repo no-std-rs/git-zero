@@ -1,36 +1,28 @@
 //! Routing for paths relative to the repository URL; HTTP framing belongs to the host.
-use crate::{
-    Error, Head, ObjectFormat, ObjectId, Repository, Result, ValidatedRepository,
-    ValidationMetadata,
+#![no_std]
+#![forbid(unsafe_code)]
+
+use git_zero_core::{
+    Error, Head, ObjectFormat, ObjectId, Repository, Result,
     io::Write,
     pack,
     pktline::{self, Packet},
     reader::DEFAULT_READ_BUFFER_SIZE,
     repository::{resolve_reference, uses_only_head},
 };
+#[cfg(feature = "read")]
+use git_zero_core::{ValidatedRepository, ValidationMetadata};
 
 /// Default HEAD body. The server writes `Repository::head_state` dynamically.
 pub const HEAD: &[u8] = b"ref: refs/heads/main\n";
 
-#[derive(Clone, Copy)]
-pub struct Request<'a> {
-    pub method: &'a str,
-    /// Repository-relative URL path. Escape URL-reserved bytes with `%HH`.
-    pub path: &'a str,
-    pub query: Option<&'a str>,
-    pub body: &'a [u8],
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Response {
-    pub status: u16,
-    pub content_type: &'static str,
-}
+pub use git_zero_core::http::{Request, Response};
 
 /// Independent per-request storage for bounded reachable-object selection.
 /// `wants` bounds distinct wanted IDs. `objects` and `indices` each need the
 /// repository's complete object count; their extra slots remain untouched.
 /// Read/parse scratch budgets match `ValidatedRepository::select_objects`.
+#[cfg(feature = "read")]
 pub struct SelectionStorage<'a> {
     pub wants: &'a mut [ObjectId],
     pub objects: &'a mut [Option<ValidationMetadata>],
@@ -47,6 +39,7 @@ pub struct SelectionStorage<'a> {
 /// the NAK or pack. No-done requests receive only NAK. Haves are parsed but do
 /// not remove objects: ACK/delta negotiation remains unadvertised. Errors
 /// invalidate all output; selection failures produce no output at all.
+#[cfg(feature = "read")]
 pub fn serve_with_selection<R: Repository + ?Sized>(
     repository: &ValidatedRepository<'_, '_, R>,
     request: Request<'_>,
@@ -87,6 +80,7 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
     })
 }
 
+#[cfg(feature = "read")]
 fn advertised(repository: &impl Repository, id: ObjectId) -> bool {
     repository.head_state().id() == Some(id)
         || (0..repository.reference_count()).any(|index| {
