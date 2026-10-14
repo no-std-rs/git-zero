@@ -454,60 +454,13 @@ pub fn validate_ref_name(name: &str) -> crate::Result<()> {
 pub fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
     let head = repository.head_state();
     let format = repository.object_format();
-    let ref_limit = ref_name_limit(format);
-    if let Some(target) = head.target() {
-        validate_ref_name(target)?;
-        let maximum = if head.id().is_some() {
-            head_ref_limit(format)
-        } else {
-            unborn_ref_limit(format)
-        };
-        if !target.starts_with("refs/heads/") || target.len() > maximum {
-            return Err(Error::InvalidReference);
-        }
-    }
-    match head.id() {
-        Some(id) if id != repository.head() || id.is_zero() || id.format() != format => {
-            return Err(Error::InvalidObject);
-        }
-        None if repository.head() != format.zero_id()
-            || (repository.reference_count() == 0 && repository.object_count() != 0) =>
-        {
-            return Err(Error::InvalidObject);
-        }
-        _ => {}
-    }
+    validate_head(repository, head, format)?;
     let mut found = false;
     for index in 0..repository.reference_count() {
         let name = repository
             .reference_name(index)
             .ok_or(Error::InvalidReference)?;
-        validate_ref_name(name)?;
-        if name.len() > ref_limit {
-            return Err(Error::InvalidReference);
-        }
-        let id = repository.reference_id(index).ok_or(Error::InvalidObject)?;
-        if id.is_zero()
-            || id.format() != format
-            || repository
-                .reference_peeled(index)
-                .is_some_and(|peeled| peeled.is_zero() || peeled.format() != format)
-        {
-            return Err(Error::InvalidObject);
-        }
-        if repository.reference_peeled(index).is_some() && name.len() > ref_limit - 3 {
-            return Err(Error::InvalidReference);
-        }
-        if head.id().is_none()
-            && index == 0
-            && name.len() > ref_limit - 1 - format.capability().len()
-        {
-            return Err(Error::InvalidReference);
-        }
-        resolve_reference(repository, name)?;
-        if Some(name) == head.target() && head.id() != Some(id) {
-            return Err(Error::InvalidReference);
-        }
+        validate_reference(repository, index, name, head, format)?;
         found |= Some(name) == head.target();
         for previous in 0..index {
             let previous = repository
@@ -530,6 +483,72 @@ pub fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
         if target.len() > head_ref_limit(format) {
             return Err(Error::InvalidReference);
         }
+    }
+    Ok(())
+}
+
+// HEAD consistency is checked before reading the ref manifest.
+fn validate_head(
+    repository: &(impl Repository + ?Sized),
+    head: Head<'_>,
+    format: ObjectFormat,
+) -> Result<()> {
+    if let Some(target) = head.target() {
+        validate_ref_name(target)?;
+        let maximum = if head.id().is_some() {
+            head_ref_limit(format)
+        } else {
+            unborn_ref_limit(format)
+        };
+        if !target.starts_with("refs/heads/") || target.len() > maximum {
+            return Err(Error::InvalidReference);
+        }
+    }
+    match head.id() {
+        Some(id) if id != repository.head() || id.is_zero() || id.format() != format => {
+            return Err(Error::InvalidObject);
+        }
+        None if repository.head() != format.zero_id()
+            || (repository.reference_count() == 0 && repository.object_count() != 0) =>
+        {
+            return Err(Error::InvalidObject);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+// Validate one advertisement before comparing its name with earlier refs.
+fn validate_reference(
+    repository: &(impl Repository + ?Sized),
+    index: usize,
+    name: &str,
+    head: Head<'_>,
+    format: ObjectFormat,
+) -> Result<()> {
+    let ref_limit = ref_name_limit(format);
+    validate_ref_name(name)?;
+    if name.len() > ref_limit {
+        return Err(Error::InvalidReference);
+    }
+    let id = repository.reference_id(index).ok_or(Error::InvalidObject)?;
+    if id.is_zero()
+        || id.format() != format
+        || repository
+            .reference_peeled(index)
+            .is_some_and(|peeled| peeled.is_zero() || peeled.format() != format)
+    {
+        return Err(Error::InvalidObject);
+    }
+    if repository.reference_peeled(index).is_some() && name.len() > ref_limit - 3 {
+        return Err(Error::InvalidReference);
+    }
+    if head.id().is_none() && index == 0 && name.len() > ref_limit - 1 - format.capability().len() {
+        return Err(Error::InvalidReference);
+    }
+    resolve_reference(repository, name)?;
+    if Some(name) == head.target() && head.id() != Some(id) {
+        return Err(Error::InvalidReference);
     }
     Ok(())
 }
