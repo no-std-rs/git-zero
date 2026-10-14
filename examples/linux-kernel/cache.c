@@ -21,6 +21,8 @@ void gitfs_cache_destroy(struct gitfs_mount *mount)
 
 	list_for_each_entry_safe(object, next, &mount->lru, lru)
 		gitfs_object_free(mount, object);
+	kvfree(mount->snapshot_index);
+	kvfree(mount->snapshot_data);
 }
 
 struct gitfs_object *gitfs_object_get(struct gitfs_mount *mount, const u8 *id)
@@ -34,6 +36,16 @@ struct gitfs_object *gitfs_object_get(struct gitfs_mount *mount, const u8 *id)
 	int error;
 
 	lockdep_assert_held(&mount->lock);
+	if (mount->snapshot_count) {
+		error = gitfs_pack_find(mount->snapshot_index, mount->snapshot_count, id, &decoded);
+		mount->hits++;
+		if (error)
+			return ERR_PTR(error);
+		mount->snapshot_view.data = mount->snapshot_data + decoded.offset;
+		mount->snapshot_view.length = decoded.length;
+		mount->snapshot_view.kind = decoded.kind;
+		return &mount->snapshot_view;
+	}
 	hash_for_each_possible(mount->objects, object, hash, key) {
 		if (memcmp(object->id, id, 20))
 			continue;

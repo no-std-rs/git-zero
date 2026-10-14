@@ -3,6 +3,9 @@
 
 use git_zero::{Error, ObjectId, client, zlib::InflateLimits};
 
+mod smart;
+mod tls;
+
 const EINVAL: i32 = -22;
 const EFBIG: i32 = -27;
 const EBADMSG: i32 = -74;

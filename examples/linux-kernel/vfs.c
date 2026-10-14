@@ -3,6 +3,7 @@
 #include <linux/fs_context.h>
 #include <linux/fs_parser.h>
 #include <linux/highmem.h>
+#include <linux/inet.h>
 #include <linux/module.h>
 #include <linux/mount.h>
 #include <linux/namei.h>
@@ -259,6 +260,8 @@ static int gitfs_show_options(struct seq_file *seq, struct dentry *root)
 	seq_printf(seq, ",commit=%s,cache_mb=%zu,object_mb=%zu,timeout_ms=%u,error_ttl_ms=%u",
 		   hex, mount->cache_limit >> 20, mount->object_limit >> 20,
 		   jiffies_to_msecs(mount->timeout), jiffies_to_msecs(mount->error_ttl));
+	if (mount->smart)
+		seq_printf(seq, ",smart,pack_mb=%zu", mount->pack_limit >> 20);
 	return 0;
 }
 
@@ -350,7 +353,11 @@ static int gitfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	if (error)
 		return error;
 	mutex_lock(&mount->lock);
-	if (!mount->explicit_commit) {
+	if (mount->smart) {
+		error = gitfs_fetch_snapshot(mount);
+		if (error)
+			goto out;
+	} else if (!mount->explicit_commit) {
 		error = gitfs_resolve_head(mount);
 		if (error)
 			goto out;
@@ -389,7 +396,8 @@ out:
 	return error;
 }
 
-enum { Opt_commit, Opt_cache, Opt_object, Opt_timeout, Opt_error_ttl };
+enum { Opt_commit, Opt_cache, Opt_object, Opt_timeout, Opt_error_ttl,
+       Opt_smart, Opt_pack, Opt_dns, Opt_address };
 
 static const struct fs_parameter_spec gitfs_parameters[] = {
 	fsparam_string("commit", Opt_commit),
@@ -397,6 +405,10 @@ static const struct fs_parameter_spec gitfs_parameters[] = {
 	fsparam_u32("object_mb", Opt_object),
 	fsparam_u32("timeout_ms", Opt_timeout),
 	fsparam_u32("error_ttl_ms", Opt_error_ttl),
+	fsparam_flag("smart", Opt_smart),
+	fsparam_u32("pack_mb", Opt_pack),
+	fsparam_string("dns", Opt_dns),
+	fsparam_string("addr", Opt_address),
 	{}
 };
 
@@ -438,6 +450,24 @@ static int gitfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 			return -EINVAL;
 		mount->error_ttl = msecs_to_jiffies(result.uint_32);
 		break;
+	case Opt_smart:
+		mount->smart = true;
+		break;
+	case Opt_pack:
+		if (!result.uint_32 || result.uint_32 > 1024)
+			return -EINVAL;
+		mount->pack_limit = (size_t)result.uint_32 << 20;
+		break;
+	case Opt_dns:
+		if (!in4_pton(param->string, -1, (u8 *)&mount->dns, -1, NULL))
+			return -EINVAL;
+		break;
+	case Opt_address:
+		if (!in4_pton(param->string, -1,
+			     (u8 *)&mount->address.sin_addr.s_addr, -1, NULL))
+			return -EINVAL;
+		mount->address_known = true;
+		break;
 	}
 	return 0;
 }
@@ -453,6 +483,9 @@ static int gitfs_get_tree(struct fs_context *fc)
 	if (mount->cache_limit <= mount->object_limit + sizeof(struct gitfs_object))
 		return -EINVAL;
 	error = gitfs_parse_url(mount, fc->source);
+	if (error)
+		return error;
+	error = gitfs_resolve_address(mount);
 	if (error)
 		return error;
 	return get_tree_nodev(fc, gitfs_fill_super);
@@ -494,6 +527,8 @@ static int gitfs_init_context(struct fs_context *fc)
 	mount->net = get_net(current->nsproxy->net_ns);
 	mount->cache_limit = 64UL << 20;
 	mount->object_limit = 8UL << 20;
+	mount->pack_limit = 64UL << 20;
+	mount->dns = htonl(0x01010101);
 	mount->timeout = msecs_to_jiffies(5000);
 	mount->error_ttl = msecs_to_jiffies(5000);
 	mutex_init(&mount->lock);

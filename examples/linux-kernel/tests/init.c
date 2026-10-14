@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/if.h>
+#include <net/route.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <time.h>
 
 static volatile unsigned *requests;
 
@@ -217,6 +219,72 @@ static void concurrent_reads(void)
 	check(*requests == before + 1, "concurrent aliases download their blob once");
 }
 
+static void setup_network(void)
+{
+	struct ifreq interface = { .ifr_name = "eth0" };
+	struct sockaddr_in *address = (struct sockaddr_in *)&interface.ifr_addr;
+	struct rtentry route = {};
+	int fd = open("/e1000.ko", O_RDONLY), socket_fd;
+
+	check(fd >= 0 && !syscall(SYS_finit_module, fd, "", 0), "load guest NIC driver");
+	close(fd);
+	socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+	check(socket_fd >= 0, "network configuration socket");
+	address->sin_family = AF_INET;
+	inet_pton(AF_INET, "10.0.2.15", &address->sin_addr);
+	check(!ioctl(socket_fd, SIOCSIFADDR, &interface), "guest IPv4 address");
+	inet_pton(AF_INET, "255.255.255.0", &address->sin_addr);
+	check(!ioctl(socket_fd, SIOCSIFNETMASK, &interface), "guest IPv4 mask");
+	interface.ifr_flags = IFF_UP | IFF_RUNNING;
+	check(!ioctl(socket_fd, SIOCSIFFLAGS, &interface), "guest NIC up");
+	((struct sockaddr_in *)&route.rt_dst)->sin_family = AF_INET;
+	((struct sockaddr_in *)&route.rt_genmask)->sin_family = AF_INET;
+	address = (struct sockaddr_in *)&route.rt_gateway;
+	address->sin_family = AF_INET;
+	inet_pton(AF_INET, "10.0.2.2", &address->sin_addr);
+	route.rt_flags = RTF_UP | RTF_GATEWAY;
+	route.rt_dev = "eth0";
+	check(!ioctl(socket_fd, SIOCADDRT, &route), "guest default route");
+	close(socket_fd);
+	sleep(1);
+}
+
+static void https_tests(void)
+{
+	char port[16] = {}, url[256], buffer[128];
+	struct stat st;
+	int fd = open("/fixture/tls-port", O_RDONLY);
+	unsigned before;
+
+	check(fd >= 0 && read(fd, port, sizeof(port) - 1) > 0, "test TLS origin port");
+	close(fd);
+	setup_network();
+	snprintf(url, sizeof(url), "https://localhost:%s/smart.git", port);
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY,
+		     "addr=10.0.2.2,timeout_ms=60000"),
+	      "mount no_std HTTPS snapshot with a self-signed, mismatched certificate");
+	expect_file("/mnt/README.md", "hello from kernel gitfs\n");
+	expect_file("/mnt/dir/note.txt", "nested\n");
+	expect_big("/mnt/big-a");
+	expect_big("/mnt/big-b");
+	expect_big("/mnt/big-c");
+	check(!stat("/mnt/run", &st) && (st.st_mode & 0111), "HTTPS executable mode");
+	missing_probes();
+	check(!umount("/mnt"), "unmount HTTPS snapshot");
+	if (!access("/fixture/test-github", F_OK)) {
+		check(!mount("https://github.com/octocat/Hello-World", "/mnt", "gitfs", MS_RDONLY,
+			     "dns=10.0.2.3,timeout_ms=60000"),
+		      "mount live GitHub repository through kernel DNS and no_std HTTPS");
+		fd = open("/mnt/README", O_RDONLY);
+		check(fd >= 0, "GitHub checkout README");
+		before = read(fd, buffer, sizeof(buffer));
+		close(fd);
+		check(before == 13 && !memcmp(buffer, "Hello World!\n", 13), "GitHub checkout bytes");
+		missing_probes();
+		check(!umount("/mnt"), "unmount GitHub checkout");
+	}
+}
+
 int main(void)
 {
 	struct ifreq interface = { .ifr_name = "lo", .ifr_flags = IFF_UP | IFF_RUNNING };
@@ -302,14 +370,15 @@ int main(void)
 	check(!umount("/mnt"), "unmount after eviction");
 	for (int i = 0; i < 3; i++) {
 		const char *urls[] = { "http://127.0.0.1:8080/corrupt.git", "http://127.0.0.1:8080/truncated.git", "http://127.0.0.1:8080/chunked.git" };
-		int errors[] = { EBADMSG, EBADMSG, EOPNOTSUPP };
+		int errors[] = { EBADMSG, EBADMSG, EBADMSG };
 		check(mount(urls[i], "/mnt", "gitfs", MS_RDONLY, options) == -1 && errno == errors[i],
 		      "reject malformed HTTP or object with expected errno");
 	}
-	check(mount("https://127.0.0.1/repo.git", "/mnt", "gitfs", MS_RDONLY, options) == -1 && errno == EPROTONOSUPPORT, "reject unsupported URL");
+	check(mount("ftp://127.0.0.1/repo.git", "/mnt", "gitfs", MS_RDONLY, options) == -1 && errno == EPROTONOSUPPORT, "reject unsupported URL");
 	check(mount("http://127.0.0.1:8080/repo.git", "/mnt", "gitfs", MS_RDONLY, "cache_mb=1,object_mb=1") == -1 && errno == EINVAL, "reject undersized cache");
 	kill(server, SIGTERM);
 	waitpid(server, NULL, 0);
+	https_tests();
 	check(!syscall(SYS_delete_module, "gitfs", O_NONBLOCK), "unload module");
 	puts("GITFS_TEST_PASS");
 	reboot(RB_POWER_OFF);

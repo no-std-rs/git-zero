@@ -2,6 +2,7 @@
 """Build a real-Git fixture and boot gitfs in an isolated, unprivileged QEMU VM."""
 import argparse
 import gzip
+import lzma
 import os
 from pathlib import Path
 import re
@@ -9,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+from https_origin import fixture as https_fixture, origin as https_origin
 
 EXAMPLE = Path(__file__).resolve().parents[1]
 
@@ -98,6 +100,8 @@ def main():
     parser.add_argument("--module", type=Path, default=EXAMPLE / "gitfs.ko")
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--log", type=Path, default=EXAMPLE / "build/qemu.log")
+    parser.add_argument("--github", action="store_true",
+                        help="also mount public GitHub directly from the guest kernel")
     args = parser.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="gitfs-qemu-") as temporary:
@@ -106,6 +110,17 @@ def main():
         root.mkdir()
         (root / "dev").mkdir()
         fixture(root)
+        certs = https_fixture(root)
+        network_module = Path(run("modinfo", "-n", "e1000", stdout=subprocess.PIPE,
+                                  text=True).stdout.strip())
+        data = network_module.read_bytes()
+        if network_module.suffix == ".xz":
+            data = lzma.decompress(data)
+        elif network_module.suffix == ".zst":
+            data = run("zstd", "-d", "-c", str(network_module), stdout=subprocess.PIPE).stdout
+        (root / "e1000.ko").write_bytes(data)
+        if args.github:
+            (root / "fixture/test-github").touch()
         run("cc", "-O2", "-Wall", "-Wextra", "-Werror",
             str(EXAMPLE / "tests/init.c"), "-o", str(root / "init"))
         # Include precisely the loader/libraries needed by the test's PID 1.
@@ -119,19 +134,22 @@ def main():
             target.chmod(0o755)
         shutil.copyfile(args.module, root / "gitfs.ko")
         image = work / "initramfs.gz"
-        initramfs(root, image)
-        command = ["qemu-system-x86_64", "-accel", "tcg", "-m", "512M",
-                   "-smp", "2", "-nographic", "-no-reboot", "-nic", "none",
-                   "-kernel", str(args.kernel), "-initrd", str(image),
-                   "-append", "console=ttyS0 rdinit=/init panic=-1 nokaslr quiet"]
-        print("Booting gitfs test VM; log:", args.log, flush=True)
-        with args.log.open("w") as log:
-            try:
-                completed = subprocess.run(command, stdout=log,
-                                           stderr=subprocess.STDOUT,
-                                           timeout=args.timeout)
-            except subprocess.TimeoutExpired:
-                raise SystemExit(f"VM timed out; inspect {args.log}")
+        with https_origin(root, certs) as port:
+            (root / "fixture/tls-port").write_text(str(port))
+            initramfs(root, image)
+            command = ["qemu-system-x86_64", "-accel", "tcg", "-m", "512M",
+                       "-smp", "2", "-nographic", "-no-reboot",
+                       "-nic", "user,model=e1000",
+                       "-kernel", str(args.kernel), "-initrd", str(image),
+                       "-append", "console=ttyS0 rdinit=/init panic=-1 nokaslr quiet"]
+            print("Booting gitfs test VM; log:", args.log, flush=True)
+            with args.log.open("w") as log:
+                try:
+                    completed = subprocess.run(command, stdout=log,
+                                               stderr=subprocess.STDOUT,
+                                               timeout=args.timeout)
+                except subprocess.TimeoutExpired:
+                    raise SystemExit(f"VM timed out; inspect {args.log}")
         output = args.log.read_text(errors="replace")
         print("\n".join(line for line in output.splitlines()
                         if line.startswith(("ok:", "GITFS_TEST_", "gitfs:"))))
