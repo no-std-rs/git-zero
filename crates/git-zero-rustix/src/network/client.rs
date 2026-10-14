@@ -49,21 +49,7 @@ impl HttpTransport<'_> {
     }
 
     fn read_response(&mut self, socket: &impl AsFd, response: &mut [u8]) -> Result<(u16, usize)> {
-        let mut length = 0;
-        loop {
-            if length == self.wire_storage.len() {
-                let mut extra = [0; 1];
-                if receive(socket, &mut extra)? != 0 {
-                    return Err(Error::BufferTooSmall);
-                }
-                break;
-            }
-            let count = receive(socket, &mut self.wire_storage[length..])?;
-            if count == 0 {
-                break;
-            }
-            length += count;
-        }
+        let length = read_to_end(socket, self.wire_storage)?;
         let end = header_end(&self.wire_storage[..length]).ok_or(Error::InvalidRequest)?;
         let header =
             core::str::from_utf8(&self.wire_storage[..end]).map_err(|_| Error::InvalidRequest)?;
@@ -84,4 +70,24 @@ impl HttpTransport<'_> {
             .copy_from_slice(body);
         Ok((status, body.len()))
     }
+}
+
+// Preserve EOF framing while rejecting responses beyond the caller's wire budget.
+fn read_to_end(socket: &impl AsFd, storage: &mut [u8]) -> Result<usize> {
+    let mut length = 0;
+    loop {
+        if length == storage.len() {
+            let mut extra = [0; 1];
+            if receive(socket, &mut extra)? != 0 {
+                return Err(Error::BufferTooSmall);
+            }
+            break;
+        }
+        let count = receive(socket, &mut storage[length..])?;
+        if count == 0 {
+            break;
+        }
+        length += count;
+    }
+    Ok(length)
 }

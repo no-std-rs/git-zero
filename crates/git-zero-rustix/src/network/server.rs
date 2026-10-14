@@ -68,6 +68,11 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
         }
         length += count;
     }
+    parse_request(&storage[..total], end)
+}
+
+// Parsing borrows only the complete request, after all socket reads have finished.
+fn parse_request(storage: &[u8], end: usize) -> Result<Request<'_>> {
     let header = core::str::from_utf8(&storage[..end]).map_err(|_| Error::InvalidRequest)?;
     let mut line = header
         .lines()
@@ -86,7 +91,7 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
         method,
         path,
         query,
-        body: &storage[end..total],
+        body: &storage[end..],
     })
 }
 
