@@ -1,10 +1,11 @@
 use super::MAX_INPUT;
 use git_zero::{
-    Error, Object, ObjectKind,
+    Error, Object, ObjectFormat, ObjectKind,
     pack::{self, DeltaLimits, Entry, Reader, ResolvedObject},
     zlib::{InflateLimits, WINDOW_SIZE},
 };
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 
 const OUTPUT: usize = 1024;
 const INFLATE: InflateLimits = InflateLimits {
@@ -18,28 +19,45 @@ const DELTA: DeltaLimits = DeltaLimits {
     max_depth: 2,
 };
 
-/// Repair pack SHA-1s to reach entry decoding after mutations. Fixed buffers and
+/// Repair pack hashes to reach entry decoding after mutations. Fixed buffers and
 /// budgets bound parser work; guards and cursor rollback catch failure mistakes.
 pub fn entries(data: &[u8]) {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        entries_with_format(data, format);
+    }
+}
+
+fn entries_with_format(data: &[u8], format: ObjectFormat) {
     if data.len() > MAX_INPUT {
         return;
     }
-    let base = ResolvedObject::external(Object {
-        kind: ObjectKind::Blob,
-        data: &[b'A'; 256],
-    });
+    let base = ResolvedObject::external_with_format(
+        Object {
+            kind: ObjectKind::Blob,
+            data: &[b'A'; 256],
+        },
+        format,
+    );
     let mut output = [0xa5; OUTPUT + 1];
     let _ = pack::apply_delta(base.object(), data, &mut output[..OUTPUT], DELTA);
     assert_eq!(output[OUTPUT], 0xa5);
     let mut bytes = [0; MAX_INPUT];
     let bytes = &mut bytes[..data.len()];
     bytes.copy_from_slice(data);
-    if bytes.len() >= 32 {
-        let end = bytes.len() - 20;
-        let hash = Sha1::digest(&bytes[..end]);
-        bytes[end..].copy_from_slice(&hash);
+    if bytes.len() >= 12 + format.id_length() {
+        let end = bytes.len() - format.id_length();
+        match format {
+            ObjectFormat::Sha1 => {
+                let hash = Sha1::digest(&bytes[..end]);
+                bytes[end..].copy_from_slice(&hash);
+            }
+            ObjectFormat::Sha256 => {
+                let hash = Sha256::digest(&bytes[..end]);
+                bytes[end..].copy_from_slice(&hash);
+            }
+        }
     }
-    let Ok(mut reader) = Reader::new(bytes) else {
+    let Ok(mut reader) = Reader::new_with_format(bytes, format) else {
         return;
     };
     let mut window = [0; WINDOW_SIZE];
@@ -88,7 +106,10 @@ fn check_object(entry: &Entry<'_>, bytes: &[u8], base: &ResolvedObject<'_>, outp
     );
     if let Some(object) = entry.object() {
         assert_eq!(object.delta_depth(), 0);
-        assert_eq!(object.id(), object.object().id());
+        assert_eq!(
+            object.id(),
+            object.object().id_with_format(object.id().format())
+        );
     } else {
         let _ = entry.resolve_delta(base, output, DELTA);
     }

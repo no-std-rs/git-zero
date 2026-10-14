@@ -1,13 +1,12 @@
 //! Streaming pack and loose-object encoding.
 use crate::{
-    Error, Object, ObjectId, ObjectInfo, ObjectReader, Repository, Result, io::Write,
+    Error, Object, ObjectId, ObjectInfo, ObjectReader, Repository, Result, io::Write, object::Hash,
     reader::DEFAULT_READ_BUFFER_SIZE, zlib,
 };
-use sha1::{Digest, Sha1};
 
 struct HashWriter<'a, W> {
     output: &'a mut W,
-    hash: Sha1,
+    hash: Hash,
 }
 
 impl<W: Write> Write for HashWriter<'_, W> {
@@ -28,7 +27,7 @@ pub fn write(repository: &impl Repository, output: &mut impl Write) -> Result<Ob
 /// A nonempty buffer suffices for any body size; borrowed bodies need no scratch.
 /// Output is independent of the buffer size, preserving pack/cache identities.
 /// Errors invalidate partial output. Scratch is reused for each object; encoder
-/// and SHA-1 state are inline and independent of object/pack sizes.
+/// and hash state are inline and independent of object/pack sizes.
 pub fn write_with_scratch(
     repository: &impl Repository,
     scratch: &mut [u8],
@@ -68,7 +67,7 @@ fn write_order(
     let count = u32::try_from(order.len()).map_err(|_| Error::Unsupported)?;
     let mut output = HashWriter {
         output,
-        hash: Sha1::new(),
+        hash: repository.object_format().hash(),
     };
     output.write_all(b"PACK")?;
     output.write_all(&2_u32.to_be_bytes())?;
@@ -83,8 +82,8 @@ fn write_order(
             zlib::write_reader(&mut output, &[], &mut reader, scratch)?;
         }
     }
-    let checksum = ObjectId(output.hash.finalize().into());
-    output.output.write_all(&checksum.0)?;
+    let checksum = output.hash.finish();
+    output.output.write_all(checksum.as_bytes())?;
     Ok(checksum)
 }
 

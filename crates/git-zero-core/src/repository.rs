@@ -1,17 +1,26 @@
-use crate::{Error, Object, ObjectId, ObjectInfo, Result};
+use crate::{Error, Object, ObjectFormat, ObjectId, ObjectInfo, Result};
 
-/// Maximum ref name size in bytes that fits a smart HTTP advertisement.
+/// Maximum SHA-1 ref name size that fits a smart HTTP advertisement.
 pub const MAX_REF_NAME_LENGTH: usize = crate::pktline::MAX_LENGTH - 4 - 40 - b" \n".len();
 
-/// Maximum default branch name size in bytes, including its HEAD symref packet.
-pub const MAX_HEAD_REF_LENGTH: usize = MAX_REF_NAME_LENGTH - b"HEAD\0symref=HEAD:".len();
+/// Maximum SHA-1 default branch size, including its HEAD capability packet.
+pub const MAX_HEAD_REF_LENGTH: usize = head_ref_limit(ObjectFormat::Sha1);
 
-/// Maximum unborn branch name size, including the empty advertisement marker.
-pub const MAX_UNBORN_REF_LENGTH: usize =
-    MAX_REF_NAME_LENGTH - b"capabilities^{}\0symref=HEAD:".len();
+/// Maximum SHA-1 unborn branch size, including the empty capabilities marker.
+pub const MAX_UNBORN_REF_LENGTH: usize = unborn_ref_limit(ObjectFormat::Sha1);
 
 /// A peeled advertisement appends `^{}` to the stored ref name.
 pub const MAX_PEELED_REF_LENGTH: usize = MAX_REF_NAME_LENGTH - 3;
+
+pub const fn ref_name_limit(format: ObjectFormat) -> usize {
+    crate::pktline::MAX_LENGTH - 4 - format.hex_length() - b" \n".len()
+}
+pub const fn head_ref_limit(format: ObjectFormat) -> usize {
+    ref_name_limit(format) - b"HEAD\0symref=HEAD:".len() - 1 - format.capability().len()
+}
+pub const fn unborn_ref_limit(format: ObjectFormat) -> usize {
+    ref_name_limit(format) - b"capabilities^{}\0symref=HEAD:".len() - 1 - format.capability().len()
+}
 
 /// One resolved advertised ref, with optional symbolic and annotated-tag data.
 /// Symbolic targets must exist, resolve without cycles, and have the same ID.
@@ -67,11 +76,15 @@ impl<'a> Head<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct EmptyRepository<'a> {
     target: &'a str,
+    format: ObjectFormat,
 }
 
 impl<'a> EmptyRepository<'a> {
     pub fn new(target: &'a str) -> Result<Self> {
-        let repository = Self { target };
+        Self::new_with_format(target, ObjectFormat::Sha1)
+    }
+    pub fn new_with_format(target: &'a str, format: ObjectFormat) -> Result<Self> {
+        let repository = Self { target, format };
         validate_refs(&repository)?;
         Ok(repository)
     }
@@ -79,7 +92,10 @@ impl<'a> EmptyRepository<'a> {
 
 impl Repository for EmptyRepository<'_> {
     fn head(&self) -> ObjectId {
-        ObjectId([0; 20])
+        self.format.zero_id()
+    }
+    fn object_format(&self) -> ObjectFormat {
+        self.format
     }
     fn head_state(&self) -> Head<'_> {
         Head::Unborn(self.target)
@@ -109,12 +125,17 @@ impl Repository for EmptyRepository<'_> {
 /// for file-backed or generated bodies. Their lengths and IDs must be exact.
 /// Ref names must be
 /// valid, unique, byte-sorted, and include the symbolic HEAD branch, if resolved.
-/// Names must fit `MAX_REF_NAME_LENGTH`; symbolic and unborn HEAD targets must
-/// fit `MAX_HEAD_REF_LENGTH` and `MAX_UNBORN_REF_LENGTH`, respectively.
+/// Names must fit `ref_name_limit(object_format())`; symbolic and unborn targets
+/// must fit `head_ref_limit` and `unborn_ref_limit` for the repository format.
 pub trait Repository {
     /// Resolved commit ID, or the all-zero sentinel for an unborn HEAD.
     /// Use `head_state().id()` when absence needs to be distinguished.
     fn head(&self) -> ObjectId;
+    /// Fixed for the entire repository, including unborn HEAD. Defaults to
+    /// SHA-1; SHA-256 providers must override this independently of `object_id`.
+    fn object_format(&self) -> ObjectFormat {
+        ObjectFormat::Sha1
+    }
     fn head_state(&self) -> Head<'_> {
         Head::Symbolic {
             target: self.head_ref(),
@@ -154,7 +175,8 @@ pub trait Repository {
     /// Return an object's ID. Streaming providers must supply precomputed IDs;
     /// `ObjectHasher` computes them incrementally with caller-owned scratch.
     fn object_id(&self, index: usize) -> Option<ObjectId> {
-        self.object(index).map(|object| object.id())
+        self.object(index)
+            .map(|object| object.id_with_format(self.object_format()))
     }
 
     fn head_ref(&self) -> &str {
@@ -220,7 +242,12 @@ impl<'refs, 'repo, R: Repository + ?Sized> RefRepository<'refs, 'repo, R> {
 
 impl<R: Repository + ?Sized> Repository for RefRepository<'_, '_, R> {
     fn head(&self) -> ObjectId {
-        self.head.id().unwrap_or(ObjectId([0; 20]))
+        self.head
+            .id()
+            .unwrap_or(self.source.object_format().zero_id())
+    }
+    fn object_format(&self) -> ObjectFormat {
+        self.source.object_format()
     }
     fn head_state(&self) -> Head<'_> {
         self.head
@@ -323,7 +350,7 @@ impl<'index, 'objects, R: Repository + ?Sized> IndexedRepository<'index, 'object
         for (index, slot) in objects.iter_mut().enumerate() {
             let object = repository.object(index).ok_or(Error::ObjectNotFound)?;
             *slot = Some(ObjectMetadata {
-                id: object.id(),
+                id: object.id_with_format(repository.object_format()),
                 object,
             });
             by_id[index] = index;
@@ -344,6 +371,9 @@ impl<'index, 'objects, R: Repository + ?Sized> IndexedRepository<'index, 'object
 }
 
 impl<R: Repository + ?Sized> Repository for IndexedRepository<'_, '_, R> {
+    fn object_format(&self) -> ObjectFormat {
+        self.repository.object_format()
+    }
     fn head(&self) -> ObjectId {
         self.repository.head()
     }
@@ -423,22 +453,24 @@ pub fn validate_ref_name(name: &str) -> crate::Result<()> {
 /// Object identities and graph closure are checked separately by the validator.
 pub fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
     let head = repository.head_state();
+    let format = repository.object_format();
+    let ref_limit = ref_name_limit(format);
     if let Some(target) = head.target() {
         validate_ref_name(target)?;
         let maximum = if head.id().is_some() {
-            MAX_HEAD_REF_LENGTH
+            head_ref_limit(format)
         } else {
-            MAX_UNBORN_REF_LENGTH
+            unborn_ref_limit(format)
         };
         if !target.starts_with("refs/heads/") || target.len() > maximum {
             return Err(Error::InvalidReference);
         }
     }
     match head.id() {
-        Some(id) if id != repository.head() || id.0 == [0; 20] => {
+        Some(id) if id != repository.head() || id.is_zero() || id.format() != format => {
             return Err(Error::InvalidObject);
         }
-        None if repository.head().0 != [0; 20]
+        None if repository.head() != format.zero_id()
             || (repository.reference_count() == 0 && repository.object_count() != 0) =>
         {
             return Err(Error::InvalidObject);
@@ -451,18 +483,25 @@ pub fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
             .reference_name(index)
             .ok_or(Error::InvalidReference)?;
         validate_ref_name(name)?;
+        if name.len() > ref_limit {
+            return Err(Error::InvalidReference);
+        }
         let id = repository.reference_id(index).ok_or(Error::InvalidObject)?;
-        if id.0 == [0; 20]
+        if id.is_zero()
+            || id.format() != format
             || repository
                 .reference_peeled(index)
-                .is_some_and(|peeled| peeled.0 == [0; 20])
+                .is_some_and(|peeled| peeled.is_zero() || peeled.format() != format)
         {
             return Err(Error::InvalidObject);
         }
-        if repository.reference_peeled(index).is_some() && name.len() > MAX_PEELED_REF_LENGTH {
+        if repository.reference_peeled(index).is_some() && name.len() > ref_limit - 3 {
             return Err(Error::InvalidReference);
         }
-        if head.id().is_none() && index == 0 && name.len() == MAX_REF_NAME_LENGTH {
+        if head.id().is_none()
+            && index == 0
+            && name.len() > ref_limit - 1 - format.capability().len()
+        {
             return Err(Error::InvalidReference);
         }
         resolve_reference(repository, name)?;
@@ -488,7 +527,7 @@ pub fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
     }
     if let Head::Symbolic { target, .. } = head {
         let (target, _) = resolve_reference(repository, target)?;
-        if target.len() > MAX_HEAD_REF_LENGTH {
+        if target.len() > head_ref_limit(format) {
             return Err(Error::InvalidReference);
         }
     }
@@ -502,7 +541,7 @@ pub fn resolve_reference<'a>(
 ) -> Result<(&'a str, ObjectId)> {
     let mut index = reference_index(repository, name).ok_or(Error::InvalidReference)?;
     let id = repository.reference_id(index).ok_or(Error::InvalidObject)?;
-    if id.0 == [0; 20] {
+    if id.is_zero() || id.format() != repository.object_format() {
         return Err(Error::InvalidObject);
     }
     for _ in 0..repository.reference_count() {

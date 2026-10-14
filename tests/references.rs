@@ -12,7 +12,7 @@ use git_zero::{
 };
 use std::{cell::Cell, io::Write as _};
 
-const ZERO: ObjectId = ObjectId([0; 20]);
+const ZERO: ObjectId = ObjectId::Sha1([0; 20]);
 const CAPACITY: usize = 32;
 
 #[derive(Clone)]
@@ -89,7 +89,7 @@ fn tree(objects: &mut Vec<Owned>, entries: &[(&str, ObjectId)]) -> ObjectId {
         bytes.extend_from_slice(b"100644 ");
         bytes.extend_from_slice(name.as_bytes());
         bytes.push(0);
-        bytes.extend_from_slice(&id.0);
+        bytes.extend_from_slice(id.as_bytes());
     }
     add(objects, ObjectKind::Tree, bytes)
 }
@@ -527,7 +527,7 @@ fn tag_links_headers_and_canonical_ids_are_validated() {
         tag_result(
             &blob,
             valid
-                .replace(&blob.id.to_string(), &ObjectId([9; 20]).to_string())
+                .replace(&blob.id.to_string(), &ObjectId::Sha1([9; 20]).to_string())
                 .into_bytes()
         ),
         Err(Error::ObjectNotFound)
@@ -801,7 +801,7 @@ fn serve_selected<R: Repository>(
 fn upload_pack_enforces_advertised_wants_and_preflights_all_selection_budgets() {
     let graph = Graph::new();
     validated(&graph.repository(), |repo| {
-        for id in [ZERO, ObjectId([9; 20]), graph.ids.main_blob.unwrap()] {
+        for id in [ZERO, ObjectId::Sha1([9; 20]), graph.ids.main_blob.unwrap()] {
             let (result, bytes) = serve_selected(repo, &[id], 4, CAPACITY, true);
             assert!(matches!(result, Err(Error::InvalidRequest)));
             assert!(bytes.is_empty());

@@ -38,6 +38,7 @@ git-zero-server = { version = "0.1.0", path = "crates/git-zero-server", optional
 
 [dev-dependencies]
 sha1 = { version = "0.10.7", default-features = false }
+sha2 = { version = "0.10.9", default-features = false }
 
 [[test]]
 name = "builder"
@@ -49,6 +50,14 @@ required-features = ["read", "write"]
 
 [[test]]
 name = "core"
+required-features = ["client", "server"]
+
+[[test]]
+name = "discovery_formats"
+required-features = ["client"]
+
+[[test]]
+name = "sha256"
 required-features = ["client", "server"]
 
 [[test]]

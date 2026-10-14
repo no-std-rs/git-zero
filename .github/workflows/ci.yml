@@ -145,7 +145,7 @@ jobs:
         run: cargo test -p git-zero-rustix --test storage real_git_fetches_changed_file_snapshots_with_cache_eviction_and_return_to_old_head --locked
       - name: Empty, unborn and detached server comparisons
         run: cargo test -p git-zero-rustix --test head_states --locked
-      - name: Independent refs, tags and selected-object server comparisons
+      - name: SHA-1/SHA-256 refs, tags and selected-object server comparisons
         run: cargo test -p git-zero-rustix --test references --locked
       - name: Pinned Git compression, delta and decoder benchmark coverage
         if: runner.os == 'Linux' && matrix.git != 'system' && matrix.shard == '0/2'

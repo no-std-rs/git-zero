@@ -1,7 +1,5 @@
 #[cfg(feature = "read")]
-use crate::{Error, Result};
-#[cfg(feature = "read")]
-use sha1::{Digest, Sha1};
+use crate::{Error, ObjectFormat, Result};
 
 #[cfg(feature = "read")]
 mod decode;
@@ -19,15 +17,20 @@ pub use encode::{
 /// and indexing are separate responsibilities; this does not decode objects.
 #[cfg(feature = "read")]
 pub fn validate(bytes: &[u8]) -> Result<()> {
-    if bytes.len() < 32
+    validate_with_format(bytes, ObjectFormat::Sha1)
+}
+
+#[cfg(feature = "read")]
+pub fn validate_with_format(bytes: &[u8], format: ObjectFormat) -> Result<()> {
+    if bytes.len() < 12 + format.id_length()
         || &bytes[..4] != b"PACK"
         || !matches!(&bytes[4..8], [0, 0, 0, 2] | [0, 0, 0, 3])
     {
         return Err(Error::CorruptPack);
     }
-    let trailer = bytes.len() - 20;
-    let actual = Sha1::digest(&bytes[..trailer]);
-    if actual[..] != bytes[trailer..] {
+    let trailer = bytes.len() - format.id_length();
+    let actual = format.digest(&bytes[..trailer]);
+    if actual.as_bytes() != &bytes[trailer..] {
         return Err(Error::CorruptPack);
     }
     Ok(())

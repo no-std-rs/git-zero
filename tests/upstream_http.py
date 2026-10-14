@@ -31,6 +31,9 @@ def refs(data):
 
 def object_manifest(repo, revision, env):
     ids = sorted(set(git(repo, "rev-list", "--objects", "--no-object-names", revision, env=env).splitlines()))
+    if not ids:
+        return {}
+    object_format = git(repo, "rev-parse", "--show-object-format", env=env).strip().decode()
     output = git(repo, "cat-file", "--batch", env=env, data=b"\n".join(ids) + b"\n")
     manifest = {}
     offset = 0
@@ -41,7 +44,7 @@ def object_manifest(repo, revision, env):
         body = output[end + 1:end + 1 + size]
         assert oid == expected and len(body) == size
         assert output[end + 1 + size:end + 2 + size] == b"\n"
-        assert hashlib.sha1(kind + b" " + str(size).encode() + b"\0" + body).hexdigest().encode() == oid
+        assert hashlib.new(object_format, kind + b" " + str(size).encode() + b"\0" + body).hexdigest().encode() == oid
         manifest[oid] = (kind, body)
         offset = end + 2 + size
     assert offset == len(output)

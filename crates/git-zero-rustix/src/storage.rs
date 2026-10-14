@@ -4,8 +4,8 @@ use core::ffi::CStr;
 use git_zero::http::{self, Request, Response};
 
 use git_zero::{
-    Error, Head, ObjectId, ObjectInfo, ObjectKind, Repository, Result, io::Write, pack,
-    repository::validate_refs,
+    Error, Head, ObjectFormat, ObjectId, ObjectInfo, ObjectKind, Repository, Result, io::Write,
+    pack, repository::validate_refs,
 };
 use rustix::{
     fd::{AsFd, OwnedFd},
@@ -203,6 +203,9 @@ impl<'a> FileRepository<'a> {
 }
 
 impl Repository for FileRepository<'_> {
+    fn object_format(&self) -> ObjectFormat {
+        self.head.format()
+    }
     fn head(&self) -> ObjectId {
         self.head
     }

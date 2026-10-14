@@ -115,7 +115,7 @@ struct Faulty {
 
 impl Repository for Faulty {
     fn head(&self) -> ObjectId {
-        ObjectId([0; 20])
+        ObjectId::Sha1([0; 20])
     }
 
     fn object_count(&self) -> usize {
@@ -190,7 +190,7 @@ struct Huge;
 
 impl Repository for Huge {
     fn head(&self) -> ObjectId {
-        ObjectId([0; 20])
+        ObjectId::Sha1([0; 20])
     }
 
     fn object_count(&self) -> usize {

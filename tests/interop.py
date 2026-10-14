@@ -3,6 +3,7 @@
 import argparse
 import concurrent.futures
 import contextlib
+import gzip
 import functools
 import hashlib
 import http.server
@@ -113,7 +114,11 @@ def reference_server(root, env, smart, requests=None):
             if protocol:
                 cgi_env["HTTP_GIT_PROTOCOL"] = protocol
             try:
-                response = run(str(backend), env=cgi_env, data=self.rfile.read(length))
+                request = self.rfile.read(length)
+                if self.headers.get("Content-Encoding") == "gzip":
+                    request = gzip.decompress(request)
+                    cgi_env["CONTENT_LENGTH"] = str(len(request))
+                response = run(str(backend), env=cgi_env, data=request)
                 header, body = response.split(b"\r\n\r\n", 1)
                 fields = [line.decode().split(":", 1) for line in header.split(b"\r\n")]
                 status = next((int(value.strip().split()[0]) for name, value in fields if name.lower() == "status"), 200)

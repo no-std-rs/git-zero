@@ -2,8 +2,8 @@
 use core::cmp::Ordering;
 
 use crate::{
-    Error, Head, Object, ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader, Repository,
-    Result,
+    Error, Head, Object, ObjectFormat, ObjectHasher, ObjectId, ObjectInfo, ObjectKind,
+    ObjectReader, Repository, Result,
     names::{cmp_tree_names, validate_name},
     repository::validate_refs,
 };
@@ -19,7 +19,7 @@ pub struct ValidationMetadata {
 
 /// Validate and index a stable repository, including streaming-only providers.
 ///
-/// Checks SHA-1 IDs, unique enumeration, commit/tree links and target kinds,
+/// Checks repository-format IDs, unique enumeration, links and target kinds,
 /// tree modes, names, Git ordering and duplicates, tag links/peeling, and exact
 /// reachability from the union of HEAD and refs. Commit parents are followed;
 /// gitlinks name external repositories
@@ -172,6 +172,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
 }
 
 impl<R: Repository + ?Sized> Repository for ValidatedRepository<'_, '_, R> {
+    fn object_format(&self) -> ObjectFormat {
+        self.repository.object_format()
+    }
     fn head(&self) -> ObjectId {
         self.head
     }
@@ -231,9 +234,9 @@ fn initialize_index(
         let info = repository.object_info(index)?;
         let id = repository.object_id(index).ok_or(Error::ObjectNotFound)?;
         if ObjectHasher::new(repository, index)?.finish(read_scratch)? != id
-            || repository
-                .object(index)
-                .is_some_and(|object| object.info() != info || object.id() != id)
+            || repository.object(index).is_some_and(|object| {
+                object.info() != info || object.id_with_format(repository.object_format()) != id
+            })
         {
             return Err(Error::InvalidObject);
         }
@@ -361,7 +364,7 @@ fn reach(
     id: ObjectId,
     kind: ObjectKind,
 ) -> Result<()> {
-    if id.0 == [0; 20] {
+    if id.is_zero() {
         return Err(Error::InvalidObject);
     }
     let index = find(objects, by_id, id).ok_or(Error::ObjectNotFound)?;
@@ -448,14 +451,16 @@ impl<'scratch, 'repo, R: Repository + ?Sized> Body<'scratch, 'repo, R> {
         }
     }
     fn id(&mut self) -> Result<ObjectId> {
-        let mut id = [0; 20];
-        for byte in &mut id {
+        let format = self.reader.object_format();
+        let mut bytes = [0; 32];
+        for byte in &mut bytes[..format.id_length()] {
             *byte = self.byte()?.ok_or(Error::InvalidObject)?;
         }
-        if id == [0; 20] {
+        let id = ObjectId::from_bytes(format, &bytes[..format.id_length()])?;
+        if id.is_zero() {
             return Err(Error::InvalidObject);
         }
-        Ok(ObjectId(id))
+        Ok(id)
     }
     fn line<'a>(&mut self, scratch: &'a mut [u8]) -> Result<&'a [u8]> {
         let line = self.until(b'\n', scratch)?;
@@ -466,9 +471,13 @@ impl<'scratch, 'repo, R: Repository + ?Sized> Body<'scratch, 'repo, R> {
     }
 }
 
-fn link(line: &[u8], prefix: &[u8]) -> Result<ObjectId> {
-    ObjectId::from_hex(line.strip_prefix(prefix).ok_or(Error::InvalidObject)?)
-        .map_err(|_| Error::InvalidObject)
+fn link(line: &[u8], prefix: &[u8], format: ObjectFormat) -> Result<ObjectId> {
+    let id = ObjectId::from_hex(line.strip_prefix(prefix).ok_or(Error::InvalidObject)?)
+        .map_err(|_| Error::InvalidObject)?;
+    if id.format() != format {
+        return Err(Error::InvalidObject);
+    }
+    Ok(id)
 }
 
 fn validate_commit(
@@ -477,15 +486,21 @@ fn validate_commit(
     objects: &mut [Option<ValidationMetadata>],
     by_id: &[usize],
 ) -> Result<()> {
+    let format = body.reader.object_format();
     reach(
         objects,
         by_id,
-        link(body.line(scratch)?, b"tree ")?,
+        link(body.line(scratch)?, b"tree ", format)?,
         ObjectKind::Tree,
     )?;
     let mut line = body.line(scratch)?;
     while line.starts_with(b"parent ") {
-        reach(objects, by_id, link(line, b"parent ")?, ObjectKind::Commit)?;
+        reach(
+            objects,
+            by_id,
+            link(line, b"parent ", format)?,
+            ObjectKind::Commit,
+        )?;
         line = body.line(scratch)?;
     }
     if !line.starts_with(b"author ") || line.len() == b"author ".len() {
@@ -506,8 +521,9 @@ fn tag_target(
     body: &mut Body<'_, '_, impl Repository + ?Sized>,
     scratch: &mut [u8],
 ) -> Result<(ObjectId, ObjectKind)> {
-    let id = link(body.line(scratch)?, b"object ")?;
-    if id.0 == [0; 20] {
+    let format = body.reader.object_format();
+    let id = link(body.line(scratch)?, b"object ", format)?;
+    if id.is_zero() {
         return Err(Error::InvalidObject);
     }
     let kind = match body.line(scratch)? {

@@ -26,6 +26,7 @@ against git-zero or claim their complete Apache/client assertions pass.
 | t5550:238–243 | Packed dumb clone | `upstream-packed-dumb` checks Git's pack/index downloads. It requires git-zero's current loose-only fetch to fail explicitly. |
 | t5550:271–315 | Corrupt dumb pack/index rejection | `upstream-corrupt-{pack,index}-dumb` checks Git rejects the corrupt download and removes the failed clone. These are reference baselines for future git-zero pack/index consumption. |
 | t5551:639–646 | v2 request falling back to a v0 server | `upstream-snapshot-smart` makes Git request v2 from git-zero, checks the v0 symref trace, and compares against an independently Git-created snapshot. |
+| t5551:648–673 | SHA-256 server and empty-remote format discovery | Native `references` compares Git clients against git-zero and Git's smart/static servers in SHA-1 and SHA-256, including empty/custom unborn remotes, independent refs, tags, merge histories, clone/fetch and exact selected pack closures. Core `sha256` checks mismatched formats and resource boundaries. Complete git-zero client clone/materialization remains deferred. |
 
 Additional `upstream-history-{smart,dumb}` and `upstream-packed-smart` cases use
 merge parents, twelve changing historical blobs, nested paths, binary/empty
@@ -78,7 +79,6 @@ from git-zero's own response.
 | t5551:399–496 | Large ref/request budgets, chunked framing and reachable/arbitrary-object wants. Bounded selection accepts advertised HEAD/ref/peeled IDs; merely reachable IDs are rejected. Chunked framing and configurable broader want policies remain planned. |
 | t5551:515–546 | Client ref updates and selecting wanted refs/IDs. The primitive smart fetch accepts an explicit ID; the demo fetch selects HEAD and does not maintain local refs. |
 | t5551:593–596 | Smart error packets and more precise remote error propagation. |
-| t5551:648–673 | SHA-256 repositories and empty-remotes object-format negotiation. Current objects use SHA-1. |
 | t5551:675–686 | DNS and caller-provided hostname resolution. Native URLs currently require numeric loopback IPv4. |
 | t5551:758–765 | Consistent trailing-slash URL normalization across host transports. |
 | t5551:767–789 | Annotated-tag selection/following with shallow negotiation. Discovery and explicitly wanted tag closures are covered by native `references`; include-tag and shallow negotiation remain planned. |

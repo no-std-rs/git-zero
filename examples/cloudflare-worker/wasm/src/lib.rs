@@ -5,7 +5,7 @@
 mod abi {
     use core::cell::UnsafeCell;
     use git_zero::{
-        Entry, EntryKind, Error, SnapshotBuilder, ValidatedRepository,
+        Entry, EntryKind, Error, ObjectFormat, SnapshotBuilder, ValidatedRepository,
         http::{self, Request},
         io::SliceWriter,
     };
@@ -44,13 +44,24 @@ mod abi {
     /// Returns output length, or negative error (1=capacity, 2=invalid input).
     #[unsafe(no_mangle)]
     pub extern "C" fn serve(input_length: usize, method: u32) -> i32 {
+        serve_with_format(input_length, method, 0)
+    }
+
+    /// Same frame and output as `serve`; format: 0=SHA-1, 1=SHA-256.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn serve_with_format(input_length: usize, method: u32, format: u32) -> i32 {
         if input_length > INPUT_CAPACITY {
             return -1;
         }
+        let format = match format {
+            0 => ObjectFormat::Sha1,
+            1 => ObjectFormat::Sha256,
+            _ => return -2,
+        };
         // SAFETY: All access is bounded, synchronous and exclusive per instance.
         let input = unsafe { &(&*INPUT.0.get())[..input_length] };
         let output = unsafe { &mut *OUTPUT.0.get() };
-        match run(input, method, output) {
+        match run(input, method, format, output) {
             Ok(length) => length as i32,
             Err(Error::BufferTooSmall) => -1,
             Err(_) => -2,
@@ -71,7 +82,12 @@ mod abi {
         ) as usize)
     }
 
-    fn run(mut input: &[u8], method: u32, output: &mut [u8]) -> git_zero::Result<usize> {
+    fn run(
+        mut input: &[u8],
+        method: u32,
+        format: ObjectFormat,
+        output: &mut [u8],
+    ) -> git_zero::Result<usize> {
         let lengths = [
             length(&mut input)?,
             length(&mut input)?,
@@ -108,7 +124,7 @@ mod abi {
                 kind: EntryKind::File(contents),
             })?;
         }
-        let repository = builder.finish()?;
+        let repository = builder.finish_with_format(format)?;
         let mut objects = [None; 6]; // Commit, root tree, up to four distinct blobs.
         let mut by_id = [0; 6];
         let repository = ValidatedRepository::new(
