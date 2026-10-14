@@ -90,6 +90,7 @@ const TARGETS: [Target; 7] = [
             include_bytes!("../fuzz/corpus/graph/duplicate"),
             include_bytes!("../fuzz/corpus/graph/empty-tree"),
             include_bytes!("../fuzz/corpus/graph/tree"),
+            include_bytes!("../fuzz/corpus/graph/tag"),
             include_bytes!("../fuzz/corpus/graph/truncated-id"),
         ],
     ),

@@ -43,8 +43,20 @@ The native Cargo `head_states` suite additionally compares git-zero's server
 with Git's HTTP backend/static bare oracle for empty/unborn and detached HEAD
 with/without branch aliases. These are server discovery/clone/fetch comparisons
 using real Git, distinct from the `upstream-empty` and `upstream-detached` client
-regressions above. Non-HEAD symbolic refs, independent tips and annotated tag
-closures remain planned server cases.
+regressions above.
+
+The native `references` suite in `crates/git-zero-rustix/tests/references.rs`
+uses `server_references.py` to compare independent branch tips, symbolic chains,
+merge histories, lightweight/annotated/nested tags and tree/blob tag targets.
+Each case runs smart and dumb discovery, full and single-branch clones, fetches,
+object-body comparisons and strict fsck against Git's oracle. Matched raw v0
+upload requests compare exact selected closures, including duplicate and multiple
+wants and peeled IDs. Unadvertised IDs are rejected even when reachable. Git's
+smart client requests `include-tag` even with `--no-tags`; the Git reference clone
+may physically receive extra tags peeling to its selected closure. Only that
+oracle case permits those extra objects; matched no-capability requests and
+git-zero's single-branch clones require the exact object set. ACK, include-tag,
+shallow/filter and v1/v2 negotiation remain planned.
 
 `upstream-snapshot-{smart,dumb}` constructs blob/tree/commit bytes using Git's
 own commands, with the demo's exact content and identity. Both servers must
@@ -62,13 +74,13 @@ from git-zero's own response.
 | t5550:451–496, 507–521 | Dumb HTTP alternate object stores and bounded traversal across them. |
 | t5551:20–22 | HTTP/2 belongs to a richer host transport. The current native transport is HTTP/1.0. |
 | t5551:293–308 | Protocol disabling and discovery content-type validation. Server routes support both modes; the native client does not yet validate media types. |
-| t5551:399–496 | Large ref/request budgets, chunked framing and reachable/arbitrary-object wants. The current server accepts only its advertised HEAD and the host has explicit fixed limits. |
+| t5551:399–496 | Large ref/request budgets, chunked framing and reachable/arbitrary-object wants. Bounded selection accepts advertised HEAD/ref/peeled IDs; merely reachable IDs are rejected. Chunked framing and configurable broader want policies remain planned. |
 | t5551:515–546 | Client ref updates and selecting wanted refs/IDs. The primitive smart fetch accepts an explicit ID; the demo fetch selects HEAD and does not maintain local refs. |
 | t5551:593–596 | Smart error packets and more precise remote error propagation. |
 | t5551:648–673 | SHA-256 repositories and empty-remotes object-format negotiation. Current objects use SHA-1. |
 | t5551:675–686 | DNS and caller-provided hostname resolution. Native URLs currently require numeric loopback IPv4. |
 | t5551:758–765 | Consistent trailing-slash URL normalization across host transports. |
-| t5551:767–789 | Annotated-tag selection/following with shallow negotiation. Tag discovery is covered; the server aliases one commit and does not serve annotated-tag closures or shallow fetches. |
+| t5551:767–789 | Annotated-tag selection/following with shallow negotiation. Discovery and explicitly wanted tag closures are covered by native `references`; include-tag and shallow negotiation remain planned. |
 
 ## Outside the initial core scope
 

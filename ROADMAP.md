@@ -49,15 +49,18 @@ milestone after the read-only server gate.
 - [x] Incremental root-entry snapshot builder with configurable commit identity/message/time.
 - [x] Validation of custom repository object graphs, tree order, and reachability.
 - [x] Native file-backed object provider using `rustix`, with optional prepacked data.
-- [ ] Empty/bare repositories, unborn and detached HEAD, symbolic refs, independent
+- [x] Empty/bare repositories, unborn and detached HEAD, symbolic refs, independent
   branch tips, lightweight/annotated tags, and peeled ref advertisements.
-  Empty repositories and unborn symbolic HEAD now have allocation-free core
-  APIs; detached HEAD supports both commit aliases and a branchless repository.
-  Real Git discovery, clone and fetch compare native smart/dumb hosts with Git's
-  HTTP backend and static bare repositories across the Git/platform CI matrix.
-  Independent branch tips, non-HEAD symbolic refs and annotated/peeled tags remain.
-- [ ] Serve the correct reachable closure for selected refs and tag targets,
+  Caller-owned refs carry independent IDs, raw symbolic targets and validated
+  final peeled IDs. Real Git discovery, clone and fetch compare native smart/dumb
+  hosts with Git's HTTP backend and static bare repositories across the Git/platform
+  CI matrix, including unborn HEAD with other refs and detached HEAD beyond them.
+- [x] Serve the correct reachable closure for selected refs and tag targets,
   including merge histories and repositories with objects beyond HEAD's closure.
+  Per-request wants, traversal/index arrays, scratch and a graph-read byte limit
+  bound selection without allocation. Matched no-capability upload requests compare
+  exact imported objects with Git. Legacy HEAD-key caches and whole-pack hooks reject
+  independent roots; requested-closure cache keys and prepacked reuse remain in section 3.
 - [ ] SHA-256 object IDs, repository validation, ref advertisements, packs, and
   object-format negotiation alongside the existing SHA-1 path.
 
@@ -70,8 +73,12 @@ annotated tags, deep trees, merge histories, binary blobs, and both object forma
 
 ## 2. Smart HTTP and upload-pack parity
 
-- [ ] Multiple wanted refs/IDs and bounded reachable-object selection, with an
+- [x] Multiple wanted refs/IDs and bounded reachable-object selection, with an
   explicit policy for unadvertised, unreachable, and arbitrary-object wants.
+  Only advertised HEAD, ref and peeled IDs are accepted. Unknown and merely
+  reachable wants fail before output; validation rejects unreachable provider
+  objects. Duplicate/overlapping wants share objects. Haves are parsed but do not
+  prune the closure; ACK, sideband and include-tag capabilities remain unadvertised.
 - [ ] Broader v0 capability negotiation, ACK/have negotiation, sideband and error packets.
 - [ ] Protocol v1/v2 (`ls-refs`, `fetch`) with accurate capability advertisements.
 - [ ] Incremental requests and responses, backpressure, cancellation, and resume points.
@@ -153,7 +160,8 @@ remain regression coverage; server completion is measured with real Git clients.
   and writer coordination remain host-backend work.
 - [ ] Fuzz packet lines, HTTP routing, zlib/pack parsers, and object-graph validation.
   Seven bounded libFuzzer targets now cover packet lines, client discovery/HEAD/
-  pack framing, HTTP routing/upload requests, commit/tree graph validation and
+  pack framing, HTTP routing/upload requests, commit/tree/tag graph validation,
+  selected closures and
   incremental zlib inflation with expansion budgets, loose-object envelopes and
   pack entries/delta instructions.
   Their shared assertions and seeded mutations also run in ordinary Cargo tests;
@@ -224,8 +232,8 @@ kernel-scale benchmarks separate from mandatory, reproducible correctness checks
   configured limits, and remaining optional work; no advertised feature lacks tests.
 
 Start further client development after this gate passes. The next implementation
-step is to add independent server cases for refs/HEAD and selected-object wants,
-then implement the missing behavior alongside those tests.
+step is SHA-256 object IDs and server object-format negotiation, with independent
+Git comparisons alongside the existing SHA-1 path.
 
 ## 7. Read/write server support
 
