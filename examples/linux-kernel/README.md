@@ -1,5 +1,7 @@
 # Kernel Git filesystem example
 
+> Not because we asked if we should, but because we could. :)
+
 `gitfs.ko` mounts a Git commit as a read-only Linux filesystem. TCP sockets,
 HTTP, ref resolution, object fetching, decompression, SHA-1 validation, tree
 traversal, and caching all run **inside the module**. There is no daemon,
