@@ -347,7 +347,8 @@ preserve all three HEAD states.
 HEAD metadata on any stable object provider. Each `Reference` carries a resolved
 ID, an optional raw `symbolic_target`, and an optional final non-tag `peeled` ID.
 Use `Reference::direct(name, id)` for ordinary branches or lightweight tags.
-Symbolic chains must resolve to an existing ref with the same ID. Ref names must
+Symbolic chains must resolve to an existing ref with the same ID. A symbolic HEAD
+can follow branch aliases to a lightweight commit tag. Ref names must
 be sorted, unique and free of file/directory conflicts. Peeled names reserve
 three extra packet bytes for `^{}`. `ValidatedRepository` checks annotated tags,
 including nested tags and tree/blob targets, against the supplied final peel.

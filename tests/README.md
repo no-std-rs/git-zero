@@ -38,7 +38,8 @@ without allocation. `http-backend` emits an empty raw `/HEAD` for unborn refs;
 git-zero serves the symbolic HEAD file, matching Git's static dumb repository.
 
 The native `references` suite compares symbolic, detached and unborn HEAD with
-independent branches, merge histories, symbolic chains, annotated/nested tags,
+independent branches, merge histories, symbolic chains (including HEAD through
+a lightweight commit tag), annotated/nested tags,
 and tree/blob targets over smart and dumb HTTP. `server_references.py` generates
 the oracle using Git's commands and exports immutable raw bodies to the native
 file provider. Discovery, raw ref files, clone/fetch refs, checkouts and every

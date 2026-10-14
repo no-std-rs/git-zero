@@ -231,6 +231,11 @@ fn real_git_symbolic_refs_tags_and_selected_closures_match_git_servers() {
 }
 
 #[test]
+fn real_git_symbolic_head_through_a_lightweight_tag_matches_git_servers() {
+    compare("symbolic-tag");
+}
+
+#[test]
 fn real_git_detached_head_beyond_ref_closures_matches_git_servers() {
     compare("detached");
 }

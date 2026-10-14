@@ -46,7 +46,8 @@ using real Git, distinct from the `upstream-empty` and `upstream-detached` clien
 regressions above.
 
 The native `references` suite in `crates/git-zero-rustix/tests/references.rs`
-uses `server_references.py` to compare independent branch tips, symbolic chains,
+uses `server_references.py` to compare independent branch tips, symbolic chains
+(including HEAD through a lightweight commit tag),
 merge histories, lightweight/annotated/nested tags and tree/blob tag targets.
 Each case runs smart and dumb discovery, full and single-branch clones, fetches,
 object-body comparisons and strict fsck against Git's oracle. Matched raw v0

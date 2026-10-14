@@ -483,7 +483,7 @@ pub fn validate_refs(repository: &(impl Repository + ?Sized)) -> Result<()> {
     }
     if let Head::Symbolic { target, .. } = head {
         let (target, _) = resolve_reference(repository, target)?;
-        if !target.starts_with("refs/heads/") || target.len() > MAX_HEAD_REF_LENGTH {
+        if target.len() > MAX_HEAD_REF_LENGTH {
             return Err(Error::InvalidReference);
         }
     }

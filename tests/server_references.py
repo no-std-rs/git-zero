@@ -54,7 +54,10 @@ def fixture(root, state, env):
     git(bare, "symbolic-ref", "refs/tags/alias-tag", "refs/tags/annotated", env=env)
     for name, oid in (("light", base), ("tree", base_tree), ("blob", blobs[3])):
         git(bare, "update-ref", "refs/tags/" + name, oid, env=env)
-    if state == "symbolic":
+    if state in ("symbolic", "symbolic-tag"):
+        if state == "symbolic-tag":
+            git(bare, "update-ref", "refs/tags/head", main, env=env)
+            git(bare, "symbolic-ref", "refs/heads/alias-next", "refs/tags/head", env=env)
         git(bare, "symbolic-ref", "HEAD", "refs/heads/alias", env=env)
         head = main
     elif state == "detached":
@@ -112,7 +115,7 @@ def compare_discovery(bare, reference, zero, smart, head, env):
     assert get(zero + "/HEAD") == (bare / "HEAD").read_bytes()
     if not smart:
         assert get(reference + "/HEAD") == get(zero + "/HEAD")
-        for name in ("refs/heads/alias", "refs/tags/alias-tag", "refs/heads/release#%é+"):
+        for name in ("refs/heads/alias", "refs/heads/alias-next", "refs/tags/alias-tag", "refs/heads/release#%é+"):
             path = urllib.parse.quote(name, safe="/")
             assert get(reference + "/" + path) == get(zero + "/" + path)
 
@@ -247,7 +250,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("prepare", "compare"))
     parser.add_argument("--root", required=True, type=Path)
-    parser.add_argument("--state", required=True, choices=("symbolic", "detached", "unborn"))
+    parser.add_argument("--state", required=True, choices=("symbolic", "symbolic-tag", "detached", "unborn"))
     parser.add_argument("--zero-url")
     args = parser.parse_args()
     if args.phase == "prepare":

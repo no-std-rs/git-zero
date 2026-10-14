@@ -328,6 +328,43 @@ fn distinct_tips_symbolic_chains_and_peeled_refs_survive_indexes() {
 }
 
 #[test]
+fn symbolic_head_can_resolve_through_a_lightweight_tag() {
+    let mut source = Graph::new();
+    source.refs[2].symbolic_target = Some("refs/tags/light");
+    source.refs[7].id = source.head();
+    let repository = allocations::without_allocations(|| {
+        RefRepository::new(&source, source.state(), &source.refs).unwrap()
+    });
+    validated(&repository, |repository| {
+        assert_eq!(
+            resolve_reference(repository, "refs/heads/alias"),
+            Ok(("refs/tags/light", source.head()))
+        );
+        let mut storage = [0; 4096];
+        let mut output = SliceWriter::new(&mut storage);
+        allocations::without_allocations(|| {
+            http::serve(
+                repository,
+                Request {
+                    method: "GET",
+                    path: "info/refs",
+                    query: Some("service=git-upload-pack"),
+                    body: &[],
+                },
+                &mut output,
+            )
+            .unwrap()
+        });
+        assert!(
+            output
+                .as_bytes()
+                .windows(b"symref=HEAD:refs/tags/light".len())
+                .any(|part| part == b"symref=HEAD:refs/tags/light")
+        );
+    });
+}
+
+#[test]
 fn selected_closures_deduplicate_roots_and_reset_state_without_allocating() {
     let graph = Graph::new();
     validated(&graph.repository(), |repo| {
