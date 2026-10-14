@@ -1,7 +1,9 @@
 """Exercise release version staging and immutable asset retry behavior."""
 
 from copy import deepcopy
+from contextlib import ExitStack, closing
 import hashlib
+import http.client
 import importlib.util
 import json
 from pathlib import Path
@@ -84,20 +86,22 @@ class PrepareRelease(unittest.TestCase):
         self.assertEqual(self.files(), before)
 
 
+def cargo_upload(name="git-zero-client", version="0.1.0"):
+    metadata = json.dumps({
+        "name": name, "vers": version,
+        "features": {"client": ["dep:transport", "transport?/tls"]},
+        "deps": [{"name": "git-zero-core", "version_req": "^0.1.0", "features": ["read"],
+                  "optional": False, "default_features": False, "target": None,
+                  "kind": "normal", "registry": None}],
+    }).encode()
+    archive = b"bounded archive fixture"
+    return struct.pack("<I", len(metadata)) + metadata + struct.pack("<I", len(archive)) + archive
+
+
 class CargoUploads(unittest.TestCase):
-    def upload(self, name="git-zero-client", version="0.1.0"):
-        metadata = json.dumps({
-            "name": name, "vers": version,
-            "features": {"client": ["dep:transport", "transport?/tls"]},
-            "deps": [{"name": "git-zero-core", "version_req": "^0.1.0", "features": ["read"],
-                      "optional": False, "default_features": False, "target": None,
-                      "kind": "normal", "registry": None}],
-        }).encode()
-        archive = b"bounded archive fixture"
-        return struct.pack("<I", len(metadata)) + metadata + struct.pack("<I", len(archive)) + archive
 
     def test_preserves_dependencies_and_namespaced_features_in_sparse_index(self):
-        record = json.loads(capture.parse_upload(self.upload(), "git-zero-client", "0.1.0"))
+        record = json.loads(capture.parse_upload(cargo_upload(), "git-zero-client", "0.1.0"))
         self.assertEqual(record["v"], 2)
         self.assertEqual(record["features2"]["client"], ["dep:transport", "transport?/tls"])
         self.assertEqual(record["deps"][0]["features"], ["read"])
@@ -105,10 +109,76 @@ class CargoUploads(unittest.TestCase):
         self.assertEqual(record["cksum"], hashlib.sha256(b"bounded archive fixture").hexdigest())
 
     def test_rejects_bad_lengths_wrong_identity_and_trailing_data(self):
-        for body in (b"", self.upload()[:-1], self.upload() + b"extra",
-                     self.upload(name="wrong"), self.upload(version="0.2.0"), struct.pack("<I", 0xffffffff) + b"data"):
+        for body in (b"", cargo_upload()[:-1], cargo_upload() + b"extra",
+                     cargo_upload(name="wrong"), cargo_upload(version="0.2.0"), struct.pack("<I", 0xffffffff) + b"data"):
             with self.assertRaises(ValueError):
                 capture.parse_upload(body, "git-zero-client", "0.1.0")
+
+
+class RegistryHTTP(unittest.TestCase):
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        self.server = self.stack.enter_context(capture.registry(self.root, "0.1.0"))
+        self.server.expected = "git-zero-client"
+        self.headers = {"Authorization": self.server.token}
+
+    def request(self, method, path, body=None, headers=None):
+        with closing(http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)) as connection:
+            connection.request(method, path, body, self.headers if headers is None else headers)
+            response = connection.getresponse()
+            return response.status, response.read()
+
+    def test_publish_serves_exact_sibling_archive_and_refuses_overwrite(self):
+        body = cargo_upload()
+        self.assertEqual(self.request("PUT", "/api/v1/crates/new", body)[0], 200)
+        status, index = self.request("GET", "/index/gi/t-/git-zero-client")
+        self.assertEqual(status, 200)
+        record = json.loads(index)
+        self.assertEqual(record["features2"]["client"], ["dep:transport", "transport?/tls"])
+        self.assertEqual(record["deps"][0]["name"], "git-zero-core")
+        self.assertEqual(self.request("GET", "/crates/git-zero-client/0.1.0/download"),
+                         (200, b"bounded archive fixture"))
+        self.assertEqual(self.request("PUT", "/api/v1/crates/new", body)[0], 422)
+        self.assertEqual((self.root / "git-zero-client-0.1.0.cargo-upload").read_bytes(), body)
+
+    def test_missing_or_wrong_authorization_cannot_capture(self):
+        for headers in ({}, {"Authorization": "incorrect-local-fixture-token"}):
+            self.assertEqual(self.request("PUT", "/api/v1/crates/new", cargo_upload(), headers)[0], 403)
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual(self.server.index, {})
+        self.assertIsNone(self.server.error)
+
+    def test_invalid_lengths_and_wrong_identity_leave_no_capture(self):
+        for length in ("0", "-1", "invalid", str(capture.MAX_UPLOAD + 1)):
+            self.assertEqual(self.request("PUT", "/api/v1/crates/new", b"",
+                                         {**self.headers, "Content-Length": length})[0], 422)
+        self.assertEqual(self.request("PUT", "/api/v1/crates/new", cargo_upload(name="wrong"))[0], 422)
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual(self.server.index, {})
+
+    def test_configuration_and_public_dependency_routes_use_correct_origins(self):
+        status, data = self.request("GET", "/index/config.json")
+        self.assertEqual(status, 200)
+        origin = f"http://127.0.0.1:{self.server.server_port}"
+        self.assertEqual(json.loads(data), {"dl": origin + "/crates", "api": origin})
+        with patch.object(capture, "fetch", return_value=b"public index") as fetch:
+            self.assertEqual(self.request("GET", "/index/sh/a1/sha1"), (200, b"public index"))
+            fetch.assert_called_once_with("https://index.crates.io/sh/a1/sha1", capture.MAX_INDEX)
+        with patch.object(capture, "fetch", return_value=b"public archive") as fetch:
+            self.assertEqual(self.request("GET", "/crates/sha1/0.10.7/download"), (200, b"public archive"))
+            fetch.assert_called_once_with("https://static.crates.io/crates/sha1/sha1-0.10.7.crate", capture.MAX_UPLOAD, 503)
+
+    def test_upstream_errors_and_invalid_routes_are_http_failures(self):
+        with patch.object(capture, "fetch", side_effect=capture.RegistryError(503)):
+            self.assertEqual(self.request("GET", "/index/sh/a1/sha1")[0], 503)
+        with patch.object(capture, "fetch") as fetch:
+            self.assertEqual(self.request("GET", "/unknown")[0], 404)
+            self.assertEqual(self.request("GET", "/crates/sha1/0.10.7/invalid")[0], 404)
+            self.assertEqual(self.request("PUT", "/unknown", cargo_upload())[0], 404)
+            fetch.assert_not_called()
+        self.assertIsNone(self.server.error)
 
 
 class ReleaseAssets(unittest.TestCase):
