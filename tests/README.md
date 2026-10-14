@@ -64,6 +64,17 @@ tags, advertised-want policy, capacities, byte-read exhaustion, retries, indepen
 request storage and rejection of unsafe HEAD-key cache/whole-pack reuse. Allocation
 tracking covers ref construction, graph validation, selection and HTTP serving.
 
+The [server acceptance matrix](server-acceptance.md) records coverage and remaining
+gaps for each server milestone, independently of git-zero client limitations.
+`server_negotiation.py::compare_negotiation` compares v0 single/multi/detailed
+ACK rounds, both sideband modes, common-history exclusion and incremental fetch
+against Git's HTTP backend in both object formats. It runs inside the native
+`references` suite and retains raw responses and imported packs on failure.
+`tests/upload.rs` adds allocation, phase/truncation, capability conflict, packet
+size, checksum, exclusion-reset, graph budget and ERR-packet regressions.
+Worker memory tests repeat negotiated ACK/sideband requests in both formats;
+the real-Git Worker smart clone selects the newly advertised capabilities.
+
 `tests/inflate.rs` compares the core zlib decoder with Python's standard zlib
 and a real Git-created loose object. Stored, fixed, dynamic and mixed blocks run
 with one-byte input/output, overlapping copies, a 32768-byte back-reference,

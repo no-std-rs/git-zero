@@ -4,6 +4,7 @@ use git_zero::{
     http::{self, Request},
     io::SliceWriter,
     pack,
+    pktline::{self, Packet},
 };
 
 /// Decode one bounded HTTP request and check any successful response.
@@ -12,7 +13,7 @@ use git_zero::{
 /// of 0, 1, 16, 64, or 4096 bytes. The rest is path, query, and body separated by
 /// two NULs; invalid UTF-8 paths/queries are skipped. An empty snapshot uses fixed
 /// tree/commit storage and one-byte read scratch. Upload replies must begin with
-/// NAK and any following pack must validate; output must fit the chosen writer.
+/// ACK/NAK and raw/sideband packs must validate; output fits the chosen writer.
 pub fn routing(data: &[u8]) {
     if data.len() < 2 || data.len() > MAX_INPUT {
         return;
@@ -41,10 +42,36 @@ pub fn routing(data: &[u8]) {
         assert!(matches!(response.status, 200 | 403 | 404 | 405));
         assert!(output.len() <= capacity);
         if response.content_type == "application/x-git-upload-pack-result" {
-            assert!(output.as_bytes().starts_with(b"0008NAK\n"));
-            if output.len() > 8 {
-                pack::validate(&output.as_bytes()[8..]).unwrap();
+            check_upload(output.as_bytes());
+        }
+    }
+}
+
+fn check_upload(mut wire: &[u8]) {
+    let mut storage = [0; MAX_INPUT];
+    let mut packed = SliceWriter::new(&mut storage);
+    let mut acknowledged = false;
+    while !wire.is_empty() {
+        if wire.starts_with(b"PACK") {
+            assert!(acknowledged);
+            pack::validate(wire).unwrap();
+            return;
+        }
+        match pktline::read(&mut wire).unwrap().unwrap() {
+            Packet::Data(line) if line.starts_with(b"ACK ") || line == b"NAK\n" => {
+                acknowledged = true;
+            }
+            Packet::Data(line) => {
+                assert!(acknowledged);
+                assert_eq!(line[0], 1);
+                git_zero::io::Write::write_all(&mut packed, &line[1..]).unwrap();
+            }
+            Packet::Flush => {
+                assert!(wire.is_empty());
+                pack::validate(packed.as_bytes()).unwrap();
+                return;
             }
         }
     }
+    assert!(acknowledged && packed.is_empty());
 }

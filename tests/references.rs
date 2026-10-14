@@ -290,6 +290,57 @@ fn selected_ids(repository: &impl Repository, indices: &[usize]) -> Vec<ObjectId
             .collect(),
     )
 }
+
+#[test]
+fn common_commit_closures_exclude_shared_merge_history_and_reset_between_requests() {
+    let graph = Graph::new();
+    validated(&graph.repository(), |repository| {
+        let mut work = [None; CAPACITY];
+        let mut indices = [0; CAPACITY];
+        for common in [
+            vec![graph.ids.base.unwrap()],
+            vec![graph.ids.main.unwrap(), graph.ids.side.unwrap()],
+            vec![graph.ids.side.unwrap(), graph.ids.side.unwrap()],
+            vec![],
+        ] {
+            let excluded = if common.is_empty() {
+                vec![]
+            } else {
+                let selected = repository
+                    .select_objects(
+                        &common,
+                        &mut work,
+                        &mut indices,
+                        &mut [0; 1],
+                        &mut [0; 128],
+                        4096,
+                    )
+                    .unwrap();
+                selected_ids(repository, selected)
+            };
+            let selected = allocations::without_allocations(|| {
+                repository
+                    .select_missing_objects(
+                        &[graph.ids.merge.unwrap()],
+                        common.iter().copied(),
+                        &mut work,
+                        &mut indices,
+                        (&mut [0; 1], &mut [0; 128]),
+                        8192,
+                    )
+                    .unwrap()
+            });
+            let expected = graph
+                .objects
+                .iter()
+                .filter(|object| object.kind != ObjectKind::Tag && !excluded.contains(&object.id))
+                .map(|object| object.id)
+                .collect();
+            assert_eq!(selected_ids(repository, selected), sorted(expected));
+        }
+    });
+}
+
 fn request(roots: &[ObjectId], done: bool) -> Vec<u8> {
     let mut bytes = Vec::new();
     for id in roots {

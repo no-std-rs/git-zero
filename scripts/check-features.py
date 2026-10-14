@@ -38,7 +38,7 @@ def main():
         expected = "read" if role == "client" else "write"
         if core.split("|")[1] != expected:
             raise RuntimeError(f"{role}-only facade enabled unexpected core features: {core}")
-        if excluded in dependencies:
+        if any(line.startswith(excluded + " ") for line in dependencies.splitlines()):
             raise RuntimeError(f"{role}-only facade unexpectedly depends on {excluded}")
     print("All 39 isolated feature combinations passed; client/server dependencies are separate.")
 

@@ -101,6 +101,10 @@ name = "snapshot"
 required-features = ["client", "server"]
 
 [[test]]
+name = "upload"
+required-features = ["read", "server"]
+
+[[test]]
 name = "validation"
 required-features = ["read", "server"]
 

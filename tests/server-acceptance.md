@@ -1,0 +1,87 @@
+# Read-only server acceptance matrix
+
+This is the server worklist for ROADMAP sections 1–6. A covered row identifies
+git-zero serving a real Git client, or explicitly identifies a narrower core
+test. It does not declare the overall server parity gate complete.
+
+The upstream case map is [upstream-http.md](upstream-http.md), pinned to Git
+v2.53.0. Fixtures and assertions here are independently authored under MIT OR
+Apache-2.0; no GPL upstream test bodies are copied. Running unchanged upstream
+tests against Git is a reference baseline, without proving git-zero coverage.
+
+## Evidence and reproduction
+
+Native reference comparisons use real Git as client and `git http-backend`
+(smart) or a Git-created static bare repository (dumb) as oracle. They compare
+refs, object IDs/kinds/bodies, checkouts and `fsck --strict`. Matched raw requests
+also check physical pack membership and strict import; pack encoding can differ.
+The native CI matrix runs Linux/macOS and system/pinned Git 2.53.0.
+
+```sh
+cargo test -p git-zero-rustix --test head_states --test references --test snapshot --test storage --locked
+cargo test -p git-zero --test upload --test references --test sha256 --test fuzz --locked
+python3 tests/interop.py --jobs 8 --artifacts /tmp/git-zero-server-acceptance
+cd examples/cloudflare-worker
+npm test
+```
+
+`N` below means the native rustix HTTP host, `W` means the exact Worker handler
+hosted by Node with real Wasm, and `C` means a core-only test. `S0` is smart v0,
+`D` is dumb HTTP, and `1/256` means SHA-1 and SHA-256. Worker real-Git clone
+tests use SHA-1. Its SHA-256 ABI checks use independent Node hashes, not a Git
+reference-server comparison. Worker tests do not prove deployed Cloudflare
+behavior. Rust allocation counters and Wasm memory ceilings are distinct checks.
+
+## Objects, refs and negotiation
+
+| Feature | Named local case / oracle evidence | Host, protocol, format | Remaining gap |
+| --- | --- | --- | --- |
+| Empty/bare/unborn HEAD | Native `head_states::real_git_empty_and_unborn_servers_match_git_http_backend`; `references::real_git_sha256_empty_repositories_match_git_servers` | N, S0/D, 1/256; Git backend/static oracle | No Worker empty fixture. |
+| Detached HEAD independent of refs | Native `references::real_git_detached_head_beyond_ref_closures_matches_git_servers` and SHA-256 counterpart; `head_states::real_git_detached_servers_with_and_without_refs_match_git_http_backend` | N, S0/D, 1/256; Git oracle | Worker only exposes its configured snapshot HEAD. |
+| Independent branches, symbolic chains, annotated/nested and lightweight tags, peeled/tree/blob targets | Native `references` symbolic/unborn cases and SHA-256 counterparts, via `server_references.py::compare` | N, S0/D, 1/256; discovery, full/single-branch clone and selected fetch versus Git | No equivalent Worker fixture. |
+| Nested/empty trees, executables, symlinks, binary blobs | Native `snapshot::real_git_clones_nested_modes_empty_trees_and_custom_refs`; `storage::real_git_clones_file_backed_nested_snapshots_with_and_without_prepacked_data`; core `sha256::git_strictly_imports_both_formats_and_independently_verifies_snapshot_ids` | N, S0/D, 1; C strict Git import, 1/256 | Native SHA-256 snapshot import has no checkout/mode comparison; Worker metadata is flat. |
+| Large/generated bounded object bodies | Native `snapshot::real_git_clones_generated_objects_with_bounded_read_scratch`; core `reader::generated_pack_and_http_bytes_match_borrowed_snapshots_for_every_budget` | N, S0/D, 1; Git clone/fsck; C byte equivalence | No Worker generated provider; kernel-scale prep remains planned. |
+| Incremental snapshot builder and stable IDs | Core `builder::git_strictly_accepts_a_builder_snapshot_with_custom_commit`; Worker `SHA-256 Wasm snapshots match independent IDs and retain fixed memory` | C strict Git import, 1; W ABI hashes, 256 | Broader cross-host custom commit/identity fixtures remain. |
+| Object indexes and graph validation | Core `validation::strict_git_accepts_validated_streamed_merge_history_and_gitlinks`, `references` and `sha256` invalid graph tests; native `references` validates Git-exported file providers | C/N, 1/256; strict import and Git oracle | Exhaustive graph/name policy is outside the validator's documented contract. |
+| Multiple/duplicate/overlapping wants, merges and exact selected closures | `server_references.py::compare_wants` in native `references`; core `references::upload_pack_enforces_advertised_wants_and_preflights_all_selection_budgets` | N, S0, 1/256; matched requests and exact objects versus Git | Only advertised HEAD/ref/peeled IDs are allowed; broader want policies remain unadvertised. |
+| Single ACK, multi_ack, multi_ack_detailed and common-history exclusion | `server_negotiation.py::compare_negotiation` in native symbolic `references` cases; core `upload` and `references::common_commit_closures_exclude_shared_merge_history_and_reset_between_requests` | N, S0, 1/256; matched Git rounds, incremental pack membership/import and real fetch; W ACK ABI, 1/256 | No ready/no-done shortcuts; complete-pack hooks may resend history. Worker lacks a multi-commit backend. |
+| Sideband and no-progress | Same native negotiation comparison; core `upload::sideband_modes_preserve_large_pack_bytes_checksums_and_packet_bounds`; Worker `negotiated ACK and sideband responses keep fixed Wasm memory in both formats` | N, S0, 1/256; both modes versus Git; W ABI, 1/256; real-Git Worker clone, 1 | No progress telemetry. Pack payload uses channel 1; terminal failures use the replacement ERR API. |
+| Terminal error packets and malformed uploads | Native `compare_negotiation` checks rejected want ERR; core `upload::bounded_error_packets_replace_failed_output_without_backend_details` and parser truncation/phase/capability tests | N/C, S0; framing/error assertions, not exact Git diagnostics | Hosts opt into `write_upload_error` after discarding failed buffered output. Client error decoding remains deferred. |
+| Protocol v1/v2, ls-refs and fetch | No implemented server case; legacy Git clients can fall back to S0 | No parity evidence | Implement version-aware discovery, commands, capabilities, format negotiation and Git/Worker comparisons. |
+| Incremental protocol I/O, backpressure, cancellation and resume | `reader` proves bounded object reads; core `references` proves request-storage reuse | C only; not incremental HTTP evidence | Implement per-request resumable transport state and slow/disconnected/cancelled-client tests. |
+| Shallow/deepen/filter | Core `upload` rejects unsupported requests/capabilities before output | C, S0 negative evidence only | Implement bounded history/filter state and real-Git positive/negative cases in both formats. |
+| HTTP methods, media types, service/version selection and normalized paths | Core `core::server_rejects_unadvertised_wants_and_push`, `references::smart_and_dumb_ref_routes_preserve_symbolic_and_peeled_data`, routing fuzz seeds | C; N S0/D refs versus Git | Header validation belongs to hosts today. Duplicate services, wrong media types, protocol headers and general route normalization need a dedicated milestone. |
+
+## Packing and caches
+
+| Feature | Named local case / oracle evidence | Host, protocol, format | Remaining gap |
+| --- | --- | --- | --- |
+| Loose objects and stored-block packs | Native `references`, `snapshot`, `storage`; core `pack_git::git_accepts_empty_duplicate_and_multiblock_objects` | N, S0/D, 1/256 via references; strict import/objects versus Git | Baseline pack encoding is uncompressed, without deltas. |
+| Packed dumb HTTP and pack/index publication | `objects/info/packs` currently empty; loose D clone cases above | N, D loose-only | Implement valid pack/index downloads and packed-only/mixed clone/fetch comparisons. Client `upstream-packed-dumb` is not server evidence. |
+| Actual bounded DEFLATE compression | No server encoder case | No parity evidence | Implement compression budgets and compare objects with stored fallback. Decoder tests do not establish encoder support. |
+| Existing pack/prepacked reuse | Native `storage::real_git_clones_file_backed_nested_snapshots_with_and_without_prepacked_data` and `prepacked_files_reject_corruption_truncation_extras_and_wrong_closure` | N, S0, 1; Git clone/fsck and exact byte verification | Only this encoder's complete HEAD closure. Requested-closure keys and arbitrary compressed/prepacked entries remain planned. |
+| Optional delta generation | No server generator case | No parity evidence | Add strict CPU/memory budgets and Git importer/clone comparisons. Client delta decoding is separate. |
+| Streaming pack index creation | No server index writer case | No parity evidence | Generate index/CRCs/fanout alongside pack and validate using Git. |
+| Versioned closure/format/encoder cache keys | Core `cache::encoder_version_is_part_of_the_cache_identity`; SHA-256 cache checks in `sha256` | C, 1/256; current complete-HEAD keys only | Version requested-closure keys before caching selected packs. |
+| Fixed-memory caching, eviction and failures | Native `storage::real_git_fetches_changed_file_snapshots_with_cache_eviction_and_return_to_old_head`; core `cache` failure tests | N, S0/D, 1; Git A → B → A checkout/object checks; C failure paths | Native disk and async KV/R2, coordinated writers, corruption verification and concurrent eviction remain planned. |
+
+## Hosts, resources and completion
+
+| Feature | Named local case / oracle evidence | Host, protocol, format | Remaining gap |
+| --- | --- | --- | --- |
+| Native listener and HTTP framing | All native server comparison suites use IPv4 loopback, bounded HTTP/1.0 requests/responses | N, S0/D, 1/256 | IPv6/TLS, HTTP/1.1 keep-alive/chunking, configurable timeouts/body/connection limits and poll-based independent connections remain planned. |
+| Streaming Wasm ABI and host callbacks | Worker `Wasm uses no host imports or allocator`; memory tests exercise the current complete-buffer ABI | W, S0/D; real-Git SHA-1 clone; ABI 1/256 | Streaming callbacks and incremental requests/responses remain planned. |
+| Worker async storage, immutable persistence and isolate reuse | Worker `metadata snapshot exposes available public data and pins objects across requests`; overlapping real-Git clones | W, S0/D, 1; self-consistency and Git fsck | No independent Git backend comparison, durable storage or deployed-edge test. URLs still carry immutable snapshot data. |
+| Tree-shaped metadata and public binding projection | Worker metadata/public-variable assertions | W, flat metadata only | Tree-shaped projection, deployed auth/storage policy and retention configuration remain planned. |
+| Allocation and memory ceilings | Native `storage::provider_validation_pack_verification_and_serving_allocate_nothing`; core `upload`, `references`; Worker memory tests | C/N allocator counters; W fixed 24-page initial ceiling and no growth, 1/256 | JS/isolate memory, simultaneous process-tree RSS and production Worker CPU/retention diagnostics remain unmeasured. |
+| Fixed-budget and optional kernel benchmarks | `test_benchmark_limits.py`, `test_benchmark_source.py`; CI benchmark smoke/default-policy and pinned-caller fixtures | N, S0/D, SHA-1, paired Git host and identical prepared objects | Kernel-scale preparation, controlled cold-cache runs and total process-tree peaks remain planned. Timing does not establish parity. |
+| Fuzzing malformed input and bounded state | `fuzz::seeded_fuzz_targets_replay_and_mutate_the_corpus`, including v0 routing/negotiation/sideband seeds; CI ASan campaigns | C, bounded packets/graphs/decoders/routing | Future v2/shallow/filter/index/framing APIs and concurrent/cancelled state require new targets. |
+| Retained traces and cross-platform coverage | Native `references` retains fixtures, responses, packs and Git packet/curl logs on failure; `interop.py` retains sharded artifacts | Linux/macOS × system/Git 2.53.0; W CI Node host | Deployed Worker and unsupported protocol/format combinations remain gaps. |
+| Upstream fixture substitution | Independently authored Python Git fixtures and optional `scripts/test-upstream-git.sh` baseline | Native local comparisons | No reusable substitution into Git's Apache harness. Preserve GPL provenance if upstream bodies are ever copied. |
+| Read-only server completion gate | Rows above are the auditable worklist | Partial S0/D coverage | V1/v2, shallow/filter, streaming/concurrency, packed dumb publication and full native/Worker oracle coverage must pass before claiming parity or starting further client work. |
+
+Git-zero client discovery/download/decoder tests remain regression coverage.
+`upstream-packed-smart` and `upstream-packed-dumb` exercise Git serving a git-zero
+client; they do not prove git-zero can serve arbitrary prepacked/delta repositories.
+Authentication and deployment policy belong to hosts. Read/write receive-pack
+is a later, separate roadmap gate.
