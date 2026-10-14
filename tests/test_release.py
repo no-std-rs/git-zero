@@ -1,10 +1,12 @@
 """Exercise release version staging and immutable asset retry behavior."""
 
+from copy import deepcopy
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import struct
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -26,6 +28,7 @@ def load(name):
 prepare = load("prepare-release")
 capture = load("package-registry-uploads")
 attach = load("attach-release-assets")
+public = load("check-public-packages")
 
 
 class PrepareRelease(unittest.TestCase):
@@ -151,6 +154,55 @@ class ReleaseAssets(unittest.TestCase):
         with patch.object(attach, "gh", self.gh):
             attach.attach("no-std-rs/git-zero", "v0.1.0", self.root)
         self.assertEqual(len(self.calls), 1)
+
+
+class PublicPackages(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.metadata = json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"], cwd=ROOT
+        ))
+        cls.packages = {item["name"]: item for item in cls.metadata["packages"]}
+        cls.core = cls.packages["git-zero-core"]
+
+    def test_real_core_metadata_and_external_dependency_are_valid(self):
+        public.check_metadata(self.core, PACKAGES["git-zero-core"])
+        public.check_dependencies(self.core, set(), self.core["version"])
+
+    def test_missing_release_metadata_is_rejected(self):
+        for field in ("description", "license", "repository", "readme"):
+            with self.subTest(field=field):
+                package = deepcopy(self.core)
+                package[field] = None
+                with self.assertRaisesRegex(ValueError, field):
+                    public.check_metadata(package, PACKAGES["git-zero-core"])
+
+    def test_dependency_order_and_version_mismatches_are_rejected(self):
+        client = self.packages["git-zero-client"]
+        with self.assertRaisesRegex(ValueError, "uploaded first"):
+            public.check_dependencies(client, set(), client["version"])
+        with self.assertRaisesRegex(ValueError, "version differs"):
+            public.check_dependencies(client, {"git-zero-core"}, "9.8.7")
+
+    def test_unpublished_local_dependency_is_rejected(self):
+        package = deepcopy(self.core)
+        package["dependencies"].append({"name": "internal", "path": str(ROOT / "internal")})
+        with self.assertRaisesRegex(ValueError, "unpublished local"):
+            public.check_dependencies(package, set(), package["version"])
+
+    def test_example_accidentally_marked_public_is_rejected(self):
+        metadata = deepcopy(self.metadata)
+        next(item for item in metadata["packages"] if item["name"] == "git-zero-worker-wasm")["publish"] = None
+        with patch.object(public.subprocess, "check_output", return_value=json.dumps(metadata).encode()):
+            with self.assertRaisesRegex(ValueError, "release package list"):
+                public.check()
+
+    def test_mixed_public_versions_are_rejected(self):
+        metadata = deepcopy(self.metadata)
+        next(item for item in metadata["packages"] if item["name"] == "git-zero-client")["version"] = "9.8.7"
+        with patch.object(public.subprocess, "check_output", return_value=json.dumps(metadata).encode()):
+            with self.assertRaisesRegex(ValueError, "one version"):
+                public.check()
 
 
 if __name__ == "__main__":

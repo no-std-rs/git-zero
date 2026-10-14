@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check feature combinations as separate Cargo builds to avoid workspace unification."""
 
-from itertools import combinations
+from itertools import chain, combinations
 from pathlib import Path
 import subprocess
 
@@ -10,6 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def run(*arguments):
     return subprocess.run(["cargo", *arguments], cwd=ROOT, check=True)
+
+
+def feature_sets(features):
+    return chain.from_iterable(combinations(features, size) for size in range(len(features) + 1))
 
 
 def main():
@@ -21,12 +25,9 @@ def main():
         "git-zero-server": ("read",),
     }
     for package, features in matrices.items():
-        for size in range(len(features) + 1):
-            for selected in combinations(features, size):
-                arguments = ["check", "-p", package, "--all-targets", "--no-default-features", "--locked"]
-                if selected:
-                    arguments += ["--features", ",".join(selected)]
-                run(*arguments)
+        for selected in feature_sets(features):
+            run("check", "-p", package, "--all-targets", "--no-default-features", "--locked",
+                "--features", ",".join(selected))
     # An isolated client must not link the server, nor a server the client.
     for role, excluded in (("client", "git-zero-server"), ("server", "git-zero-client")):
         dependencies = subprocess.check_output([
