@@ -6,6 +6,13 @@ mod decode;
 #[cfg(feature = "read")]
 pub use decode::{DeltaLimits, Entry, EntryKind, Reader, ResolvedObject, apply_delta, crc32};
 
+#[cfg(feature = "read")]
+mod materialize;
+#[cfg(feature = "read")]
+pub use materialize::{
+    MaterializeLimits, MaterializedEntry, MaterializedPack, find_materialized, materialize,
+};
+
 #[cfg(feature = "write")]
 mod encode;
 #[cfg(feature = "write")]
