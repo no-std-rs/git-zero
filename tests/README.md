@@ -125,7 +125,7 @@ rejection. Real Git imports a custom builder snapshot and accepts `fsck --strict
 The allocator-free Worker uses the builder with default metadata, so its existing
 clone and object checks also exercise the builder in Wasm.
 
-Repository validation tests cover SHA-1 mismatches, missing/wrong-kind links,
+Repository validation tests cover hash mismatches, missing/wrong-kind links,
 duplicate IDs, unreachable objects, malformed commit/tree records, canonical
 modes, byte-based ordering, nonconsecutive file/directory name duplicates, binary
 names, refs, exact scratch limits and backend failures. Deep trees and long parent
@@ -135,6 +135,20 @@ accept a validated streamed merge history with shared empty trees and an externa
 gitlink. Native nested/generated clone tests serve validated repositories; the
 native demo and allocator-free Worker also validate before serving, preserving IDs
 and pack/HTTP bytes across native and Wasm execution.
+
+`sha256` tests independently hash every nested snapshot object with Git in both
+formats, import packs with `index-pack --strict`, and run `fsck --strict`.
+They cover mixed-format refs/peeled IDs/hash metadata, binary tree and commit/tag
+link widths, full 32-byte reference-delta bases, SHA-256 trailers, and exact
+format-specific pkt-line limits. Builder, indexes, short-read validation, hashing,
+pack decoding and cache miss/hit paths run under allocation tracking. The graph,
+loose and pack-entry fuzz assertions also exercise SHA-256 with dedicated seeds.
+Native `references` runs all HEAD/ref/tag/selected-closure comparisons in SHA-1
+and SHA-256, plus SHA-256 empty remotes with ordinary and custom unborn branches.
+The independently generated fixtures avoid redundant tips to stay below Git's
+1 KiB request-gzip threshold for the native host, which currently takes decoded,
+Content-Length-delimited request bodies. The Git reference wrapper decompresses
+gzip requests before invoking `http-backend`.
 
 Native storage tests persist raw object bodies and compare their IDs and generated
 pack/loose bytes against a 1 MiB generated repository. They exercise interleaved

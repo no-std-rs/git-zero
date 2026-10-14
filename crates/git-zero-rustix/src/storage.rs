@@ -2,7 +2,7 @@
 use core::ffi::CStr;
 
 use git_zero::{
-    Error, Head, ObjectId, ObjectInfo, ObjectKind, Repository, Result,
+    Error, Head, ObjectFormat, ObjectId, ObjectInfo, ObjectKind, Repository, Result,
     http::{self, Request, Response},
     io::Write,
     pack,
@@ -203,6 +203,9 @@ impl<'a> FileRepository<'a> {
 }
 
 impl Repository for FileRepository<'_> {
+    fn object_format(&self) -> ObjectFormat {
+        self.head.format()
+    }
     fn head(&self) -> ObjectId {
         self.head
     }

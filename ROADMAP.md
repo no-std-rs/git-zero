@@ -63,8 +63,12 @@ milestone after the read-only server gate.
   bound selection without allocation. Matched no-capability upload requests compare
   exact imported objects with Git. Legacy HEAD-key caches and whole-pack hooks reject
   independent roots; requested-closure cache keys and prepacked reuse remain in section 3.
-- [ ] SHA-256 object IDs, repository validation, ref advertisements, packs, and
+- [x] SHA-256 object IDs, repository validation, ref advertisements, packs, and
   object-format negotiation alongside the existing SHA-1 path.
+  Format-tagged IDs, fixed hash state and width-aware graph/packet limits remain
+  allocation-free. Native smart/dumb Git comparisons cover both formats, empty
+  and unborn remotes, symbolic/detached HEAD, independent refs, tags and selected
+  merge closures; Git's strict importer also verifies SHA-256 snapshots.
 
 Acceptance: Git `fsck --strict` accepts nested and generated snapshots; deterministic
 inputs yield identical IDs on native and Wasm without enabling an allocator.
@@ -234,8 +238,8 @@ kernel-scale benchmarks separate from mandatory, reproducible correctness checks
   configured limits, and remaining optional work; no advertised feature lacks tests.
 
 Start further client development after this gate passes. The next implementation
-step is SHA-256 object IDs and server object-format negotiation, with independent
-Git comparisons alongside the existing SHA-1 path.
+step is broader v0 capability and ACK/have negotiation, sideband and error
+packets, with independent Git comparisons in both object formats.
 
 ## 7. Read/write server support
 

@@ -22,7 +22,7 @@ pub struct MaterializedEntry {
 
 impl MaterializedEntry {
     pub fn id(&self) -> ObjectId {
-        ObjectId(self.id)
+        ObjectId::Sha1(self.id)
     }
     pub fn kind(&self) -> Result<ObjectKind> {
         match self.kind {
@@ -98,7 +98,10 @@ impl<'a> MaterializedPack<'a> {
 /// Find metadata in the sorted index produced by materialize. Adapters retaining
 /// the raw index must keep it immutable. Default/unpopulated entries are omitted.
 pub fn find_materialized(index: &[MaterializedEntry], id: ObjectId) -> Option<&MaterializedEntry> {
-    let position = index.binary_search_by_key(&id.0, |entry| entry.id).ok()?;
+    let ObjectId::Sha1(id) = id else {
+        return None;
+    };
+    let position = index.binary_search_by_key(&id, |entry| entry.id).ok()?;
     let entry = &index[position];
     (entry.kind != 0).then_some(entry)
 }
@@ -189,7 +192,9 @@ pub fn materialize<'a>(
                         EntryKind::OffsetDelta { base_offset } => {
                             candidate.pack_offset == base_offset
                         }
-                        EntryKind::ReferenceDelta { base_id } => candidate.id == base_id.0,
+                        EntryKind::ReferenceDelta { base_id } => {
+                            candidate.id.as_slice() == base_id.as_bytes()
+                        }
                         EntryKind::Object(_) => false,
                     };
                     if candidate.kind != 0 && matches {
@@ -236,8 +241,11 @@ pub fn materialize<'a>(
             if object.kind == ObjectKind::Tree {
                 Tree::parse_with_budget(object.data, &mut tree_bytes)?;
             }
+            let ObjectId::Sha1(id) = object.id() else {
+                return Err(Error::Unsupported);
+            };
             index[i] = MaterializedEntry {
-                id: object.id().0,
+                id,
                 kind: object.kind as u32,
                 pack_offset: entry.offset(),
                 offset: used,

@@ -1,8 +1,7 @@
 use crate::{
-    Error, Object, ObjectId, ObjectInfo, ObjectReader, Repository, Result, io::Write,
-    reader::DEFAULT_READ_BUFFER_SIZE, zlib,
+    Error, Object, ObjectFormat, ObjectId, ObjectInfo, ObjectReader, Repository, Result, io::Write,
+    object::Hash, reader::DEFAULT_READ_BUFFER_SIZE, zlib,
 };
-use sha1::{Digest, Sha1};
 
 mod decode;
 pub use decode::{DeltaLimits, Entry, EntryKind, Reader, ResolvedObject, apply_delta, crc32};
@@ -13,7 +12,7 @@ pub use materialize::{
 
 struct HashWriter<'a, W> {
     output: &'a mut W,
-    hash: Sha1,
+    hash: Hash,
 }
 
 impl<W: Write> Write for HashWriter<'_, W> {
@@ -34,7 +33,7 @@ pub fn write(repository: &impl Repository, output: &mut impl Write) -> Result<Ob
 /// A nonempty buffer suffices for any body size; borrowed bodies need no scratch.
 /// Output is independent of the buffer size, preserving pack/cache identities.
 /// Errors invalidate partial output. Scratch is reused for each object; encoder
-/// and SHA-1 state are inline and independent of object/pack sizes.
+/// and hash state are inline and independent of object/pack sizes.
 pub fn write_with_scratch(
     repository: &impl Repository,
     scratch: &mut [u8],
@@ -74,7 +73,7 @@ fn write_order(
     let count = u32::try_from(order.len()).map_err(|_| Error::Unsupported)?;
     let mut output = HashWriter {
         output,
-        hash: Sha1::new(),
+        hash: repository.object_format().hash(),
     };
     output.write_all(b"PACK")?;
     output.write_all(&2_u32.to_be_bytes())?;
@@ -89,8 +88,8 @@ fn write_order(
             zlib::write_reader(&mut output, &[], &mut reader, scratch)?;
         }
     }
-    let checksum = ObjectId(output.hash.finalize().into());
-    output.output.write_all(&checksum.0)?;
+    let checksum = output.hash.finish();
+    output.output.write_all(checksum.as_bytes())?;
     Ok(checksum)
 }
 
@@ -134,15 +133,19 @@ pub fn write_loose_with_scratch(
 /// Check the framing and checksum of a downloaded pack. Object/delta validation
 /// and indexing are separate responsibilities; this does not decode objects.
 pub fn validate(bytes: &[u8]) -> Result<()> {
-    if bytes.len() < 32
+    validate_with_format(bytes, ObjectFormat::Sha1)
+}
+
+pub fn validate_with_format(bytes: &[u8], format: ObjectFormat) -> Result<()> {
+    if bytes.len() < 12 + format.id_length()
         || &bytes[..4] != b"PACK"
         || !matches!(&bytes[4..8], [0, 0, 0, 2] | [0, 0, 0, 3])
     {
         return Err(Error::CorruptPack);
     }
-    let trailer = bytes.len() - 20;
-    let actual = Sha1::digest(&bytes[..trailer]);
-    if actual[..] != bytes[trailer..] {
+    let trailer = bytes.len() - format.id_length();
+    let actual = format.digest(&bytes[..trailer]);
+    if actual.as_bytes() != &bytes[trailer..] {
         return Err(Error::CorruptPack);
     }
     Ok(())

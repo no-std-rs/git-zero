@@ -1,6 +1,8 @@
 //! C ABI and Linux name limits for the shared Git client and pack importer.
-use crate::{Decoded, errno, validate_tree_names};
-use git_zero::{Error, ObjectId, ObjectKind, client, io::SliceWriter, pack, zlib::InflateLimits};
+use crate::{Decoded, errno, sha1_bytes, validate_tree_names};
+use git_zero::{
+    Error, ObjectFormat, ObjectId, ObjectKind, client, io::SliceWriter, pack, zlib::InflateLimits,
+};
 
 pub type PackObject = pack::MaterializedEntry;
 
@@ -38,6 +40,12 @@ pub unsafe extern "C" fn gitfs_smart_discover(
     let data = unsafe { core::slice::from_raw_parts(data, length) };
     let parsed = (|| {
         let advertisement = client::SmartAdvertisement::parse(data)?;
+        if advertisement
+            .object_format()
+            .is_some_and(|format| format != ObjectFormat::Sha1)
+        {
+            return Err(Error::Unsupported);
+        }
         for reference in advertisement.references() {
             vfs_ref_name(reference?.name)?;
         }
@@ -50,8 +58,11 @@ pub unsafe extern "C" fn gitfs_smart_discover(
     match parsed {
         Ok((id, capabilities)) => {
             if let Some(id) = id {
+                let Ok(id) = sha1_bytes(id) else {
+                    return -95;
+                };
                 // SAFETY: Head has 20 writable bytes disjoint from the response.
-                unsafe { core::ptr::copy_nonoverlapping(id.0.as_ptr(), head, 20) };
+                unsafe { core::ptr::copy_nonoverlapping(id.as_ptr(), head, 20) };
                 capabilities | 8
             } else {
                 capabilities
@@ -74,7 +85,7 @@ pub unsafe extern "C" fn gitfs_smart_validate_want(
     let (data, id) = unsafe {
         (
             core::slice::from_raw_parts(data, length),
-            ObjectId(*id.cast::<[u8; 20]>()),
+            ObjectId::Sha1(*id.cast::<[u8; 20]>()),
         )
     };
     match client::SmartAdvertisement::parse(data)
@@ -106,12 +117,15 @@ pub unsafe extern "C" fn gitfs_smart_ref_next(
                 if vfs_ref_name(reference.name).is_err() {
                     return -74;
                 }
+                let Ok(id) = sha1_bytes(reference.id) else {
+                    return -95;
+                };
                 // SAFETY: The name remains borrowed from C's live response.
                 unsafe {
                     *entry = RefEntry {
                         name: reference.name.as_ptr(),
                         name_length: reference.name.len(),
-                        id: reference.id.0,
+                        id,
                     }
                 };
                 return 1;
@@ -135,11 +149,11 @@ pub unsafe extern "C" fn gitfs_smart_request(
     capacity: usize,
     length: *mut usize,
 ) -> i32 {
-    // SAFETY: ObjectId is transparent over [u8;20], aligned to one, with all
-    // bit patterns valid. C supplies the documented live disjoint allocations.
+    // SAFETY: C supplies consecutive 20-byte arrays aligned to one. Construct
+    // format-tagged Rust IDs through the iterator; their layout is not a C ABI.
     let (ids, output) = unsafe {
         (
-            core::slice::from_raw_parts(ids.cast::<ObjectId>(), count),
+            core::slice::from_raw_parts(ids.cast::<[u8; 20]>(), count),
             core::slice::from_raw_parts_mut(output, capacity),
         )
     };
@@ -149,7 +163,11 @@ pub unsafe extern "C" fn gitfs_smart_request(
         ofs_delta: capabilities & 2 != 0,
         no_progress: capabilities & 4 != 0,
     };
-    match client::write_fetch_request(ids, options, &mut writer) {
+    match client::write_fetch_request_iter(
+        ids.iter().copied().map(ObjectId::Sha1),
+        options,
+        &mut writer,
+    ) {
         Ok(()) => {
             // SAFETY: C owns the exclusive aligned output.
             unsafe { *length = writer.len() };
@@ -237,7 +255,7 @@ pub unsafe extern "C" fn gitfs_pack_find(
     let (index, id) = unsafe {
         (
             core::slice::from_raw_parts(index, count),
-            ObjectId(*id.cast::<[u8; 20]>()),
+            ObjectId::Sha1(*id.cast::<[u8; 20]>()),
         )
     };
     let Some(entry) = pack::find_materialized(index, id) else {

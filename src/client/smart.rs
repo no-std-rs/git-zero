@@ -1,7 +1,7 @@
 //! Protocol-v0 discovery, bounded fetch negotiation and raw-pack responses.
 use super::{Protocol, Reference, References};
 use crate::{
-    Error, ObjectId, Result,
+    Error, ObjectFormat, ObjectId, Result,
     io::{SliceWriter, Write},
     pack,
     pktline::{self, Packet},
@@ -14,6 +14,7 @@ pub struct SmartAdvertisement<'a> {
     body_offset: usize,
     head: Option<ObjectId>,
     capabilities: &'a [u8],
+    format: Option<ObjectFormat>,
 }
 
 impl<'a> SmartAdvertisement<'a> {
@@ -29,6 +30,7 @@ impl<'a> SmartAdvertisement<'a> {
             protocol: Protocol::Smart,
             bytes: body,
             failed: false,
+            format: None,
         };
         for entry in &mut refs {
             let entry = entry?;
@@ -41,11 +43,15 @@ impl<'a> SmartAdvertisement<'a> {
             body_offset: data.len() - body.len(),
             head,
             capabilities,
+            format: refs.format,
         })
     }
 
     pub fn head(&self) -> Result<ObjectId> {
         self.head.ok_or(Error::ObjectNotFound)
+    }
+    pub fn object_format(&self) -> Option<ObjectFormat> {
+        self.format
     }
     pub fn supports_shallow(&self) -> bool {
         self.supports("shallow")
@@ -69,6 +75,9 @@ impl<'a> SmartAdvertisement<'a> {
     /// an allow-*-sha1-in-want capability; the server still checks whether the ID
     /// is an allowed hidden tip or reachable object under that capability.
     pub fn validate_want(&self, id: ObjectId) -> Result<()> {
+        if self.format.is_some_and(|format| format != id.format()) {
+            return Err(Error::InvalidRequest);
+        }
         if self.supports("allow-tip-sha1-in-want") || self.supports("allow-reachable-sha1-in-want")
         {
             return Ok(());
@@ -85,6 +94,7 @@ impl<'a> SmartAdvertisement<'a> {
             protocol: Protocol::Smart,
             bytes: &self.bytes[self.body_offset..],
             failed: false,
+            format: self.format,
         }
     }
 }
@@ -100,28 +110,30 @@ pub(super) fn advertisement_body(mut data: &[u8]) -> Result<&[u8]> {
     Ok(data)
 }
 
-pub(super) fn next_reference<'a>(bytes: &mut &'a [u8]) -> Result<Option<Reference<'a>>> {
+pub(super) fn next_reference<'a>(
+    bytes: &mut &'a [u8],
+    format: &mut Option<ObjectFormat>,
+) -> Result<Option<Reference<'a>>> {
     loop {
         match pktline::read(bytes)? {
             Some(Packet::Data(line)) => {
-                let line = line
-                    .split(|&b| b == 0)
-                    .next()
-                    .ok_or(Error::InvalidReference)?;
-                let line = line.strip_suffix(b"\n").unwrap_or(line);
-                if line == b"0000000000000000000000000000000000000000 capabilities^{}" {
+                let mut parser = References {
+                    protocol: Protocol::Smart,
+                    bytes: &[],
+                    failed: false,
+                    format: *format,
+                };
+                let reference = parser.parse(line)?;
+                *format = parser.format;
+                if reference.id.is_zero() && reference.name == "capabilities^{}" {
                     continue;
                 }
-                if line.len() < 42 || line[40] != b' ' {
-                    return Err(Error::InvalidReference);
+                if reference.name != "HEAD" {
+                    crate::repository::validate_ref_name(
+                        reference.name.strip_suffix("^{}").unwrap_or(reference.name),
+                    )?;
                 }
-                let id = ObjectId::from_hex(&line[..40])?;
-                let name =
-                    core::str::from_utf8(&line[41..]).map_err(|_| Error::InvalidReference)?;
-                if name != "HEAD" {
-                    crate::repository::validate_ref_name(name.strip_suffix("^{}").unwrap_or(name))?;
-                }
-                return Ok(Some(Reference { id, name }));
+                return Ok(Some(reference));
             }
             Some(Packet::Flush) if bytes.is_empty() => return Ok(None),
             _ => return Err(Error::InvalidPacket),
@@ -140,12 +152,23 @@ pub fn read_smart_reference<'a>(
     if *offset == data.len() && *offset != 0 {
         return Ok(None);
     }
+    let body = advertisement_body(data)?;
+    let mut first = body;
+    let mut parser = References {
+        protocol: Protocol::Smart,
+        bytes: &[],
+        failed: false,
+        format: None,
+    };
+    if let Some(Packet::Data(line)) = pktline::read(&mut first)? {
+        parser.parse(line)?;
+    }
     let mut bytes = if *offset == 0 {
-        advertisement_body(data)?
+        body
     } else {
         data.get(*offset..).ok_or(Error::InvalidPacket)?
     };
-    let entry = next_reference(&mut bytes)?;
+    let entry = next_reference(&mut bytes, &mut parser.format)?;
     *offset = data.len() - bytes.len();
     Ok(entry)
 }
@@ -167,11 +190,27 @@ pub fn write_fetch_request(
     options: FetchOptions,
     output: &mut impl Write,
 ) -> Result<()> {
-    if wants.is_empty() || options.shallow_depth == Some(0) {
+    write_fetch_request_iter(wants.iter().copied(), options, output)
+}
+
+/// Encode a cloneable iterator of IDs, avoiding temporary ID arrays in adapters.
+/// Duplicate probes reread the iterator; it must yield the same IDs on every
+/// clone. All wants use one format. Validation precedes any output.
+pub fn write_fetch_request_iter(
+    wants: impl Iterator<Item = ObjectId> + Clone,
+    options: FetchOptions,
+    output: &mut impl Write,
+) -> Result<()> {
+    let format = wants.clone().next().ok_or(Error::InvalidRequest)?.format();
+    if options.shallow_depth == Some(0) || wants.clone().any(|want| want.format() != format) {
         return Err(Error::InvalidRequest);
     }
-    for (position, want) in wants.iter().enumerate() {
-        if wants[..position].contains(want) {
+    for (position, want) in wants.clone().enumerate() {
+        if wants
+            .clone()
+            .take(position)
+            .any(|previous| previous == want)
+        {
             continue;
         }
         let mut storage = [0; 128];
@@ -179,6 +218,10 @@ pub fn write_fetch_request(
         line.write_all(b"want ")?;
         line.write_all(&want.to_hex())?;
         if position == 0 {
+            if format == ObjectFormat::Sha256 {
+                line.write_all(b" ")?;
+                line.write_all(format.capability())?;
+            }
             if options.ofs_delta {
                 line.write_all(b" ofs-delta")?;
             }
@@ -205,17 +248,27 @@ pub fn write_fetch_request(
 
 /// Extract a checksummed, non-sideband pack after optional shallow negotiation.
 /// ACK/have negotiation and protocol v2 are intentionally outside this parser.
-pub fn read_pack_response(mut bytes: &[u8]) -> Result<&[u8]> {
+pub fn read_pack_response(bytes: &[u8]) -> Result<&[u8]> {
+    read_pack_response_with_format(bytes, ObjectFormat::Sha1)
+}
+
+/// Validate a response in the repository's negotiated object format, including
+/// each shallow boundary ID and the full-width pack checksum.
+pub fn read_pack_response_with_format(mut bytes: &[u8], format: ObjectFormat) -> Result<&[u8]> {
     loop {
         match pktline::read(&mut bytes)? {
             Some(Packet::Data(b"NAK\n")) => break,
             Some(Packet::Data(line)) if line.starts_with(b"shallow ") => {
-                ObjectId::from_hex(&line.strip_suffix(b"\n").unwrap_or(line)[8..])?;
+                if ObjectId::from_hex(&line.strip_suffix(b"\n").unwrap_or(line)[8..])?.format()
+                    != format
+                {
+                    return Err(Error::InvalidRequest);
+                }
             }
             Some(Packet::Flush) => {}
             _ => return Err(Error::InvalidPacket),
         }
     }
-    pack::validate(bytes)?;
+    pack::validate_with_format(bytes, format)?;
     Ok(bytes)
 }

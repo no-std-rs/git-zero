@@ -188,6 +188,8 @@ validated. TLS state and record buffers live in kernel-owned memory and are
 wiped on close.
 
 Smart mounts support SHA-1 packs with up to 32,768 objects and delta depth 64.
+SHA-256 advertisements return `EOPNOTSUPP` before IDs enter the kernel's fixed
+20-byte ABI; the shared core client and object views support both formats.
 Imports permit 16,777,216 delta-base index probes and 64 MiB of encoded tree
 validation reads, including duplicate-name rescans, across the complete pack.
 Loose trees use the same 64 MiB validation-work limit per object. These work

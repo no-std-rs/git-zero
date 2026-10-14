@@ -5,7 +5,7 @@
 //! entry/delta decoding and bounded materialized indexes. The host owns storage
 //! and checkout policy.
 use crate::{
-    Error, Object, ObjectId, Result,
+    Error, Object, ObjectFormat, ObjectId, Result,
     http::Request,
     io::{SliceWriter, Write},
     zlib::{InflateLimits, InflateStatus, Inflater, WINDOW_SIZE},
@@ -13,7 +13,8 @@ use crate::{
 
 mod smart;
 pub use smart::{
-    FetchOptions, SmartAdvertisement, read_pack_response, read_smart_reference, write_fetch_request,
+    FetchOptions, SmartAdvertisement, read_pack_response, read_pack_response_with_format,
+    read_smart_reference, write_fetch_request, write_fetch_request_iter,
 };
 
 pub trait Transport {
@@ -23,9 +24,8 @@ pub trait Transport {
     fn request(&mut self, request: Request<'_>, response: &mut [u8]) -> Result<(u16, usize)>;
 }
 
-/// Wire capacity for a default-zlib loose object at the given body limit,
-/// including up to 32 bytes of canonical Git header. Non-default encoders may
-/// need a separate wire budget; the inflater's output budget is independent.
+/// Default-zlib wire capacity, including up to 32 bytes of canonical Git header.
+/// Non-default encoders can need a separate budget; output limits are independent.
 pub fn loose_wire_capacity(body_limit: usize) -> Result<usize> {
     let source = body_limit.checked_add(32).ok_or(Error::LimitExceeded)?;
     usize::try_from(crate::zlib::compress_bound(source as u64)?).map_err(|_| Error::LimitExceeded)
@@ -46,24 +46,36 @@ pub struct Reference<'a> {
 pub struct Discovery<'a> {
     pub protocol: Protocol,
     bytes: &'a [u8],
+    format: Option<ObjectFormat>,
 }
 
 impl<'a> Discovery<'a> {
-    /// Parse a complete response without performing transport I/O.
+    /// Parse a complete downloaded response without transport I/O. Reference
+    /// IDs must share the advertised or inferred repository object format.
     pub fn parse(data: &'a [u8]) -> Result<Self> {
-        let (protocol, bytes) = if data
+        let (protocol, bytes, format) = if data
             .get(4..)
             .is_some_and(|tail| tail.starts_with(b"# service="))
         {
-            SmartAdvertisement::parse(data)?;
-            (Protocol::Smart, smart::advertisement_body(data)?)
+            let advertisement = SmartAdvertisement::parse(data)?;
+            (
+                Protocol::Smart,
+                smart::advertisement_body(data)?,
+                advertisement.object_format(),
+            )
         } else {
-            (Protocol::Dumb, data)
+            (Protocol::Dumb, data, None)
         };
-        let discovery = Self { protocol, bytes };
-        for reference in discovery.references() {
+        let mut discovery = Self {
+            protocol,
+            bytes,
+            format,
+        };
+        let mut references = discovery.references();
+        for reference in references.by_ref() {
             reference?;
         }
+        discovery.format = references.format;
         Ok(discovery)
     }
     pub fn references(&self) -> References<'a> {
@@ -71,6 +83,7 @@ impl<'a> Discovery<'a> {
             protocol: self.protocol,
             bytes: self.bytes,
             failed: false,
+            format: self.format,
         }
     }
 
@@ -93,6 +106,51 @@ pub struct References<'a> {
     protocol: Protocol,
     bytes: &'a [u8],
     failed: bool,
+    format: Option<ObjectFormat>,
+}
+
+impl<'a> References<'a> {
+    fn parse(&mut self, line: &'a [u8]) -> Result<Reference<'a>> {
+        let mut parts = line.splitn(2, |&byte| byte == 0);
+        let reference = parts.next().ok_or(Error::InvalidRequest)?;
+        let reference = reference.strip_suffix(b"\n").unwrap_or(reference);
+        let separator = reference
+            .iter()
+            .position(|&byte| matches!(byte, b' ' | b'\t'))
+            .ok_or(Error::InvalidRequest)?;
+        if reference.len() < separator + 2 {
+            return Err(Error::InvalidRequest);
+        }
+        let id = ObjectId::from_hex(&reference[..separator])?;
+        let advertised = if self.protocol == Protocol::Smart {
+            parts.next().and_then(|capabilities| {
+                capabilities
+                    .strip_suffix(b"\n")
+                    .unwrap_or(capabilities)
+                    .split(|&byte| byte == b' ')
+                    .find_map(|capability| capability.strip_prefix(b"object-format="))
+            })
+        } else {
+            None
+        };
+        let format = match advertised {
+            Some(b"sha1") => ObjectFormat::Sha1,
+            Some(b"sha256") => ObjectFormat::Sha256,
+            Some(_) => return Err(Error::Unsupported),
+            None => id.format(),
+        };
+        // The first advertised algorithm encodes the refs. Without a capability,
+        // infer it from the first ID (including the empty capabilities marker).
+        let expected = *self.format.get_or_insert(format);
+        if format != expected || id.format() != expected {
+            return Err(Error::InvalidRequest);
+        }
+        Ok(Reference {
+            id,
+            name: core::str::from_utf8(&reference[separator + 1..])
+                .map_err(|_| Error::InvalidRequest)?,
+        })
+    }
 }
 
 impl<'a> Iterator for References<'a> {
@@ -101,46 +159,44 @@ impl<'a> Iterator for References<'a> {
         if self.failed {
             return None;
         }
-        let line = match self.protocol {
-            Protocol::Smart => {
-                let result = smart::next_reference(&mut self.bytes);
-                if !matches!(result, Ok(Some(_))) {
-                    self.failed = true;
-                }
-                return result.transpose();
+        if self.protocol == Protocol::Smart {
+            let result = smart::next_reference(&mut self.bytes, &mut self.format);
+            if !matches!(result, Ok(Some(_))) {
+                self.failed = true;
             }
-            Protocol::Dumb => {
-                if self.bytes.is_empty() {
-                    return None;
-                }
-                let end = self
-                    .bytes
-                    .iter()
-                    .position(|&byte| byte == b'\n')
-                    .unwrap_or(self.bytes.len());
-                let line = &self.bytes[..end];
-                self.bytes = self.bytes.get(end + 1..).unwrap_or_default();
-                line
-            }
-        };
-        let result = (|| {
-            let line = line
-                .split(|&byte| byte == 0)
-                .next()
-                .ok_or(Error::InvalidRequest)?;
-            let line = line.strip_suffix(b"\n").unwrap_or(line);
-            if line.len() < 42 || !matches!(line[40], b' ' | b'\t') {
-                return Err(Error::InvalidRequest);
-            }
-            Ok(Reference {
-                id: ObjectId::from_hex(&line[..40])?,
-                name: core::str::from_utf8(&line[41..]).map_err(|_| Error::InvalidRequest)?,
-            })
-        })();
-        if result.is_err() {
-            self.failed = true;
+            return result.transpose();
         }
-        Some(result)
+        loop {
+            let line = match self.protocol {
+                Protocol::Smart => unreachable!("handled above"),
+                Protocol::Dumb => {
+                    if self.bytes.is_empty() {
+                        return None;
+                    }
+                    let end = self
+                        .bytes
+                        .iter()
+                        .position(|&byte| byte == b'\n')
+                        .unwrap_or(self.bytes.len());
+                    let line = &self.bytes[..end];
+                    self.bytes = self.bytes.get(end + 1..).unwrap_or_default();
+                    line
+                }
+            };
+            let result = self.parse(line);
+            if let Ok(reference) = &result {
+                if self.protocol == Protocol::Smart
+                    && reference.id.is_zero()
+                    && reference.name == "capabilities^{}"
+                {
+                    continue;
+                }
+            }
+            if result.is_err() {
+                self.failed = true;
+            }
+            return Some(result);
+        }
     }
 }
 
@@ -194,7 +250,11 @@ pub fn read_head(
         }
         Err(Error::ObjectNotFound)
     } else {
-        ObjectId::from_hex(line)
+        let id = ObjectId::from_hex(line)?;
+        if discovery.format.is_some_and(|format| format != id.format()) {
+            return Err(Error::InvalidRequest);
+        }
+        Ok(id)
     }
 }
 
@@ -214,8 +274,8 @@ pub fn fetch_pack<'a>(
     )
 }
 
-/// Fetch several wanted tips using optional shallow and offset-delta support.
-/// Caller storage and the transport's limits bound the request and response.
+/// Fetch distinct tips in one request. Options must match the advertisement;
+/// all wants and the checksummed response use the same object format.
 pub fn fetch_pack_with_options<'a>(
     transport: &mut impl Transport,
     wants: &[ObjectId],
@@ -240,7 +300,7 @@ pub fn fetch_pack_with_options<'a>(
     let bytes = response_storage
         .get(..length)
         .ok_or(Error::BufferTooSmall)?;
-    read_pack_response(bytes)
+    read_pack_response_with_format(bytes, wants[0].format())
 }
 
 /// Fetch a loose object's zlib bytes from an ordinary HTTP repository.
@@ -250,7 +310,7 @@ pub fn fetch_loose<'a>(
     response_storage: &'a mut [u8],
 ) -> Result<&'a [u8]> {
     let hex = id.to_hex();
-    let mut path_storage = [0; 49];
+    let mut path_storage = [0; 73];
     let mut path = SliceWriter::new(&mut path_storage);
     path.write_all(b"objects/")?;
     path.write_all(&hex[..2])?;

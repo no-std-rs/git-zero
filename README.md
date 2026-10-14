@@ -28,7 +28,9 @@ for checks and repository connection requirements.
   Git clients requesting v2 can fall back to the v0 advertisement.
 - Ordinary Git HTTP, usually called **dumb HTTP**: `HEAD`, `info/refs`, branch
   refs, and zlib loose objects. No filesystem repository is needed.
-- Complete SHA-1 packs generated on demand from unpacked objects. The encoder
+- SHA-1 and SHA-256 repositories with format-specific object IDs, refs and packs.
+  Smart HTTP advertises the repository's object-format capability.
+- Complete packs generated on demand from unpacked objects. The encoder
   streams valid zlib/DEFLATE stored blocks, so it uses bounded memory but does
   not yet compress data or create deltas. Identical blobs and subtrees are deduplicated.
 - Optional caller-owned object metadata and ID indexes for constant-time
@@ -45,7 +47,7 @@ for checks and repository connection requirements.
   negotiation, and fetches dumb loose objects.
 - Incremental zlib inflation with caller-owned history/output buffers, stored/
   fixed/dynamic DEFLATE support, Adler-32 validation and output/expansion limits.
-- Loose-object envelope validation before body exposure, plus a SHA-1 pack entry
+- Loose-object envelope validation before body exposure, plus a pack entry
   reader with wire CRCs, canonical object IDs and bounded offset/reference deltas.
 - Complete pack materialization into caller-owned bodies and a sorted ID index,
   plus borrowed commit messages, tree entries and annotated-tag targets.
@@ -59,9 +61,43 @@ The client downloads wire objects: raw packs for smart HTTP and zlib objects for
 dumb HTTP. Hosts can decode them and materialize complete packs with shared core
 APIs; the kernel example uses these to expose cached snapshots and refs. A dumb
 repository walker and a native checkout writer remain work. Push, filter
-requests, protocol v2, SHA-256 repositories, and standalone `git://` transport
+requests, protocol v2, and standalone `git://` transport
 remain future work. Shallow fetch is supported by the client; this library's
 server still serves complete selected packs.
+
+## Object formats
+
+`ObjectFormat::{Sha1, Sha256}` selects one fixed format for a repository.
+`ObjectId::{Sha1([u8; 20]), Sha256([u8; 32])}` preserves that format and all ID
+bytes. Replace the former tuple constructor with `ObjectId::Sha1(bytes)`, and
+replace `.0` with `as_bytes()`. `from_hex` accepts exactly 40 or 64 hex digits;
+`to_hex()` returns fixed storage exposing only those active bytes.
+
+Existing snapshot constructors and `Object::id()` default to SHA-1 and retain
+their object bytes and IDs. Use `Snapshot::new_with_format`,
+`Snapshot::from_entries_with_format` or `SnapshotBuilder::finish_with_format`
+for SHA-256; corresponding `*_with_commit_and_format` methods accept custom
+metadata. Tree IDs occupy 32 binary bytes and commit/tag links use 64 hex digits.
+Tree storage therefore needs another 12 bytes per entry compared with SHA-1.
+Empty repositories use `EmptyRepository::new_with_format`.
+
+Custom SHA-256 providers must override `Repository::object_format()` (its default
+is SHA-1), return IDs in that format, and use its zero ID for unborn HEAD.
+Indexes and validated/ref wrappers forward the provider's format. Validation
+rejects mixed IDs, wrong-width links and hash mismatches. `FileRepository` takes
+its format from the supplied HEAD ID, including an unborn zero ID.
+
+Smart v0 discovery advertises `object-format=sha1` or `object-format=sha256`.
+The first want may explicitly select that format; mismatches and unadvertised
+capabilities fail before pack output. [Git's v0 client](https://github.com/git/git/blob/v2.53.0/fetch-pack.c)
+selects the advertised
+format without repeating it on wants, so omission also uses the repository's
+format. Every want/have still requires the correct ID width. Dumb refs and loose
+paths use 40 or 64 digits. Independent real-Git clone/fetch tests cover both.
+Client discovery rejects mixed ID formats and capabilities that conflict with
+the advertised IDs, including the empty-repository marker.
+Packs use a 20-byte SHA-1 or 32-byte SHA-256 trailer; HEAD cache keys include the
+ID's format. This does not translate objects between formats.
 
 ## Incremental zlib inflation
 
@@ -103,13 +139,15 @@ See the [API example](src/zlib.rs) for a complete bounded loop.
 one complete loose response. Its staging capacity and inflation limits include
 the Git header and body. It returns a borrowed `Object` only after the zlib
 checksum, canonical type/unsigned decimal size, exact body length and expected
-SHA-1 match. Concatenated streams and trailing bytes fail. `fetch_loose_object`
+hash in the ID's format match. Concatenated streams and trailing bytes fail. `fetch_loose_object`
 combines the existing dumb transport request with this decoding, using separate
 compressed/inflated buffers. `Object::from_loose` performs envelope/ID checks on
 bytes already inflated by a host. These checks do not validate commit/tree/tag
 semantics or traverse the repository graph.
 
 `pack::Reader::new(pack)` checks a complete SHA-1 pack's header and trailer.
+Use `Reader::new_with_format(pack, ObjectFormat::Sha256)` and
+`pack::validate_with_format` for SHA-256 packs.
 `read_entry(staging, window, limits)` decodes one entry into caller buffers,
 checks its declared size and records offsets and the wire CRC-32. A failure
 preserves the cursor for retry; discard modified staging bytes. `finish()` or a
@@ -122,7 +160,8 @@ canonical ID. For deltas, provide a materialized base to `resolve_delta` plus
 separate result storage and `DeltaLimits { max_output, max_instructions,
 max_depth }`. Offset bases must have the correct offset in the same pack;
 reference bases must have the advertised ID. Host objects can become reference
-bases through `ResolvedObject::external`. Delta copies, inserts, base/result
+bases through `ResolvedObject::external` (SHA-1) or `external_with_format`.
+Delta copies, inserts, base/result
 sizes, exact instruction closure and chain depth are checked before returning
 a canonical body and ID. `verify_id` compares it with a trusted expected ID.
 `pack::apply_delta` provides the one-level instruction primitive separately.
@@ -133,7 +172,7 @@ needs its canonical base and caller-bounded result storage. No recursion or
 allocation occurs. The native `fetch` command retains its wire-output behavior.
 
 `pack::materialize(pack, index, arena, scratch, window, limits)` resolves a
-complete non-thin pack, including forward reference deltas, into a
+complete non-thin SHA-1 pack, including forward reference deltas, into a
 `MaterializedPack`. The host supplies metadata slots and a byte arena; neither
 the compressed pack nor scratch is retained. Lookup uses the sorted object ID
 index. Inflation, delta depth/instructions, pass count and decoded bytes per
@@ -146,16 +185,23 @@ This checks pack/object/tree structure; graph closure is a separate operation.
 `object::Tree::parse` checks modes, byte-string names, ordering and duplicates,
 then exposes borrowed entries. `Tree::parse_with_budget` bounds reads and alias
 rescans; `Tree::parse` uses a 64 MiB validation budget. `object::Tag::parse` extracts an annotated tag's
-target and declared kind. Host filesystem limits stay in the adapters; use
+target and declared kind. Commit and tree parsers default to SHA-1; their
+`*_with_format` methods accept SHA-256, and `Tree::parse_with_budget_and_format`
+combines the format with a caller-owned read budget. Tags infer their target ID
+format from its hexadecimal width. Host filesystem limits stay in the adapters; use
 `ValidatedRepository` for stronger graph and reference validation.
 
 `client::SmartAdvertisement::parse` and `read_smart_reference` handle a downloaded
 protocol-v0 advertisement without I/O. Its `fetch_options` selects advertised
 capabilities and `validate_want` checks permission to request an explicit ID.
 `write_fetch_request` deduplicates wanted IDs and encodes optional shallow/offset-delta negotiation.
+SHA-256 wants include their object-format capability; mixed-format wants are
+rejected before emitting output. `write_fetch_request_iter` accepts a cloneable
+iterator so adapters can retain their own ID representation.
 `fetch_pack_with_options` combines this with the host transport, and
 `read_pack_response` handles shallow negotiation before authenticating a raw
-pack. All these APIs use caller-owned storage without `std`, `alloc` or unsafe
+pack; `read_pack_response_with_format` checks SHA-256 boundaries and checksums.
+All these APIs use caller-owned storage without `std`, `alloc` or unsafe
 code.
 
 ## Workspace
@@ -345,8 +391,10 @@ are preserved exactly, with no added newline, and may not contain NUL. Unix time
 are unsigned seconds up to `i64::MAX`; timezone offsets have a sign, hours 00–23,
 and minutes 00–59 and do not adjust those seconds. Malformed metadata returns
 `InvalidObject`. Very large timestamps need not be displayable by every host Git.
-Names must fit smart discovery packets: at most 65,474 bytes per ref and 65,457
-bytes for the default branch (which also appears in the HEAD symref capability).
+Names must fit smart discovery packets. `repository::ref_name_limit(format)`,
+`head_ref_limit(format)` and `unborn_ref_limit(format)` account for ID width,
+symref and object-format capabilities; peeled rows reserve three more bytes.
+The `MAX_REF_NAME_LENGTH` and HEAD/unborn/peeled constants give the SHA-1 limits.
 Changing refs leaves object IDs and pack-cache keys stable.
 `http::Request::path` is a URL path: percent-encode reserved bytes in ref URLs.
 The server decodes escapes once when matching ref names, preserving literal `+`.
@@ -462,7 +510,7 @@ For independent refs, use `http::serve_with_selection` with the validated provid
 ```rust
 use git_zero::{ObjectId, http};
 
-let mut wants = [ObjectId([0; 20]); 8];
+let mut wants = [ObjectId::Sha1([0; 20]); 8];
 let mut objects = [None; 64];
 let mut indices = [0; 64];
 let mut read = [0; 1024];
@@ -516,7 +564,7 @@ let id = loop {
 pack::write_with_scratch(&repository, &mut scratch, &mut output)?;
 ```
 
-`ObjectReader` stores its cursor and metadata inline; `ObjectHasher` adds SHA-1
+`ObjectReader` stores its cursor and metadata inline; `ObjectHasher` adds hash
 state. `core::mem::size_of` gives their exact state budgets for a target. Neither
 owns scratch or allocates. A read/hash step performs at most one provider read;
 EOF needs no buffer, and nonempty bodies need at least one scratch byte. Early EOF

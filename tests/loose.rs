@@ -121,7 +121,7 @@ fn even_matching_ids_cannot_accept_bad_headers_or_body_lengths() {
         b"blob 18446744073709551616\0",
         b"blob 0000000000000000000000000000000000000000\0",
     ] {
-        let expected = ObjectId(Sha1::digest(raw).into());
+        let expected = ObjectId::Sha1(Sha1::digest(raw).into());
         assert!(matches!(
             Object::from_loose(raw, expected),
             Err(Error::InvalidObject)
@@ -145,7 +145,13 @@ fn wrong_ids_trailing_streams_corruption_and_limits_fail() {
     let mut storage = [0; 256];
     let mut window = [0; WINDOW_SIZE];
     assert!(matches!(
-        client::decode_loose(&wire, ObjectId([0; 20]), &mut storage, &mut window, LIMITS),
+        client::decode_loose(
+            &wire,
+            ObjectId::Sha1([0; 20]),
+            &mut storage,
+            &mut window,
+            LIMITS
+        ),
         Err(Error::InvalidObject)
     ));
     let mut trailing = wire.clone();

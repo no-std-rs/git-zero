@@ -19,6 +19,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 sha1 = { version = "0.10.7", default-features = false }
+sha2 = { version = "0.10.9", default-features = false }
 
 [profile.release]
 panic = "abort"

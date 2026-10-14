@@ -359,6 +359,9 @@ static void https_tests(void)
 	expect_file("/mnt/old/tree/README.md", "old revision\n");
 	check(stat("/mnt/.refs/HEAD", &st) == -1 && errno == ENOENT, "headless refs do not invent HEAD");
 	check(!umount("/mnt"), "unmount headless refs view");
+	snprintf(url, sizeof(url), "https://localhost:%s/sha256.git", port);
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY, "refs,addr=10.0.2.2,timeout_ms=60000") == -1 && errno == EOPNOTSUPP,
+	      "reject SHA-256 discovery before copying IDs into the SHA-1 kernel ABI");
 	snprintf(url, sizeof(url), "https://localhost:%s/compressed.git", port);
 	check(!mount(url, "/mnt", "gitfs", MS_RDONLY,
 		     "addr=10.0.2.2,object_mb=32,timeout_ms=60000"), "mount maximally compressed smart object");

@@ -48,7 +48,7 @@ fn shared_forward_base_pack(count: u32) -> Vec<u8> {
     bytes.extend_from_slice(&count.to_be_bytes());
     for _ in 1..count {
         bytes.push(0x74);
-        bytes.extend_from_slice(&base.id().0);
+        bytes.extend_from_slice(base.id().as_bytes());
         append_zlib(&mut bytes, b"\x01\x01\x01y");
     }
     bytes.push(0x31);
@@ -133,7 +133,7 @@ fn delta_pack(forward: bool) -> Vec<u8> {
     let delta = b"\x05\x05\x05world";
     if forward {
         bytes.push(0x78);
-        bytes.extend_from_slice(&base.id().0);
+        bytes.extend_from_slice(base.id().as_bytes());
         append_zlib(&mut bytes, delta);
         bytes.push(0x35);
         append_zlib(&mut bytes, base.data);
@@ -182,7 +182,7 @@ fn forward_reference_and_offset_deltas_become_shared_searchable_objects_without_
                 assert_eq!(entry.delta_depth(), u32::from(data == b"world"));
                 assert_eq!(entry.kind(), Ok(ObjectKind::Blob));
             }
-            assert!(store.find(ObjectId([0; 20])).is_none());
+            assert!(store.find(ObjectId::Sha1([0; 20])).is_none());
             assert!(store.object(2).is_none());
         });
         assert!(index[2].kind().is_err());

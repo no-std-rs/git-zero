@@ -1,4 +1,4 @@
-use git_zero::{ObjectId, ObjectInfo, Repository, Result};
+use git_zero::{ObjectFormat, ObjectId, ObjectInfo, Repository, Result};
 
 /// Suppress borrowed bodies and deliberately return short reads.
 pub struct Streamed<'a> {
@@ -6,6 +6,9 @@ pub struct Streamed<'a> {
     pub limit: usize,
 }
 impl Repository for Streamed<'_> {
+    fn object_format(&self) -> ObjectFormat {
+        self.source.object_format()
+    }
     fn head(&self) -> ObjectId {
         self.source.head()
     }

@@ -336,9 +336,15 @@ fn configured_refs_drive_both_http_protocols_without_changing_ids() {
 
 #[test]
 fn ref_lengths_fit_smart_advertisements() {
-    // HEAD includes its symref capability; alias packets have 17 fewer bytes.
-    let head = format!("refs/heads/{}", "x".repeat(65_457 - "refs/heads/".len()));
-    let alias = format!("refs/tags/{}", "x".repeat(65_474 - "refs/tags/".len()));
+    // HEAD includes both the symref and object-format capabilities.
+    let head = format!(
+        "refs/heads/{}",
+        "x".repeat(git_zero::repository::MAX_HEAD_REF_LENGTH - "refs/heads/".len())
+    );
+    let alias = format!(
+        "refs/tags/{}",
+        "x".repeat(git_zero::repository::MAX_REF_NAME_LENGTH - "refs/tags/".len())
+    );
     let refs = [head.as_str(), alias.as_str()];
     let mut trees = [0; 4];
     let mut commit = [0; 512];

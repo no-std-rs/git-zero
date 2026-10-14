@@ -24,6 +24,13 @@ fn errno(error: Error) -> i32 {
     }
 }
 
+fn sha1_bytes(id: ObjectId) -> Result<[u8; 20], Error> {
+    match id {
+        ObjectId::Sha1(bytes) => Ok(bytes),
+        ObjectId::Sha256(_) => Err(Error::Unsupported),
+    }
+}
+
 #[repr(C)]
 pub struct Decoded {
     pub offset: usize,
@@ -65,7 +72,7 @@ pub unsafe extern "C" fn gitfs_decode_loose(
     let (wire, id, output, window) = unsafe {
         (
             core::slice::from_raw_parts(wire, wire_length),
-            ObjectId(*id.cast::<[u8; 20]>()),
+            ObjectId::Sha1(*id.cast::<[u8; 20]>()),
             core::slice::from_raw_parts_mut(output, capacity),
             &mut *window.cast::<[u8; 32768]>(),
         )
@@ -106,10 +113,10 @@ pub unsafe extern "C" fn gitfs_decode_loose(
 pub unsafe extern "C" fn gitfs_commit_tree(data: *const u8, length: usize, id: *mut u8) -> i32 {
     // SAFETY: The module supplies a verified commit and a valid output array.
     let data = unsafe { core::slice::from_raw_parts(data, length) };
-    match Commit::root_tree(data) {
+    match Commit::root_tree(data).and_then(sha1_bytes) {
         Ok(tree) => {
             // SAFETY: `id` points to 20 writable bytes and is disjoint from data.
-            unsafe { core::ptr::copy_nonoverlapping(tree.0.as_ptr(), id, 20) };
+            unsafe { core::ptr::copy_nonoverlapping(tree.as_ptr(), id, 20) };
             0
         }
         Err(_) => EBADMSG,
@@ -178,13 +185,16 @@ pub unsafe extern "C" fn gitfs_tree_next(
             if entry.name.len() > 255 {
                 return EINVAL;
             }
+            let Ok(id) = sha1_bytes(entry.id) else {
+                return -95;
+            };
             // SAFETY: `result` is a valid exclusive struct output pointer.
             unsafe {
                 *result = TreeEntry {
                     name: entry.name.as_ptr(),
                     name_length: entry.name.len(),
                     mode: entry.mode,
-                    id: entry.id.0,
+                    id,
                 };
             }
             1
@@ -209,9 +219,12 @@ pub unsafe extern "C" fn gitfs_tag_target(
     let Ok(tag) = Tag::parse(data) else {
         return EBADMSG;
     };
+    let Ok(target) = sha1_bytes(tag.target) else {
+        return -95;
+    };
     // SAFETY: Outputs have the documented size and alignment.
     unsafe {
-        core::ptr::copy_nonoverlapping(tag.target.0.as_ptr(), id, 20);
+        core::ptr::copy_nonoverlapping(target.as_ptr(), id, 20);
         *kind = tag.target_kind as u32;
     }
     0
@@ -234,15 +247,16 @@ mod tests {
 
     #[test]
     fn smart_discovery_reports_capabilities_without_requiring_head() {
-        for name in ["HEAD", "refs/heads/main"] {
+        for (name, id, expected) in [
+            ("HEAD", ObjectId::Sha1([7; 20]), 15),
+            ("refs/heads/main", ObjectId::Sha1([7; 20]), 7),
+            ("HEAD", ObjectId::Sha256([7; 32]), -95),
+        ] {
             let mut storage = [0; 512];
             let mut wire = SliceWriter::new(&mut storage);
             git_zero::pktline::write(&mut wire, b"# service=git-upload-pack\n").unwrap();
             git_zero::io::Write::write_all(&mut wire, b"0000").unwrap();
-            let reference = format!(
-                "{} {name}\0shallow ofs-delta no-progress\n",
-                ObjectId([7; 20])
-            );
+            let reference = format!("{} {name}\0shallow ofs-delta no-progress\n", id);
             git_zero::pktline::write(&mut wire, reference.as_bytes()).unwrap();
             git_zero::io::Write::write_all(&mut wire, b"0000").unwrap();
             let mut head = [5; 20];
@@ -250,9 +264,44 @@ mod tests {
             let result = unsafe {
                 smart::gitfs_smart_discover(bytes.as_ptr(), bytes.len(), head.as_mut_ptr())
             };
-            assert_eq!(result, if name == "HEAD" { 15 } else { 7 });
-            assert_eq!(head, if name == "HEAD" { [7; 20] } else { [5; 20] });
+            assert_eq!(result, expected);
+            assert_eq!(head, if expected == 15 { [7; 20] } else { [5; 20] });
         }
+    }
+
+    #[test]
+    fn request_abi_constructs_ids_from_flat_bytes_without_assuming_enum_layout() {
+        let ids = [[7; 20], [8; 20], [7; 20]];
+        let mut output = [0; 512];
+        let mut length = 0;
+        assert_eq!(
+            unsafe {
+                smart::gitfs_smart_request(
+                    ids.as_ptr().cast(),
+                    ids.len(),
+                    0,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut length,
+                )
+            },
+            0
+        );
+        let mut bytes = &output[..length];
+        for raw in &ids[..2] {
+            let line = format!("want {}\n", ObjectId::Sha1(*raw));
+            assert!(matches!(git_zero::pktline::read(&mut bytes).unwrap(),
+                Some(git_zero::pktline::Packet::Data(actual)) if actual == line.as_bytes()));
+        }
+        assert_eq!(
+            git_zero::pktline::read(&mut bytes).unwrap(),
+            Some(git_zero::pktline::Packet::Flush)
+        );
+        assert_eq!(
+            git_zero::pktline::read(&mut bytes).unwrap(),
+            Some(git_zero::pktline::Packet::Data(b"done\n"))
+        );
+        assert!(bytes.is_empty());
     }
 
     #[test]
@@ -319,7 +368,7 @@ mod tests {
                 gitfs_decode_loose(
                     wire.as_ptr(),
                     wire.len(),
-                    id.0.as_ptr(),
+                    id.as_bytes().as_ptr(),
                     output.as_mut_ptr(),
                     capacity,
                     window.as_mut_ptr(),
@@ -328,7 +377,7 @@ mod tests {
             }
         };
         assert_eq!(run(wire, object.id(), 128), 0);
-        assert_eq!(run(wire, ObjectId([0; 20]), 128), EBADMSG);
+        assert_eq!(run(wire, ObjectId::Sha1([0; 20]), 128), EBADMSG);
         assert_eq!(run(wire, object.id(), 4), EFBIG);
         assert_eq!(run(&wire[..wire.len() - 1], object.id(), 128), EBADMSG);
         assert_eq!(result.kind, ObjectKind::Blob as u32);

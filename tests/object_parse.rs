@@ -2,7 +2,7 @@
 mod allocations;
 
 use git_zero::{
-    Error, ObjectId, ObjectKind,
+    Error, ObjectFormat, ObjectId, ObjectKind,
     object::{Commit, Tag, Tree, TreeEntry},
 };
 
@@ -37,7 +37,7 @@ fn git_tree_order_modes_and_byte_names_use_borrowed_storage() {
                 TreeEntry::read(&bytes, &mut offset).unwrap(),
                 Some(expected)
             );
-            assert_eq!(expected.id, ObjectId([7; 20]));
+            assert_eq!(expected.id, ObjectId::Sha1([7; 20]));
         }
         assert_eq!(offset, bytes.len());
         assert!(TreeEntry::read(&bytes, &mut offset).unwrap().is_none());
@@ -156,7 +156,7 @@ fn commits_preserve_empty_binary_and_multiline_messages() {
             );
         });
     }
-    let id = ObjectId([9; 20]);
+    let id = ObjectId::Sha1([9; 20]);
     let bytes = format!("tree {id}\nauthor test\n\nmessage\n");
     assert_eq!(Commit::root_tree(bytes.as_bytes()), Ok(id));
     for bad in [
@@ -182,11 +182,11 @@ fn annotated_tag_targets_require_canonical_ids_and_kinds() {
     ] {
         let bytes = format!(
             "object {}\ntype {kind}\ntag v1\ntagger example\n\nmessage\n",
-            ObjectId([7; 20])
+            ObjectId::Sha1([7; 20])
         );
         allocations::without_allocations(|| {
             let tag = Tag::parse(bytes.as_bytes()).unwrap();
-            assert_eq!(tag.target, ObjectId([7; 20]));
+            assert_eq!(tag.target, ObjectId::Sha1([7; 20]));
             assert_eq!(tag.target_kind, expected);
         });
     }
@@ -197,4 +197,35 @@ fn annotated_tag_targets_require_canonical_ids_and_kinds() {
     ] {
         assert!(Tag::parse(bad).is_err());
     }
+}
+
+#[test]
+fn sha256_object_views_preserve_full_width_links_without_allocating() {
+    let id = ObjectId::Sha256([7; 32]);
+    let mut tree = b"100644 file\0".to_vec();
+    tree.extend_from_slice(id.as_bytes());
+    let commit = format!("tree {id}\nauthor test\n\nmessage\n");
+    let tag = format!("object {id}\ntype tree\ntag v1\n\nmessage\n");
+    allocations::without_allocations(|| {
+        let mut budget = tree.len() as u64;
+        let parsed =
+            Tree::parse_with_budget_and_format(&tree, &mut budget, ObjectFormat::Sha256).unwrap();
+        assert_eq!(budget, 0);
+        assert_eq!(parsed.entries().next().unwrap().id, id);
+        let mut offset = 0;
+        assert_eq!(
+            TreeEntry::read_with_format(&tree, &mut offset, ObjectFormat::Sha256)
+                .unwrap()
+                .unwrap()
+                .id,
+            id
+        );
+        assert_eq!(offset, tree.len());
+        let parsed = Commit::parse_with_format(commit.as_bytes(), ObjectFormat::Sha256).unwrap();
+        assert_eq!(parsed.tree(), id);
+        assert_eq!(parsed.message(), b"message\n");
+        assert_eq!(Tag::parse(tag.as_bytes()).unwrap().target, id);
+        assert!(Commit::parse(commit.as_bytes()).is_err());
+        assert!(Tree::parse(&tree).is_err());
+    });
 }

@@ -52,6 +52,15 @@ def fixture(root):
     command("git", "-C", str(source), "add", "repeated.bin", env=env)
     command("git", "-C", str(source), "commit", "-m", "compressed object", env=env)
     command("git", "clone", "--bare", str(source), str(root / "fixture/compressed.git"))
+    sha256 = root / "fixture/sha256.git"
+    command("git", "init", "--bare", "--object-format=sha256", "--initial-branch=main", str(sha256))
+    blob = command("git", "--git-dir", str(sha256), "hash-object", "-w", "--stdin",
+                   input=b"SHA-256 fixture\n").strip()
+    tree = command("git", "--git-dir", str(sha256), "mktree",
+                   input=b"100644 blob " + blob + b"\tREADME.md\n").strip()
+    commit = command("git", "--git-dir", str(sha256), "commit-tree", tree.decode(),
+                     input=b"SHA-256 snapshot\n", env=env).strip()
+    command("git", "--git-dir", str(sha256), "update-ref", "refs/heads/main", commit.decode())
     certs = root.parent / "certs"
     certs.mkdir()
     command("openssl", "req", "-x509", "-newkey", "ec",

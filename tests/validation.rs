@@ -105,7 +105,7 @@ fn entry(tree: &mut Vec<u8>, mode: &[u8], name: &[u8], id: ObjectId) {
     tree.push(b' ');
     tree.extend_from_slice(name);
     tree.push(0);
-    tree.extend_from_slice(&id.0);
+    tree.extend_from_slice(id.as_bytes());
 }
 
 fn blob() -> OwnedObject {
@@ -186,7 +186,7 @@ fn nested_snapshot_index_preserves_metadata_refs_pack_and_http() {
             validated.read_object(validated.object_count(), 0, &mut [0]),
             Err(Error::ObjectNotFound)
         );
-        assert!(validated.find_index(ObjectId([0; 20])).is_none());
+        assert!(validated.find_index(ObjectId::Sha1([0; 20])).is_none());
         let mut expected = vec![0; 4096];
         let mut actual = vec![0; 4096];
         let mut left = SliceWriter::new(&mut expected);
@@ -290,7 +290,7 @@ fn graph_rejects_missing_targets_wrong_kinds_extra_and_duplicate_objects() {
     for (kind, target, children, expected) in [
         (
             b"100644".as_slice(),
-            ObjectId([9; 20]),
+            ObjectId::Sha1([9; 20]),
             vec![],
             Error::ObjectNotFound,
         ),
@@ -326,9 +326,9 @@ fn graph_rejects_missing_targets_wrong_kinds_extra_and_duplicate_objects() {
     let mut fixture = Fixture::tree(vec![], vec![]);
     fixture.head = empty.id();
     assert_eq!(outcome(&fixture, 7, 128), Err(Error::InvalidObject));
-    fixture.head = ObjectId([9; 20]);
+    fixture.head = ObjectId::Sha1([9; 20]);
     assert_eq!(outcome(&fixture, 7, 128), Err(Error::ObjectNotFound));
-    fixture.head = ObjectId([0; 20]);
+    fixture.head = ObjectId::Sha1([0; 20]);
     assert_eq!(outcome(&fixture, 7, 128), Err(Error::InvalidObject));
     let parent = commit(empty.id(), &[], b"parent");
     let child = commit(empty.id(), &[parent.id()], b"child");
@@ -347,7 +347,7 @@ fn graph_rejects_missing_targets_wrong_kinds_extra_and_duplicate_objects() {
     fixture.objects.push(tag);
     assert_eq!(outcome(&fixture, 7, 128), Err(Error::InvalidObject));
     assert_eq!(
-        outcome(&Fixture::new(vec![], ObjectId([9; 20])), 7, 128),
+        outcome(&Fixture::new(vec![], ObjectId::Sha1([9; 20])), 7, 128),
         Err(Error::ObjectNotFound)
     );
 }
@@ -417,7 +417,7 @@ fn tree_order_names_modes_and_framing_are_checked_across_read_boundaries() {
         );
     }
     let mut tree = vec![];
-    entry(&mut tree, b"100644", b"x", ObjectId([0; 20]));
+    entry(&mut tree, b"100644", b"x", ObjectId::Sha1([0; 20]));
     assert_eq!(
         tree_outcome(tree, vec![], 1, 128),
         Err(Error::InvalidObject)
@@ -524,7 +524,7 @@ impl Repository for Broken<'_> {
     fn object_id(&self, index: usize) -> Option<ObjectId> {
         match self.fault {
             1 => None,
-            2 => Some(ObjectId([9; 20])),
+            2 => Some(ObjectId::Sha1([9; 20])),
             _ => self.source.object_id(index),
         }
     }
@@ -590,7 +590,7 @@ fn strict_git_accepts_validated_streamed_merge_history_and_gitlinks() {
     entry(&mut data, b"100644", b"a.c", blob.id());
     entry(&mut data, b"40000", b"a", empty.id());
     entry(&mut data, b"40000", b"b", empty.id());
-    entry(&mut data, b"160000", b"external", ObjectId([9; 20]));
+    entry(&mut data, b"160000", b"external", ObjectId::Sha1([9; 20]));
     entry(&mut data, b"100755", b"run", blob.id());
     entry(&mut data, b"120000", b"target", blob.id());
     let tree = OwnedObject {
