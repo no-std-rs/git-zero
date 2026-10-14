@@ -195,6 +195,8 @@ class ReleaseAssets(unittest.TestCase):
     def gh(self, arguments):
         self.calls.append(arguments)
         if arguments[0] == "api":
+            if arguments[1].endswith("/releases/assets/1"):
+                return self.retained
             return json.dumps(self.release).encode()
         return b""
 
@@ -224,6 +226,39 @@ class ReleaseAssets(unittest.TestCase):
         with patch.object(attach, "gh", self.gh):
             attach.attach("no-std-rs/git-zero", "v0.1.0", self.root)
         self.assertEqual(len(self.calls), 1)
+
+    def test_older_asset_without_digest_is_verified_before_missing_uploads(self):
+        existing = self.asset(self.files[0])
+        existing.pop("digest")
+        self.release["assets"] = [existing]
+        self.retained = (self.root / self.files[0]).read_bytes()
+        with patch.object(attach, "gh", self.gh):
+            attach.attach("no-std-rs/git-zero", "v0.1.0", self.root)
+        self.assertEqual(self.calls[1], ["api", "repos/no-std-rs/git-zero/releases/assets/1",
+                                        "--header", "Accept: application/octet-stream"])
+        self.assertEqual(self.calls[2][:3], ["release", "upload", "v0.1.0"])
+        self.assertNotIn(str(self.root / self.files[0]), self.calls[2])
+
+    def test_older_asset_with_different_bytes_prevents_all_uploads(self):
+        existing = self.asset(self.files[0])
+        existing.pop("digest")
+        self.release["assets"] = [existing]
+        self.retained = b"!" + (self.root / self.files[0]).read_bytes()[1:]
+        with patch.object(attach, "gh", self.gh), self.assertRaises(ValueError):
+            attach.attach("no-std-rs/git-zero", "v0.1.0", self.root)
+        self.assertEqual(len(self.calls), 2)
+        self.assertTrue(all(call[0] == "api" for call in self.calls))
+
+    def test_ineligible_release_prevents_uploads(self):
+        for field, value in (("draft", True), ("prerelease", True), ("tag_name", "v0.2.0")):
+            with self.subTest(field=field):
+                self.release = {"tag_name": "v0.1.0", "draft": False, "prerelease": False, "assets": []}
+                self.release[field] = value
+                self.calls.clear()
+                with patch.object(attach, "gh", self.gh), self.assertRaises(ValueError):
+                    attach.attach("no-std-rs/git-zero", "v0.1.0", self.root)
+                self.assertEqual(len(self.calls), 1)
+                self.assertEqual(self.calls[0][0], "api")
 
 
 class PublicPackages(unittest.TestCase):
