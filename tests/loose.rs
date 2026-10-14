@@ -1,5 +1,3 @@
-#![cfg(all(feature = "client", feature = "write"))]
-
 #[path = "common/allocations.rs"]
 mod allocations;
 

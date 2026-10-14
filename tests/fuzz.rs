@@ -1,5 +1,3 @@
-#![cfg(all(feature = "client", feature = "server"))]
-
 mod fuzz_support;
 
 type Target = (&'static str, fn(&[u8]), &'static [&'static [u8]]);

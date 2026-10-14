@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import tomllib
-from release_packages import PACKAGES
+from release_packages import PACKAGES, require
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,14 +17,13 @@ def check(release=False):
     ))
     public = {package["name"]: package for package in metadata["packages"]
               if package["publish"] != []}
-    if public.keys() != PACKAGES.keys():
-        raise ValueError("public workspace packages differ from the release package list")
+    require(public.keys() == PACKAGES.keys(), "public workspace packages differ from the release package list")
     versions = {package["version"] for package in public.values()}
-    if len(versions) != 1:
-        raise ValueError("public packages must share one version")
+    require(len(versions) == 1, "public packages must share one version")
     version = versions.pop()
-    if release and version != ROOT.joinpath("version.txt").read_text().strip():
-        raise ValueError("prepared package versions differ from version.txt")
+    if release:
+        require(version == ROOT.joinpath("version.txt").read_text().strip(),
+                "prepared package versions differ from version.txt")
     earlier = set()
     for name, relative in PACKAGES.items():
         package = public[name]
@@ -36,31 +35,24 @@ def check(release=False):
 
 def check_metadata(package, relative):
     name = package["name"]
-    if Path(package["manifest_path"]) != ROOT / relative:
-        raise ValueError(f"unexpected manifest path for {name}")
+    require(Path(package["manifest_path"]) == ROOT / relative, f"unexpected manifest path for {name}")
     for field in ("description", "license", "repository", "readme"):
-        if not package[field]:
-            raise ValueError(f"missing {field} for {name}")
+        require(package[field], f"missing {field} for {name}")
     directory = Path(package["manifest_path"]).parent
     for license_name in ("LICENSE-MIT", "LICENSE-APACHE"):
-        if not (directory / license_name).is_file():
-            raise ValueError(f"missing {license_name} for {name}")
+        require((directory / license_name).is_file(), f"missing {license_name} for {name}")
     manifest = tomllib.loads((ROOT / relative).read_text())
-    if "include" not in manifest["package"]:
-        raise ValueError(f"missing package file allowlist for {name}")
+    require("include" in manifest["package"], f"missing package file allowlist for {name}")
 
 
 def check_dependencies(package, earlier, version):
     for dependency in package["dependencies"]:
         name = dependency["name"]
         if name not in PACKAGES:
-            if dependency.get("path"):
-                raise ValueError(f"{package['name']} depends on an unpublished local package")
+            require(not dependency.get("path"), f"{package['name']} depends on an unpublished local package")
             continue
-        if name not in earlier:
-            raise ValueError(f"{package['name']}'s dependencies must be uploaded first")
-        if dependency["req"] != "^" + version:
-            raise ValueError(f"{package['name']}'s dependency version differs from the release")
+        require(name in earlier, f"{package['name']}'s dependencies must be uploaded first")
+        require(dependency["req"] == "^" + version, f"{package['name']}'s dependency version differs from the release")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,3 @@
-#![cfg(all(feature = "read", feature = "server"))]
-
 #[path = "common/streamed.rs"]
 mod streamed;
 

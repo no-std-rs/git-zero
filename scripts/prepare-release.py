@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import sys
 import tomllib
-from release_packages import PACKAGES
+from release_packages import PACKAGES, require
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
@@ -14,8 +14,7 @@ VERSION = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
 
 def replace_one(source, pattern, replacement, label):
     updated, count = re.subn(pattern, replacement, source)
-    if count != 1:
-        raise ValueError(f"expected one {label} version entry")
+    require(count == 1, f"expected one {label} version entry")
     return updated
 
 
@@ -30,8 +29,7 @@ def dependency_version(match, version):
 def manifest_version(relative, version):
     source = (ROOT / relative).read_text()
     package = tomllib.loads(source)["package"]["name"]
-    if PACKAGES.get(package) != relative:
-        raise ValueError(f"unexpected package name in {relative}")
+    require(PACKAGES.get(package) == relative, f"unexpected package name in {relative}")
     source = replace_one(source, r'(?m)^version\s*=\s*"[^"\n]+"', f'version = "{version}"', relative)
     return re.sub(r'(?m)^([A-Za-z0-9_-]+)\s*=\s*\{([^\n]+)\}',
                   partial(dependency_version, version=version), source)
@@ -46,11 +44,9 @@ def lock_version(version):
 
 
 def prepare(tag):
-    if not re.fullmatch("v" + VERSION, tag):
-        raise ValueError("expected a stable vMAJOR.MINOR.PATCH release tag")
+    require(re.fullmatch("v" + VERSION, tag), "expected a stable vMAJOR.MINOR.PATCH release tag")
     version = tag.removeprefix("v")
-    if ROOT.joinpath("version.txt").read_text().strip() != version:
-        raise ValueError("tag differs from version.txt")
+    require(ROOT.joinpath("version.txt").read_text().strip() == version, "tag differs from version.txt")
     updates = {ROOT / relative: manifest_version(relative, version) for relative in PACKAGES.values()}
     updates[ROOT / "Cargo.lock"] = lock_version(version)
     # Validate every manifest and lock entry before writing any file.

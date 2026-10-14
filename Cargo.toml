@@ -39,6 +39,66 @@ git-zero-server = { version = "0.1.0", path = "crates/git-zero-server", optional
 [dev-dependencies]
 sha1 = { version = "0.10.7", default-features = false }
 
+[[test]]
+name = "builder"
+required-features = ["write"]
+
+[[test]]
+name = "cache"
+required-features = ["read", "write"]
+
+[[test]]
+name = "core"
+required-features = ["client", "server"]
+
+[[test]]
+name = "fuzz"
+required-features = ["client", "server"]
+
+[[test]]
+name = "head_states"
+required-features = ["read", "server"]
+
+[[test]]
+name = "indexed"
+required-features = ["read", "server"]
+
+[[test]]
+name = "inflate"
+required-features = ["client", "write"]
+
+[[test]]
+name = "loose"
+required-features = ["client", "write"]
+
+[[test]]
+name = "pack_git"
+required-features = ["write"]
+
+[[test]]
+name = "pack_reader"
+required-features = ["read", "write"]
+
+[[test]]
+name = "reader"
+required-features = ["read", "server"]
+
+[[test]]
+name = "references"
+required-features = ["read", "server"]
+
+[[test]]
+name = "snapshot"
+required-features = ["client", "server"]
+
+[[test]]
+name = "validation"
+required-features = ["read", "server"]
+
+[[test]]
+name = "zlib"
+required-features = ["write"]
+
 [profile.release]
 panic = "abort"
 lto = true

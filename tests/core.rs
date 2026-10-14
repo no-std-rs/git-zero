@@ -1,5 +1,3 @@
-#![cfg(all(feature = "client", feature = "server"))]
-
 use git_zero::{
     Error, File, Object, ObjectId, ObjectKind, Repository, Snapshot,
     cache::{self, Key, PackCache},

@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 from urllib.parse import quote
-from release_packages import PACKAGES
+from release_packages import PACKAGES, require
 
 
 def gh(arguments):
@@ -17,15 +17,14 @@ def gh(arguments):
 
 
 def attach(repository, tag, directory):
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
-        raise ValueError("expected OWNER/REPOSITORY")
-    if not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag):
-        raise ValueError("expected a stable git-zero release tag")
+    require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository), "expected OWNER/REPOSITORY")
+    require(re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag),
+            "expected a stable git-zero release tag")
     version = tag.removeprefix("v")
     files = [Path(directory) / f"{name}-{version}.cargo-upload" for name in PACKAGES] + [Path(directory) / "SHA256SUMS"]
     release = json.loads(gh(["api", f"repos/{repository}/releases/tags/{quote(tag, safe='')}"]))
-    if release["tag_name"] != tag or release["draft"] or release["prerelease"]:
-        raise ValueError("expected the matching published stable release")
+    require(release["tag_name"] == tag and not release["draft"] and not release["prerelease"],
+            "expected the matching published stable release")
     existing = {asset["name"]: asset for asset in release["assets"]}
     missing = []
     # Check every existing asset before any new write. A previous partial upload
@@ -43,16 +42,15 @@ def attach(repository, tag, directory):
 
 
 def verify_existing(repository, path, local, asset):
-    if asset["size"] != len(local):
-        raise ValueError(f"existing asset differs: {path.name}")
+    require(asset["size"] == len(local), f"existing asset differs: {path.name}")
     digest = asset.get("digest")
     if digest is None:
         # Older GitHub assets may lack the server-side digest field.
         retained = gh(["api", f"repos/{repository}/releases/assets/{asset['id']}",
                        "--header", "Accept: application/octet-stream"])
         digest = "sha256:" + hashlib.sha256(retained).hexdigest()
-    if digest != "sha256:" + hashlib.sha256(local).hexdigest():
-        raise ValueError(f"existing asset differs: {path.name}")
+    require(digest == "sha256:" + hashlib.sha256(local).hexdigest(),
+            f"existing asset differs: {path.name}")
 
 
 if __name__ == "__main__":

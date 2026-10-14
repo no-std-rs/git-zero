@@ -21,7 +21,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
-from release_packages import PACKAGES
+from release_packages import PACKAGES, require
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,17 +40,16 @@ def index_path(name):
 
 
 def parse_upload(body, expected_name, version):
-    if len(body) < 8 or len(body) > MAX_UPLOAD:
-        raise ValueError("invalid Cargo upload size")
+    require(8 <= len(body) <= MAX_UPLOAD, "invalid Cargo upload size")
     metadata_size = struct.unpack_from("<I", body)[0]
-    if not 0 < metadata_size <= 128 * 1024 or len(body) < 8 + metadata_size:
-        raise ValueError("invalid Cargo metadata size")
+    require(0 < metadata_size <= 128 * 1024 and len(body) >= 8 + metadata_size,
+            "invalid Cargo metadata size")
     metadata = json.loads(body[4 : 4 + metadata_size])
     archive_size = struct.unpack_from("<I", body, 4 + metadata_size)[0]
-    if not 0 < archive_size <= MAX_UPLOAD or len(body) != 8 + metadata_size + archive_size:
-        raise ValueError("invalid Cargo archive size")
-    if metadata.get("name") != expected_name or metadata.get("vers") != version:
-        raise ValueError("Cargo package identity differs from release")
+    require(0 < archive_size <= MAX_UPLOAD and len(body) == 8 + metadata_size + archive_size,
+            "invalid Cargo archive size")
+    require(metadata.get("name") == expected_name and metadata.get("vers") == version,
+            "Cargo package identity differs from release")
     archive = body[8 + metadata_size :]
     dependencies = [
         {
@@ -137,8 +136,7 @@ class LocalRegistry(http.server.ThreadingHTTPServer):
     def capture(self, body):
         record = parse_upload(body, self.expected, self.version)
         key = index_path(self.expected)
-        if key in self.index:
-            raise ValueError("duplicate Cargo upload")
+        require(key not in self.index, "duplicate Cargo upload")
         self.output.joinpath(f"{self.expected}-{self.version}.cargo-upload").write_bytes(body)
         self.index[key] = record
 
@@ -168,8 +166,7 @@ class RegistryHandler(http.server.BaseHTTPRequestHandler):
             return
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if not 0 < size <= MAX_UPLOAD:
-                raise ValueError("invalid upload length")
+            require(0 < size <= MAX_UPLOAD, "invalid upload length")
             self.server.capture(self.rfile.read(size))
         except (ValueError, KeyError, TypeError, OSError) as error:
             self.server.error = str(error)

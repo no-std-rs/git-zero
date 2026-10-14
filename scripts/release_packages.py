@@ -7,3 +7,9 @@ PACKAGES = {
     "git-zero": "Cargo.toml",
     "git-zero-rustix": "crates/git-zero-rustix/Cargo.toml",
 }
+
+
+def require(condition, message):
+    """Reject invalid release metadata with the same error across build helpers."""
+    if not condition:
+        raise ValueError(message)

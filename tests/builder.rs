@@ -1,5 +1,3 @@
-#![cfg(feature = "write")]
-
 mod common;
 
 use git_zero::{
