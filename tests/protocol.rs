@@ -174,6 +174,33 @@ fn v2_rounds_ack_known_commits_and_do_not_mix_nak_or_pack() {
     });
 }
 
+#[test]
+fn unborn_ls_refs_requires_symrefs_to_describe_the_missing_head_target() {
+    let repository = git_zero::EmptyRepository::new("refs/heads/new/default").unwrap();
+    for args in [vec![], vec!["unborn\n".into()], vec!["symrefs\n".into()]] {
+        let body = command("ls-refs", ObjectFormat::Sha1, &args);
+        assert_eq!(
+            response(&repository, request(&body)),
+            (200, b"0000".to_vec())
+        );
+    }
+    let body = command(
+        "ls-refs",
+        ObjectFormat::Sha1,
+        &["unborn\n".into(), "symrefs\n".into()],
+    );
+    let (_, wire) = response(&repository, request(&body));
+    let mut wire = wire.as_slice();
+    assert_eq!(
+        pktline::read(&mut wire).unwrap(),
+        Some(Packet::Data(
+            b"unborn HEAD symref-target:refs/heads/new/default\n"
+        ))
+    );
+    assert_eq!(pktline::read(&mut wire).unwrap(), Some(Packet::Flush));
+    assert!(wire.is_empty());
+}
+
 fn rejected(repository: &impl Repository, body: &[u8]) {
     let mut bytes = [0xcc; 4098];
     let mut output = SliceWriter::new(&mut bytes[1..4097]);

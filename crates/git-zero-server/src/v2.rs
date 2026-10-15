@@ -181,7 +181,7 @@ impl<'a> Refs<'a> {
 
     pub fn write(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
         let head = repository.head_state();
-        if head.id().is_some() || self.unborn {
+        if head.id().is_some() || (self.unborn && self.symrefs) {
             let target = match head {
                 Head::Symbolic { target, .. } => Some(resolve_reference(repository, target)?.0),
                 _ => head.target(),

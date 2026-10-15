@@ -39,7 +39,7 @@ def packets(data):
 
 
 def compare_ls_refs(bare, urls, fmt):
-    for args in [[], [b"symrefs", b"peel", b"unborn"], [b"ref-prefix refs/tags/", b"peel"],
+    for args in [[], [b"unborn"], [b"symrefs", b"peel", b"unborn"], [b"ref-prefix refs/tags/", b"peel"],
                  [b"ref-prefix HEAD", b"symrefs", b"unborn"], [b"ref-prefix does-not-exist"]]:
         replies = [sorted(packets(post(url, command(b"ls-refs", fmt, args)))) for _, url in urls]
         # Git's ls-refs treats symref-target as a complete resolved ref name.
