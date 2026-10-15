@@ -44,7 +44,10 @@ impl Extensions {
     }
 
     pub fn active(&self) -> bool {
-        self.has_shallow || self.options.depth.is_some() || self.filtered
+        self.has_shallow
+            || self.options.depth.is_some()
+            || self.options.deepen_relative
+            || self.filtered
     }
 }
 

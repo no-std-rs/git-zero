@@ -36,13 +36,15 @@ pub use storage::{SelectionBuffers, SelectionStorage};
 /// ACKs or pack. Present commit haves exclude their complete reachable history;
 /// unknown and non-commit haves are ignored. Requests are stateless: clients
 /// replay wants and acknowledged haves each round. No-done rounds only negotiate.
-/// Absolute-depth shallow requests and blob filters use the same graph budget.
+/// Absolute/relative-depth shallow requests and blob filters use the same graph budget.
 /// Shallow haves never imply complete history. Errors
 /// invalidate all output; selection failures produce no output at all.
 ///
 /// Requests must contain a complete, bounded body and the upload-pack media type.
 /// Absolute `deepen` requests may have an initial v0 shallow-list probe without
 /// `done`; that probe consumes the same graph budget as the eventual pack.
+/// Relative probes from full clients only flush an empty boundary list and need
+/// no graph work slots, read/parse scratch or structural-read budget.
 /// A client must replay its shallow IDs and negotiation state on each request.
 /// ACK-only rounds validate client boundaries through the repository index and
 /// need no graph work slots, read/parse scratch or structural-read budget.
@@ -51,7 +53,7 @@ pub use storage::{SelectionBuffers, SelectionStorage};
 ///
 /// Blob filters preserve explicitly wanted blobs but do not grant permission
 /// to request unadvertised promised objects. Partial clones currently need
-/// `--no-checkout`. Relative/time/exclusion deepening and other filter families
+/// `--no-checkout`. Time/exclusion deepening and other filter families
 /// return `Unsupported`; malformed options and invalid shallow IDs return
 /// `InvalidRequest`. Scratch/slot exhaustion returns `BufferTooSmall`, and graph
 /// read exhaustion returns `LimitExceeded`. A buffered host can replace a failed
@@ -103,8 +105,11 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
 ) -> Result<SelectedFetch<'storage, 'body>> {
     let (upload, count) =
         UploadRequest::parse_selected(repository, request.body, version, storage.wants)?;
-    let boundary_probe = version != Version::V2 && upload.extensions.options.depth.is_some();
-    let indices = if upload.done || boundary_probe {
+    let boundary_probe =
+        version != Version::V2 && !upload.done && upload.extensions.options.depth.is_some();
+    let select_boundaries = boundary_probe
+        && (!upload.extensions.options.deepen_relative || upload.shallow().next().is_some());
+    let indices = if upload.done || select_boundaries {
         Some(repository.select_bounded_fetch(
             &storage.wants[..count],
             (upload.common(repository), upload.shallow()),
@@ -125,6 +130,8 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
     };
     if indices.is_some() {
         upload.shallow_info(&storage.objects[..repository.object_count()], output)?;
+    } else if boundary_probe {
+        output.write_all(b"0000")?;
     }
     upload.acknowledge(repository, output)?;
     Ok(SelectedFetch {

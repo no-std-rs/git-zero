@@ -108,12 +108,14 @@ annotated tags, deep trees, merge histories, binary blobs, and both object forma
   responses. HTTP chunked request decoding and nonblocking socket polling remain
   adapter work in section 4.
 - [ ] Shallow/filter requests with bounded traversal and documented rejection paths.
-  Absolute depth, shallow clients, absolute deepening/unshallow, blob:none and
+  Absolute depth, shallow clients, absolute/relative deepening/unshallow, blob:none and
   blob:limit now share caller-owned traversal arrays and one graph-read budget.
   Native Git-oracle clones compare boundaries and delivered objects for v0/v1/v2
   in SHA-1/SHA-256, including merges and combined depth/filter requests. Worker
   clones and repeated fragmented/cancelled ABI pulls retain the 24-page ceiling.
-  Relative/time/exclusion deepening and additional filters remain rejected.
+  Relative depth follows Git 2.55 wanted-history semantics; versioned tests retain
+  Git 2.53's unrelated-branch boundary difference. Time/exclusion deepening and
+  additional filters remain rejected.
   Partial clones use --no-checkout: lazy promised-object wants still need an
   explicit extension of the advertised-ID policy before general checkout works.
 - [x] Proper method/content-type checks, service selection, protocol-version
@@ -325,7 +327,7 @@ kernel-scale benchmarks separate from mandatory, reproducible correctness checks
   configured limits, and remaining optional work; no advertised feature lacks tests.
 
 Start further client development after this gate passes. The next implementation
-step is completing shallow/partial-fetch follow-ups (relative/time/exclusion
+step is completing shallow/partial-fetch follow-ups (time/exclusion
 deepening and promised-object retrieval), then packed dumb HTTP publication and
 the remaining native/Worker hosting work.
 

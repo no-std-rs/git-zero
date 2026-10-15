@@ -14,9 +14,9 @@ pub(crate) fn capabilities(selection: bool) -> &'static [u8] {
 }
 
 #[derive(Clone, Copy, Default)]
-struct Capabilities(u8);
+struct Capabilities(u16);
 
-const CAPABILITY_FLAGS: &[(&[u8], u8)] = &[
+const CAPABILITY_FLAGS: &[(&[u8], u16)] = &[
     (b"multi_ack", 1),
     (b"multi_ack_detailed", 2),
     (b"side-band", 4),
@@ -24,9 +24,10 @@ const CAPABILITY_FLAGS: &[(&[u8], u8)] = &[
     (b"no-progress", 16),
     (b"shallow", 64),
     (b"filter", 128),
+    (b"deepen-relative", 256),
 ];
 
-fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u8> {
+fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u16> {
     if capability == format.capability() {
         return Ok(32);
     }
@@ -44,7 +45,7 @@ fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u8> {
 
 impl Capabilities {
     fn parse(bytes: &[u8], format: ObjectFormat) -> Result<Self> {
-        let mut seen = 0_u8;
+        let mut seen = 0_u16;
         for capability in bytes.split(|&byte| byte == b' ') {
             let flag = capability_flag(capability, format)?;
             if seen & flag != 0 {
@@ -71,10 +72,10 @@ impl Capabilities {
     }
 
     fn ack(self) -> u8 {
-        self.0 & 3
+        (self.0 & 3) as u8
     }
     fn band(self) -> u8 {
-        (self.0 >> 2) & 3
+        ((self.0 >> 2) & 3) as u8
     }
 }
 
@@ -126,6 +127,7 @@ fn parse_wants(
             }
             // Shallow commands use the server's advertisement; Git does not
             // echo `shallow` in its want capabilities. Filter is negotiated.
+            extensions.options.deepen_relative |= capabilities.0 & 256 != 0;
             extensions.require_filter_capability(capabilities.0 & 128 != 0)?;
             return wanted.then_some(capabilities).ok_or(Error::InvalidRequest);
         };
