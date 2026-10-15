@@ -227,12 +227,21 @@ wire bytes match. A thread-local allocation counter covers all served routes.
 This test runs across the existing Linux/macOS and system/pinned Git CI matrix,
 using `GIT_ZERO_TEST_GIT` to select the reference executable.
 
-Core cache tests cover HEAD/encoder key separation, eviction, scratch and cache
+Legacy core cache tests cover HEAD/encoder key separation, eviction, scratch and cache
 capacity exhaustion, read/write backend failures, and output failure followed by
 a scratchless retry. Hits do not enter the object provider. Failed generation or
 insertion produces no pack output; a successfully inserted complete pack survives
-an output failure. These synchronous tests leave concurrent host coordination,
-corrupt cache entries and persistent backend policy for future work.
+an output failure. `selected_cache.rs` adds independent Python hashlib key
+vectors, equivalent sets across provider orders, changed independent roots,
+selected and empty packs, fixed-buffer disabled/eviction/capacity behavior and
+bounded one-byte streaming reads. Allocation guards cover miss, hit and empty
+paths; write-only feature tests ensure integrity needs no pack reader. Git's
+strict importer independently checks both formats and every imported ID/body.
+Truncations and malformed headers/zlib/Adler32/trailers never reach the sink;
+valid recomputed checksums around wrong or duplicate objects still fail exact
+set verification. Backend/sink failures, byte/ID budgets, failed-miss preservation
+and scratchless hits retain retry behavior. Concurrent host coordination and
+persistent backend policy remain future work.
 
 ## Selective runs and CI sharding
 
