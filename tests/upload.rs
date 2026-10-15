@@ -43,18 +43,7 @@ fn have_metadata_failures_propagate_in_every_ack_mode_before_pack_writers_run() 
     for caps in ["", " multi_ack", " multi_ack_detailed"] {
         for done in [false, true] {
             let body = body(snapshot.head(), caps, &[snapshot.head()], done);
-            let mut bytes = [0; 4096];
-            let mut output = SliceWriter::new(&mut bytes);
-            let mut called = false;
-            let result = allocations::without_allocations(|| {
-                http::serve_with_pack(&repository, request(&body), &mut [], &mut output, |_, _| {
-                    called = true;
-                    Ok(())
-                })
-            });
-            assert!(matches!(result, Err(Error::Backend)));
-            assert!(!called);
-            assert!(output.is_empty());
+            assert_eq!(assert_rejected(&repository, &body), Error::Backend);
         }
     }
 }
@@ -198,21 +187,21 @@ fn sideband_modes_preserve_large_pack_bytes_checksums_and_packet_bounds() {
     });
 }
 
-fn assert_rejected(repository: &impl Repository, bytes: &[u8]) {
+fn assert_rejected(repository: &impl Repository, bytes: &[u8]) -> Error {
     let mut storage = [0; 4096];
     let mut output = SliceWriter::new(&mut storage);
     let mut calls = 0;
-    assert!(
+    let result = allocations::without_allocations(|| {
         http::serve_with_pack(repository, request(bytes), &mut [], &mut output, |_, _| {
             calls += 1;
             Ok(())
         })
-        .is_err(),
-        "accepted {:?}",
-        String::from_utf8_lossy(bytes)
-    );
+    });
     assert_eq!(calls, 0);
     assert!(output.is_empty());
+    result
+        .err()
+        .unwrap_or_else(|| panic!("accepted {:?}", String::from_utf8_lossy(bytes)))
 }
 
 #[test]

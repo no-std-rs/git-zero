@@ -291,6 +291,42 @@ fn selected_ids(repository: &impl Repository, indices: &[usize]) -> Vec<ObjectId
     )
 }
 
+fn check_missing_closure(
+    graph: &Graph,
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    common: &[ObjectId],
+    work: &mut [Option<git_zero::ValidationMetadata>],
+    indices: &mut [usize],
+) {
+    let excluded = if common.is_empty() {
+        vec![]
+    } else {
+        let selected = repository
+            .select_objects(common, work, indices, &mut [0; 1], &mut [0; 128], 4096)
+            .unwrap();
+        selected_ids(repository, selected)
+    };
+    let selected = allocations::without_allocations(|| {
+        repository
+            .select_missing_objects(
+                &[graph.ids.merge.unwrap()],
+                common.iter().copied().map(Ok),
+                work,
+                indices,
+                (&mut [0; 1], &mut [0; 128]),
+                8192,
+            )
+            .unwrap()
+    });
+    let expected = graph
+        .objects
+        .iter()
+        .filter(|object| object.kind != ObjectKind::Tag && !excluded.contains(&object.id))
+        .map(|object| object.id)
+        .collect();
+    assert_eq!(selected_ids(repository, selected), sorted(expected));
+}
+
 #[test]
 fn common_commit_closures_exclude_shared_merge_history_and_reset_between_requests() {
     let graph = Graph::new();
@@ -314,40 +350,7 @@ fn common_commit_closures_exclude_shared_merge_history_and_reset_between_request
             vec![graph.ids.side.unwrap(), graph.ids.side.unwrap()],
             vec![],
         ] {
-            let excluded = if common.is_empty() {
-                vec![]
-            } else {
-                let selected = repository
-                    .select_objects(
-                        &common,
-                        &mut work,
-                        &mut indices,
-                        &mut [0; 1],
-                        &mut [0; 128],
-                        4096,
-                    )
-                    .unwrap();
-                selected_ids(repository, selected)
-            };
-            let selected = allocations::without_allocations(|| {
-                repository
-                    .select_missing_objects(
-                        &[graph.ids.merge.unwrap()],
-                        common.iter().copied().map(Ok),
-                        &mut work,
-                        &mut indices,
-                        (&mut [0; 1], &mut [0; 128]),
-                        8192,
-                    )
-                    .unwrap()
-            });
-            let expected = graph
-                .objects
-                .iter()
-                .filter(|object| object.kind != ObjectKind::Tag && !excluded.contains(&object.id))
-                .map(|object| object.id)
-                .collect();
-            assert_eq!(selected_ids(repository, selected), sorted(expected));
+            check_missing_closure(&graph, repository, &common, &mut work, &mut indices);
         }
     });
 }

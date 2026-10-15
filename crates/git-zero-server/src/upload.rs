@@ -75,62 +75,71 @@ fn id(bytes: &[u8], format: ObjectFormat) -> Result<ObjectId> {
     Ok(id)
 }
 
+fn request_line(line: &[u8]) -> &[u8] {
+    line.strip_suffix(b"\n").unwrap_or(line)
+}
+
+fn unexpected_command(line: &[u8]) -> Error {
+    if line.starts_with(b"want ") || line.starts_with(b"have ") || line == b"done" {
+        Error::InvalidRequest
+    } else {
+        Error::Unsupported
+    }
+}
+
+fn parse_wants(
+    bytes: &mut &[u8],
+    format: ObjectFormat,
+    mut want: impl FnMut(ObjectId) -> Result<()>,
+) -> Result<Capabilities> {
+    let mut wanted = false;
+    let mut capabilities = Capabilities::default();
+    while let Some(packet) = pktline::read(bytes)? {
+        let Packet::Data(line) = packet else {
+            return wanted.then_some(capabilities).ok_or(Error::InvalidRequest);
+        };
+        let line = request_line(line);
+        let value = line
+            .strip_prefix(b"want ")
+            .ok_or_else(|| unexpected_command(line))?;
+        want(capabilities.want(value, !wanted, format)?)?;
+        wanted = true;
+    }
+    Err(Error::InvalidRequest)
+}
+
+fn parse_haves(mut bytes: &[u8], format: ObjectFormat) -> Result<bool> {
+    let empty = bytes.is_empty();
+    while let Some(packet) = pktline::read(&mut bytes)? {
+        let Packet::Data(line) = packet else {
+            return bytes
+                .is_empty()
+                .then_some(false)
+                .ok_or(Error::InvalidRequest);
+        };
+        let line = request_line(line);
+        if line == b"done" && bytes.is_empty() {
+            return Ok(true);
+        }
+        let value = line
+            .strip_prefix(b"have ")
+            .ok_or_else(|| unexpected_command(line))?;
+        id(value, format)?;
+    }
+    empty.then_some(false).ok_or(Error::InvalidRequest)
+}
+
 impl<'a> UploadRequest<'a> {
     pub fn parse(
         mut bytes: &'a [u8],
         format: ObjectFormat,
-        mut want: impl FnMut(ObjectId) -> Result<()>,
+        want: impl FnMut(ObjectId) -> Result<()>,
     ) -> Result<Self> {
-        let mut wanted = false;
-        let mut haves = None;
-        let mut capabilities = Capabilities::default();
-        let mut done = false;
-        let mut ended = true;
-        while let Some(packet) = pktline::read(&mut bytes)? {
-            let Packet::Data(line) = packet else {
-                if !wanted {
-                    return Err(Error::InvalidRequest);
-                }
-                if haves.is_some() {
-                    if !bytes.is_empty() {
-                        return Err(Error::InvalidRequest);
-                    }
-                    ended = true;
-                } else {
-                    haves = Some(bytes);
-                }
-                continue;
-            };
-            let line = line.strip_suffix(b"\n").unwrap_or(line);
-            if let Some(value) = line.strip_prefix(b"want ") {
-                if haves.is_some() {
-                    return Err(Error::InvalidRequest);
-                }
-                want(capabilities.want(value, !wanted, format)?)?;
-                wanted = true;
-            } else if let Some(value) = line.strip_prefix(b"have ") {
-                if haves.is_none() {
-                    return Err(Error::InvalidRequest);
-                }
-                id(value, format)?;
-                ended = false;
-            } else if line == b"done" {
-                if haves.is_none() || !bytes.is_empty() {
-                    return Err(Error::InvalidRequest);
-                }
-                done = true;
-                ended = true;
-            } else {
-                return Err(Error::Unsupported);
-            }
-        }
-        if !ended {
-            return Err(Error::InvalidRequest);
-        }
+        let capabilities = parse_wants(&mut bytes, format, want)?;
         Ok(Self {
-            done,
+            done: parse_haves(bytes, format)?,
             capabilities,
-            haves: haves.ok_or(Error::InvalidRequest)?,
+            haves: bytes,
         })
     }
 
