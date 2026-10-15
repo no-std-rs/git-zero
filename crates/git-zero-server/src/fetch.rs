@@ -24,9 +24,6 @@ impl Extensions {
                 }
                 self.options.depth = Some(depth as u32);
             }
-            (b"deepen-relative", None) if !self.options.deepen_relative => {
-                self.options.deepen_relative = true;
-            }
             (b"filter", Some(value)) => {
                 if self.filtered {
                     return Err(Error::InvalidRequest);

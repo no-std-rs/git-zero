@@ -127,6 +127,18 @@ function checkShallowFiltered(first, second, format, version) {
   for (let round = 0; round < 16; round++) {
     checkStreamingTarget(first, second, relativeInput, 1, format, version === 2, deepened);
   }
+  const full = version === 2
+    ? command(format, "fetch", [`want ${head}`, `have ${head}`, "deepen 1", "deepen-relative", "done"])
+    : Buffer.concat([packet(`want ${head} deepen-relative object-format=${format === 0 ? "sha1" : "sha256"}\n`),
+      packet("deepen 1\n"), Buffer.from("0000"), packet(`have ${head}\n`), packet("done\n")]);
+  const fullInput = httpFrame("git-upload-pack", full, `version=${version}`);
+  const unchanged = call(first, fullInput, 1, format, true);
+  const { lines, pack } = decodeNegotiation(version === 2 ? unchanged.body : unchanged.body.subarray(4), version === 2 ? "side-band-64k" : null);
+  assert.deepEqual(lines, version === 2 ? ["packfile\n"] : [`ACK ${head}\n`]);
+  assert.equal(pack.readUInt32BE(8), 0, "a full client's common history must not be resent");
+  for (let round = 0; round < 16; round++) {
+    checkStreamingTarget(first, second, fullInput, 1, format, version === 2, unchanged);
+  }
 }
 
 test("shallow and filtered pulls retain fixed memory, format widths and exact packs", () => {

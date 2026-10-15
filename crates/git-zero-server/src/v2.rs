@@ -271,6 +271,9 @@ impl Fetch {
                 }
                 (b"done", None) if !fetch.done => fetch.done = true,
                 (b"include-tag", None) => fetch.include_tags = true,
+                (b"deepen-relative", None) if !extensions.options.deepen_relative => {
+                    extensions.options.deepen_relative = true;
+                }
                 // Full, non-delta packs also satisfy thin-pack/ofs-delta requests.
                 (b"thin-pack" | b"ofs-delta" | b"no-progress", None) => {}
                 _ => extensions.argument(arg, format)?,

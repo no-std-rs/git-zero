@@ -1,6 +1,7 @@
 """Real-Git shallow/partial clone and absolute/relative-deepening oracle comparisons."""
 from itertools import product
 import re
+import urllib.request
 from interop import run
 from upstream_http import git, object_manifest, verify_checkout
 from server_references import all_object_ids
@@ -119,6 +120,46 @@ def compare_relative_unrelated_tip(root, bare, urls, env, version):
         assert side in shallow_ids(clones[0])
 
 
+def compare_full_relative_fetch(root, bare, urls, env, version):
+    from server_references import packet
+    from server_negotiation import imported_pack
+    from server_protocol import command, packets, packfile
+    tip = git(bare, "rev-parse", "light", env=env).strip()
+    main = git(bare, "rev-parse", "z-main", env=env).strip()
+    fmt = b"sha256" if len(tip) == 64 else b"sha1"
+    for name, url in urls:
+        clone = clone_one(root, bare, name, url, f"full-relative-v{version}", env, version, "z-main", None, None)
+        before = object_manifest(clone, "HEAD", env)
+        git(clone, "-c", f"protocol.version={version}", "fetch", "--deepen=1", "--no-tags", "origin", env=env)
+        assert not shallow_ids(clone)
+        assert object_manifest(clone, "HEAD", env) == before
+        git(clone, "fsck", "--strict", env=env)
+        # Matched requests prove both the empty no-op pack and incremental
+        # pruning, rather than only checking the already complete checkout.
+        for index, common in enumerate((tip, main)):
+            if version == 2:
+                body = command(b"fetch", fmt, [b"want " + tip, b"have " + common,
+                    b"deepen 1", b"deepen-relative", b"no-progress", b"done"])
+            else:
+                body = (packet(b"want " + tip + b" deepen-relative no-progress object-format=" + fmt + b"\n")
+                    + packet(b"deepen 1\n") + b"0000" + packet(b"have " + common + b"\n") + packet(b"done\n"))
+            request = urllib.request.Request(url + "/git-upload-pack", data=body, headers={
+                "Git-Protocol": f"version={version}", "Content-Type": "application/x-git-upload-pack-request"})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                raw = response.read()
+            label = f"{name}-full-relative-v{version}-{index}"
+            (root / (label + ".response")).write_bytes(raw)
+            if version == 2:
+                lines = packets(raw)
+                if lines[0] == b"shallow-info\n":
+                    assert lines[:2] == [b"shallow-info\n", None]
+                    lines = lines[2:]
+                packed = packfile(lines)
+            else:
+                packed = raw[raw.index(b"PACK"):]
+            imported_pack(root, bare, label, packed, (tip,), (common,), env)
+
+
 def compare_bounded_fetch(root, bare, urls, env):
     git(bare, "config", "uploadpack.allowFilter", "true", env=env)
     for version, branch, depth in product((0, 1, 2), ("z-main", "light"), (1, 2, 8)):
@@ -128,4 +169,5 @@ def compare_bounded_fetch(root, bare, urls, env):
     for version in (0, 1, 2):
         compare_relative_boundaries(root, bare, urls, env, version)
         compare_relative_unrelated_tip(root, bare, urls, env, version)
+        compare_full_relative_fetch(root, bare, urls, env, version)
         compare_clone(root, bare, urls, env, version, "light", 1, "blob:none")

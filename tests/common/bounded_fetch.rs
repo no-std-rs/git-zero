@@ -187,12 +187,76 @@ fn relative_depth_counts_from_client_boundaries_in_both_enumeration_orders() {
 }
 
 #[test]
+fn relative_requests_from_full_clients_preserve_common_history_pruning() {
+    let graph = Graph::new();
+    let options = FetchOptions {
+        depth: Some(1),
+        deepen_relative: true,
+        filter: BlobFilter::All,
+    };
+    for common in [graph.ids.main.unwrap(), graph.ids.merge.unwrap()] {
+        assert_eq!(
+            select(
+                &graph,
+                &[graph.ids.merge.unwrap()],
+                &[common],
+                &[],
+                options,
+                false
+            ),
+            select(
+                &graph,
+                &[graph.ids.merge.unwrap()],
+                &[common],
+                &[],
+                FetchOptions::default(),
+                false
+            )
+        );
+    }
+    assert!(
+        select(
+            &graph,
+            &[graph.ids.merge.unwrap()],
+            &[graph.ids.merge.unwrap()],
+            &[],
+            options,
+            false
+        )
+        .0
+        .is_empty()
+    );
+}
+
+#[test]
+fn standalone_relative_arguments_are_rejected_in_v0_and_v1() {
+    let graph = Graph::new();
+    let source = graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repository = &validation.validate(&source);
+    for version in [0, 1] {
+        for capability in ["", " deepen-relative"] {
+            let mut bytes = Vec::new();
+            packet(&mut bytes, &format!("want {}{capability}", graph.head()));
+            packet(&mut bytes, "deepen 1");
+            packet(&mut bytes, "deepen-relative");
+            bytes.extend_from_slice(b"0000");
+            packet(&mut bytes, "done");
+            let (result, output) =
+                Harness::default().serve(repository, request(&bytes, version), 32768);
+            assert!(result.is_err());
+            assert!(output.is_empty());
+        }
+    }
+}
+
+#[test]
 fn relative_requests_validate_options_and_match_fragmented_streaming() {
     let graph = Graph::new();
     let source = graph.repository();
     let mut validation = ValidationBuffers::new();
     let repository = &validation.validate(&source);
-    for version in [0, 2] {
+    for version in [0, 1, 2] {
         let shallow = format!("shallow {}", graph.ids.merge.unwrap());
         let args = [shallow.as_str(), "deepen 1", "deepen-relative"];
         let bytes = body(graph.ids.merge.unwrap(), version, &args, true);
@@ -512,12 +576,25 @@ fn body(tip: ObjectId, version: u8, args: &[&str], done: bool) -> Vec<u8> {
         packet(&mut result, "object-format=sha1");
         result.extend_from_slice(b"0001");
     }
-    let capabilities = if version == 2 { "" } else { " filter" };
+    let mut capabilities = if version == 2 {
+        String::new()
+    } else {
+        String::from(" filter")
+    };
+    if version != 2 {
+        for arg in args.iter().filter(|&&arg| arg == "deepen-relative") {
+            capabilities.push(' ');
+            capabilities.push_str(arg);
+        }
+    }
     packet(&mut result, &format!("want {tip}{capabilities}"));
-    for arg in args {
+    for arg in args
+        .iter()
+        .filter(|&&arg| version == 2 || arg != "deepen-relative")
+    {
         packet(&mut result, arg);
     }
-    if version == 0 {
+    if version != 2 {
         result.extend_from_slice(b"0000");
     }
     if done {
@@ -540,10 +617,10 @@ fn request(body: &[u8], version: u8) -> Request<'_> {
         query: None,
         body,
         content_type: Some("application/x-git-upload-pack-request"),
-        git_protocol: Some(if version == 2 {
-            "version=2"
-        } else {
-            "version=0"
+        git_protocol: Some(match version {
+            2 => "version=2",
+            1 => "version=1",
+            _ => "version=0",
         }),
     }
 }

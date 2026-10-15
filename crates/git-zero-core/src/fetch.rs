@@ -16,6 +16,7 @@ pub struct FetchOptions {
     /// Absolute commit depth from the wanted tips (1..=2147483647).
     /// None preserves client shallow boundaries. A depth request retransmits
     /// its bounded closure so shallow haves cannot hide newly requested history.
+    /// A relative request without client boundaries keeps common-history pruning.
     pub depth: Option<u32>,
     /// Add `depth` to the nearest client boundary measured from wanted tips
     /// (Git 2.55). Requires a depth; unrelated client boundaries are preserved.

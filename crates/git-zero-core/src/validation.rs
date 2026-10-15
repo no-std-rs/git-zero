@@ -232,6 +232,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
     /// Select shallow/filtered history with caller-owned arrays. Client shallow
     /// IDs must name present commits. Common traversal stops at those commits;
     /// depth requests instead resend their closure without trusting common haves.
+    /// Relative requests from full clients preserve ordinary common exclusion.
     /// Relative depth measures the nearest boundary from wanted history, then
     /// extends that absolute cut (Git 2.55). Both passes share the budget.
     /// Work metadata retains shallow/unshallow markers until the next selection.
@@ -328,6 +329,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             object.client_shallow = false;
             object.shallow = false;
         }
+        let mut has_shallow = false;
         for id in shallow {
             let index = find(work, self.by_id, id?).ok_or(Error::InvalidRequest)?;
             let object = work[index].as_mut().expect("validated metadata");
@@ -335,11 +337,15 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
                 return Err(Error::InvalidRequest);
             }
             object.client_shallow = true;
+            has_shallow = true;
         }
+        // A relative request from a full client is an ordinary incremental
+        // fetch. Its depth cannot expose missing history behind a boundary.
+        let deepening = fetch.depth.is_some() && (!fetch.deepen_relative || has_shallow);
         for id in common {
             let id = id?;
             let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-            if fetch.depth.is_none() {
+            if !deepening {
                 reach(work, self.by_id, id, metadata(work, index).info.kind)?;
             }
         }
@@ -364,8 +370,8 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             object.depth = u32::MAX;
             object.shallow = false;
         }
-        let mut depth = fetch.depth;
-        if fetch.deepen_relative {
+        let mut depth = fetch.depth.filter(|_| deepening);
+        if fetch.deepen_relative && has_shallow {
             // Git 2.55 measures the nearest client boundary from the wants.
             // Unrelated shallow branches cannot influence or extend this cut.
             for &id in roots {

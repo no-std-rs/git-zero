@@ -45,6 +45,8 @@ for (const version of [0, 1, 2]) {
       await git("-C", directory, "fetch", "--deepen=1", "--no-tags", "origin");
       assert.equal((await git("-C", directory, "rev-parse", "--is-shallow-repository")).stdout.trim(), "false");
       assert.equal((await git("-C", directory, "rev-list", "--count", "HEAD")).stdout.trim(), "1");
+      await git("-C", directory, "fetch", "--deepen=1", "--no-tags", "origin");
+      assert.equal((await git("-C", directory, "rev-parse", "--is-shallow-repository")).stdout.trim(), "false");
       await git("-C", directory, "fsck", "--strict");
     } finally {
       server.closeAllConnections();
