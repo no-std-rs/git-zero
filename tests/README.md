@@ -431,7 +431,8 @@ a vanished task remains a tolerated exit race. Cancellation/timeouts stop the ob
 the owned command/server process groups, including descendants left after the
 frontend exits.
 
-A local observer check used pinned Git 2.53.0, unchanged release host/client
+Sequential local observer controls, without overlapping local tests or scoring,
+used pinned Git 2.53.0, unchanged release host/client
 binaries from `e3dc303`, the matched profile, 16 files × 65,536 bytes × 8
 commits, 10 paired samples, two warmups and one workload worker. Every run had
 the same 39 objects, 1,514,520 raw bytes and fixture fingerprint
@@ -440,18 +441,20 @@ The `server-clone-smart` median wall observations were:
 
 | Runner | Git ms | git-zero ms |
 | --- | ---: | ---: |
-| Unchanged base, first control | 56.93 | 44.63 |
-| New runner, observer disabled | 66.14 | 50.98 |
-| New runner, 10 ms observer | 60.42 | 51.57 |
-| Unchanged base, repeated control | 60.49 | 53.00 |
+| Unchanged base, first control | 118.81 | 86.62 |
+| New runner, observer disabled | 65.12 | 52.59 |
+| New runner, 10 ms observer | 50.83 | 40.68 |
+| Unchanged base, repeated control | 43.75 | 35.38 |
 
 The unchanged base controls also moved substantially on this shared host;
 these observations do not isolate a latency regression or speedup. Both HTTP
 backends and release binaries were identical. The enabled observer recorded a
-median 2.00/1.46 ms of its own CPU per Git/git-zero operation, with individual
-sweeps below 1.25 ms. Its largest sampled tree sums were 16,320/3,732 KiB with
-four/one simultaneous processes. These remain sampled RSS observations rather
-than exact physical-memory peaks. Reproduce the enabled run with:
+median 1.53/0.96 ms of its own CPU per Git/git-zero operation, with individual
+sweeps below 1.11 ms. Its largest observed tree sums were 16,392/3,776 KiB with
+four/one simultaneous processes. Two Git operations missed live descendants
+and were explicitly partial; their aggregate budget values remain null. These
+remain sampled RSS observations rather than exact physical-memory peaks.
+Reproduce the enabled run with:
 
 ```sh
 python3 tests/benchmark.py --files 16 --blob-bytes 65536 --commits 8 \

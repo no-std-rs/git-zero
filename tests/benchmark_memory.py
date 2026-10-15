@@ -61,57 +61,70 @@ class TreeReader:
     def stat(self, pid, budget):
         return self.parse_stat(budget.read(self.proc / str(pid) / "stat"))
 
+    def task_children(self, path, budget):
+        data = budget.read(path / "children")
+        if data is not None:
+            return (int(value) for value in data.split())
+        live = self.parse_stat(budget.read(path / "stat"))
+        if live is not None and live[0] not in (b"Z", b"X"):
+            raise SamplingError("Linux proc children interface unavailable for live task")
+        return ()
+
     def children(self, pid, budget):
         # Linux child lists are per thread; reading only the thread-group
         # leader misses children forked by another host/backend thread.
         try:
             with os.scandir(self.proc / str(pid) / "task") as tasks:
                 for task in tasks:
-                    if task.name.isdecimal():
-                        budget.charge("tasks")
-                        data = budget.read(Path(task.path) / "children")
-                        if data is None:
-                            live = self.parse_stat(budget.read(Path(task.path) / "stat"))
-                            if live is not None and live[0] not in (b"Z", b"X"):
-                                raise SamplingError("Linux proc children interface unavailable for live task")
-                        else:
-                            yield from (int(value) for value in data.split())
+                    if not task.name.isdecimal():
+                        continue
+                    budget.charge("tasks")
+                    yield from self.task_children(Path(task.path), budget)
         except (FileNotFoundError, ProcessLookupError):
             return
 
-    def sample(self):
-        budget = Budget(self.limits)
+    def memory(self, pid, parent, budget):
+        record = self.stat(pid, budget)
+        if record is None or record[0] in (b"Z", b"X"):
+            if parent is None:
+                raise SamplingError("server exited during process-tree RSS sampling")
+            return None
+        _, ppid, start, memory = record
+        if parent is None:
+            if self.start_time is not None and start != self.start_time:
+                raise SamplingError("server PID changed during process-tree RSS sampling")
+            self.start_time = start
+        elif ppid != parent or start < self.start_time:
+            return None  # The child exited/reparented, or its PID was reused.
+        if memory < 0:
+            raise SamplingError("invalid negative process RSS")
+        return memory
+
+    def walk(self, budget):
         pending, seen = [(self.pid, None)], set()
-        rss, count = 0, 0
         while pending:
             pid, parent = pending.pop()
             if pid in seen:
                 continue
             seen.add(pid)
             budget.charge("processes")
-            record = self.stat(pid, budget)
-            if record is None or record[0] in (b"Z", b"X"):
-                if parent is None:
-                    raise SamplingError("server exited during process-tree RSS sampling")
+            memory = self.memory(pid, parent, budget)
+            if memory is None:
                 continue
-            _, ppid, start, memory = record
-            if parent is None:
-                if self.start_time is not None and start != self.start_time:
-                    raise SamplingError("server PID changed during process-tree RSS sampling")
-                self.start_time = start
-            elif ppid != parent or start < self.start_time:
-                continue  # The child exited/reparented, or its PID was reused.
-            if memory < 0:
-                raise SamplingError("invalid negative process RSS")
-            rss += memory
-            count += 1
+            yield memory
             for child in self.children(pid, budget):
-                if child not in seen:
-                    pending.append((child, pid))
-                    if len(pending) + len(seen) > self.limits["processes"]:
-                        raise SamplingError("process-tree RSS observer exceeded processes budget")
+                if child in seen:
+                    continue
+                pending.append((child, pid))
+                if len(pending) + len(seen) > self.limits["processes"]:
+                    raise SamplingError("process-tree RSS observer exceeded processes budget")
+
+    def sample(self):
+        budget = Budget(self.limits)
+        # At most limits["processes"] scalar observations are retained.
+        observations = list(self.walk(budget))
         budget.charge("read_bytes", 0)
-        return rss, count
+        return sum(observations), len(observations)
 
 
 class ProcessTreeRSS:
@@ -130,12 +143,10 @@ class ProcessTreeRSS:
         self.previous = None
 
     def observe(self):
+        self.completed = False
         start, cpu = time.monotonic(), time.thread_time()
         try:
             rss, count = self.reader.sample()
-        except Exception as error:
-            self.error = error
-            raise
         finally:
             elapsed = time.monotonic() - start
             self.wall_s += elapsed

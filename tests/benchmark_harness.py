@@ -13,6 +13,15 @@ import urllib.request
 from benchmark_memory import ProcessTreeRSS
 
 
+def signal_group(pid, kind):
+    """Signal only an owned session, tolerating an already-exited group."""
+    try:
+        os.killpg(pid, kind)
+        return True
+    except ProcessLookupError:
+        return False
+
+
 def read_origin(process, timeout):
     deadline, data = time.monotonic() + timeout, bytearray()
     with selectors.DefaultSelector() as selector:
@@ -72,17 +81,22 @@ class Server:
             assert response.status == 204
         return [json.loads(line) for line in self.path.read_text().splitlines()]
 
+    def validate_request(self, record):
+        assert record["event"] == "request" and record["backend"] == self.implementation
+        assert record["status"] in (200, 404)
+        assert record["wall_s"] > 0 and record["frontend_cpu_s"] >= 0 and record["backend_children_cpu_s"] >= 0
+        assert 0 < record["frontend_rss_kib"] <= record["frontend_peak_rss_kib"]
+        assert 0 <= record["sendfile_bytes"] + record["buffered_file_bytes"] <= record["response_bytes"]
+        if self.arguments[7] == "buffered":
+            assert record["sendfile_bytes"] == 0
+        if self.implementation == "zero" or self.arguments[4] == "dumb":
+            assert record["backend_children_cpu_s"] == 0 and record["backend_child_peak_rss_kib"] == 0
+
     def measurements(self, start):
         records = self.records()[start:]
-        assert records and all(r["event"] == "request" and r["backend"] == self.implementation for r in records)
-        assert all(r["status"] in (200, 404) for r in records)
-        assert all(r["wall_s"] > 0 and r["frontend_cpu_s"] >= 0 and r["backend_children_cpu_s"] >= 0
-                   and 0 < r["frontend_rss_kib"] <= r["frontend_peak_rss_kib"] for r in records)
-        assert all(0 <= r["sendfile_bytes"] + r["buffered_file_bytes"] <= r["response_bytes"] for r in records)
-        if self.arguments[7] == "buffered":
-            assert all(r["sendfile_bytes"] == 0 for r in records)
-        if self.implementation == "zero" or self.arguments[4] == "dumb":
-            assert all(r["backend_children_cpu_s"] == 0 and r["backend_child_peak_rss_kib"] == 0 for r in records)
+        assert records
+        for record in records:
+            self.validate_request(record)
         result = {"served_by": self.implementation, "request_count": len(records), "requests": records}
         for key in ("wall_s", "frontend_cpu_s", "backend_children_cpu_s", "response_bytes",
                     "sendfile_bytes", "buffered_file_bytes", "minor_faults", "major_faults"):
@@ -100,21 +114,15 @@ class Server:
 
     def __exit__(self, *unused):
         failed = self.process.poll() not in (None, 0)
-        try:
-            os.killpg(self.process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        signal_group(self.process.pid, signal.SIGTERM)
         try:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            os.killpg(self.process.pid, signal.SIGKILL)
+            signal_group(self.process.pid, signal.SIGKILL)
             self.process.wait()
         # The frontend may have exited before a descendant ignoring SIGTERM.
         # Keep cleanup scoped to the session we created, even after reaping it.
-        try:
-            os.killpg(self.process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        signal_group(self.process.pid, signal.SIGKILL)
         self.process.stdout.close()
         self.errors.seek(0)
         errors = self.errors.read().decode(errors="replace")

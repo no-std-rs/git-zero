@@ -48,28 +48,37 @@ def load(path, workloads):
     return policy
 
 
+def field(value, path):
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def observation_value(metric, observation):
+    # Numeric sampled-tree peaks are usable only with a complete observation.
+    if metric == "server.process_tree_peak_rss_kib":
+        if field(observation, ("server", "process_tree_rss", "status")) != "sampled":
+            return None
+    return field(observation, METRICS[metric][1:])
+
+
+def observation_values(result, limit):
+    metric = limit["metric"]
+    group = METRICS[metric][0]
+    observations = result.get(group, {}).get(limit["implementation"], [])
+    if group == "server_startup":
+        observations = [observations] if observations else []
+    return [observation_value(metric, observation) for observation in observations]
+
+
 def evaluate(policy, results):
     """Check the largest observation; missing/invalid observations never pass."""
     by_workload = {result["workload"]: result for result in results}
     evaluations = []
     for limit in policy["limits"]:
-        result = by_workload.get(limit["workload"], {})
-        group, *path = METRICS[limit["metric"]]
-        observations = result.get(group, {}).get(limit["implementation"], [])
-        if group == "server_startup":
-            observations = [observations] if observations else []
-        values = []
-        for observation in observations:
-            value = observation
-            for key in path:
-                value = value.get(key) if isinstance(value, dict) else None
-            if limit["metric"] == "server.process_tree_peak_rss_kib":
-                tree = observation
-                for key in ("server", "process_tree_rss"):
-                    tree = tree.get(key) if isinstance(tree, dict) else None
-                if not isinstance(tree, dict) or tree.get("status") != "sampled":
-                    value = None
-            values.append(value)
+        values = observation_values(by_workload.get(limit["workload"], {}), limit)
         complete = bool(values) and all(nonnegative_number(value) for value in values)
         maximum = max(values) if complete else None
         status = ("missing_or_invalid" if not complete else

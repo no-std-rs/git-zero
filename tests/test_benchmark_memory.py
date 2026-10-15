@@ -83,102 +83,100 @@ def proc_record(root, pid, parent, pages, children=(), start=1, task=None):
 
 
 @unittest.skipUnless(sys.platform == "linux", "Linux /proc resource observer")
-class ProcessTreeMemoryTests(unittest.TestCase):
+class FakeProcessTreeMemoryTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+
     def test_aggregate_is_one_sweep_and_does_not_add_independent_peaks(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            proc_record(root, 10, 1, 100, (20,), start=10)
-            proc_record(root, 20, 10, 50, start=20)
-            reader = TreeReader(10, proc=root)
-            sampler = ProcessTreeRSS(10, 1, reader=reader)
-            with sampler:
-                proc_record(root, 10, 1, 40, (20,), start=10)
-                proc_record(root, 20, 10, 200, start=20)
-            report = sampler.report()
-            self.assertEqual(report["peak_rss_kib"], 240 * reader.page_kib)
-            self.assertNotEqual(report["peak_rss_kib"], 300 * reader.page_kib)
-            self.assertEqual(report["processes_at_peak"], 2)
-            self.assertFalse(sampler.thread.is_alive())
+        root = self.root
+        proc_record(root, 10, 1, 100, (20,), start=10)
+        proc_record(root, 20, 10, 50, start=20)
+        reader = TreeReader(10, proc=root)
+        sampler = ProcessTreeRSS(10, 1, reader=reader)
+        with sampler:
+            proc_record(root, 10, 1, 40, (20,), start=10)
+            proc_record(root, 20, 10, 200, start=20)
+        report = sampler.report()
+        self.assertEqual(report["peak_rss_kib"], 240 * reader.page_kib)
+        self.assertNotEqual(report["peak_rss_kib"], 300 * reader.page_kib)
+        self.assertEqual(report["processes_at_peak"], 2)
+        self.assertFalse(sampler.thread.is_alive())
 
     def test_short_lived_descendants_between_sweeps_are_explicitly_partial(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            proc_record(root, 10, 1, 100)
-            with ProcessTreeRSS(10, 1, expect_children=True, reader=TreeReader(10, proc=root)) as sampler:
-                # A CGI child can finish entirely between the initial/final
-                # sweeps. Its historical peak must not fill this missing sum.
-                proc_record(root, 10, 1, 100, (20,))
-                proc_record(root, 20, 10, 100)
-                (root / "20/stat").unlink()
-                proc_record(root, 10, 1, 100)
-            report = sampler.report()
-            self.assertEqual(report["status"], "partial")
-            self.assertIsNone(report["peak_rss_kib"])
-            self.assertGreater(report["observed_peak_rss_kib"], 0)
-            self.assertEqual(report["samples_with_descendants"], 0)
-
-    def test_process_task_byte_and_wall_limits_fail_without_a_partial_success(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+        root = self.root
+        proc_record(root, 10, 1, 100)
+        with ProcessTreeRSS(10, 1, expect_children=True, reader=TreeReader(10, proc=root)) as sampler:
+            # A CGI child can finish entirely between the initial/final
+            # sweeps. Its historical peak must not fill this missing sum.
             proc_record(root, 10, 1, 100, (20,))
             proc_record(root, 20, 10, 100)
-            for limits in ({**LIMITS, "processes": 1}, {**LIMITS, "tasks": 0},
-                           {**LIMITS, "read_bytes": 1}, {**LIMITS, "sample_wall_s": -1}):
-                sampler = ProcessTreeRSS(10, 1, reader=TreeReader(10, proc=root, limits=limits))
-                with self.subTest(limits=limits), self.assertRaisesRegex(SamplingError, "budget"):
-                    with sampler:
-                        pass
-                with self.assertRaisesRegex(SamplingError, "unavailable"):
-                    sampler.report()
-
-    def test_pid_reuse_reparenting_and_vanished_children_do_not_mix_foreign_rss(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            proc_record(root, 10, 1, 100, (20, 30))
-            proc_record(root, 20, 99, 1000000)
-            reader = TreeReader(10, proc=root)
-            self.assertEqual(reader.sample(), (100 * reader.page_kib, 1))
-            proc_record(root, 10, 1, 100, start=2)
-            with self.assertRaisesRegex(SamplingError, "PID changed"):
-                reader.sample()
-            final = ProcessTreeRSS(10, 1, reader=TreeReader(10, proc=root))
-            with self.assertRaisesRegex(SamplingError, "PID changed"):
-                with final:
-                    proc_record(root, 10, 1, 100, start=3)
-            with self.assertRaisesRegex(SamplingError, "unavailable"):
-                final.report()
-
-    def test_missing_children_interface_fails_but_vanished_threads_are_ignored(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            (root / "20/stat").unlink()
             proc_record(root, 10, 1, 100)
-            (root / "10/task/10/children").unlink()
-            sampler = ProcessTreeRSS(10, 1, reader=TreeReader(10, proc=root))
-            with self.assertRaisesRegex(SamplingError, "children interface unavailable"):
-                with sampler:
-                    self.fail("missing kernel interface was accepted as an empty tree")
+        report = sampler.report()
+        self.assertEqual(report["status"], "partial")
+        self.assertIsNone(report["peak_rss_kib"])
+        self.assertGreater(report["observed_peak_rss_kib"], 0)
+        self.assertEqual(report["samples_with_descendants"], 0)
+
+    def test_process_task_byte_and_wall_limits_fail_without_a_partial_success(self):
+        root = self.root
+        proc_record(root, 10, 1, 100, (20,))
+        proc_record(root, 20, 10, 100)
+        for limits in ({**LIMITS, "processes": 1}, {**LIMITS, "tasks": 0},
+                       {**LIMITS, "read_bytes": 1}, {**LIMITS, "sample_wall_s": -1}):
+            sampler = ProcessTreeRSS(10, 1, reader=TreeReader(10, proc=root, limits=limits))
+            with self.subTest(limits=limits), self.assertRaisesRegex(SamplingError, "budget"), sampler:
+                pass
             with self.assertRaisesRegex(SamplingError, "unavailable"):
                 sampler.report()
-            proc_record(root, 10, 1, 100)
-            (root / "10/task/99").mkdir()  # A task disappeared after scandir.
-            self.assertEqual(TreeReader(10, proc=root).sample(), (100 * sampler.reader.page_kib, 1))
 
+    def test_pid_reuse_reparenting_and_vanished_children_do_not_mix_foreign_rss(self):
+        root = self.root
+        proc_record(root, 10, 1, 100, (20, 30))
+        proc_record(root, 20, 99, 1000000)
+        reader = TreeReader(10, proc=root)
+        self.assertEqual(reader.sample(), (100 * reader.page_kib, 1))
+        proc_record(root, 10, 1, 100, start=2)
+        with self.assertRaisesRegex(SamplingError, "PID changed"):
+            reader.sample()
+        final = ProcessTreeRSS(10, 1, reader=TreeReader(10, proc=root))
+        with self.assertRaisesRegex(SamplingError, "PID changed"), final:
+            proc_record(root, 10, 1, 100, start=3)
+        with self.assertRaisesRegex(SamplingError, "unavailable"):
+            final.report()
+
+    def test_missing_children_interface_fails_but_vanished_threads_are_ignored(self):
+        root = self.root
+        proc_record(root, 10, 1, 100)
+        (root / "10/task/10/children").unlink()
+        sampler = ProcessTreeRSS(10, 1, reader=TreeReader(10, proc=root))
+        with self.assertRaisesRegex(SamplingError, "children interface unavailable"), sampler:
+            self.fail("missing kernel interface was accepted as an empty tree")
+        with self.assertRaisesRegex(SamplingError, "unavailable"):
+            sampler.report()
+        proc_record(root, 10, 1, 100)
+        (root / "10/task/99").mkdir()  # A task disappeared after scandir.
+        self.assertEqual(TreeReader(10, proc=root).sample(), (100 * sampler.reader.page_kib, 1))
+
+
+@unittest.skipUnless(sys.platform == "linux", "Linux /proc resource observer")
+class LiveProcessTreeMemoryTests(unittest.TestCase):
     @requires_children
     def test_sampling_failure_and_cancellation_stop_the_observer(self):
         with program("import time; print('ready', flush=True); time.sleep(60)") as process:
             self.assertEqual(line(process), "ready")
             sampler = ProcessTreeRSS(process.pid, 0.01)
-            with self.assertRaisesRegex(SamplingError, "observation failed"):
-                with sampler:
-                    with mock.patch.object(sampler.reader, "sample", side_effect=PermissionError("denied")):
-                        self.assertTrue(sampler.stop.wait(timeout=2))
+            with self.assertRaisesRegex(SamplingError, "observation failed"), sampler:
+                with mock.patch.object(sampler.reader, "sample", side_effect=PermissionError("denied")):
+                    self.assertTrue(sampler.stop.wait(timeout=2))
             self.assertFalse(sampler.thread.is_alive())
             with self.assertRaisesRegex(SamplingError, "unavailable"):
                 sampler.report()
             cancelled = ProcessTreeRSS(process.pid, 0.01)
-            with self.assertRaisesRegex(RuntimeError, "cancelled"):
-                with cancelled:
-                    raise RuntimeError("cancelled")
+            with self.assertRaisesRegex(RuntimeError, "cancelled"), cancelled:
+                raise RuntimeError("cancelled")
             self.assertFalse(cancelled.thread.is_alive())
             with self.assertRaisesRegex(SamplingError, "unavailable"):
                 cancelled.report()
@@ -188,11 +186,10 @@ class ProcessTreeMemoryTests(unittest.TestCase):
         with program("import time; print('ready', flush=True); time.sleep(60)") as process:
             self.assertEqual(line(process), "ready")
             sampler = ProcessTreeRSS(process.pid, 0.01)
-            with self.assertRaisesRegex(SamplingError, "server exited"):
-                with sampler:
-                    process.kill()
-                    process.wait(timeout=5)
-                    self.assertTrue(sampler.stop.wait(timeout=2))
+            with self.assertRaisesRegex(SamplingError, "server exited"), sampler:
+                process.kill()
+                process.wait(timeout=5)
+                self.assertTrue(sampler.stop.wait(timeout=2))
             self.assertFalse(sampler.thread.is_alive())
 
     @requires_children
