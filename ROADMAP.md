@@ -141,7 +141,11 @@ wrong methods/media types, truncated bodies, and exhausted request/output budget
 - [ ] Bounded actual DEFLATE compression, with stored blocks as a selectable fallback.
 - [ ] Reuse prepacked entries and existing packs when their closure matches the request.
 - [ ] Optional delta generation with strict CPU/memory budgets.
-- [ ] Stream pack index creation alongside packs for dumb HTTP reuse.
+- [x] Stream pack index creation alongside packs for dumb HTTP reuse.
+  Caller-owned entry slots collect IDs, wire CRCs and 64-bit offsets during one
+  stored-block encoding pass; the sorted version-2 index streams after the pack.
+  SHA-1/SHA-256 indexes match Git's independent indexer byte for byte, without
+  allocation or pack-sized staging. HTTP publication remains the item above.
 - [ ] Versioned keys incorporating object format, encoder choices, and requested closure.
 - [ ] Fixed-memory example cache, native disk cache, and async KV/R2 host adapters.
 - [ ] Cache integrity validation, eviction, cold-miss coordination, and observability.
