@@ -1,5 +1,6 @@
 //! Bounded SHA-1/SHA-256 pack consumption, based on Git's pack specification:
 //! https://git-scm.com/docs/pack-format. No recursion or allocation is used.
+use super::crc::crc32;
 use crate::{
     Error, Object, ObjectFormat, ObjectId, ObjectKind, Result,
     zlib::{InflateLimits, InflateStatus, Inflater, WINDOW_SIZE},
@@ -438,52 +439,4 @@ fn variable(bytes: &mut &[u8]) -> Result<u64> {
         }
         shift += 7;
     }
-}
-
-/// Standard reflected IEEE CRC-32 used by Git pack indexes (initial/final XOR).
-pub fn crc32(bytes: &[u8]) -> u32 {
-    const TABLE: [[u32; 256]; 8] = crc_tables();
-    let mut crc = u32::MAX;
-    let mut chunks = bytes.chunks_exact(8);
-    for chunk in &mut chunks {
-        let low = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) ^ crc;
-        crc = TABLE[7][usize::from(low as u8)]
-            ^ TABLE[6][usize::from((low >> 8) as u8)]
-            ^ TABLE[5][usize::from((low >> 16) as u8)]
-            ^ TABLE[4][(low >> 24) as usize]
-            ^ TABLE[3][usize::from(chunk[4])]
-            ^ TABLE[2][usize::from(chunk[5])]
-            ^ TABLE[1][usize::from(chunk[6])]
-            ^ TABLE[0][usize::from(chunk[7])];
-    }
-    for &byte in chunks.remainder() {
-        crc = (crc >> 8) ^ TABLE[0][usize::from(crc as u8 ^ byte)];
-    }
-    !crc
-}
-
-const fn crc_tables() -> [[u32; 256]; 8] {
-    let mut table = [[0; 256]; 8];
-    let mut index = 0;
-    while index < 256 {
-        let mut value = index as u32;
-        let mut bit = 0;
-        while bit < 8 {
-            value = (value >> 1) ^ if value & 1 != 0 { 0xedb8_8320 } else { 0 };
-            bit += 1;
-        }
-        table[0][index] = value;
-        index += 1;
-    }
-    let mut slice = 1;
-    while slice < 8 {
-        index = 0;
-        while index < 256 {
-            let previous = table[slice - 1][index];
-            table[slice][index] = (previous >> 8) ^ table[0][(previous & 255) as usize];
-            index += 1;
-        }
-        slice += 1;
-    }
-    table
 }

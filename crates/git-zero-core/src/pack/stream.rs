@@ -132,7 +132,7 @@ impl LooseEncoder {
         Self::from_info(index, repository.object_info(index)?, true)
     }
 
-    fn from_info(index: usize, info: ObjectInfo, loose: bool) -> Result<Self> {
+    pub(super) fn from_info(index: usize, info: ObjectInfo, loose: bool) -> Result<Self> {
         let mut prefix = [0; 32];
         let prefix_length = if loose {
             info.header(&mut prefix)?.len()

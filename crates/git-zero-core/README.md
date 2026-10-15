@@ -1,5 +1,11 @@
 # git-zero-core
 
+`pack::write_indexed_with_scratch` streams a stored-block pack and a Git v2 index
+using one caller-owned `pack::IndexEntry` per object and bounded read scratch.
+It supports SHA-1/SHA-256, selected object orders, wire CRCs and 64-bit offsets.
+Publish the pair only after success: errors invalidate both outputs. Existing
+verified entry metadata can be streamed separately with `pack::write_index`.
+
 Allocation-free Git objects, repositories, pack and zlib primitives. Safe `no_std` Rust without `alloc`.
 
 `read` enables zlib inflation, pack/delta decoding and repository validation.
