@@ -169,7 +169,10 @@ baseline without blocking server parity.
   into bounded host staging through ReadableStream pull/cancel callbacks. Input
   remains bounded and complete before prepare. Tests cover fragmented output,
   cancellation, restart, independent instances, both formats and fixed memory;
-  real-Git Worker clones cover v0/v1/v2 and dumb HTTP.
+  real-Git Worker clones cover v0/v1/v2 and dumb HTTP. A versioned raw-object
+  import adds 64 objects, eight refs and a fixed 128 KiB body arena while keeping
+  legacy frames and URLs. Chunked import authenticates complete SHA-1/SHA-256
+  repositories before serving; request intake remains independently bounded.
 - [x] Worker integration with async storage, streaming responses, and isolate-safe reuse.
   Optional KV/R2 snapshot bindings await publication, bound streamed reads and
   authenticate immutable records before preparing independently owned Wasm
@@ -225,8 +228,14 @@ remain regression coverage; server completion is measured with real Git clients.
   a merge, a 384 KiB binary, executables, symlinks, unusual refs and nested tags
   over v0/v1/v2 and dumb HTTP in SHA-1/SHA-256, with full and incremental clones.
   The Git oracle is packed-only and must contain deltas; git-zero serves the same
-  exported raw objects. Worker rich fixtures and server compressed/delta pack
-  generation/reuse remain gaps rather than inferred coverage.
+  exported raw objects. A separate scaled Worker fixture has 44 objects, seven
+  refs, eight mainline commits plus a side/merge, nine tree levels including root,
+  a 96 KiB binary and nested tags. Both formats pass smart v0/v1/v2 full and
+  incremental clone comparisons. Loose dumb clones omit the referenced canonical
+  empty tree, matching an unchanged Git-created loose server; direct-object
+  verification and explicit import precede assisted 44-object fsck. Full native
+  fixture parity, unassisted complete dumb closure and server compressed/delta
+  pack generation/reuse remain gaps rather than inferred coverage.
 - [ ] Incremental fetch after changing a backend snapshot, pack reuse and eviction races.
   Native smart/dumb tests now fetch file-backed snapshots through A → B → A at
   one URL, validate refs, object bodies and checkouts with real Git, and exercise
