@@ -186,7 +186,7 @@ across repeated discovery/pack/loose requests, full-capacity inputs, malformed
 frames and independent instances. The 64 KiB input and 128 KiB output capacities
 are asserted separately; JavaScript allocation is outside this Wasm budget.
 The raw ABI's `serve_with_format(length, method, format)` accepts format 0 for
-SHA-1 and 1 for SHA-256; `serve` and the Worker use SHA-1. SHA-256 tests compare
+SHA-1 and 1 for SHA-256; `serve` and the default metadata Worker use SHA-1. SHA-256 tests compare
 independently computed snapshot IDs, pack trailers and loose objects, and reject
 format mismatches while retaining the same memory ceiling.
 The dry run validates
@@ -224,3 +224,88 @@ INPUT during a live session; calls are synchronous, single-threaded and
 non-reentrant. Failed starts leave no old session; read failures cancel and the
 host aborts the response. A prepared response can exceed OUTPUT's capacity.
 Requests are still accumulated within the fixed INPUT limit before starting.
+
+## Importing bounded repositories
+
+`src/repository.mjs` exports `createRepositoryWorker(module, loadRepository)` for
+hosts that already have canonical Git objects. Its trusted asynchronous loader
+receives the Request and returns `{ repository, target }`, or `null` for no route.
+The loader owns authentication, routing, storage and immutable URL policy. It
+must select the same repository across discovery and object downloads. This
+adapter does not change the default metadata handler, its bindings, or existing
+snapshot URLs.
+
+The repository descriptor has a `format` of `sha1` or `sha256`, an `objects` array
+of `{ id, kind, body }` records, a `refs` array of `{ name, id, symbolicTarget?,
+peeled? }` records, and a `head`. IDs are lowercase hexadecimal; kinds are
+`commit`, `tree`, `blob` or `tag`; bodies are uncompressed canonical `Uint8Array`
+values, without the loose-object header. HEAD is `{ type: "symbolic", target,
+id }`, `{ type: "detached", id }`, or `{ type: "unborn", target }`. Refs must
+follow the core validator's ordering and name rules. Supply exactly the unique
+objects reachable from HEAD and refs; import validates IDs, graph edges, symbolic
+refs and peeled targets before preparing Git output.
+
+Each instance owns at most 64 objects, eight refs, 128 KiB of raw object bodies,
+4 KiB of copied HEAD/ref names and an 8 KiB manifest. Object bodies arrive through
+repeated chunks in the existing 64 KiB INPUT, then live in a separate fixed arena.
+The 128 KiB OUTPUT, 32 KiB wire/decoded Git POST bound and legacy frame remain
+unchanged. Validation uses 64 object slots and 512-byte read/parse scratch;
+streaming uses bounded control/selection storage. Long structural lines or
+selection limits can reject a repository/request even when its total bodies fit.
+JavaScript descriptors and backend reads are outside the Rust memory budget.
+There is no asynchronous Rust provider wait during a stream pull.
+
+The loader completes before an independently owned Wasm instance imports its
+repository. Loader failures return 503, invalid sources 502, source capacity
+failures 413 and invalid request intake 400, with `Cache-Control: no-store` and
+without backend error details. Successfully prepared responses use the same
+pull/cancel adapter as metadata snapshots.
+
+The additional exports are `repository_capacity()`,
+`repository_manifest_capacity()`, `repository_begin(length)`,
+`repository_write(length)`, `repository_finish()` and
+`stream_start_repository(length, method)`. Begin/write read INPUT; finish checks
+the exact byte count and authenticates every object. Import operations return 0,
+-1 for insufficient capacity, or -2 for invalid data/state. A begin cancels any
+response and invalidates the previous import, including a failed begin. Writes
+and finish require an unfinished import; rejected calls on a ready import leave
+an active response intact. A request start requires a finished import and pins it
+until cancellation or EOF. `input_ptr()` cancels a response but preserves the
+finished import. Calls remain synchronous, single-threaded and non-reentrant;
+never mutate INPUT during a live response.
+
+The versioned manifest starts with the four bytes `GZR\0`, then little-endian
+u32 version 1, frame kind 1 (raw objects), format (0/1), object count, ref count
+and HEAD kind (0 unborn, 1 symbolic, 2 detached). A non-unborn HEAD contains its
+raw ID; a non-detached HEAD then contains its length-prefixed UTF-8 target.
+Each object contains a u32 kind (1 commit, 2 tree, 3 blob, 4 tag), u32 body length
+and raw ID. Each ref contains a length-prefixed name, raw ID, length-prefixed
+symbolic target (empty when absent), u32 peeled flag (0/1), and optional raw
+peeled ID. IDs occupy 20 or 32 bytes according to the format. All lengths are
+u32 little-endian. Trailing manifest bytes are rejected. Writes concatenate the
+object bodies in descriptor order. The request-only frame is a length-prefixed
+target, two header lengths, Git-Protocol/Content-Type bytes and remaining body;
+its format comes from the imported repository.
+
+`test/fixture.py` independently builds deterministic Git fixtures in both formats
+and reuses the project's raw exporter. Each has 44 objects (10 commits, 19 trees,
+13 blobs and two nested tags), seven refs, a merge, eight directory components
+(nine tree levels including root), executable/symlink/empty modes and a 96 KiB
+binary. Raw bodies total 102,426 bytes for SHA-1 and 103,362 for SHA-256. Real Git
+v0/v1/v2 full and incremental clones compare refs, every canonical ID/body,
+checkout bytes/modes and strict fsck with the Git-created source.
+
+Loose dumb HTTP has an explicit empty-tree limitation: Git's walker omits the
+referenced canonical empty tree from both this Worker and an unchanged Git-created
+loose static server. Unassisted clones contain 43 of the expected 44 objects and
+fail fsck for that one missing tree. Tests retain that result, verify the Worker's
+direct empty-tree response and canonical ID, then explicitly import it before
+checking all 44 objects and strict fsck. This is assisted coverage; packed dumb
+publication must later provide the full unassisted closure.
+
+Raw ABI tests also fill all 64 object slots, eight refs and the exact 128 KiB body
+arena, stream responses larger than OUTPUT, reject excess input, and mix legacy
+and imported sessions with cancellation and independent instances. The release
+module currently starts at 22 Wasm pages (1.375 MiB), below the 24-page test
+ceiling, and these tests assert no growth or allocator imports. This is a linear
+memory result, not a measurement of JavaScript memory or deployed Worker CPU.

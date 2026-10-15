@@ -1,15 +1,10 @@
 import { decodeSnapshot, loadSnapshot, MAX_SNAPSHOT_BYTES, persistSnapshot, SnapshotError } from "./snapshots.mjs";
-import { readBytes } from "./bytes.mjs";
+import { readRequestBody } from "./bytes.mjs";
 import { captureMetadata } from "./metadata.mjs";
+import { streamResponse } from "./stream.mjs";
 
 const encoder = new TextEncoder();
 const MAX_TOKEN_LENGTH = Math.ceil(MAX_SNAPSHOT_BYTES / 3) * 4;
-const CONTENT_TYPES = [
-  "text/plain; charset=utf-8",
-  "application/x-git-upload-pack-advertisement",
-  "application/x-git-upload-pack-result",
-  "application/x-git-loose-object",
-];
 
 function encodeToken(bytes) {
   return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
@@ -51,48 +46,7 @@ function invoke(module, parts, target, body, method, headers) {
   }
   input.set(body, offset);
   const result = exports.stream_start(length, method === "POST" ? 1 : 0, 0);
-  if (result < 0) return new Response("Invalid or oversized Git request\n", { status: result === -1 ? 413 : 400 });
-  const output = new Uint8Array(exports.memory.buffer, exports.output_ptr(), 3);
-  const status = new DataView(output.buffer, output.byteOffset, 3).getUint16(0, true);
-  const type = CONTENT_TYPES[output[2]];
-  const stream = new ReadableStream({
-    pull(controller) {
-      const count = exports.stream_read(16384);
-      if (count < 0) {
-        exports.stream_cancel();
-        controller.error(new Error("Git response failed"));
-      } else if (count === 0) {
-        exports.stream_cancel();
-        controller.close();
-      } else {
-        // Rust reuses OUTPUT on each pull; queued JS chunks own their bytes.
-        controller.enqueue(new Uint8Array(exports.memory.buffer, exports.output_ptr(), count).slice());
-      }
-    },
-    cancel() { exports.stream_cancel(); },
-  }, { highWaterMark: 0 });
-  return new Response(stream, {
-    status,
-    headers: { "Content-Type": type, "Cache-Control": "no-store" },
-  });
-}
-
-async function readBody(request, maximum) {
-  const declared = request.headers.get("content-length");
-  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > maximum)) throw new Error("Request too large");
-  if (!request.body) return new Uint8Array();
-  const encoding = request.headers.get("content-encoding")?.toLowerCase();
-  if (encoding && !["gzip", "identity"].includes(encoding)) throw new Error("Unsupported content encoding");
-  let wireLength = 0;
-  const bounded = request.body.pipeThrough(new TransformStream({
-    transform(chunk, controller) {
-      wireLength += chunk.length;
-      if (wireLength > maximum) throw new Error("Request too large");
-      controller.enqueue(chunk);
-    },
-  }));
-  const stream = encoding === "gzip" ? bounded.pipeThrough(new DecompressionStream("gzip")) : bounded;
-  return readBytes(stream, maximum);
+  return streamResponse(exports, result);
 }
 
 export function createWorker(module) {
@@ -125,7 +79,7 @@ export function createWorker(module) {
       if (!["GET", "POST"].includes(request.method)) return new Response("Method not allowed\n", { status: 405 });
       try {
         const parts = inline ? decodeToken(inline[1]) : await loadSnapshot(env, stored[1], stored[2]);
-        const body = await readBody(request, 32768);
+        const body = await readRequestBody(request, 32768);
         return invoke(module, parts, `${inline ? inline[2] : stored[3]}${url.search}`, body, request.method, request.headers);
       } catch (error) {
         if (error instanceof SnapshotError) {
