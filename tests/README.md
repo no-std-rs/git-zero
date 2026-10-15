@@ -841,9 +841,10 @@ Apache 2.4 and its CGI/prefork modules (Ubuntu:
 `apache2`). The source checkout must be clean at the exact tag commit, with
 `GIT-BUILD-OPTIONS` and `t/helper/test-tool` built. The output directory must be
 new; it retains every trial's TAP, bare/client repositories, Apache logs, private
-CGI trace and the final `report.json`, including failures. Each trial has a
-120-second deadline, configurable with `--timeout`; detached daemon/CGI cleanup
-is bounded and tested on normal completion and timeout. Native failures, skipped
+CGI trace and the final `report.json`, including failures. Each upstream shell
+run has a 120-second deadline, configurable with `--timeout`; individual Git
+inspection commands have 30-second deadlines. Detached daemon/CGI cleanup is
+bounded and tested on normal completion and timeout. Native failures, skipped
 selected tests, absent/foreign traces or mismatched object graphs fail the run.
 Both Git's source and installation remain unchanged. The [coverage map](upstream-http.md)
 documents provenance, limits and the exact substitution hook. The broader suites,
