@@ -57,7 +57,9 @@ Hits require ID scratch and a byte limit, with no pack staging or body reads
 when the provider supplies precomputed IDs. Both hits and misses validate the
 pack trailer, stored zlib framing/Adler32, canonical object hashes and exact set
 before output; misses also validate before insertion. The key's 48-byte encoding
-includes schema, object format, codec and encoder revision. Backend errors and
+includes schema, object format, codec and encoder revision. Equivalent sets can
+use different pack orders: publish pack/index URLs using the actual pack
+checksum, rather than the selected-set key digest. Backend errors and
 corruption propagate. Failed insertion preserves the old entry; an output error
 may retain a new complete entry for retry. Hosts discard partial output and own
 atomic publication, persistence and coordination between concurrent requests.
