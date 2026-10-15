@@ -40,11 +40,11 @@ Selection APIs advertise `shallow deepen-relative filter` (v0/v1) or `fetch=shal
 They support absolute and relative `deepen` depths, shallow/unshallow boundaries, blob:none
 and blob:limit filters, sharing the graph budget and object/index arrays.
 Relative depth uses the nearest client boundary in wanted history, matching
-Git 2.55. Unrelated branch boundaries remain intact. Git 2.53 and
+Git 2.55. Unrelated branch boundaries remain intact; with no matching boundary,
+the wanted history is complete (within the graph budget). Git 2.53 and
 earlier extend all reachable client boundaries, so this case deliberately differs;
 the versioned native oracle asserts both outcomes and identical imported objects.
-Depth requests retransmit
-their bounded closure; ordinary shallow haves stop
+Depth requests retransmit their bounded closure; ordinary shallow haves stop
 common traversal at the client's boundary. Root commits at the depth limit stay
 shallow, matching Git. Time/exclusion deepening and other filters are
 rejected. The advertised-ID want policy still requires partial clones to use

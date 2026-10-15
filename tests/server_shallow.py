@@ -88,6 +88,37 @@ def compare_relative_boundaries(root, bare, urls, env, version):
             assert object_manifest(clones[0], "--all", env) == object_manifest(clones[1], "--all", env)
 
 
+def compare_relative_unrelated_tip(root, bare, urls, env, version):
+    # Git 2.55 returns no new boundary when the wanted history has no client
+    # boundary. This deliberately differs from 2.53's global-boundary walk.
+    git_version = tuple(map(int, re.search(rb"(\d+)\.(\d+)", run("git", "version", env=env)).groups()))
+    main = git(bare, "rev-parse", "z-main", env=env).strip()
+    side = git(bare, "rev-parse", "a-side", env=env).strip()
+    base = git(bare, "rev-parse", "z-main^", env=env).strip()
+    clones = []
+    for name, url in urls:
+        clone = root / f"{name}-relative-unrelated-v{version}"
+        run("git", "-c", f"protocol.version={version}", "clone", "-q", "--depth=1",
+            "--single-branch", "--branch=z-main", "--no-tags", url, str(clone), env=env)
+        git(clone, "-c", f"protocol.version={version}", "fetch", "--deepen=1", "--no-tags",
+            "origin", "a-side", env=env)
+        git(clone, "fsck", "--strict", env=env)
+        clones.append(clone)
+    assert shallow_ids(clones[1]) == {main}, (version, "zero unrelated boundary")
+    expected_reference = {main} if git_version >= (2, 55) else ({main, side} if git_version >= (2, 54) else {base})
+    assert shallow_ids(clones[0]) == expected_reference, (version, "reference unrelated boundary", git_version)
+    assert object_manifest(clones[1], "FETCH_HEAD", env) == object_manifest(bare, "a-side", env)
+    objects = delivered(clones[0], env)
+    compare_delivered_bodies(clones[0], bare, objects, env)
+    if git_version != (2, 54):
+        assert object_manifest(clones[0], "FETCH_HEAD", env) == object_manifest(clones[1], "FETCH_HEAD", env)
+        assert objects == delivered(clones[1], env)
+    else:
+        # Git 2.54 alone falls back to absolute depth N for this case; 2.55
+        # explicitly removed that fallback. Its side tip is still a boundary.
+        assert side in shallow_ids(clones[0])
+
+
 def compare_bounded_fetch(root, bare, urls, env):
     git(bare, "config", "uploadpack.allowFilter", "true", env=env)
     for version, branch, depth in product((0, 1, 2), ("z-main", "light"), (1, 2, 8)):
@@ -96,4 +127,5 @@ def compare_bounded_fetch(root, bare, urls, env):
         compare_clone(root, bare, urls, env, version, "light", None, filter_spec)
     for version in (0, 1, 2):
         compare_relative_boundaries(root, bare, urls, env, version)
+        compare_relative_unrelated_tip(root, bare, urls, env, version)
         compare_clone(root, bare, urls, env, version, "light", 1, "blob:none")

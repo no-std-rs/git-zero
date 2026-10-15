@@ -384,6 +384,8 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
                     distance: true,
                 },
             )?;
+            // Git 2.55 get_shallow_commits returns no new boundaries when none
+            // match. Unlike Git 2.54, this leaves wanted history complete.
             depth = work
                 .iter()
                 .flatten()

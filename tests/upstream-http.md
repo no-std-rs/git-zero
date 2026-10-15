@@ -132,10 +132,13 @@ upload their diagnostic directories. Local Cargo invokes the same full runner;
 it without changing test code.
 
 Relative deepening pins the wanted-history policy from
-[Git 2.54 `shallow.c`](https://github.com/git/git/blob/v2.54.0/shallow.c):
+[Git 2.55 `shallow.c`](https://github.com/git/git/blob/v2.55.0/shallow.c):
 compute the nearest client boundary from requested tips, then extend that depth.
 [Git 2.53 `upload-pack.c`](https://github.com/git/git/blob/v2.53.0/upload-pack.c)
 instead extends every reachable client boundary. The versioned multi-boundary
 oracle retains this deliberate difference when fetching only one branch, verifies
 each exact expected shallow file and compares all imported objects/checkouts.
 Fetching all branches requires exact shallow-file equality for both algorithms.
+The unrelated-tip case also pins Git 2.55's explicit no-matching-boundary rule:
+leave existing client boundaries intact and add no boundary to the wanted history.
+It compares every delivered object body and the requested FETCH_HEAD closure.
