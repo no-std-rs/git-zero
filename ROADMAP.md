@@ -166,9 +166,18 @@ baseline without blocking server parity.
   remains bounded and complete before prepare. Tests cover fragmented output,
   cancellation, restart, independent instances, both formats and fixed memory;
   real-Git Worker clones cover v0/v1/v2 and dumb HTTP.
-- [ ] Worker integration with async storage, streaming responses, and isolate-safe reuse.
-- [ ] Replace long embedded snapshot URLs with optional immutable persisted snapshots;
+- [x] Worker integration with async storage, streaming responses, and isolate-safe reuse.
+  Optional KV/R2 snapshot bindings await publication, bound streamed reads and
+  authenticate immutable records before preparing independently owned Wasm
+  responses. Cross-isolate fixtures cover concurrency, cancellation, eviction,
+  corrupt/oversized entries and failed storage; real Git clones/fetches both
+  adapters over smart and dumb HTTP. Complete-pack storage adapters remain in
+  section 3; these bindings persist metadata snapshots.
+- [x] Replace long embedded snapshot URLs with optional immutable persisted snapshots;
   preserve stable IDs across discovery and downloads, retries, and isolate changes.
+  Versioned SHA-256 URLs cover file contents and expiry; missing/expired/corrupt
+  records fail explicitly and never recapture current metadata. Configurable
+  retention, KV propagation limitations and R2 physical cleanup are documented.
 - [ ] Tree-shaped Cloudflare metadata and public binding projection, with deployment
   authentication and explicit public variable selection.
 - [ ] Configurable retention, diagnostics, and CPU/memory measurements for Workers.

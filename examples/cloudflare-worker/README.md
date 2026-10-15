@@ -44,11 +44,75 @@ The token contains the four UTF-8 JSON file contents. Every Git request rebuilds
 that exact snapshot, even in another isolate or after a retry. Neither discovery
 nor an object request captures new metadata. Visit `/` again for a fresh snapshot.
 
-This deliberately stateless demo needs no KV binding. Encoded snapshots are
+The default stateless mode needs no KV binding. Encoded snapshots are
 public data and can appear in URLs/logs. Raw snapshot data is limited to 8 KiB;
 request bodies are limited to 32 KiB. The Rust ABI has 64 KiB input and 128 KiB
-output buffers. Larger repositories and shorter snapshot URLs need the planned
-persistent snapshot/cache backend.
+output buffers. The optional storage modes below shorten snapshot URLs while
+preserving the same repository contents and resource limits.
+
+## Persisted snapshots
+
+Set `SNAPSHOT_STORAGE` to `r2` and bind an R2 bucket as `SNAPSHOTS_R2`, or set it
+to `kv` and bind a KV namespace as `SNAPSHOTS_KV`. For example, add this to
+`wrangler.toml`, using your own bucket:
+
+```toml
+# Add these settings to the existing [vars] table.
+SNAPSHOT_STORAGE = "r2"
+SNAPSHOT_TTL_SECONDS = "86400"
+
+[[r2_buckets]]
+binding = "SNAPSHOTS_R2"
+bucket_name = "your-git-zero-snapshots"
+```
+
+For KV, use `SNAPSHOT_STORAGE = "kv"` and replace the bucket block with:
+
+```toml
+[[kv_namespaces]]
+binding = "SNAPSHOTS_KV"
+id = "your-namespace-id"
+```
+
+`GET /` awaits the write before returning `/s/r2/<sha256>/repo.git` or
+`/s/kv/<sha256>/repo.git`, plus an `expires_at` timestamp. The digest covers a
+versioned record containing the four file contents and their expiry. Git
+requests read that exact record, verify its digest and schema, and pin their
+own snapshot before streaming. Changing the current metadata, variables,
+retention setting or capture mode cannot change an existing URL's objects.
+Identical concurrent records use the same key and bytes; no mutable latest-ref
+pointer or isolate cache participates in repository identity. Storage bindings
+must remain available for existing links even after switching capture modes.
+
+Retention defaults to one day; `SNAPSHOT_TTL_SECONDS` accepts integer seconds
+from 60 through 31536000. KV writes set a TTL. R2 records enforce their expiry on
+read; configure a bucket lifecycle rule for the `snapshots/v1/` prefix to reclaim
+expired data physically. Retention changes apply to newly captured snapshots.
+Keep retention long enough for discovery, clone/fetch, and retries to finish.
+An already prepared response remains valid if storage expires or is evicted
+while its consumer is paused; later requests fail without recapturing metadata.
+
+Storage is read through a stream capped at 8320 bytes, including record overhead.
+Missing records return 404, records still present after their logical expiry
+return 410, integrity/stream failures 502, and configuration/read/write failures
+503, before any Git response bytes. KV physically deletes TTL-expired records;
+these return 404, indistinguishably from eviction or a key that never existed.
+The adapter retains no tombstones beyond the configured retention. Error
+responses use `Cache-Control: no-store`; storage read errors include
+`Retry-After: 60`. KV is eventually consistent: another location can temporarily
+miss a completed write, and concurrent writes of the same key can be rate limited.
+Retrying may be necessary; choose R2 when immediate cross-location availability
+is required. Failed publication never returns a clone URL. A missing or corrupt
+record never falls back to a fresh snapshot or to the request environment.
+
+Snapshots remain public metadata. Apply deployment authentication (for example
+Cloudflare Access) to both `/` and repository paths when access must be limited.
+Storage keys and shorter URLs do not provide authentication. No credentials or
+storage binding methods are exported as repository files.
+
+The adapters use the documented [KV streaming read](https://developers.cloudflare.com/kv/api/read-key-value-pairs/),
+[KV write/TTL](https://developers.cloudflare.com/kv/api/write-key-value-pairs/), and
+[R2 Workers APIs](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/).
 
 The Worker instantiates the precompiled module once per response. A ReadableStream
 pull callback advances Rust only when the consumer requests bytes, copies each
@@ -86,6 +150,14 @@ independently computed snapshot IDs, pack trailers and loose objects, and reject
 format mismatches while retaining the same memory ceiling.
 The dry run validates
 Wrangler packaging without deploying.
+
+Storage tests use async KV/R2-shaped fixtures and fresh Worker handlers per
+request, covering awaited publication, concurrent readers, eviction during a
+paused response, cancellation, expiry, corruption, oversized records, and
+read/write failures. Real Git clones/fetches each backend over smart v2 and dumb
+HTTP concurrently, verifies every file against the captured record and runs
+`fsck --strict`. These are local adapter tests; they do not provision or contact
+a Cloudflare account or measure production storage latency.
 
 References: [Workers Wasm](https://developers.cloudflare.com/workers/runtime-apis/webassembly/),
 [request metadata](https://developers.cloudflare.com/workers/runtime-apis/request/),
