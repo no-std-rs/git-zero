@@ -113,7 +113,9 @@ annotated tags, deep trees, merge histories, binary blobs, and both object forma
   Native Git-oracle clones compare boundaries and delivered objects for v0/v1/v2
   in SHA-1/SHA-256, including merges and combined depth/filter requests. Worker
   clones and repeated fragmented/cancelled ABI pulls retain the 24-page ceiling.
-  Time/exclusion deepening and additional filters remain rejected.
+  Relative depth follows Git 2.55 wanted-history semantics; versioned tests retain
+  Git 2.53's unrelated-branch boundary difference. Time/exclusion deepening and
+  additional filters remain rejected.
   Partial clones use --no-checkout: lazy promised-object wants still need an
   explicit extension of the advertised-ID policy before general checkout works.
 - [x] Proper method/content-type checks, service selection, protocol-version

@@ -153,6 +153,16 @@ fn relative_depth_counts_from_client_boundaries_in_both_enumeration_orders() {
             &graph,
             &[ids.merge.unwrap()],
             &[],
+            &[ids.main.unwrap(), ids.base.unwrap()],
+            options,
+            false,
+        );
+        assert_eq!(boundaries, vec![ids.base.unwrap()]);
+        assert_eq!(removed, vec![ids.main.unwrap()]);
+        let (_, boundaries, removed) = select(
+            &graph,
+            &[ids.merge.unwrap()],
+            &[],
             &[ids.merge.unwrap()],
             options,
             false,
@@ -167,8 +177,8 @@ fn relative_depth_counts_from_client_boundaries_in_both_enumeration_orders() {
             options,
             false,
         );
-        assert_eq!(boundaries, vec![ids.base.unwrap()]);
-        assert_eq!(removed, vec![ids.side.unwrap()]);
+        assert!(boundaries.is_empty());
+        assert!(removed.is_empty());
         let (_, boundaries, removed) =
             select(&graph, &[ids.merge.unwrap()], &[], &[], options, false);
         assert!(boundaries.is_empty());

@@ -39,8 +39,11 @@ budget. Whole-pack hooks retain their documented HEAD-only restriction.
 Selection APIs advertise `shallow deepen-relative filter` (v0/v1) or `fetch=shallow filter` (v2).
 They support absolute and relative `deepen` depths, shallow/unshallow boundaries, blob:none
 and blob:limit filters, sharing the graph budget and object/index arrays.
-Relative depth extends every client boundary reachable from the advertised
-repository, including other branches, matching Git 2.53. Depth requests retransmit
+Relative depth uses the nearest client boundary in wanted history, matching
+Git 2.55. Unrelated branch boundaries remain intact. Git 2.53 and
+earlier extend all reachable client boundaries, so this case deliberately differs;
+the versioned native oracle asserts both outcomes and identical imported objects.
+Depth requests retransmit
 their bounded closure; ordinary shallow haves stop
 common traversal at the client's boundary. Root commits at the depth limit stay
 shallow, matching Git. Time/exclusion deepening and other filters are

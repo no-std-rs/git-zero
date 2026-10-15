@@ -130,3 +130,12 @@ cross-job fixture or port sharing and no fail-fast cancellation. Failed jobs
 upload their diagnostic directories. Local Cargo invokes the same full runner;
 `GIT_ZERO_TEST_JOBS`, `GIT_ZERO_TEST_GIT`, and `GIT_ZERO_TEST_ARTIFACTS` configure
 it without changing test code.
+
+Relative deepening pins the wanted-history policy from
+[Git 2.54 `shallow.c`](https://github.com/git/git/blob/v2.54.0/shallow.c):
+compute the nearest client boundary from requested tips, then extend that depth.
+[Git 2.53 `upload-pack.c`](https://github.com/git/git/blob/v2.53.0/upload-pack.c)
+instead extends every reachable client boundary. The versioned multi-boundary
+oracle retains this deliberate difference when fetching only one branch, verifies
+each exact expected shallow file and compares all imported objects/checkouts.
+Fetching all branches requires exact shallow-file equality for both algorithms.

@@ -100,6 +100,12 @@ isolation and guarded one-byte pulls. Worker real-Git
 clones test depth/unshallow and partial fetches; ABI tests repeat them in both
 formats across fragmented pulls, cancellation and independent instances within
 the unchanged 24-page memory ceiling.
+Relative selection follows Git 2.55: only wanted history determines the nearest
+client boundary. The multi-boundary/single-refspec case explicitly asserts the
+older Git 2.53 oracle's extra branch deepening, git-zero's preserved unrelated
+boundary, and identical reachable object bodies/checkouts. Matched all-branch
+deepening requires identical shallow files on every Git version.
+
 
 `tests/inflate.rs` compares the core zlib decoder with Python's standard zlib
 and a real Git-created loose object. Stored, fixed, dynamic and mixed blocks run

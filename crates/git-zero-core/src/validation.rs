@@ -37,7 +37,7 @@ impl ValidationMetadata {
 struct History {
     limit: Option<u32>,
     client: bool,
-    fixed: bool,
+    distance: bool,
 }
 
 /// Traversal budget and annotated-tag policy for a selected fetch pack.
@@ -232,8 +232,8 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
     /// Select shallow/filtered history with caller-owned arrays. Client shallow
     /// IDs must name present commits. Common traversal stops at those commits;
     /// depth requests instead resend their closure without trusting common haves.
-    /// Relative depth finds a global cut from every client boundary, then selects
-    /// wants and those boundary roots through it. Both passes share the budget.
+    /// Relative depth measures the nearest boundary from wanted history, then
+    /// extends that absolute cut (Git 2.55). Both passes share the budget.
     /// Work metadata retains shallow/unshallow markers until the next selection.
     /// All structural reads, including revisits after a shorter merge path,
     /// consume one budget. Retries reset depths, exclusions and boundary markers.
@@ -353,7 +353,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             History {
                 limit: None,
                 client: true,
-                fixed: false,
+                distance: false,
             },
         )?;
         for slot in work.iter_mut() {
@@ -364,14 +364,13 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             object.depth = u32::MAX;
             object.shallow = false;
         }
+        let mut depth = fetch.depth;
         if fetch.deepen_relative {
-            // Git deepens every client boundary reachable from the advertised
-            // repository, including boundaries outside the current wants. Find
-            // the new global cut first, then traverse wants through that cut.
-            for slot in work.iter_mut() {
-                let object = slot.as_mut().expect("validated metadata");
-                object.reached = object.client_shallow;
-                object.depth = if object.client_shallow { 1 } else { u32::MAX };
+            // Git 2.55 measures the nearest client boundary from the wants.
+            // Unrelated shallow branches cannot influence or extend this cut.
+            for &id in roots {
+                let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
+                reach(work, self.by_id, id, metadata(work, index).info.kind)?;
             }
             walk(
                 self,
@@ -380,22 +379,29 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
                 (read_scratch, parse_scratch),
                 Some(&mut remaining),
                 History {
-                    limit: fetch.depth.map(|depth| depth + 1),
-                    client: false,
-                    fixed: false,
+                    limit: None,
+                    client: true,
+                    distance: true,
                 },
             )?;
+            depth = work
+                .iter()
+                .flatten()
+                .filter(|object| object.reached && object.client_shallow)
+                .map(|object| object.depth)
+                .min()
+                .map(|boundary| {
+                    boundary
+                        .checked_add(fetch.depth.expect("relative depth"))
+                        .ok_or(Error::LimitExceeded)
+                })
+                .transpose()?;
             for slot in work.iter_mut() {
                 let object = slot.as_mut().expect("validated metadata");
                 object.reached = false;
                 object.checked = false;
                 object.depth = u32::MAX;
-            }
-            for index in 0..work.len() {
-                let object = *metadata(work, index);
-                if object.client_shallow {
-                    reach(work, self.by_id, object.id, ObjectKind::Commit)?;
-                }
+                object.shallow = false;
             }
         }
         for &id in roots {
@@ -409,9 +415,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             (read_scratch, parse_scratch),
             Some(&mut remaining),
             History {
-                limit: fetch.depth.filter(|_| !fetch.deepen_relative),
+                limit: depth,
                 client: fetch.depth.is_none(),
-                fixed: fetch.deepen_relative,
+                distance: false,
             },
         )?;
         filter_blobs(work, roots, fetch.filter);
@@ -424,9 +430,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
                 (read_scratch, parse_scratch),
                 Some(&mut remaining),
                 History {
-                    limit: fetch.depth.filter(|_| !fetch.deepen_relative),
+                    limit: depth,
                     client: fetch.depth.is_none(),
-                    fixed: fetch.deepen_relative,
+                    distance: false,
                 },
             )?;
             filter_blobs(work, roots, fetch.filter);
@@ -596,14 +602,13 @@ fn walk(
         match object.info.kind {
             ObjectKind::Commit => {
                 let stop = history.limit.is_some_and(|limit| object.depth >= limit)
-                    || (history.client && object.client_shallow)
-                    || (history.fixed && object.shallow);
+                    || (history.client && object.client_shallow);
                 validate_commit(
                     &mut body,
                     parse_scratch,
                     objects,
                     by_id,
-                    (!stop).then_some(if history.limit.is_some() {
+                    (!stop).then_some(if history.limit.is_some() || history.distance {
                         object.depth.saturating_add(1)
                     } else {
                         1

@@ -1,5 +1,6 @@
 """Real-Git shallow/partial clone and absolute/relative-deepening oracle comparisons."""
 from itertools import product
+import re
 from interop import run
 from upstream_http import git, object_manifest, verify_checkout
 from server_references import all_object_ids
@@ -62,21 +63,29 @@ def compare_clone(root, bare, urls, env, version, branch, depth, filter_spec=Non
 
 
 def compare_relative_boundaries(root, bare, urls, env, version):
-    # The client sends all its boundaries even when fetching only one branch.
-    # Git deepens the other advertised branch as part of the same global cut.
-    clones = []
-    for name, url in urls:
-        clone = root / f"{name}-relative-all-v{version}"
-        run("git", "-c", f"protocol.version={version}", "clone", "-q", "--depth=1",
-            "--no-single-branch", "--no-tags", url, str(clone), env=env)
-        clones.append(clone)
-    for options in (("--deepen=1",), ("--deepen=2",)):
-        for clone in clones:
-            git(clone, "-c", f"protocol.version={version}", "fetch", "--no-tags", *options,
-                "origin", "z-main", env=env)
-            git(clone, "fsck", "--strict", env=env)
-        assert shallow_ids(clones[0]) == shallow_ids(clones[1]), (version, options)
-        assert object_manifest(clones[0], "--all", env) == object_manifest(clones[1], "--all", env)
+    # Since Git 2.54, only boundaries in the requested history influence the
+    # relative cut. Pin that policy and retain the older oracle's difference.
+    git_version = tuple(map(int, re.search(rb"(\d+)\.(\d+)", run("git", "version", env=env)).groups()))
+    side = git(bare, "rev-parse", "a-side", env=env).strip()
+    base = git(bare, "rev-parse", "z-main^", env=env).strip()
+    for selected_branch in (True, False):
+        clones = []
+        for name, url in urls:
+            clone = root / f"{name}-relative-all-v{version}-{selected_branch}"
+            run("git", "-c", f"protocol.version={version}", "clone", "-q", "--depth=1",
+                "--no-single-branch", "--no-tags", url, str(clone), env=env)
+            clones.append(clone)
+        for generation, options in enumerate((("--deepen=1",), ("--deepen=2",))):
+            for clone in clones:
+                git(clone, "-c", f"protocol.version={version}", "fetch", "--no-tags", *options,
+                    "origin", *(("z-main",) if selected_branch else ()), env=env)
+                git(clone, "fsck", "--strict", env=env)
+                verify_checkout(bare, clone, git(clone, "rev-parse", "HEAD", env=env).strip().decode(), env)
+            expected = ({base} if generation == 0 else set()) | ({side} if selected_branch else set())
+            reference_expected = expected - ({side} if selected_branch and git_version < (2, 54) else set())
+            assert shallow_ids(clones[0]) == reference_expected, (version, options, "reference", git_version)
+            assert shallow_ids(clones[1]) == expected, (version, options, "zero")
+            assert object_manifest(clones[0], "--all", env) == object_manifest(clones[1], "--all", env)
 
 
 def compare_bounded_fetch(root, bare, urls, env):
