@@ -7,6 +7,7 @@ Git source, shell tests and Apache configuration are never copied or modified.
 import argparse
 from contextlib import ExitStack
 import hashlib
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -218,14 +219,13 @@ def arguments():
 
 
 def matrix(args, report):
-    for object_format in ("sha1", "sha256"):
-        for protocol in (0, 2):
-            expected = trial(args, "git-reference", protocol, object_format, report["port_bind_failures"])
-            report["results"].append(expected)
-            actual = trial(args, "git-zero", protocol, object_format, report["port_bind_failures"])
-            report["results"].append(actual)
-            if expected["manifest_sha256"] != actual["manifest_sha256"]:
-                raise ValueError("reference and git-zero fixture object graphs differ")
+    for object_format, protocol in product(("sha1", "sha256"), (0, 2)):
+        expected = trial(args, "git-reference", protocol, object_format, report["port_bind_failures"])
+        report["results"].append(expected)
+        actual = trial(args, "git-zero", protocol, object_format, report["port_bind_failures"])
+        report["results"].append(actual)
+        if expected["manifest_sha256"] != actual["manifest_sha256"]:
+            raise ValueError("reference and git-zero fixture object graphs differ")
 
 
 def capture_failure(report, operation, *arguments):

@@ -29,8 +29,13 @@ def refs(data):
     return result
 
 
+def object_ids(repo, *revisions, env):
+    output = git(repo, "rev-list", "--objects", "--no-object-names", *revisions, env=env)
+    return sorted(set(output.splitlines()))
+
+
 def object_manifest(repo, revision, env):
-    ids = sorted(set(git(repo, "rev-list", "--objects", "--no-object-names", revision, env=env).splitlines()))
+    ids = object_ids(repo, revision, env=env)
     if not ids:
         return {}
     object_format = git(repo, "rev-parse", "--show-object-format", env=env).strip().decode()

@@ -857,6 +857,9 @@ Apache's unchanged harness cannot inherit the selected port's reservation socket
 Only an exact chosen-port `EADDRINUSE` before any selected test or native trace
 allows a new isolated trial, at most three attempts; failed logs and retry records
 remain in the report. Semantic, native and timeout failures are never retried.
-Both Git's source and installation remain unchanged. The [coverage map](upstream-http.md)
+CI retains these directories in a compressed tar archive, preserving helper
+symlinks and hidden client `.git` metadata instead of copying installed Git
+executables through every helper link. Both Git's source and installation remain
+unchanged. The [coverage map](upstream-http.md)
 documents provenance, limits and the exact substitution hook. The broader suites,
 HTTP/2, Worker and Apache's static dumb Alias remain separate coverage gaps.

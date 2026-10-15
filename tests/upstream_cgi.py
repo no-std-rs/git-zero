@@ -7,8 +7,9 @@ import sys
 import tempfile
 from typing import NamedTuple
 
-from interop import environment, run
+from interop import environment
 from server_fixture import export_fixture
+from upstream_http import git, object_ids
 
 
 BODY_LIMIT = 65_536
@@ -47,15 +48,14 @@ def request(config, env, stream):
 
 
 def export_bounded(root, repo, env):
-    ids = sorted(set(run("git", "-C", str(repo), "rev-list", "--objects",
-                         "--no-object-names", "--all", "HEAD", env=env).splitlines()))
+    ids = object_ids(repo, "--all", "HEAD", env=env)
     if not 0 < len(ids) <= OBJECT_LIMIT:
         raise ValueError("fixture object count exceeds limit")
-    sizes = run("git", "-C", str(repo), "cat-file", "--batch-check=%(objectsize)",
+    sizes = git(repo, "cat-file", "--batch-check=%(objectsize)",
                 data=b"\n".join(ids) + b"\n", env=env).splitlines()
     if len(sizes) != len(ids) or sum(map(int, sizes)) > BYTE_LIMIT:
         raise ValueError("fixture object bytes exceed limit")
-    refs = run("git", "-C", str(repo), "for-each-ref", "--format=%(refname)", env=env)
+    refs = git(repo, "for-each-ref", "--format=%(refname)", env=env)
     if len(refs.splitlines()) > 32:
         raise ValueError("fixture ref count exceeds limit")
     manifest = export_fixture(root, repo, env)
