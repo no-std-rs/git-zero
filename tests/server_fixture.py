@@ -20,8 +20,6 @@ def export_fixture(root, bare, env):
     resolved = command("git", "-C", str(bare), "rev-parse", "--verify", "HEAD", env=env)
     head = resolved.stdout.strip().decode() if resolved.returncode == 0 else None
     manifest = object_manifest(bare, "--all", env)
-    if head is not None:
-        manifest.update(object_manifest(bare, "HEAD", env))
     objects = root / "raw"
     objects.mkdir()
     rows = []
