@@ -80,50 +80,19 @@ out:
 int gitfs_refs_prepare(struct gitfs_mount *mount)
 {
 	struct gitfs_ref *ref;
-	struct gitfs_object *object;
-	struct gitfs_decoded message;
-	u8 id[20];
-	u32 expected_kind;
-	int depth, error;
+	struct gitfs_checkout_root root;
+	int error;
 
 	list_for_each_entry(ref, &mount->refs, allocation) {
 		if (!ref->leaf)
 			continue;
-		memcpy(id, ref->id, 20);
-		expected_kind = 0;
-		for (depth = 0; ; depth++) {
-			object = gitfs_object_get(mount, id);
-			if (IS_ERR(object))
-				return PTR_ERR(object);
-			if (expected_kind && object->kind != expected_kind)
-				return -EBADMSG;
-			if (object->kind != GITFS_TAG)
-				break;
-			if (depth == 8)
-				return -EBADMSG;
-			error = gitfs_tag_target(object->data, object->length, id, &expected_kind);
-			if (error)
-				return error;
-		}
-		memcpy(ref->id, id, 20);
-		if (object->kind == GITFS_COMMIT) {
-			error = gitfs_commit_tree(object->data, object->length, ref->tree);
-			if (!error)
-				error = gitfs_commit_message(object->data, object->length, &message);
-			if (error)
-				return error;
-			ref->message = true;
-			object = gitfs_object_get(mount, ref->tree);
-			if (IS_ERR(object))
-				return PTR_ERR(object);
-			if (object->kind != GITFS_TREE)
-				return -EBADMSG;
-		} else {
-			memcpy(ref->tree, id, 20);
-		}
-		if (object->kind != GITFS_TREE && object->kind != GITFS_BLOB)
-			return -EBADMSG;
-		ref->tree_mode = object->kind == GITFS_TREE ? 040000 : 0100644;
+		error = gitfs_resolve_checkout(mount, gitfs_checkout_fetch, ref->id, &root);
+		if (error)
+			return error;
+		memcpy(ref->id, root.id, 20);
+		memcpy(ref->tree, root.tree, 20);
+		ref->message = root.message;
+		ref->tree_mode = root.mode;
 	}
 	return 0;
 }

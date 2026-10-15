@@ -49,6 +49,14 @@ name = "cache"
 required-features = ["read", "write"]
 
 [[test]]
+name = "checkout"
+required-features = ["read"]
+
+[[test]]
+name = "reference_selection"
+required-features = ["client"]
+
+[[test]]
 name = "core"
 required-features = ["client", "server"]
 

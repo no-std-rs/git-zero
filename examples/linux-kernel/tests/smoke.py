@@ -63,6 +63,7 @@ def fixture(root):
     ])
     revision = git("commit-tree", root_tree.decode(), data=b"kernel mount test\n")
     git("update-ref", "refs/heads/main", revision.decode())
+    git("update-ref", "refs/heads/snapshot", revision.decode())
     (root / "fixture/revision").write_bytes(revision)
     large = bytearray(random.Random(42).randbytes(32*1024*1024))
     large[:5] = b"first"

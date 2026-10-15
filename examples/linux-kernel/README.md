@@ -9,13 +9,17 @@ FUSE connection, subprocess, userspace upcall, or local checkout.
 
 C implements VFS, kernel sockets, DNS and buffer ownership. The Rust example
 contains TLS 1.3 and thin C ABI wrappers calling `git-zero` for smart discovery,
-fetch encoding, pack materialization/index lookup, and commit/tree/tag parsing.
+fetch encoding, pack materialization/index lookup, and checkout operations.
 The shared implementation lives in `git-zero-core` and `git-zero-client`; the
 kernel codec enables the facade's client feature, with encoding enabled only for
 its host-side tests.
 Git parsing and delta resolution live in the shared, safe Rust core. The adapter
 adds Linux name limits and errno conversion. Linux allocates the buffers; the
 kernel Rust build uses neither `std` nor `alloc`.
+`git-zero-core::checkout` owns tag peeling, commit/tree resolution, byte-name
+lookup, Git modes and blob/symlink content validation. `git-zero-client` owns
+branch selector normalization, advertised-ref selection and bounded symbolic-ref
+HTTP traversal, including URL encoding. C supplies the cache and VFS callbacks.
 
 ## Build and mount
 
@@ -41,7 +45,7 @@ Public GitHub repositories can be mounted directly:
 ```sh
 sudo insmod examples/linux-kernel/gitfs.ko
 sudo mkdir -p /mnt/git
-sudo mount -t gitfs -o ro https://github.com/octocat/Hello-World /mnt/git
+sudo mount -t gitfs -o ro,checkout https://github.com/octocat/Hello-World /mnt/git
 cat /mnt/git/README
 sudo umount /mnt/git
 ```
@@ -56,7 +60,7 @@ is optional.
 To browse this repository's branches, commit messages and trees:
 
 ```sh
-sudo mount -t gitfs -o ro,refs https://github.com/no-std-rs/git-zero /mnt/git
+sudo mount -t gitfs -o ro https://github.com/no-std-rs/git-zero /mnt/git
 ls /mnt/git
 cat /mnt/git/main/msg
 ls /mnt/git/main/tree
@@ -64,7 +68,7 @@ cat /mnt/git/main/tree/src/lib.rs
 sudo umount /mnt/git
 ```
 
-The `refs` view exposes each advertised branch as `<branch>/msg` and
+The default `refs` view exposes each advertised branch as `<branch>/msg` and
 `<branch>/tree`. `msg` contains the commit's exact message bytes, including
 newlines. `tree` exposes files and subtrees through the usual VFS operations.
 Slashes in branch names form directories: `topic/demo/tree/file` works.
@@ -72,13 +76,34 @@ HEAD is available at `.refs/HEAD`, and tags at `.refs/tags/<tag>`; other ref
 namespaces use `.refs/<namespace>`. Annotated tags are peeled to their target.
 Refs to a tree or blob expose `tree` as a directory or file and have no `msg`.
 An origin with branches or tags but an unborn default branch can still be
-mounted with `refs`; `.refs/HEAD` is present only when HEAD was advertised.
-Single-snapshot mounts require HEAD unless an explicit allowed commit is selected.
+mounted; `.refs/HEAD` is present only when HEAD was advertised.
+Direct checkouts require HEAD unless a named ref or explicit allowed commit is selected.
 
 Discovery pins all advertised refs. One upload-pack request fetches their
 distinct targets, sharing objects across branches. Ref directories, messages,
 trees and missing-name lookups then work with the network offline. The view
-does not fetch commit history, and `refs` cannot be combined with `commit`.
+does not fetch commit history. Explicit `refs`/`view=refs` cannot be combined
+with `ref` or `commit` selectors.
+
+For files directly at the mount root, use `checkout` (or `view=checkout`). It
+pins HEAD by default. A `ref` selector also selects this layout, accepts short
+branch names or full refs, and peels annotated tags:
+
+```sh
+sudo mount -t gitfs -o ro,ref=main https://github.com/no-std-rs/git-zero /mnt/git
+cat /mnt/git/README.md
+ls /mnt/git/crates/git-zero-core/src
+sudo umount /mnt/git
+# Other selectors: ref=topic/demo, ref=refs/tags/v1, ref=HEAD
+```
+
+Checkout roots must resolve to a commit or tree. Blob refs remain readable as
+files through the refs view.
+
+Both views expose actual blob contents, executable modes and Git symlinks.
+`readlink` returns the stored target; normal path lookup follows relative,
+directory and dangling symlinks using Linux rules. Contents preserve binary
+bytes without newline or text conversion. Submodules remain empty directories.
 
 For a small origin, run the existing server in another terminal:
 
@@ -91,7 +116,7 @@ Load and mount:
 ```sh
 sudo insmod examples/linux-kernel/gitfs.ko
 sudo mkdir -p /mnt/git
-sudo mount -t gitfs -o ro,cache_mb=64,object_mb=8 \
+sudo mount -t gitfs -o ro,checkout,cache_mb=64,object_mb=8 \
   http://127.0.0.1:8080/repo.git /mnt/git
 ls -la /mnt/git
 cat /mnt/git/README.md
@@ -103,7 +128,7 @@ The server is an ordinary repository origin, with no special relationship to
 the mount. A static HTTP server exposing a bare repository's loose objects also
 works.
 
-By default, the module resolves `HEAD` once and pins that commit. For ordinary
+The checkout view resolves `HEAD` once and pins that commit. For ordinary
 HTTP, select a commit directly and skip ref requests:
 
 ```sh
@@ -111,8 +136,9 @@ sudo mount -t gitfs -o ro,commit=0123456789abcdef0123456789abcdef01234567 \
   http://192.0.2.10:8080/repo.git /mnt/git
 ```
 
-Replace the example SHA-1 with an existing commit's full ID. The resolved ID
-appears in `/proc/mounts`. Upstream branch updates do not change existing mounts;
+Replace the example SHA-1 with an existing commit's full ID. HEAD/commit checkouts
+show their resolved ID in `/proc/mounts`; named checkouts show their canonical ref.
+Upstream branch updates do not change existing mounts;
 unmount and mount again to see a new revision. Read-write remounts are rejected.
 Smart mounts still perform discovery and validate explicit wants against it.
 An unadvertised commit requires an `allow-*-sha1-in-want` capability; the server
@@ -150,13 +176,16 @@ SHA-1 checks pass. Identical blobs share bytes across paths and file modes.
 
 | Option | Default | Range / meaning |
 | --- | --- | --- |
-| `commit` | Resolve `HEAD` | Full SHA-1 of a commit, not an annotated tag |
+| `view` | `refs` | `refs` exposes branches/messages/trees; `checkout` exposes files at root |
+| `checkout` | Disabled | Alias for `view=checkout`; selects HEAD unless `ref`/`commit` is given |
+| `refs` | Enabled | Alias for `view=refs`; enables smart HTTP |
+| `ref` | Unset | HEAD, short branch or full ref; implies checkout; mutually exclusive with `commit` |
+| `commit` | Unset | Full SHA-1 of a commit; implies checkout; not an annotated tag |
 | `cache_mb` | 64 | 1–1024 MiB, strictly larger than the object limit plus an entry |
 | `object_mb` | 8 | 1–64 MiB maximum uncompressed object body |
 | `timeout_ms` | 5000 | 1–60000 ms total deadline per HTTP request |
 | `error_ttl_ms` | 5000 | 0–60000 ms; zero disables failure retention |
 | `smart` | Automatic for HTTPS | Enable smart upload-pack for plain HTTP too |
-| `refs` | Disabled | Browse advertised refs, messages and trees; enables smart HTTP |
 | `pack_mb` | 64 | 1–1024 MiB maximum smart HTTP response |
 | `dns` | `1.1.1.1` | IPv4 DNS server; a bounded UDP A query, without resolver upcalls |
 | `addr` | Resolve hostname | Explicit IPv4 destination; TLS sends the URL hostname as SNI |
@@ -244,5 +273,9 @@ their source bytes, and lists git-zero's branches, commit message and subtrees.
 Regression cases cover 32 MiB incompressible and highly compressed objects,
 refs with an unborn default branch, missing optional capabilities, discovery
 above 1 MiB and rejected unadvertised smart wants.
+Checkout selection tests cover ordinary HTTP branches, smart branch names with
+slashes, annotated/direct-tree tags, absent refs and conflicting options.
+Both layouts read binary/empty files and follow parent/directory symlinks with
+the guest NIC down; dangling and cyclic links retain normal Linux behavior.
 The userspace origins are only test fixtures. Logs go to
 `build/qemu.log`.

@@ -10,6 +10,8 @@
 
 #[cfg(feature = "write")]
 pub mod cache;
+#[cfg(feature = "read")]
+pub mod checkout;
 pub mod http;
 pub mod io;
 #[cfg(any(feature = "read", feature = "write"))]

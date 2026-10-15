@@ -323,9 +323,39 @@ static unsigned list_directory(const char *path)
 	return count;
 }
 
+static void content_tests(const char *root)
+{
+	char path[256], target[64], bytes[16];
+	struct stat st;
+	ssize_t length;
+	int fd;
+
+	snprintf(path, sizeof(path), "%s/binary", root);
+	fd = open(path, O_RDONLY);
+	check(fd >= 0, "open binary contents");
+	check(read(fd, bytes, sizeof(bytes)) == 10 && !memcmp(bytes, "\0binary\xff\r\n", 10),
+	      "file bytes preserve NUL, non-UTF-8 and CRLF");
+	close(fd);
+	snprintf(path, sizeof(path), "%s/empty-file", root);
+	check(!stat(path, &st) && S_ISREG(st.st_mode) && !st.st_size, "empty blob is a regular file");
+	snprintf(path, sizeof(path), "%s/dir/parent-link", root);
+	length = readlink(path, target, sizeof(target));
+	check(length == 12 && !memcmp(target, "../README.md", 12), "relative parent symlink bytes");
+	expect_file(path, "hello from kernel gitfs\n");
+	snprintf(path, sizeof(path), "%s/dir-link/note.txt", root);
+	expect_file(path, "nested\n");
+	snprintf(path, sizeof(path), "%s/dangling", root);
+	check(!lstat(path, &st) && S_ISLNK(st.st_mode), "dangling Git symlink is visible");
+	check(stat(path, &st) == -1 && errno == ENOENT, "dangling symlink follows Linux lookup");
+	snprintf(path, sizeof(path), "%s/loop", root);
+	length = readlink(path, target, sizeof(target));
+	check(length == 4 && !memcmp(target, "loop", 4), "cyclic symlink target is readable");
+	check(stat(path, &st) == -1 && errno == ELOOP, "Linux bounds cyclic symlink following");
+}
+
 static void https_tests(void)
 {
-	char port[16] = {}, url[256], buffer[128];
+	char port[16] = {}, url[256], buffer[128], options[160];
 	struct stat st;
 	int fd = open("/fixture/tls-port", O_RDONLY);
 	unsigned before;
@@ -335,7 +365,7 @@ static void https_tests(void)
 	setup_network();
 	snprintf(url, sizeof(url), "https://localhost:%s/smart.git", port);
 	check(!mount(url, "/mnt", "gitfs", MS_RDONLY,
-		     "addr=10.0.2.2,timeout_ms=60000"),
+		     "checkout,addr=10.0.2.2,timeout_ms=60000"),
 	      "mount no_std HTTPS snapshot with a self-signed, mismatched certificate");
 	expect_file("/mnt/README.md", "hello from kernel gitfs\n");
 	expect_file("/mnt/dir/note.txt", "nested\n");
@@ -343,15 +373,18 @@ static void https_tests(void)
 	expect_big("/mnt/big-b");
 	expect_big("/mnt/big-c");
 	check(!stat("/mnt/run", &st) && (st.st_mode & 0111), "HTTPS executable mode");
+	set_network_up(0);
+	content_tests("/mnt");
+	set_network_up(1);
 	missing_probes();
 	check(!umount("/mnt"), "unmount HTTPS snapshot");
 	snprintf(url, sizeof(url), "https://localhost:%s/restricted.git", port);
-	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "addr=10.0.2.2,timeout_ms=60000"),
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "checkout,addr=10.0.2.2,timeout_ms=60000"),
 	      "mount origin without ofs-delta or no-progress capabilities");
 	expect_file("/mnt/README.md", "hello from kernel gitfs\n");
 	check(!umount("/mnt"), "unmount restricted-capability origin");
 	snprintf(url, sizeof(url), "https://localhost:%s/headless.git", port);
-	check(mount(url, "/mnt", "gitfs", MS_RDONLY, "addr=10.0.2.2,timeout_ms=60000") == -1 && errno == ENOENT,
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY, "checkout,addr=10.0.2.2,timeout_ms=60000") == -1 && errno == ENOENT,
 	      "single-snapshot mount requires HEAD without an explicit commit");
 	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "refs,addr=10.0.2.2,timeout_ms=60000"),
 	      "mount refs with an unborn default branch and no advertised HEAD");
@@ -364,7 +397,7 @@ static void https_tests(void)
 	      "reject SHA-256 discovery before copying IDs into the SHA-1 kernel ABI");
 	snprintf(url, sizeof(url), "https://localhost:%s/compressed.git", port);
 	check(!mount(url, "/mnt", "gitfs", MS_RDONLY,
-		     "addr=10.0.2.2,object_mb=32,timeout_ms=60000"), "mount maximally compressed smart object");
+		     "checkout,addr=10.0.2.2,object_mb=32,timeout_ms=60000"), "mount maximally compressed smart object");
 	fd = open("/mnt/repeated.bin", O_RDONLY);
 	check(fd >= 0 && !fstat(fd, &st) && st.st_size == 32*1024*1024, "compressed smart object fits its absolute body budget");
 	check(read(fd, buffer, sizeof(buffer)) == (ssize_t)sizeof(buffer), "read compressed smart object");
@@ -375,9 +408,9 @@ static void https_tests(void)
 	close(fd);
 	check(!umount("/mnt"), "unmount compressed smart object");
 	snprintf(url, sizeof(url), "https://localhost:%s/manyrefs.git", port);
-	check(mount(url, "/mnt", "gitfs", MS_RDONLY, "addr=10.0.2.2,pack_mb=1,timeout_ms=60000") == -1 && errno == EFBIG,
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY, "checkout,addr=10.0.2.2,pack_mb=1,timeout_ms=60000") == -1 && errno == EFBIG,
 	      "discovery respects a small configured response budget");
-	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "addr=10.0.2.2,pack_mb=2,timeout_ms=60000"),
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "checkout,addr=10.0.2.2,pack_mb=2,timeout_ms=60000"),
 	      "mount discovery larger than 1 MiB with pack_mb=2");
 	expect_file("/mnt/README.md", "hello from kernel gitfs\n");
 	check(!umount("/mnt"), "unmount many-ref origin");
@@ -391,8 +424,38 @@ static void https_tests(void)
 	check(mount(url, "/mnt", "gitfs", MS_RDONLY,
 		    "refs,addr=10.0.2.2,commit=0123456789abcdef0123456789abcdef01234567") == -1 &&
 	      errno == EINVAL, "refs view rejects an explicit single commit");
+	const char *invalid_options[] = {
+		"refs,ref=main", "ref=main,view=refs", "refs,checkout", "checkout,refs",
+		"view=unknown", "ref=../escape", "ref=main,commit=0123456789abcdef0123456789abcdef01234567",
+	};
+	for (size_t i = 0; i < sizeof(invalid_options)/sizeof(invalid_options[0]); i++)
+		check(mount(url, "/mnt", "gitfs", MS_RDONLY, invalid_options[i]) == -1 && errno == EINVAL,
+		      "reject conflicting views or invalid selectors before network access");
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY, "ref=missing,addr=10.0.2.2,timeout_ms=60000") == -1 && errno == ENOENT,
+	      "unknown advertised branch is not silently replaced with HEAD");
+	fd = open("/fixture/smart-tag-revision", O_RDONLY);
+	check(fd >= 0 && read(fd, buffer, 40) == 40, "annotated tag ID");
+	close(fd);
+	buffer[40] = 0;
+	snprintf(options, sizeof(options), "commit=%.40s,addr=10.0.2.2,timeout_ms=60000", buffer);
+	check(mount(url, "/mnt", "gitfs", MS_RDONLY, options) == -1 && errno == EBADMSG,
+	      "commit selector still requires a commit rather than an annotated tag");
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "ref=old,addr=10.0.2.2,timeout_ms=60000"), "select branch directly at root");
+	expect_file("/mnt/README.md", "old revision\n");
+	check(!umount("/mnt"), "unmount selected old branch");
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "view=checkout,ref=topic/demo,addr=10.0.2.2,timeout_ms=60000"), "select nested branch name");
+	expect_file("/mnt/README.md", "old revision\n");
+	check(!umount("/mnt"), "unmount selected nested branch");
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "ref=refs/tags/v1,addr=10.0.2.2,timeout_ms=60000"), "checkout annotated tag through shared traversal");
+	set_network_up(0);
+	content_tests("/mnt");
+	check(!umount("/mnt"), "unmount offline annotated tag checkout");
+	set_network_up(1);
+	check(!mount(url, "/mnt", "gitfs", MS_RDONLY, "ref=refs/tags/tree,addr=10.0.2.2,timeout_ms=60000"), "checkout direct tree tag");
+	expect_file("/mnt/dir/note.txt", "nested\n");
+	check(!umount("/mnt"), "unmount direct tree checkout");
 	check(!mount(url, "/mnt", "gitfs", MS_RDONLY,
-		     "refs,addr=10.0.2.2,timeout_ms=60000"), "mount pinned refs view");
+		     "addr=10.0.2.2,timeout_ms=60000"), "mount default pinned refs view");
 	set_network_up(0);
 	expect_file("/mnt/main/msg", "current snapshot\n");
 	expect_file("/mnt/main/tree/README.md", "hello from kernel gitfs\n");
@@ -410,6 +473,7 @@ static void https_tests(void)
 	      "non-commit ref has no commit message");
 	check(!stat("/mnt/main/tree/run", &st) && (st.st_mode & 0111), "refs executable mode");
 	expect_file("/mnt/main/tree/link", "hello from kernel gitfs\n");
+	content_tests("/mnt/main/tree");
 	check(list_directory("/mnt") == 5, "list refs and namespace directories");
 	check(list_directory("/mnt/main") == 2, "list commit message and tree");
 	check(list_directory("/mnt/topic") == 1, "list nested ref namespace");
@@ -418,7 +482,7 @@ static void https_tests(void)
 	set_network_up(1);
 	if (!access("/fixture/test-github", F_OK)) {
 		check(!mount("https://github.com/octocat/Hello-World", "/mnt", "gitfs", MS_RDONLY,
-			     "timeout_ms=60000"),
+			     "view=checkout,timeout_ms=60000"),
 		      "mount live GitHub repository through kernel DNS and no_std HTTPS");
 		fd = open("/mnt/README", O_RDONLY);
 		check(fd >= 0, "GitHub checkout README");
@@ -428,7 +492,7 @@ static void https_tests(void)
 		missing_probes();
 		check(!umount("/mnt"), "unmount GitHub checkout");
 		check(!mount("https://github.com/no-std-rs/git-zero", "/mnt", "gitfs", MS_RDONLY,
-			     "refs,timeout_ms=60000"), "mount git-zero refs from GitHub");
+			     "timeout_ms=60000"), "mount default git-zero refs from GitHub");
 		set_network_up(0);
 		expect_prefix("/mnt/main/tree/README.md", "# git-zero\n");
 		expect_prefix("/mnt/main/tree/src/lib.rs", "//! Allocation-free");
@@ -471,7 +535,7 @@ int main(void)
 	module = open("/gitfs.ko", O_RDONLY);
 	check(module >= 0 && !syscall(SYS_finit_module, module, "", 0), "load kernel module");
 	close(module);
-	check(!mount("http://127.0.0.1:8080/repo.git", "/mnt", "gitfs", MS_RDONLY, "error_ttl_ms=100"), "mount HEAD");
+	check(!mount("http://127.0.0.1:8080/repo.git", "/mnt", "gitfs", MS_RDONLY, "checkout,error_ttl_ms=100"), "mount HEAD");
 	check(*requests == 4, "mount fetches HEAD, branch, commit and root tree only");
 	expect_file("/mnt/README.md", "hello from kernel gitfs\n");
 	before = *requests;
@@ -522,6 +586,12 @@ int main(void)
 	check(fd >= 0 && read(fd, revision, 40) == 40, "read pinned revision");
 	close(fd);
 	snprintf(options, sizeof(options), "commit=%s,cache_mb=2,object_mb=1", revision);
+	before = *requests;
+	check(!mount("http://127.0.0.1:8080/repo.git", "/mnt", "gitfs", MS_RDONLY,
+		     "ref=snapshot"), "select branch over ordinary HTTP");
+	check(*requests == before + 3, "named loose checkout skips HEAD and fetches ref, commit and tree");
+	expect_file("/mnt/README.md", "hello from kernel gitfs\n");
+	check(!umount("/mnt"), "unmount named loose checkout");
 	before = *requests;
 	check(!mount("http://127.0.0.1:8080/repo.git", "/mnt", "gitfs", MS_RDONLY, options), "mount pinned commit");
 	check(*requests == before + 2, "explicit commit skips ref roundtrips");

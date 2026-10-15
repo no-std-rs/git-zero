@@ -50,6 +50,21 @@ impl<'a> SmartAdvertisement<'a> {
     pub fn head(&self) -> Result<ObjectId> {
         self.head.ok_or(Error::ObjectNotFound)
     }
+    /// Resolve HEAD or a normalized fully qualified ref, including tags.
+    pub fn resolve_reference(&self, name: &str) -> Result<ObjectId> {
+        if name == "HEAD" {
+            return self.head();
+        }
+        git_zero_core::repository::validate_ref_name(name)?;
+        let mut found = None;
+        for entry in self.references() {
+            let entry = entry?;
+            if entry.name == name && found.replace(entry.id).is_some() {
+                return Err(Error::InvalidReference);
+            }
+        }
+        found.ok_or(Error::ObjectNotFound)
+    }
     pub fn object_format(&self) -> Option<ObjectFormat> {
         self.format
     }

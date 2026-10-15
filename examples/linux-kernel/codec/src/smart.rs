@@ -6,6 +6,36 @@ use git_zero::{
 
 pub type PackObject = pack::MaterializedEntry;
 
+/// Select a normalized ref through the shared advertisement parser.
+/// # Safety
+/// Inputs are live and ID is a disjoint writable 20-byte range.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gitfs_smart_resolve_ref(
+    data: *const u8,
+    length: usize,
+    name: *const u8,
+    name_length: usize,
+    id: *mut u8,
+) -> i32 {
+    let (data, name) = unsafe {
+        (
+            core::slice::from_raw_parts(data, length),
+            core::slice::from_raw_parts(name, name_length),
+        )
+    };
+    let result = (|| {
+        let name = core::str::from_utf8(name).map_err(|_| Error::InvalidReference)?;
+        sha1_bytes(client::SmartAdvertisement::parse(data)?.resolve_reference(name)?)
+    })();
+    match result {
+        Ok(value) => {
+            unsafe { core::ptr::copy_nonoverlapping(value.as_ptr(), id, 20) };
+            0
+        }
+        Err(error) => errno(error),
+    }
+}
+
 #[repr(C)]
 pub struct RefEntry {
     name: *const u8,

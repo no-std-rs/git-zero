@@ -31,6 +31,12 @@ def fixture(root):
     (source / "run").write_text("#!/bin/sh\n")
     (source / "run").chmod(0o755)
     (source / "link").symlink_to("README.md")
+    (source / "dir/parent-link").symlink_to("../README.md")
+    (source / "dir-link").symlink_to("dir")
+    (source / "dangling").symlink_to("no-such-file")
+    (source / "loop").symlink_to("loop")
+    (source / "binary").write_bytes(b"\0binary\xff\r\n")
+    (source / "empty-file").touch()
     for seed in range(3):
         (source / f"big-{chr(97+seed)}").write_bytes(
             bytes((i + seed) % 251 for i in range(700000)))
@@ -40,6 +46,8 @@ def fixture(root):
     command("git", "-C", str(source), "branch", "topic/demo", "HEAD~1")
     command("git", "-C", str(source), "branch", "alias", "HEAD")
     command("git", "-C", str(source), "tag", "-a", "v1", "-m", "annotated tag", env=env)
+    (root / "fixture/smart-tag-revision").write_bytes(
+        command("git", "-C", str(source), "rev-parse", "refs/tags/v1").strip())
     command("git", "-C", str(source), "tag", "tree", "HEAD^{tree}")
     command("git", "-C", str(source), "tag", "blob", "HEAD:README.md")
     command("git", "clone", "--bare", str(source), str(root / "fixture/smart.git"))

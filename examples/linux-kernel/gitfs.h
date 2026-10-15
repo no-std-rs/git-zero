@@ -18,6 +18,20 @@
 #define GITFS_BUCKET_BITS 8
 #define GITFS_URL_MAX 1024
 #define GITFS_HTTP_HEADERS 8192
+#define GITFS_VIEW_DEFAULT 0
+#define GITFS_VIEW_REFS 1
+#define GITFS_VIEW_CHECKOUT 2
+
+struct gitfs_object_slice {
+	const u8 *data;
+	size_t length;
+	u32 kind;
+};
+
+struct gitfs_checkout_root {
+	u8 id[20], tree[20];
+	u32 mode, message;
+};
 
 struct gitfs_decoded {
 	size_t offset, length;
@@ -64,6 +78,8 @@ struct gitfs_mount {
 	char hostname[254];
 	char path[GITFS_URL_MAX];
 	u8 commit[20];
+	char reference[GITFS_URL_MAX];
+	u32 view;
 	bool explicit_commit, https, smart, address_known, ref_view;
 	struct gitfs_ref *ref_root;
 	struct list_head refs;
@@ -97,11 +113,22 @@ size_t gitfs_loose_wire_size(size_t body_limit);
 int gitfs_decode_loose(const u8 *wire, size_t length, const u8 *id,
 		       u8 *output, size_t capacity, u8 *window,
 		       struct gitfs_decoded *result);
-int gitfs_commit_tree(const u8 *data, size_t length, u8 *id);
 int gitfs_commit_message(const u8 *data, size_t length, struct gitfs_decoded *result);
-int gitfs_tag_target(const u8 *data, size_t length, u8 *id, u32 *kind);
 int gitfs_tree_next(const u8 *data, size_t length, size_t *offset,
 		   struct gitfs_tree_entry *entry);
+int gitfs_tree_lookup(const u8 *data, size_t length, const u8 *name, size_t name_length,
+		      struct gitfs_tree_entry *entry);
+int gitfs_content_info(const u8 *data, size_t length, u32 kind, u32 mode,
+		       struct gitfs_decoded *result);
+int gitfs_checkout_fetch(void *context, const u8 *id, struct gitfs_object_slice *result);
+int gitfs_resolve_checkout(void *context,
+	int (*fetch)(void *, const u8 *, struct gitfs_object_slice *),
+	const u8 *id, struct gitfs_checkout_root *result);
+int gitfs_reference_name(const u8 *name, size_t length, u8 *output, size_t capacity);
+int gitfs_loose_reference(void *context,
+	int (*get)(void *, const u8 *, size_t, u8 *, size_t, size_t *),
+	const u8 *name, size_t name_length, u8 *response, size_t capacity,
+	u8 *path, size_t path_capacity, u8 *id);
 
 int gitfs_parse_url(struct gitfs_mount *mount, const char *url);
 int gitfs_resolve_address(struct gitfs_mount *mount);
@@ -136,6 +163,8 @@ int gitfs_tls_open(void *state, u8 *read, u8 *write, struct gitfs_socket_io io,
 ssize_t gitfs_tls_read(void *state, u8 *output, size_t length);
 ssize_t gitfs_tls_write(void *state, const u8 *input, size_t length);
 int gitfs_smart_discover(const u8 *data, size_t length, u8 *head);
+int gitfs_smart_resolve_ref(const u8 *data, size_t length, const u8 *name,
+			   size_t name_length, u8 *id);
 int gitfs_smart_validate_want(const u8 *data, size_t length, const u8 *id);
 int gitfs_smart_request(const u8 *ids, size_t count, u32 capabilities,
 			u8 *output, size_t capacity, size_t *length);
