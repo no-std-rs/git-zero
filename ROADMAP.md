@@ -184,6 +184,11 @@ baseline without blocking server parity.
   retention, KV propagation limitations and R2 physical cleanup are documented.
 - [ ] Tree-shaped Cloudflare metadata and public binding projection, with deployment
   authentication and explicit public variable selection.
+  New flat captures now select public Cloudflare headers explicitly, exclude
+  Access credentials, and copy only bounded plain-JSON values from explicitly
+  named bindings. Real Git checks public objects over smart/dumb HTTP; existing
+  snapshot URLs retain their IDs. Whole-Worker Access deployment policy and
+  service authentication are documented. The tree-shaped layout remains planned.
 - [ ] Configurable retention, diagnostics, and CPU/memory measurements for Workers.
 
 Acceptance: native and Worker hosts share protocol behavior; overlapping requests
