@@ -29,7 +29,8 @@ impl IndexEntry {
 ///
 /// IDs, selection and metadata capacity are checked before output. The repository
 /// must satisfy its stable, accurate-ID contract (or be validated beforehand).
-/// Entries are collected while encoding each body once, then sorted in place
+/// Preflight IDs are retained, avoiding repeated provider hashing. Entries are
+/// collected while encoding each body once, then sorted in place
 /// without allocation in O(n log n) time. Index bytes follow after the pack's
 /// trailer is written. On any error discard both outputs and used metadata;
 /// publish them together only after success. Returns the pack checksum.
@@ -53,7 +54,7 @@ pub fn write_indexed_with_scratch(
     output.write_all(&(entries.len() as u32).to_be_bytes())?;
     for (position, entry) in entries.iter_mut().enumerate() {
         let index = order.map_or(position, |order| order[position]);
-        *entry = output.write_entry(repository, index, scratch)?;
+        *entry = output.write_entry(repository, index, entry.id, scratch)?;
     }
     let checksum = output.hash.finish();
     output.output.write_all(checksum.as_bytes())?;
@@ -86,7 +87,9 @@ fn prepare_entries<'entries>(
         repository.object_info(index)?;
         *entry = IndexEntry {
             id,
-            offset: 0,
+            // Retain caller order while sorting IDs for the uniqueness check.
+            // The selected count above fits u32, so each position fits u64.
+            offset: position as u64,
             crc32: 0,
         };
     }
@@ -94,6 +97,7 @@ fn prepare_entries<'entries>(
     if entries.windows(2).any(|pair| pair[0].id == pair[1].id) {
         return Err(Error::InvalidObject);
     }
+    entries.sort_unstable_by_key(|entry| entry.offset);
 
     Ok(entries)
 }
@@ -159,10 +163,10 @@ impl<W: Write> PackWriter<'_, W> {
         &mut self,
         repository: &impl Repository,
         index: usize,
+        id: ObjectId,
         scratch: &mut [u8],
     ) -> Result<IndexEntry> {
         let info = repository.object_info(index)?;
-        let id = repository.object_id(index).ok_or(Error::ObjectNotFound)?;
         let offset = self.offset;
         self.crc = Crc32::new();
         encode::write_entry_header(info, self)?;
