@@ -162,6 +162,8 @@ fn indexed_snapshots_preserve_pack_and_http_bytes() {
     }
     for (method, path, query, body) in requests {
         let request = Request {
+            content_type: None,
+            git_protocol: None,
             method,
             path: &path,
             query,

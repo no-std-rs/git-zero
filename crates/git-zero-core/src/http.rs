@@ -6,6 +6,10 @@ pub struct Request<'a> {
     /// Repository-relative URL path. Escape URL-reserved bytes with `%HH`.
     pub path: &'a str,
     pub query: Option<&'a str>,
+    /// Request Content-Type; upload-pack requires its Git request media type.
+    pub content_type: Option<&'a str>,
+    /// Git-Protocol header, for example `version=2`. Absent selects v0.
+    pub git_protocol: Option<&'a str>,
     pub body: &'a [u8],
 }
 

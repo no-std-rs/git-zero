@@ -251,6 +251,9 @@ def compare(root, zero, state):
         protocol = "smart" if smart else "dumb"
         with reference_server(root, env, smart) as reference:
             urls = (("reference", reference), ("zero", zero))
+            if smart:
+                from server_protocol import compare_protocol
+                compare_protocol(root, bare, urls, head, env)
             compare_discovery(bare, reference, zero, smart, head, client_env)
             clone_all(root, bare, head, urls, protocol, client_env)
             if git(bare, "for-each-ref", env=env):

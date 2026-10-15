@@ -185,7 +185,8 @@ def snapshot_case(root, env, binary, smart):
             verify_checkout(bare, clone, head, env)
             git(clone, "fetch", "origin", env=client_env)
         if smart:
-            assert "symref=HEAD:refs/heads/main" in (root / "zero-packets.log").read_text()
+            trace = (root / "zero-packets.log").read_text()
+            assert "version 2" in trace and "symref-target:refs/heads/main" in trace
         assert object_manifest(root / "reference", "--all", env) == object_manifest(root / "zero", "--all", env)
 
 

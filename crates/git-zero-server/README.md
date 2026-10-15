@@ -20,6 +20,28 @@ No progress messages or `ready`/`no-done` shortcuts are emitted.
 
 Parse and selection failures precede output. Any later error invalidates the
 whole response. Buffered hosts may replace it with `write_upload_error` on an
-empty sink; streaming hosts close failed transfers. Shallow/filter requests,
-include-tag and protocol v1/v2 remain unadvertised. Hosts supply HTTP validation,
-authentication and request/output capacities.
+empty sink; streaming hosts close failed transfers.
+
+`Request::git_protocol` selects v0 (absent), v1 or v2. V1 adds its version packet
+before the v0 refs. V2 advertises `ls-refs=unborn`, `fetch`, agent and object
+format. Its commands require complete delimiter/flush framing. ls-refs supports
+symrefs, peels, unborn HEAD and multiple ref-prefix filters. Fetch supports wants,
+haves, no-progress, thin-pack/ofs-delta hints and include-tag; full non-delta packs
+satisfy the hints. Done requests omit ACKs and send a sideband packfile section;
+other rounds return ACKs or NAK and wait for done. Selection includes annotated
+and nested tags only when their final target is being sent, sharing one graph
+budget. Whole-pack hooks retain their documented HEAD-only restriction.
+Shallow/filter, ready shortcuts and other optional v2 features stay unadvertised.
+V2 preflights every selected ls-refs line, including its attributes, against the
+65,520-byte packet limit. Oversized attribute combinations return `LimitExceeded`
+before output; hosts can report a resource error. A narrower ref-prefix or a
+request without those attributes can still serve the same valid repository.
+
+Hosts populate `content_type` and `git_protocol`. Uploads require
+`application/x-git-upload-pack-request` (415 otherwise). Known routes reject wrong
+methods (405), unavailable services (403), duplicate service/version fields,
+malformed escapes, encoded separators, dot components and control bytes. Paths
+accept zero or one leading slash; refs decode reserved bytes exactly once.
+Service parameter names must be literal. Hosts own HTTP framing, content decoding,
+authentication and request/output capacities. Native and Worker examples bound
+both compressed and decompressed gzip bodies.

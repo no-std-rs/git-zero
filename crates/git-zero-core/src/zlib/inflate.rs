@@ -140,6 +140,7 @@ pub struct Inflater<'a> {
     total_output: u64,
     adler: Adler32,
     failure: Option<Error>,
+    raw: bool,
 }
 
 impl<'a> Inflater<'a> {
@@ -161,7 +162,17 @@ impl<'a> Inflater<'a> {
             total_output: 0,
             adler: Adler32::new(),
             failure: None,
+            raw: false,
         }
+    }
+
+    /// Decode a raw RFC 1951 stream. The host must validate its outer envelope
+    /// and checksum before exposing output. `reset` starts a zlib stream again.
+    pub fn new_raw(window: &'a mut [u8; WINDOW_SIZE], limits: InflateLimits) -> Self {
+        let mut decoder = Self::new(window, limits);
+        decoder.state = State::Block;
+        decoder.raw = true;
+        decoder
     }
 
     /// Start an independent stream. Old history is inaccessible: each distance
@@ -178,6 +189,7 @@ impl<'a> Inflater<'a> {
         self.total_output = 0;
         self.adler = Adler32::new();
         self.failure = None;
+        self.raw = false;
     }
 
     pub fn total_input(&self) -> u64 {
@@ -566,7 +578,11 @@ impl<'a> Inflater<'a> {
     fn end_block(&mut self) {
         self.state = if self.final_block {
             self.bits.align();
-            State::Trailer { read: 0, value: 0 }
+            if self.raw {
+                State::Done
+            } else {
+                State::Trailer { read: 0, value: 0 }
+            }
         } else {
             State::Block
         };

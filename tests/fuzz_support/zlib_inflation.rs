@@ -20,6 +20,14 @@ pub fn inflation(data: &[u8]) {
         return;
     }
     let mut window = [0; WINDOW_SIZE];
+    let mut guarded = [0xa5; MAX_OUTPUT + 2];
+    let limits = InflateLimits {
+        max_output: MAX_OUTPUT as u64,
+        max_ratio: 64,
+        ratio_slack: 64,
+    };
+    let _ = git_zero::zlib::decode_gzip(data, &mut guarded[1..MAX_OUTPUT + 1], &mut window, limits);
+    assert_eq!((guarded[0], guarded[MAX_OUTPUT + 1]), (0xa5, 0xa5));
     let mut whole = [0; MAX_OUTPUT];
     let mut fragmented = [0; MAX_OUTPUT];
     for limits in [

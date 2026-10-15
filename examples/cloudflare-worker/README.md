@@ -88,3 +88,12 @@ Wrangler packaging without deploying.
 References: [Workers Wasm](https://developers.cloudflare.com/workers/runtime-apis/webassembly/),
 [request metadata](https://developers.cloudflare.com/workers/runtime-apis/request/),
 [environment bindings](https://developers.cloudflare.com/workers/configuration/environment-variables/).
+
+The host forwards `Git-Protocol` and `Content-Type` through the `serve_http` ABI.
+Smart discovery/fetch supports v0/v1/v2; the client chooses the version. Gzip
+uploads are decoded with `DecompressionStream`, with both wire length and expanded
+body limited to 32 KiB. The extended ABI frame adds two u32-LE lengths and the
+Git-Protocol/Content-Type bytes after the target, before the body. Existing `serve`
+and `serve_with_format` frames remain available for embedded callers that have
+already validated HTTP metadata. Worker tests run real-Git v0/v1/v2 clones;
+ABI tests cover SHA-1/SHA-256 commands and fixed memory without allocator imports.

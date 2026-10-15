@@ -199,6 +199,8 @@ fn nested_snapshot_index_preserves_metadata_refs_pack_and_http() {
         for path in &paths {
             for query in [None, Some("service=git-upload-pack")] {
                 let request = Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path,
                     query,

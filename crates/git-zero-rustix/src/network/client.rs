@@ -41,7 +41,25 @@ impl HttpTransport<'_> {
         if let Some(query) = request.query {
             write!(&mut header, "?{query}").map_err(|_| Error::BufferTooSmall)?;
         }
-        write!(&mut header, " HTTP/1.0\r\nHost: {}\r\nContent-Length: {}\r\nContent-Type: application/x-git-upload-pack-request\r\nConnection: close\r\n\r\n", self.address, request.body.len()).map_err(|_| Error::BufferTooSmall)?;
+        write!(
+            &mut header,
+            " HTTP/1.0\r\nHost: {}\r\nContent-Length: {}\r\n",
+            self.address,
+            request.body.len()
+        )
+        .map_err(|_| Error::BufferTooSmall)?;
+        for (name, value) in [
+            ("Content-Type", request.content_type),
+            ("Git-Protocol", request.git_protocol),
+        ] {
+            if let Some(value) = value {
+                if value.bytes().any(|b| matches!(b, 0 | b'\r' | b'\n')) {
+                    return Err(Error::InvalidRequest);
+                }
+                write!(&mut header, "{name}: {value}\r\n").map_err(|_| Error::BufferTooSmall)?;
+            }
+        }
+        header.write_all(b"Connection: close\r\n\r\n")?;
         let mut output = SocketWriter(socket.as_fd());
         output.write_all(header.as_bytes())?;
         output.write_all(request.body)?;

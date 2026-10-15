@@ -65,9 +65,12 @@ pub(crate) struct UploadRequest<'a> {
     pub done: bool,
     capabilities: Capabilities,
     haves: &'a [u8],
+    v2: bool,
+    #[cfg(feature = "read")]
+    include_tags: bool,
 }
 
-fn id(bytes: &[u8], format: ObjectFormat) -> Result<ObjectId> {
+pub(crate) fn id(bytes: &[u8], format: ObjectFormat) -> Result<ObjectId> {
     let id = ObjectId::from_hex(bytes)?;
     if id.format() != format || id.is_zero() {
         return Err(Error::InvalidRequest);
@@ -133,13 +136,32 @@ impl<'a> UploadRequest<'a> {
     pub fn parse(
         mut bytes: &'a [u8],
         format: ObjectFormat,
+        version: crate::route::Version,
         want: impl FnMut(ObjectId) -> Result<()>,
     ) -> Result<Self> {
+        if version == crate::route::Version::V2 {
+            let command = crate::v2::Command::parse(bytes, format)?.ok_or(Error::InvalidRequest)?;
+            if command.name != b"fetch" {
+                return Err(Error::InvalidRequest);
+            }
+            let fetch = crate::v2::Fetch::parse(command.args, format, want)?;
+            return Ok(Self {
+                done: fetch.done,
+                capabilities: Capabilities::default(),
+                haves: command.args,
+                v2: true,
+                #[cfg(feature = "read")]
+                include_tags: fetch.include_tags,
+            });
+        }
         let capabilities = parse_wants(&mut bytes, format, want)?;
         Ok(Self {
             done: parse_haves(bytes, format)?,
             capabilities,
             haves: bytes,
+            v2: false,
+            #[cfg(feature = "read")]
+            include_tags: false,
         })
     }
 
@@ -155,7 +177,15 @@ impl<'a> UploadRequest<'a> {
             .filter_map(move |id| common_commit(repository, id).transpose())
     }
 
+    #[cfg(feature = "read")]
+    pub fn include_tags(&self) -> bool {
+        self.include_tags
+    }
+
     pub fn acknowledge(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
+        if self.v2 {
+            return crate::v2::acknowledge(self.done, self.common(repository), output);
+        }
         let mut last = None;
         for id in self.common(repository) {
             let id = id?;
@@ -181,7 +211,8 @@ impl<'a> UploadRequest<'a> {
     pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
         PackOutput {
             output,
-            band: self.capabilities.band(),
+            // V2 always frames its packfile section on sideband channel 1.
+            band: if self.v2 { 2 } else { self.capabilities.band() },
             buffer: [0; 1024],
             length: 0,
         }
@@ -198,7 +229,10 @@ fn have_id(packet: Packet<'_>) -> Option<ObjectId> {
     ObjectId::from_hex(hex.strip_suffix(b"\n").unwrap_or(hex)).ok()
 }
 
-fn common_commit(repository: &impl Repository, id: ObjectId) -> Result<Option<ObjectId>> {
+pub(crate) fn common_commit(
+    repository: &impl Repository,
+    id: ObjectId,
+) -> Result<Option<ObjectId>> {
     let Some(index) = repository.find_index(id) else {
         return Ok(None);
     };

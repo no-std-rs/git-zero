@@ -6,7 +6,7 @@ use git_zero::{
     Reference, Repository, Result, ValidatedRepository,
     cache::{self, Key, PackCache},
     http::{self, Request, SelectionStorage},
-    io::SliceWriter,
+    io::{SliceWriter, Write as _},
     pack, pktline,
     repository::{MAX_PEELED_REF_LENGTH, resolve_reference},
 };
@@ -411,6 +411,8 @@ fn symbolic_head_can_resolve_through_a_lightweight_tag() {
             http::serve(
                 repository,
                 Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path: "info/refs",
                     query: Some("service=git-upload-pack"),
@@ -628,6 +630,8 @@ fn unborn_and_detached_heads_can_have_independent_ref_roots() {
             http::serve(
                 repo,
                 Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path: "info/refs",
                     query: Some("service=git-upload-pack"),
@@ -663,6 +667,8 @@ fn smart_and_dumb_ref_routes_preserve_symbolic_and_peeled_data() {
             http::serve(
                 repo,
                 Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path,
                     query: None,
@@ -679,6 +685,8 @@ fn smart_and_dumb_ref_routes_preserve_symbolic_and_peeled_data() {
             http::serve(
                 repo,
                 Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path: "info/refs",
                     query: smart.then_some("service=git-upload-pack"),
@@ -720,6 +728,8 @@ fn peeled_ref_packet_budgets_include_the_suffix() {
     http::serve(
         &repository,
         Request {
+            content_type: None,
+            git_protocol: None,
             method: "GET",
             path: "info/refs",
             query: Some("service=git-upload-pack"),
@@ -738,6 +748,82 @@ fn peeled_ref_packet_budgets_include_the_suffix() {
         RefRepository::new(&graph, graph.state(), &refs),
         Err(Error::InvalidReference)
     ));
+}
+
+fn ls_refs_command<'a>(storage: &'a mut [u8], attributes: &[&[u8]]) -> &'a [u8] {
+    let mut command = SliceWriter::new(storage);
+    pktline::write(&mut command, b"command=ls-refs\n").unwrap();
+    command.write_all(b"0001").unwrap();
+    for attribute in attributes {
+        pktline::write(&mut command, attribute).unwrap();
+    }
+    command.write_all(b"0000").unwrap();
+    command.finish()
+}
+
+fn assert_v2_ref_budget(source: &impl Repository, attribute: &[u8]) {
+    validated(source, |repository| {
+        let mut bytes = vec![0; 300_000];
+        let mut body = [0; 128];
+        let request = Request {
+            method: "POST",
+            path: "git-upload-pack",
+            query: None,
+            body: ls_refs_command(&mut body, &[attribute]),
+            content_type: Some("application/x-git-upload-pack-request"),
+            git_protocol: Some("version=2"),
+        };
+        let mut output = SliceWriter::new(&mut bytes);
+        let result =
+            allocations::without_allocations(|| http::serve(repository, request, &mut output));
+        assert!(matches!(result, Err(Error::LimitExceeded)));
+        assert!(output.is_empty());
+        // Attribute-free lines still fit for this same validated repository.
+        let mut plain = [0; 128];
+        http::serve(
+            repository,
+            Request {
+                body: ls_refs_command(&mut plain, &[]),
+                ..request
+            },
+            &mut output,
+        )
+        .unwrap();
+        let mut wire = output.as_bytes();
+        while pktline::read(&mut wire).unwrap().is_some() {}
+    });
+}
+
+#[test]
+fn v2_peeled_ref_attributes_preflight_the_complete_packet_budget() {
+    let graph = Graph::new();
+    let long_tag = format!("refs/tags/{}", "z".repeat(MAX_PEELED_REF_LENGTH - 10));
+    let mut refs: Vec<Reference<'_>> = graph.refs.clone();
+    refs.iter_mut()
+        .find(|reference| reference.peeled.is_some())
+        .unwrap()
+        .name = &long_tag;
+    refs.sort_unstable_by_key(|reference| reference.name);
+    let repository = RefRepository::new(&graph, graph.state(), &refs).unwrap();
+    assert_v2_ref_budget(&repository, b"peel\n");
+}
+
+#[test]
+fn v2_symbolic_ref_attributes_preflight_the_complete_packet_budget() {
+    let graph = Graph::new();
+    let long_alias = format!("refs/heads/alias-{}", "a".repeat(40_000));
+    let long_target = format!("refs/heads/target-{}", "b".repeat(40_000));
+    let mut refs: Vec<Reference<'_>> = graph.refs.clone();
+    refs.push(Reference::direct(&long_target, graph.head()));
+    refs.push(Reference {
+        name: &long_alias,
+        id: graph.head(),
+        symbolic_target: Some(&long_target),
+        peeled: None,
+    });
+    refs.sort_unstable_by_key(|reference| reference.name);
+    let repository = RefRepository::new(&graph, graph.state(), &refs).unwrap();
+    assert_v2_ref_budget(&repository, b"symrefs\n");
 }
 
 #[test]
@@ -852,6 +938,8 @@ fn serve_selected<R: Repository>(
         http::serve_with_selection(
             repository,
             Request {
+                content_type: Some("application/x-git-upload-pack-request"),
+                git_protocol: None,
                 method: "POST",
                 path: "git-upload-pack",
                 query: None,
@@ -931,6 +1019,8 @@ fn whole_repository_pack_hooks_and_head_keys_reject_independent_roots() {
         http::serve_with_pack(
             &repository,
             Request {
+                content_type: Some("application/x-git-upload-pack-request"),
+                git_protocol: None,
                 method: "POST",
                 path: "git-upload-pack",
                 query: None,
@@ -1015,6 +1105,8 @@ fn graph_read_limits_bound_actual_io_and_fail_before_pack_output() {
             http::serve_with_selection(
                 repo,
                 Request {
+                    content_type: Some("application/x-git-upload-pack-request"),
+                    git_protocol: None,
                     method: "POST",
                     path: "git-upload-pack",
                     query: None,
@@ -1032,6 +1124,8 @@ fn graph_read_limits_bound_actual_io_and_fail_before_pack_output() {
         http::serve_with_selection(
             repo,
             Request {
+                content_type: Some("application/x-git-upload-pack-request"),
+                git_protocol: None,
                 method: "POST",
                 path: "git-upload-pack",
                 query: None,

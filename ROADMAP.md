@@ -92,11 +92,21 @@ annotated tags, deep trees, merge histories, binary blobs, and both object forma
   within one shared graph-read budget. Native Git-oracle comparisons check exact
   incremental objects and imports in SHA-1/SHA-256. Wasm tests check framing,
   ACKs, checksums and fixed memory; complete-pack hooks may resend common history.
-- [ ] Protocol v1/v2 (`ls-refs`, `fetch`) with accurate capability advertisements.
+- [x] Protocol v1/v2 (`ls-refs`, `fetch`) with accurate capability advertisements.
+  Header-selected v1 discovery and stateless v2 ls-refs/fetch support symrefs,
+  peels, unborn HEAD, prefix filters, ACK rounds, include-tag and sideband packs.
+  Native real-Git comparisons cover SHA-1/SHA-256, all HEAD states, exact pack
+  membership and incremental fetch; Worker Git clones cover v0/v1/v2 and its
+  fixed-memory ABI checks both formats. Shallow/filter extensions stay absent.
 - [ ] Incremental requests and responses, backpressure, cancellation, and resume points.
 - [ ] Shallow/filter requests with bounded traversal and documented rejection paths.
-- [ ] Proper method/content-type checks, service selection, protocol-version
+- [x] Proper method/content-type checks, service selection, protocol-version
   handling, route normalization, and a wider malformed-request corpus.
+  Shared routing rejects wrong methods/media types, duplicate services/versions,
+  unsafe path components and malformed escapes before output. Hosts pass HTTP
+  metadata explicitly; native and Worker hosts decode bounded gzip requests.
+  Negative, truncated-command, retry, output-guard and seeded fuzz cases cover
+  the new surface. HTTP streaming/chunked framing remains in sections 2 and 4.
 
 Acceptance: supported cases from upstream HTTP tests have mapped, reproducible
 git-zero coverage; unsupported operations return explicit errors.
@@ -184,8 +194,9 @@ remain regression coverage; server completion is measured with real Git clients.
 - [ ] Expand server fuzz coverage for capability/want/have negotiation, v2 commands,
   shallow/filter state, incremental HTTP framing, and concurrent/cancelled request
   state. Retain regressions and check bounded work, state reset, and output guards.
-  V0 capability conflicts, ACK/have phases and sideband responses now have seeded
-  routing mutations; v2, shallow/filter and asynchronous state remain planned.
+  V0 capability conflicts, ACK/have phases and sideband responses and v2 command
+  framing, ls-refs/fetch, unsupported extensions and HTTP gzip envelopes have
+  seeded mutations; shallow/filter and asynchronous state remain planned.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.
@@ -248,8 +259,8 @@ kernel-scale benchmarks separate from mandatory, reproducible correctness checks
   configured limits, and remaining optional work; no advertised feature lacks tests.
 
 Start further client development after this gate passes. The next implementation
-step is protocol v1/v2 discovery and fetch, with accurate capabilities and
-independent Git comparisons in both object formats.
+step is incremental request/response state, backpressure, cancellation and
+resume points, followed by bounded shallow/filter traversal.
 
 ## 7. Read/write server support
 

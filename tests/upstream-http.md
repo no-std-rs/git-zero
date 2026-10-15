@@ -25,7 +25,7 @@ against git-zero or claim their complete Apache/client assertions pass.
 | t5550:197–203, 227–243; t5551:157–169 | Changed remote, default branch and packed repository | `upstream-incremental-{smart,dumb}` changes the fixture after the initial download, checks real Git's updated remote ref/checkout, and compares git-zero's new full pack or loose HEAD. This does not test git-zero have/ACK negotiation. |
 | t5550:238–243 | Packed dumb clone | `upstream-packed-dumb` checks Git's pack/index downloads. It requires git-zero's current loose-only fetch to fail explicitly. |
 | t5550:271–315 | Corrupt dumb pack/index rejection | `upstream-corrupt-{pack,index}-dumb` checks Git rejects the corrupt download and removes the failed clone. These are reference baselines for future git-zero pack/index consumption. |
-| t5551:639–646 | v2 request falling back to a v0 server | `upstream-snapshot-smart` makes Git request v2 from git-zero, checks the v0 symref trace, and compares against an independently Git-created snapshot. |
+| t5551:639–646 | v2 discovery and clone | `upstream-snapshot-smart` makes Git request v2 from git-zero, checks version and ls-refs symref traces, and compares against an independently Git-created snapshot. |
 | t5551:648–673 | SHA-256 server and empty-remote format discovery | Native `references` compares Git clients against git-zero and Git's smart/static servers in SHA-1 and SHA-256, including empty/custom unborn remotes, independent refs, tags, merge histories, clone/fetch and exact selected pack closures. Core `sha256` checks mismatched formats and resource boundaries. Complete git-zero client clone/materialization remains deferred. |
 
 Additional `upstream-history-{smart,dumb}` and `upstream-packed-smart` cases use
@@ -58,8 +58,10 @@ smart client requests `include-tag` even with `--no-tags`; the Git reference clo
 may physically receive extra tags peeling to its selected closure. Only that
 oracle case permits those extra objects; matched no-capability requests and
 git-zero's single-branch clones require the exact object set. V0 ACK/sideband
-comparisons now also check common-history exclusion; include-tag, shallow/filter
-and v1/v2 remain planned. The [server acceptance matrix](server-acceptance.md)
+comparisons also check common-history exclusion. `server_protocol.py` compares
+v1/v2 discovery, ls-refs, clone, incremental fetch, ACK rounds and exact selected
+packs in SHA-1/SHA-256, including v2 nested include-tag behavior. Shallow/filter
+and v0 include-tag remain planned. The [server acceptance matrix](server-acceptance.md)
 separates this server evidence from the client and Git-only baselines.
 
 `upstream-snapshot-{smart,dumb}` constructs blob/tree/commit bytes using Git's

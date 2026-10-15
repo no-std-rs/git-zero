@@ -39,7 +39,7 @@ pub use snapshot::{
     CommitIdentity, CommitOptions, Entry, EntryKind, File, Snapshot, SnapshotBuilder,
 };
 #[cfg(feature = "read")]
-pub use validation::{ValidatedRepository, ValidationMetadata};
+pub use validation::{SelectionOptions, ValidatedRepository, ValidationMetadata};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {

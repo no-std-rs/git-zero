@@ -14,7 +14,7 @@ include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*", "/examples/**"]
 [features]
 default = ["client", "server", "storage", "cli"]
 client = ["git-zero/client", "rustix/net"]
-server = ["git-zero/server", "rustix/net"]
+server = ["git-zero/server", "git-zero/read", "rustix/net"]
 storage = ["git-zero/write", "rustix/fs"]
 cli = ["client", "server", "storage", "git-zero/read"]
 

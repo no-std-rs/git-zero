@@ -73,7 +73,18 @@ against Git's HTTP backend in both object formats. It runs inside the native
 `tests/upload.rs` adds allocation, phase/truncation, capability conflict, packet
 size, checksum, exclusion-reset, graph budget and ERR-packet regressions.
 Worker memory tests repeat negotiated ACK/sideband requests in both formats;
-the real-Git Worker smart clone selects the newly advertised capabilities.
+the real-Git Worker smart clones cover v0/v1/v2.
+
+`server_protocol.py` extends the native references suite with v1/v2 discovery,
+ls-refs prefix/symref/peel/unborn queries, full and incremental clones/fetches,
+matched ACK rounds and exact pack imports. Both formats cover empty/unborn,
+symbolic/detached HEAD, independent roots and nested tags. Git can gzip requests
+over 1 KiB; native tests use its normal compression behavior. Host request storage
+bounds compressed plus expanded bytes. `protocol` checks malformed commands,
+selectors/media types, unsafe paths, graph/output budgets and retries without
+allocation. Gzip tests use Python's independent encoder and validate truncation,
+CRC/size/header fields and expansion limits. Worker v1/v2 ABI tests enforce the
+same fixed memory ceiling in both formats, alongside real-Git SHA-1 clones.
 
 `tests/inflate.rs` compares the core zlib decoder with Python's standard zlib
 and a real Git-created loose object. Stored, fixed, dynamic and mixed blocks run

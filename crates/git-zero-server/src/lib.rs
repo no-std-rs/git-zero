@@ -9,9 +9,12 @@ use git_zero_core::{
     reader::DEFAULT_READ_BUFFER_SIZE,
     repository::{resolve_reference, uses_only_head},
 };
+mod route;
 mod upload;
+mod v2;
 #[cfg(feature = "read")]
-use git_zero_core::{ValidatedRepository, ValidationMetadata};
+use git_zero_core::{SelectionOptions, ValidatedRepository, ValidationMetadata};
+use route::Version;
 use upload::UploadRequest;
 pub use upload::{PackOutput, write_upload_error};
 
@@ -50,11 +53,19 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
     storage: &mut SelectionStorage<'_>,
     output: &mut impl Write,
 ) -> Result<Response> {
-    if request.method != "POST" || request.path.trim_start_matches('/') != "git-upload-pack" {
+    let route = route::validate(request)?;
+    if let Some(response) = route.rejection {
+        return Ok(response);
+    }
+    if request.method != "POST" || route.path != "git-upload-pack" {
         return serve_with_scratch(repository, request, storage.read, output);
     }
+    let version = route.version;
+    if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
+        return Ok(upload_response());
+    }
     let mut count = 0;
-    let upload = UploadRequest::parse(request.body, repository.object_format(), |id| {
+    let upload = UploadRequest::parse(request.body, repository.object_format(), version, |id| {
         if !advertised(repository, id) {
             return Err(Error::InvalidRequest);
         }
@@ -65,13 +76,16 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
         Ok(())
     })?;
     if upload.done {
-        let indices = repository.select_missing_objects(
+        let indices = repository.select_fetch_objects(
             &storage.wants[..count],
             upload.common(repository),
             storage.objects,
             storage.indices,
             (storage.read, storage.parse),
-            storage.graph_read_limit,
+            SelectionOptions {
+                graph_read_limit: storage.graph_read_limit,
+                include_tags: upload.include_tags(),
+            },
         )?;
         upload.acknowledge(repository, output)?;
         let mut packed = upload.output(output);
@@ -80,10 +94,15 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
     } else {
         upload.acknowledge(repository, output)?;
     }
-    Ok(Response {
+    Ok(upload_response())
+}
+
+#[cfg(feature = "read")]
+fn upload_response() -> Response {
+    Response {
         status: 200,
         content_type: "application/x-git-upload-pack-result",
-    })
+    }
 }
 
 #[cfg(feature = "read")]
@@ -141,7 +160,12 @@ pub fn serve_with_pack<W: Write>(
     output: &mut W,
     write_pack: impl FnOnce(&mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<Response> {
-    let path = request.path.trim_start_matches('/');
+    let route = route::validate(request)?;
+    if let Some(response) = route.rejection {
+        return Ok(response);
+    }
+    let path = route.path;
+    let version = route.version;
     let mut response = Response {
         status: 200,
         content_type: "text/plain; charset=utf-8",
@@ -156,17 +180,10 @@ pub fn serve_with_pack<W: Write>(
             }
             output.write_all(b"\n")?;
         }
-        ("GET", "info/refs") => match service(request.query) {
+        ("GET", "info/refs") => match route.service {
             Some("git-upload-pack") => {
                 response.content_type = "application/x-git-upload-pack-advertisement";
-                pktline::write(output, b"# service=git-upload-pack\n")?;
-                output.write_all(b"0000")?;
-                let head = repository.head_state();
-                if head.id().is_some() || repository.reference_count() == 0 {
-                    advertise_head(repository, output)?;
-                }
-                advertise_references(repository, true, output)?;
-                output.write_all(b"0000")?;
+                advertise_smart(repository, version, output)?;
             }
             None => {
                 advertise_references(repository, false, output)?;
@@ -175,68 +192,14 @@ pub fn serve_with_pack<W: Write>(
         },
         ("POST", "git-upload-pack") => {
             response.content_type = "application/x-git-upload-pack-result";
-            if !uses_only_head(repository) {
-                return Err(Error::Unsupported);
-            }
-            let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
-            let upload = UploadRequest::parse(request.body, repository.object_format(), |id| {
-                if id == head {
-                    Ok(())
-                } else {
-                    Err(Error::InvalidRequest)
-                }
-            })?;
-            upload.acknowledge(repository, output)?;
-            if upload.done {
-                let mut packed = upload.output(output);
-                write_pack(scratch, &mut packed)?;
-                packed.finish()?;
-            }
+            write_upload(repository, request, version, scratch, output, write_pack)?;
         }
         ("GET", "objects/info/packs") => {}
         ("GET", _) if path.starts_with("refs/") => {
-            if let Some(index) = (0..repository.reference_count()).find(|&index| {
-                repository
-                    .reference_name(index)
-                    .is_some_and(|name| ref_path_matches(path, name))
-            }) {
-                if let Some(target) = repository.reference_symbolic_target(index) {
-                    output.write_all(b"ref: ")?;
-                    output.write_all(target.as_bytes())?;
-                } else {
-                    output.write_all(
-                        &repository
-                            .reference_id(index)
-                            .ok_or(Error::InvalidObject)?
-                            .to_hex(),
-                    )?;
-                }
-                output.write_all(b"\n")?;
-            } else {
-                response.status = 404;
-            }
+            response.status = serve_reference(repository, path, output)?;
         }
         ("GET", _) if path.starts_with("objects/") => {
-            let object_path = &path.as_bytes()[8..];
-            let format = repository.object_format();
-            if object_path.len() != format.hex_length() + 1 || object_path[2] != b'/' {
-                response.status = 404;
-            } else {
-                let mut storage = [0; 64];
-                let hex = &mut storage[..format.hex_length()];
-                hex[..2].copy_from_slice(&object_path[..2]);
-                hex[2..].copy_from_slice(&object_path[3..]);
-                if let Ok(id) = ObjectId::from_hex(hex) {
-                    if let Some(index) = repository.find_index(id) {
-                        response.content_type = "application/x-git-loose-object";
-                        pack::write_loose_with_scratch(repository, index, scratch, output)?;
-                    } else {
-                        response.status = 404;
-                    }
-                } else {
-                    response.status = 404;
-                }
-            }
+            response = serve_loose(repository, &path.as_bytes()[8..], scratch, output)?;
         }
         ("GET" | "POST", _) => response.status = 404,
         _ => response.status = 405,
@@ -244,32 +207,112 @@ pub fn serve_with_pack<W: Write>(
     Ok(response)
 }
 
-fn ref_path_matches(path: &str, name: &str) -> bool {
-    let mut bytes = path.bytes();
-    for expected in name.bytes() {
-        let Some(mut byte) = bytes.next() else {
-            return false;
-        };
-        if byte == b'%' {
-            let Some(high) = bytes.next().and_then(|byte| (byte as char).to_digit(16)) else {
-                return false;
-            };
-            let Some(low) = bytes.next().and_then(|byte| (byte as char).to_digit(16)) else {
-                return false;
-            };
-            byte = ((high << 4) | low) as u8;
-        }
-        if byte != expected {
-            return false;
-        }
+fn advertise_smart(
+    repository: &impl Repository,
+    version: Version,
+    output: &mut impl Write,
+) -> Result<()> {
+    pktline::write(output, b"# service=git-upload-pack\n")?;
+    output.write_all(b"0000")?;
+    if version == Version::V2 {
+        return v2::advertise(repository.object_format(), output);
     }
-    bytes.next().is_none()
+    if version == Version::V1 {
+        pktline::write(output, b"version 1\n")?;
+    }
+    if repository.head_state().id().is_some() || repository.reference_count() == 0 {
+        advertise_head(repository, output)?;
+    }
+    advertise_references(repository, true, output)?;
+    output.write_all(b"0000")
 }
 
-fn service(query: Option<&str>) -> Option<&str> {
-    query?
-        .split('&')
-        .find_map(|field| field.strip_prefix("service="))
+fn write_upload<W: Write>(
+    repository: &impl Repository,
+    request: Request<'_>,
+    version: Version,
+    scratch: &mut [u8],
+    output: &mut W,
+    write_pack: impl FnOnce(&mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
+) -> Result<()> {
+    if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
+        return Ok(());
+    }
+    if !uses_only_head(repository) {
+        return Err(Error::Unsupported);
+    }
+    let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
+    let upload = UploadRequest::parse(request.body, repository.object_format(), version, |id| {
+        if id == head {
+            Ok(())
+        } else {
+            Err(Error::InvalidRequest)
+        }
+    })?;
+    upload.acknowledge(repository, output)?;
+    if upload.done {
+        let mut packed = upload.output(output);
+        write_pack(scratch, &mut packed)?;
+        packed.finish()?;
+    }
+    Ok(())
+}
+
+fn serve_reference(
+    repository: &impl Repository,
+    path: &str,
+    output: &mut impl Write,
+) -> Result<u16> {
+    let index = (0..repository.reference_count()).find(|&index| {
+        repository
+            .reference_name(index)
+            .is_some_and(|name| route::decoded(path).eq(name.bytes().map(Ok)))
+    });
+    let Some(index) = index else { return Ok(404) };
+    if let Some(target) = repository.reference_symbolic_target(index) {
+        output.write_all(b"ref: ")?;
+        output.write_all(target.as_bytes())?;
+    } else {
+        output.write_all(
+            &repository
+                .reference_id(index)
+                .ok_or(Error::InvalidObject)?
+                .to_hex(),
+        )?;
+    }
+    output.write_all(b"\n")?;
+    Ok(200)
+}
+
+fn serve_loose(
+    repository: &impl Repository,
+    path: &[u8],
+    scratch: &mut [u8],
+    output: &mut impl Write,
+) -> Result<Response> {
+    let missing = Response {
+        status: 404,
+        content_type: "text/plain; charset=utf-8",
+    };
+    let width = repository.object_format().hex_length();
+    if path.len() != width + 1 || path[2] != b'/' {
+        return Ok(missing);
+    }
+    let mut storage = [0; 64];
+    let hex = &mut storage[..width];
+    hex[..2].copy_from_slice(&path[..2]);
+    hex[2..].copy_from_slice(&path[3..]);
+    let index = ObjectId::from_hex(hex)
+        .ok()
+        .and_then(|id| repository.find_index(id));
+    let Some(index) = index else {
+        return Ok(missing);
+    };
+    pack::write_loose_with_scratch(repository, index, scratch, output)?;
+    Ok(Response {
+        status: 200,
+        content_type: "application/x-git-loose-object",
+    })
 }
 
 fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {
@@ -281,31 +324,28 @@ fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Resu
     } else {
         b" capabilities^{}\0"
     };
-    if let Some(target) = head.target() {
-        let target = if matches!(head, Head::Symbolic { .. }) {
-            resolve_reference(repository, target)?.0
-        } else {
-            target
-        };
-        pktline::write_parts(
-            output,
-            &[
-                &id,
-                name,
-                b"symref=HEAD:",
-                target.as_bytes(),
-                b" ",
-                format.capability(),
-                upload::CAPABILITIES,
-                b"\n",
-            ],
-        )
-    } else {
-        pktline::write_parts(
-            output,
-            &[&id, name, format.capability(), upload::CAPABILITIES, b"\n"],
-        )
-    }
+    let target = match head {
+        Head::Symbolic { target, .. } => Some(resolve_reference(repository, target)?.0),
+        Head::Unborn(target) => Some(target),
+        Head::Detached(_) => None,
+    };
+    let (symref, separator): (&[u8], &[u8]) = match target {
+        Some(_) => (b"symref=HEAD:", b" "),
+        None => (b"", b""),
+    };
+    pktline::write_parts(
+        output,
+        &[
+            &id,
+            name,
+            symref,
+            target.unwrap_or("").as_bytes(),
+            separator,
+            format.capability(),
+            upload::CAPABILITIES,
+            b"\n",
+        ],
+    )
 }
 
 fn advertise_references(
@@ -338,6 +378,11 @@ fn reference_line(
     let format = id.format();
     let id = id.to_hex();
     if smart {
+        let parts: [&[u8]; 3] = if capabilities {
+            [b"\0", format.capability(), upload::CAPABILITIES]
+        } else {
+            [b"", b"", b""]
+        };
         pktline::write_parts(
             output,
             &[
@@ -345,17 +390,9 @@ fn reference_line(
                 b" ",
                 name.as_bytes(),
                 suffix,
-                if capabilities { b"\0" } else { b"" },
-                if capabilities {
-                    format.capability()
-                } else {
-                    b""
-                },
-                if capabilities {
-                    upload::CAPABILITIES
-                } else {
-                    b""
-                },
+                parts[0],
+                parts[1],
+                parts[2],
                 b"\n",
             ],
         )

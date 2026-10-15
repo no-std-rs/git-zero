@@ -52,6 +52,8 @@ pub fn resolve_reference(
     for _ in 0..max_reads {
         let (status, length) = transport.request(
             Request {
+                content_type: None,
+                git_protocol: None,
                 method: "GET",
                 path: request_path,
                 query: None,

@@ -126,6 +126,8 @@ fn real_git_clones_nested_modes_empty_trees_and_custom_refs() {
             let (status, length) = transport
                 .request(
                     http::Request {
+                        content_type: None,
+                        git_protocol: None,
                         method: "GET",
                         path,
                         query: None,

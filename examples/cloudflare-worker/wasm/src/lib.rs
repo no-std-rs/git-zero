@@ -50,6 +50,18 @@ mod abi {
     /// Same frame and output as `serve`; format: 0=SHA-1, 1=SHA-256.
     #[unsafe(no_mangle)]
     pub extern "C" fn serve_with_format(input_length: usize, method: u32, format: u32) -> i32 {
+        serve_frame(input_length, method, format, false)
+    }
+
+    /// Extended frame: after target bytes, two u32-LE lengths followed by the
+    /// Git-Protocol and Content-Type header values, then the Git request body.
+    /// Empty header values mean absent. Other limits and output match `serve`.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn serve_http(input_length: usize, method: u32, format: u32) -> i32 {
+        serve_frame(input_length, method, format, true)
+    }
+
+    fn serve_frame(input_length: usize, method: u32, format: u32, http_metadata: bool) -> i32 {
         if input_length > INPUT_CAPACITY {
             return -1;
         }
@@ -61,7 +73,7 @@ mod abi {
         // SAFETY: All access is bounded, synchronous and exclusive per instance.
         let input = unsafe { &(&*INPUT.0.get())[..input_length] };
         let output = unsafe { &mut *OUTPUT.0.get() };
-        match run(input, method, format, output) {
+        match run(input, method, format, http_metadata, output) {
             Ok(length) => length as i32,
             Err(Error::BufferTooSmall) => -1,
             Err(_) => -2,
@@ -86,6 +98,7 @@ mod abi {
         mut input: &[u8],
         method: u32,
         format: ObjectFormat,
+        http_metadata: bool,
         output: &mut [u8],
     ) -> git_zero::Result<usize> {
         let lengths = [
@@ -101,6 +114,20 @@ mod abi {
         let target_length = length(&mut input)?;
         let target = core::str::from_utf8(take(&mut input, target_length)?)
             .map_err(|_| Error::InvalidRequest)?;
+        let (git_protocol, content_type) = if http_metadata {
+            let protocol_length = length(&mut input)?;
+            let media_length = length(&mut input)?;
+            let protocol = core::str::from_utf8(take(&mut input, protocol_length)?)
+                .map_err(|_| Error::InvalidRequest)?;
+            let media = core::str::from_utf8(take(&mut input, media_length)?)
+                .map_err(|_| Error::InvalidRequest)?;
+            (
+                (!protocol.is_empty()).then_some(protocol),
+                (!media.is_empty()).then_some(media),
+            )
+        } else {
+            (None, Some("application/x-git-upload-pack-request"))
+        };
         let (path, query) = target
             .split_once('?')
             .map_or((target, None), |(path, query)| (path, Some(query)));
@@ -138,6 +165,8 @@ mod abi {
         let response = http::serve(
             &repository,
             Request {
+                content_type,
+                git_protocol,
                 method,
                 path,
                 query,

@@ -101,7 +101,11 @@ fn content_length(header: &str) -> Result<Option<usize>> {
             if result.is_some() {
                 return Err(Error::InvalidRequest);
             }
-            result = Some(value.trim().parse().map_err(|_| Error::InvalidRequest)?);
+            let value = value.trim();
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(Error::InvalidRequest);
+            }
+            result = Some(value.parse().map_err(|_| Error::InvalidRequest)?);
         }
     }
     Ok(result)

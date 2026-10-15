@@ -18,6 +18,19 @@ pub struct ValidationMetadata {
     excluded: bool,
 }
 
+/// Traversal budget and annotated-tag policy for a selected fetch pack.
+#[derive(Clone, Copy, Debug)]
+pub struct SelectionOptions {
+    /// Maximum structural bytes read across common history, wanted objects and
+    /// included tags. Buffered reads and rereads consume the same budget.
+    pub graph_read_limit: u64,
+    /// Include advertised annotated and nested tags whose final peeled target
+    /// is being sent. A target excluded as common history does not qualify.
+    /// Tags use the existing object/index arrays and traversal budget; no extra
+    /// collection or allocation is required. False selects only explicit wants.
+    pub include_tags: bool,
+}
+
 /// Validate and index a stable repository, including streaming-only providers.
 ///
 /// Checks repository-format IDs, unique enumeration, links and target kinds,
@@ -159,6 +172,35 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         scratch: (&mut [u8], &mut [u8]),
         graph_read_limit: u64,
     ) -> Result<&'selected [usize]> {
+        self.select_fetch_objects(
+            roots,
+            common,
+            work,
+            selected,
+            scratch,
+            SelectionOptions {
+                graph_read_limit,
+                include_tags: false,
+            },
+        )
+    }
+
+    /// Select missing objects and optionally include advertised annotated tags
+    /// whose final peeled targets are being sent. Tag traversal shares the
+    /// graph-read budget with wanted and common history; retries reset all state.
+    pub fn select_fetch_objects<'selected>(
+        &self,
+        roots: &[ObjectId],
+        common: impl IntoIterator<Item = Result<ObjectId>>,
+        work: &mut [Option<ValidationMetadata>],
+        selected: &'selected mut [usize],
+        scratch: (&mut [u8], &mut [u8]),
+        options: SelectionOptions,
+    ) -> Result<&'selected [usize]> {
+        let SelectionOptions {
+            graph_read_limit,
+            include_tags,
+        } = options;
         let (read_scratch, parse_scratch) = scratch;
         if roots.is_empty() {
             return Err(Error::InvalidRequest);
@@ -206,6 +248,17 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             parse_scratch,
             Some(&mut remaining),
         )?;
+        if include_tags {
+            self.include_matching_tags(work)?;
+            walk(
+                self,
+                work,
+                self.by_id,
+                read_scratch,
+                parse_scratch,
+                Some(&mut remaining),
+            )?;
+        }
         let mut length = 0;
         for (index, slot) in work.iter().enumerate() {
             if slot.expect("initialized metadata").reached {
@@ -214,6 +267,20 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             }
         }
         Ok(&selected[..length])
+    }
+
+    fn include_matching_tags(&self, work: &mut [Option<ValidationMetadata>]) -> Result<()> {
+        for reference in 0..self.reference_count() {
+            let Some(peeled) = self.reference_peeled(reference) else {
+                continue;
+            };
+            let index = find(work, self.by_id, peeled).ok_or(Error::ObjectNotFound)?;
+            if metadata(work, index).reached {
+                let id = self.reference_id(reference).ok_or(Error::InvalidObject)?;
+                reach(work, self.by_id, id, ObjectKind::Tag)?;
+            }
+        }
+        Ok(())
     }
 }
 
