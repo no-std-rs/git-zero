@@ -101,6 +101,10 @@ name = "pack_git"
 required-features = ["write"]
 
 [[test]]
+name = "pack_index"
+required-features = ["write"]
+
+[[test]]
 name = "pack_streaming"
 required-features = ["read", "write"]
 

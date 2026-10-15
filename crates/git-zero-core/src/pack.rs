@@ -1,10 +1,15 @@
 #[cfg(feature = "read")]
 use crate::{Error, ObjectFormat, Result};
 
+#[cfg(any(feature = "read", feature = "write"))]
+mod crc;
+#[cfg(any(feature = "read", feature = "write"))]
+pub use crc::crc32;
+
 #[cfg(feature = "read")]
 mod decode;
 #[cfg(feature = "read")]
-pub use decode::{DeltaLimits, Entry, EntryKind, Reader, ResolvedObject, apply_delta, crc32};
+pub use decode::{DeltaLimits, Entry, EntryKind, Reader, ResolvedObject, apply_delta};
 
 #[cfg(feature = "read")]
 mod materialize;
@@ -12,6 +17,11 @@ mod materialize;
 pub use materialize::{
     MaterializeLimits, MaterializedEntry, MaterializedPack, find_materialized, materialize,
 };
+
+#[cfg(feature = "write")]
+mod index;
+#[cfg(feature = "write")]
+pub use index::{IndexEntry, write_index, write_indexed_with_scratch};
 
 #[cfg(feature = "write")]
 mod encode;
