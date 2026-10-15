@@ -1,0 +1,230 @@
+//! Independent wire cases through real sockets and the public native reader.
+use git_zero::{Error, http::Request, io::Write as _};
+use git_zero_rustix::{SocketWriter, read_request};
+use rustix::{
+    fd::AsFd,
+    net::{self, sockopt},
+};
+use std::{thread, time::Duration};
+
+#[derive(Debug, PartialEq, Eq)]
+struct Parsed {
+    method: String,
+    path: String,
+    query: Option<String>,
+    content_type: Option<String>,
+    git_protocol: Option<String>,
+    body: Vec<u8>,
+}
+
+impl From<Request<'_>> for Parsed {
+    fn from(request: Request<'_>) -> Self {
+        Self {
+            method: request.method.into(),
+            path: request.path.into(),
+            query: request.query.map(str::to_owned),
+            content_type: request.content_type.map(str::to_owned),
+            git_protocol: request.git_protocol.map(str::to_owned),
+            body: request.body.into(),
+        }
+    }
+}
+
+fn receive(wire: &[u8], width: usize, storage: &mut [u8]) -> Result<Parsed, Error> {
+    let (reader, writer) = net::socketpair(
+        net::AddressFamily::UNIX,
+        net::SocketType::STREAM,
+        net::SocketFlags::empty(),
+        None,
+    )
+    .unwrap();
+    sockopt::set_socket_timeout(
+        &reader,
+        sockopt::Timeout::Recv,
+        Some(Duration::from_secs(2)),
+    )
+    .unwrap();
+    sockopt::set_socket_timeout(
+        &writer,
+        sockopt::Timeout::Send,
+        Some(Duration::from_secs(2)),
+    )
+    .unwrap();
+    let wire = wire.to_vec();
+    let sender = thread::spawn(move || -> Result<(), Error> {
+        for chunk in wire.chunks(width) {
+            SocketWriter(writer.as_fd()).write_all(chunk)?;
+        }
+        // Truncated requests reach EOF immediately rather than waiting for a
+        // timeout. The reader may already have closed after an early rejection.
+        let _ = net::shutdown(&writer, net::Shutdown::Write);
+        Ok(())
+    });
+    let result = read_request(&reader, storage).map(Parsed::from);
+    drop(reader);
+    let sent = sender.join().unwrap();
+    if result.is_ok() {
+        sent.unwrap();
+    }
+    result
+}
+
+fn upload(body: &[u8]) -> Vec<u8> {
+    let mut wire = format!(
+        "POST /repo.git/git-upload-pack?service=git-upload-pack HTTP/1.1\r\nContent-Length: {}\r\nContent-Type: application/x-git-upload-pack-request\r\nGit-Protocol: version=2\r\n\r\n",
+        body.len()
+    ).into_bytes();
+    wire.extend_from_slice(body);
+    wire
+}
+
+fn expected_upload(body: &[u8]) -> Parsed {
+    Parsed {
+        method: "POST".into(),
+        path: "/repo.git/git-upload-pack".into(),
+        query: Some("service=git-upload-pack".into()),
+        content_type: Some("application/x-git-upload-pack-request".into()),
+        git_protocol: Some("version=2".into()),
+        body: body.into(),
+    }
+}
+
+#[test]
+fn fragmented_uploads_preserve_metadata_and_binary_body_bytes() {
+    let body = b"0000\0\xff\r\n\r\npayload";
+    let wire = upload(body);
+    let mut storage = [0xa5; 512];
+    for width in [1, 2, 3, 4, 7, 31, 512] {
+        assert_eq!(
+            receive(&wire, width, &mut storage),
+            Ok(expected_upload(body))
+        );
+    }
+}
+
+#[test]
+fn malformed_corpus_rejects_and_recovers_with_reused_caller_storage() {
+    let cases: &[(&str, &[u8], Error)] = &[
+        ("empty", b"", Error::InvalidRequest),
+        (
+            "truncated header",
+            b"GET / HTTP/1.0\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "LF only",
+            b"GET / HTTP/1.0\nX: a\n\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "truncated body",
+            b"POST / HTTP/1.0\r\nContent-Length: 4\r\n\r\nabc",
+            Error::InvalidRequest,
+        ),
+        (
+            "duplicate length",
+            b"POST / HTTP/1.0\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "negative length",
+            b"POST / HTTP/1.0\r\nContent-Length: -1\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "nondecimal length",
+            b"POST / HTTP/1.0\r\nContent-Length: 0x1\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "missing colon",
+            b"GET / HTTP/1.0\r\nBad header\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "duplicate protocol",
+            b"GET / HTTP/1.0\r\nGit-Protocol: version=1\r\nGit-Protocol: version=2\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "unsupported version",
+            b"GET / HTTP/2\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "relative target",
+            b"GET repo.git/HEAD HTTP/1.0\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "control target",
+            b"GET /repo.git/\x7f HTTP/1.0\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "invalid UTF-8",
+            b"GET / HTTP/1.0\r\nX: \xff\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "transfer encoding",
+            b"POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n",
+            Error::Unsupported,
+        ),
+        (
+            "unsupported coding",
+            b"POST / HTTP/1.0\r\nContent-Encoding: br\r\n\r\n",
+            Error::Unsupported,
+        ),
+        (
+            "invalid gzip",
+            b"POST / HTTP/1.0\r\nContent-Length: 4\r\nContent-Encoding: gzip\r\n\r\nnope",
+            Error::InvalidZlib,
+        ),
+    ];
+    let body = b"0000\0\xff\r\n\r\nafter rejection";
+    let valid = upload(body);
+    let mut storage = [0xa5; 512];
+    for (name, wire, error) in cases {
+        for width in [1, 4, 31] {
+            assert_eq!(
+                receive(wire, width, &mut storage),
+                Err(*error),
+                "{name}, width={width}"
+            );
+            assert_eq!(
+                receive(&valid, width, &mut storage),
+                Ok(expected_upload(body)),
+                "after {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn exact_header_capacity_succeeds_and_over_budget_requests_recover() {
+    let mut storage = [0xa5; 512];
+    let prefix = b"GET /repo.git/HEAD HTTP/1.0\r\nX: ";
+    let mut exact = vec![b'a'; storage.len()];
+    exact[..prefix.len()].copy_from_slice(prefix);
+    exact[508..].copy_from_slice(b"\r\n\r\n");
+    let expected = Parsed {
+        method: "GET".into(),
+        path: "/repo.git/HEAD".into(),
+        query: None,
+        content_type: None,
+        git_protocol: None,
+        body: vec![],
+    };
+    assert_eq!(receive(&exact, 3, &mut storage), Ok(expected));
+    let mut over = exact[..508].to_vec();
+    over.extend_from_slice(b"a\r\n\r\n");
+    let oversized_body = upload(&[0; 512]);
+    for wire in [&over[..], &oversized_body[..]] {
+        assert_eq!(receive(wire, 7, &mut storage), Err(Error::BufferTooSmall));
+        assert_eq!(
+            receive(&upload(b"after limit"), 7, &mut storage),
+            Ok(expected_upload(b"after limit"))
+        );
+    }
+}

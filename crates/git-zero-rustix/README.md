@@ -19,6 +19,12 @@ compressed body and expanded body must all fit. Inflation borrows a fixed 32 KiB
 stack history window and validates the gzip checksum and size before routing.
 Duplicate framing/selector headers, truncated bodies and unsupported transfer or
 content encodings are rejected. Chunked framing remains unsupported.
+Header delimiter scanning retains three overlap bytes between reads, so each
+possible four-byte delimiter position is examined at most once. Header and body
+bytes still share the caller's fixed request storage; fragmentation does not
+raise that limit. The `http_framing` socket tests cover binary bodies, malformed
+requests, exact capacity and recovery with reused storage. Scan unit tests prove
+the work bound for one-byte fragments through a 64 KiB header.
 
 `respond_stream` sends a prepared `http::stream::ResponseEncoder` with HTTP/1.0
 close-delimited framing and caller-owned output staging. It writes all staged
