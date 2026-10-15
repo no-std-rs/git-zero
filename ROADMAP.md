@@ -198,9 +198,19 @@ remain regression coverage; server completion is measured with real Git clients.
   independent oracle evidence and explicit unimplemented or untested gaps.
 - [ ] Reusable upstream fixture adapter where Git's harness allows replacing a server;
   record GPL provenance for any copied tests rather than copying them silently.
+  `tests/server_fixture.py` now exports any Git-created fixture's reachable raw
+  objects, refs and HEAD for the native file-provider harness, including packed
+  sources and both object formats. This independently authored adapter does not
+  substitute into Git's Apache-specific upstream harness; that integration remains.
 - [ ] Empty/bare repositories, arbitrary refs, tags, large binary blobs, deep histories,
   nested trees, aggressive packing, and deltas served by git-zero in the real-Git
   client interoperability matrix, including protocol versions and object formats.
+  Native `references` now compares 40-level trees, 32 changing historical blobs,
+  a merge, a 384 KiB binary, executables, symlinks, unusual refs and nested tags
+  over v0/v1/v2 and dumb HTTP in SHA-1/SHA-256, with full and incremental clones.
+  The Git oracle is packed-only and must contain deltas; git-zero serves the same
+  exported raw objects. Worker rich fixtures and server compressed/delta pack
+  generation/reuse remain gaps rather than inferred coverage.
 - [ ] Incremental fetch after changing a backend snapshot, pack reuse and eviction races.
   Native smart/dumb tests now fetch file-backed snapshots through A → B → A at
   one URL, validate refs, object bodies and checkouts with real Git, and exercise

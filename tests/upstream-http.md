@@ -67,6 +67,26 @@ and all three smart protocols. Relative/time/exclusion deepening, promised-objec
 retrieval and v0 include-tag remain planned. The [server acceptance matrix](server-acceptance.md)
 separates this server evidence from the client and Git-only baselines.
 
+`references::real_git_deep_binary_modes_and_packed_fixtures_match_git_servers_in_both_formats`
+adds a native server fixture with a 40-level tree, 32 changing historical blobs,
+a merge, a 384 KiB binary, executable/symlink modes, unusual refs and nested
+annotated tags. Real Git compares discovery, full clones and incremental fetches
+over v0/v1/v2 and dumb HTTP in SHA-1/SHA-256. Assertions compare every reachable
+object's ID/kind/body, recursive tree modes, checkout bytes, refs and strict fsck.
+The Git oracle is packed-only with deltas verified by `git verify-pack`.
+git-zero serves exported raw objects; this test does not imply that its server
+generates or reuses compressed/delta packs. Worker rich-fixture parity remains
+unimplemented.
+
+`server_fixture.py::export_fixture` is the reusable boundary between independently
+Git-created fixtures and the native file-backed harness. It reads packed or
+loose sources without changing them and exports raw bodies plus exact object
+format, refs, symbolic targets, peeled IDs and HEAD. Existing empty/unborn,
+detached and symbolic-ref fixtures use the same adapter. A separate export can
+be prepared with `python3 tests/server_fixture.py --repo /path/to/fixture.git
+--root /tmp/exported-fixture`. This is not substitution into Git's Apache harness;
+no upstream GPL fixture bodies have been copied.
+
 `upstream-snapshot-{smart,dumb}` constructs blob/tree/commit bytes using Git's
 own commands, with the demo's exact content and identity. Both servers must
 advertise identical refs and produce identical reachable objects and checkouts.
