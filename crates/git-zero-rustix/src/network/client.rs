@@ -19,7 +19,7 @@ pub struct HttpTransport<'a> {
 
 impl Transport for HttpTransport<'_> {
     fn request(&mut self, request: Request<'_>, response: &mut [u8]) -> Result<(u16, usize)> {
-        let socket = socket()?;
+        let socket = socket(net::AddressFamily::INET)?;
         timeouts(&socket)?;
         net::connect(&socket, &self.address).map_err(|_| Error::Backend)?;
         self.send_request(&socket, request)?;
