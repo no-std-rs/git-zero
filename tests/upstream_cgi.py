@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from typing import NamedTuple
 
 from interop import environment, run
 from server_fixture import export_fixture
@@ -13,6 +14,14 @@ from server_fixture import export_fixture
 BODY_LIMIT = 65_536
 OBJECT_LIMIT = 256
 BYTE_LIMIT = 8 * 1024 * 1024
+
+
+class CgiRequest(NamedTuple):
+    method: str
+    path: str
+    query: str
+    git_protocol: str
+    content_type: str
 
 
 def request(config, env, stream):
@@ -32,8 +41,9 @@ def request(config, env, stream):
     body = stream.read(length)
     if len(body) != length:
         raise ValueError("truncated CGI body")
-    return repo, [method, path.removeprefix("/repo.git/"), env.get("QUERY_STRING", ""),
-                  env.get("HTTP_GIT_PROTOCOL", ""), env.get("CONTENT_TYPE", "")], body
+    args = CgiRequest(method, path.removeprefix("/repo.git/"), env.get("QUERY_STRING", ""),
+                      env.get("HTTP_GIT_PROTOCOL", ""), env.get("CONTENT_TYPE", ""))
+    return repo, args, body
 
 
 def export_bounded(root, repo, env):
@@ -54,32 +64,39 @@ def export_bounded(root, repo, env):
     return manifest
 
 
+def attested_response(config, root, args, body):
+    result = subprocess.run([config["native"], str(root), *args], input=body,
+                            capture_output=True, timeout=20, check=True)
+    proof = f"git-zero-upstream-cgi: served {args.method} {args.path}\n".encode()
+    if result.stderr != proof or not result.stdout.startswith(b"Status: 200 OK\r\n"):
+        raise ValueError("native encoder did not attest successful request")
+    if len(result.stdout) > BYTE_LIMIT + 4096:
+        raise ValueError("CGI response exceeds limit")
+    return result.stdout
+
+
+def append_trace(path, entry):
+    data = (json.dumps(entry, sort_keys=True) + "\n").encode()
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600),
+                   "wb", buffering=0) as trace:
+        if trace.write(data) != len(data):
+            raise OSError("short CGI trace write")
+
+
 def serve(config, env, stream):
     repo, args, body = request(config, env, stream)
     git_env = environment(config["git"])
     with tempfile.TemporaryDirectory(prefix="request-", dir=config["snapshots"]) as temp:
         root = Path(temp)
         manifest = export_bounded(root, repo, git_env)
-        result = subprocess.run([config["native"], str(root), *args], input=body,
-                                capture_output=True, timeout=20, check=True)
-        proof = f"git-zero-upstream-cgi: served {args[0]} {args[1]}\n".encode()
-        if result.stderr != proof or not result.stdout.startswith(b"Status: 200 OK\r\n"):
-            raise ValueError("native encoder did not attest successful request")
-        if len(result.stdout) > BYTE_LIMIT + 4096:
-            raise ValueError("CGI response exceeds limit")
+        response = attested_response(config, root, args, body)
         entry = {"backend": "git-zero", "native_sha256": config["native_sha256"],
-                 "method": args[0], "path": args[1], "protocol": args[3],
+                 "method": args.method, "path": args.path, "protocol": args.git_protocol,
                  "head": (root / "head.txt").read_text().splitlines()[0],
                  "objects": len(manifest), "body_bytes": len(body),
-                 "response_bytes": len(result.stdout)}
-        fd = os.open(config["trace"], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        try:
-            data = (json.dumps(entry, sort_keys=True) + "\n").encode()
-            if os.write(fd, data) != len(data):
-                raise OSError("short CGI trace write")
-        finally:
-            os.close(fd)
-        return result.stdout
+                 "response_bytes": len(response)}
+        append_trace(config["trace"], entry)
+        return response
 
 
 def main(config_path):

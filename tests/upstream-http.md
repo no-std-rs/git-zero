@@ -112,6 +112,10 @@ Separate reference and git-zero runs cover v0/v2 × SHA-1/SHA-256. Each selected
 case must execute successfully; missing, renamed, duplicated or skipped cases
 fail the adapter. Real Git strict fsck and exact object-body/tree comparisons
 check each clone, and both backends must produce the same fixture manifest.
+`manifest_sha256` hashes the exact `manifest.json` bytes: UTF-8 JSON with sorted
+keys, two-space indentation and a trailing newline. Each object ID maps to its
+kind, byte length and raw-body SHA-256; the fingerprint binds the comparison to
+that persisted artifact. Independent clone checks still compare the full bytes.
 The export allows at most 256 objects, 32 refs and 8 MiB of raw objects; requests
 are at most 64 KiB and encoded responses at most 8 MiB. These test-host limits
 are independent of production host policies. Linux subreaper ownership, PID

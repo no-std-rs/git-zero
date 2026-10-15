@@ -1,128 +1,22 @@
 //! Independent CGI test host for unchanged, external Git HTTP fixtures.
 //! Apache owns HTTP framing. This is not a production repository importer.
 use git_zero::{
-    Head, ObjectId, ObjectKind, RefRepository, Reference, ValidatedRepository,
+    RefRepository, Repository, ValidatedRepository,
     http::{Request, SelectionStorage, stream::ResponseEncoder},
 };
-use git_zero_rustix::{FileObject, FileRepository};
+use git_zero_rustix::FileRepository;
 use std::{
     io::{Read, Write},
     path::Path,
 };
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-const OBJECTS: usize = 256;
+#[path = "support/fixture.rs"]
+mod fixture;
+use fixture::{Fixture, OBJECT_BYTES, OBJECTS, Result, core_result};
+
 const BODY_BYTES: usize = 65_536;
-const OBJECT_BYTES: u64 = 8 * 1024 * 1024;
 
-fn bounded_text(path: &Path) -> Result<String> {
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take(65_537)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > 65_536 {
-        return Err("fixture metadata exceeds limit".into());
-    }
-    Ok(String::from_utf8(bytes)?)
-}
-
-fn object_id(text: &str) -> Result<ObjectId> {
-    ObjectId::from_hex(text.as_bytes()).map_err(|error| format!("object ID: {error:?}").into())
-}
-
-fn object_kind(text: &str) -> Result<ObjectKind> {
-    match text {
-        "blob" => Ok(ObjectKind::Blob),
-        "tree" => Ok(ObjectKind::Tree),
-        "commit" => Ok(ObjectKind::Commit),
-        "tag" => Ok(ObjectKind::Tag),
-        _ => Err("unknown fixture object kind".into()),
-    }
-}
-
-fn objects(root: &Path) -> Result<Vec<FileObject>> {
-    let mut result = Vec::new();
-    let mut total = 0;
-    for row in bounded_text(&root.join("objects.txt"))?.lines() {
-        if result.len() == OBJECTS {
-            return Err("fixture object count exceeds limit".into());
-        }
-        let (hex, kind) = row.split_once('\t').ok_or("invalid object row")?;
-        let id = object_id(hex)?;
-        let path = root.join("raw").join(hex);
-        let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?;
-        let fd = rustix::fs::open(
-            path.as_c_str(),
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
-        let size = rustix::fs::fstat(&fd)
-            .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?
-            .st_size;
-        total += u64::try_from(size)?;
-        if total > OBJECT_BYTES {
-            return Err("fixture object bytes exceed limit".into());
-        }
-        result.push(
-            FileObject::from_fd(fd, object_kind(kind)?, id)
-                .map_err(|error| format!("file object: {error:?}"))?,
-        );
-    }
-    Ok(result)
-}
-
-fn references(text: &str) -> Result<Vec<Reference<'_>>> {
-    let mut result = Vec::new();
-    for row in text.lines() {
-        if result.len() == 32 {
-            return Err("fixture ref count exceeds limit".into());
-        }
-        let fields: Vec<_> = row.split('\t').collect();
-        if fields.len() != 4 {
-            return Err("invalid ref row".into());
-        }
-        result.push(Reference {
-            name: fields[0],
-            id: object_id(fields[1])?,
-            symbolic_target: (fields[2] != "-").then_some(fields[2]),
-            peeled: (fields[3] != "-")
-                .then(|| object_id(fields[3]))
-                .transpose()?,
-        });
-    }
-    Ok(result)
-}
-
-fn serve(args: &[String]) -> Result<()> {
-    let root = Path::new(&args[0]);
-    let objects = objects(root)?;
-    let head_text = bounded_text(&root.join("head.txt"))?;
-    let mut lines = head_text.lines();
-    let id = object_id(lines.next().ok_or("missing HEAD")?)?;
-    let target = lines.next().unwrap_or("");
-    let head = if id.is_zero() {
-        Head::Unborn(target)
-    } else if target.is_empty() {
-        Head::Detached(id)
-    } else {
-        Head::Symbolic { target, id }
-    };
-    let refs_text = bounded_text(&root.join("refs.txt"))?;
-    let refs = references(&refs_text)?;
-    let files = FileRepository::new(id, &objects);
-    let repository =
-        RefRepository::new(&files, head, &refs).map_err(|error| format!("refs: {error:?}"))?;
-    let mut metadata = [None; OBJECTS];
-    let mut by_id = [0; OBJECTS];
-    let repository = ValidatedRepository::new(
-        &repository,
-        &mut metadata,
-        &mut by_id,
-        &mut [0; 1024],
-        &mut [0; 4096],
-    )
-    .map_err(|error| format!("validation: {error:?}"))?;
+fn request_body() -> Result<Vec<u8>> {
     let mut body = Vec::new();
     std::io::stdin()
         .take((BODY_BYTES + 1) as u64)
@@ -130,31 +24,25 @@ fn serve(args: &[String]) -> Result<()> {
     if body.len() > BODY_BYTES {
         return Err("request body exceeds limit".into());
     }
-    let request = Request {
+    Ok(body)
+}
+
+fn request<'a>(args: &'a [String], body: &'a [u8]) -> Request<'a> {
+    Request {
         method: &args[1],
         path: &args[2],
         query: (!args[3].is_empty()).then_some(args[3].as_str()),
         git_protocol: (!args[4].is_empty()).then_some(args[4].as_str()),
         content_type: (!args[5].is_empty()).then_some(args[5].as_str()),
-        body: &body,
-    };
-    let mut wants = [id; 32];
-    let mut selected = [None; OBJECTS];
-    let mut indices = [0; OBJECTS];
-    let mut read = [0; 1024];
-    let mut parse = [0; 4096];
-    let mut selection = SelectionStorage {
-        wants: &mut wants,
-        objects: &mut selected,
-        indices: &mut indices,
-        read: &mut read,
-        parse: &mut parse,
-        graph_read_limit: OBJECT_BYTES,
-    };
-    let mut control = [0; 65_536];
-    let mut encoder =
-        ResponseEncoder::with_selection(&repository, request, &mut selection, &mut control)
-            .map_err(|error| format!("HTTP preparation: {error:?}"))?;
+        body,
+    }
+}
+
+fn transmit(
+    repository: &impl Repository,
+    encoder: &mut ResponseEncoder<'_>,
+    request: Request<'_>,
+) -> Result<()> {
     let response = encoder.response();
     if response.status != 200 {
         return Err(format!("unexpected CGI status {}", response.status).into());
@@ -168,9 +56,7 @@ fn serve(args: &[String]) -> Result<()> {
     let mut staging = [0; 4096];
     let mut total = 0;
     loop {
-        let count = encoder
-            .read(&repository, &mut staging)
-            .map_err(|error| format!("HTTP encoding: {error:?}"))?;
+        let count = core_result(encoder.read(repository, &mut staging), "HTTP encoding")?;
         if count == 0 {
             break;
         }
@@ -186,6 +72,47 @@ fn serve(args: &[String]) -> Result<()> {
         request.method, request.path
     );
     Ok(())
+}
+
+fn serve(args: &[String]) -> Result<()> {
+    let fixture = Fixture::load(Path::new(&args[0]))?;
+    let (id, head) = fixture.head()?;
+    let refs = fixture.references()?;
+    let files = FileRepository::new(id, fixture.objects());
+    let repository = core_result(RefRepository::new(&files, head, &refs), "refs")?;
+    let mut metadata = [None; OBJECTS];
+    let mut by_id = [0; OBJECTS];
+    let repository = core_result(
+        ValidatedRepository::new(
+            &repository,
+            &mut metadata,
+            &mut by_id,
+            &mut [0; 1024],
+            &mut [0; 4096],
+        ),
+        "validation",
+    )?;
+    let body = request_body()?;
+    let request = request(args, &body);
+    let mut wants = [id; 32];
+    let mut selected = [None; OBJECTS];
+    let mut indices = [0; OBJECTS];
+    let mut read = [0; 1024];
+    let mut parse = [0; 4096];
+    let mut selection = SelectionStorage {
+        wants: &mut wants,
+        objects: &mut selected,
+        indices: &mut indices,
+        read: &mut read,
+        parse: &mut parse,
+        graph_read_limit: OBJECT_BYTES,
+    };
+    let mut control = [0; 65_536];
+    let mut encoder = core_result(
+        ResponseEncoder::with_selection(&repository, request, &mut selection, &mut control),
+        "HTTP preparation",
+    )?;
+    transmit(&repository, &mut encoder, request)
 }
 
 fn main() {

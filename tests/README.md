@@ -838,14 +838,25 @@ python3 tests/upstream_harness.py \
 
 Run as a non-root Linux user with `/proc` child lists, Python pidfd support,
 Apache 2.4 and its CGI/prefork modules (Ubuntu:
-`apache2`). The source checkout must be clean at the exact tag commit, with
+`apache2`). The native CGI and native reference comparisons use the same bounded
+raw-fixture loader: 256 objects, 32 refs, 8 MiB of raw objects and 64 KiB per metadata
+file, including empty, unborn, symbolic and detached HEAD states. The source checkout must be clean at the exact tag commit, with
 `GIT-BUILD-OPTIONS` and `t/helper/test-tool` built. The output directory must be
 new; it retains every trial's TAP, bare/client repositories, Apache logs, private
 CGI trace and the final `report.json`, including failures. Each upstream shell
 run has a 120-second deadline, configurable with `--timeout`; individual Git
 inspection commands have 30-second deadlines. Detached daemon/CGI cleanup is
-bounded and tested on normal completion and timeout. Native failures, skipped
+bounded and tested on normal completion and timeout. The dedicated Python runner
+requires one thread, Linux child-subreaper adoption, `/proc` child lists and
+`waitid(P_PIDFD)` support; it checks these before launching Apache. Each pidfd
+must name a kernel-waitable child before it can be signalled. Killing an owned
+parent adopts its remaining descendants for subsequent bounded cleanup passes.
+Native failures, skipped
 selected tests, absent/foreign traces or mismatched object graphs fail the run.
+Apache's unchanged harness cannot inherit the selected port's reservation socket.
+Only an exact chosen-port `EADDRINUSE` before any selected test or native trace
+allows a new isolated trial, at most three attempts; failed logs and retry records
+remain in the report. Semantic, native and timeout failures are never retried.
 Both Git's source and installation remain unchanged. The [coverage map](upstream-http.md)
 documents provenance, limits and the exact substitution hook. The broader suites,
 HTTP/2, Worker and Apache's static dumb Alias remain separate coverage gaps.
