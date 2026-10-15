@@ -39,15 +39,22 @@ impl Fixture {
 pub fn core_result<T>(result: git_zero::Result<T>, context: &str) -> Result<T> {
     result.map_err(|error| format!("{context}: {error:?}").into())
 }
-fn bounded_text(path: &Path) -> Result<String> {
+/// Read one bounded host input, including one extra byte to detect overflow.
+pub fn bounded_bytes(input: impl Read, limit: u32, exceeded: &str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take(65_537)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > 65_536 {
-        return Err("fixture metadata exceeds limit".into());
+    input.take(u64::from(limit) + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit as usize {
+        return Err(exceeded.into());
     }
-    Ok(String::from_utf8(bytes)?)
+    Ok(bytes)
+}
+
+fn bounded_text(path: &Path) -> Result<String> {
+    Ok(String::from_utf8(bounded_bytes(
+        std::fs::File::open(path)?,
+        65_536,
+        "fixture metadata exceeds limit",
+    )?)?)
 }
 
 fn object_id(text: &str) -> Result<ObjectId> {
@@ -55,13 +62,15 @@ fn object_id(text: &str) -> Result<ObjectId> {
 }
 
 fn object_kind(text: &str) -> Result<ObjectKind> {
-    match text {
-        "blob" => Ok(ObjectKind::Blob),
-        "tree" => Ok(ObjectKind::Tree),
-        "commit" => Ok(ObjectKind::Commit),
-        "tag" => Ok(ObjectKind::Tag),
-        _ => Err("unknown fixture object kind".into()),
-    }
+    [
+        ObjectKind::Blob,
+        ObjectKind::Tree,
+        ObjectKind::Commit,
+        ObjectKind::Tag,
+    ]
+    .into_iter()
+    .find(|kind| kind.name() == text)
+    .ok_or_else(|| "unknown fixture object kind".into())
 }
 
 fn objects(root: &Path) -> Result<Vec<FileObject>> {

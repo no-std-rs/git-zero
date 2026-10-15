@@ -5,27 +5,13 @@ use git_zero::{
     http::{Request, SelectionStorage, stream::ResponseEncoder},
 };
 use git_zero_rustix::FileRepository;
-use std::{
-    io::{Read, Write},
-    path::Path,
-};
+use std::{io::Write, path::Path};
 
 #[path = "support/fixture.rs"]
 mod fixture;
 use fixture::{Fixture, OBJECT_BYTES, OBJECTS, Result, core_result};
 
-const BODY_BYTES: usize = 65_536;
-
-fn request_body() -> Result<Vec<u8>> {
-    let mut body = Vec::new();
-    std::io::stdin()
-        .take((BODY_BYTES + 1) as u64)
-        .read_to_end(&mut body)?;
-    if body.len() > BODY_BYTES {
-        return Err("request body exceeds limit".into());
-    }
-    Ok(body)
-}
+const BODY_BYTES: u32 = 65_536;
 
 fn request<'a>(args: &'a [String], body: &'a [u8]) -> Request<'a> {
     Request {
@@ -92,7 +78,7 @@ fn serve(args: &[String]) -> Result<()> {
         ),
         "validation",
     )?;
-    let body = request_body()?;
+    let body = fixture::bounded_bytes(std::io::stdin(), BODY_BYTES, "request body exceeds limit")?;
     let request = request(args, &body);
     let mut wants = [id; 32];
     let mut selected = [None; OBJECTS];

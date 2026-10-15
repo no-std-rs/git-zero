@@ -58,6 +58,7 @@ def compare_repository(source, target, revision, env):
     assert actual == expected, f"object graph differs: {set(actual) ^ set(expected)}"
     tree_revision = git(source, "rev-parse", "HEAD", env=env).strip().decode() if revision == "--all" else revision
     assert git(source, "ls-tree", "-rz", tree_revision, env=env) == git(target, "ls-tree", "-rz", tree_revision, env=env)
+    return expected
 
 
 def verify_checkout(repo, checkout, head, env):

@@ -1,4 +1,5 @@
 """Coverage, no-fallback and Linux daemon ownership contracts of the adapter."""
+from contextlib import contextmanager
 import io
 import json
 import os
@@ -114,15 +115,19 @@ class CgiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             upstream_cgi.request(self.config, self.env, io.BytesIO(b"0000"))
 
+    @contextmanager
+    def rejected_native(self, **outcome):
+        with patch.object(upstream_cgi, "export_bounded", return_value={}), \
+             patch.object(upstream_cgi.subprocess, "run", **outcome) as native:
+            yield
+        native.assert_called_once()
+        self.assertEqual(native.call_args.args[0][0], self.config["native"])
+        self.assertFalse(Path(self.config["trace"]).exists())
+
     def test_failed_native_never_falls_back_or_writes_success_trace(self):
         failure = subprocess.CalledProcessError(1, [self.config["native"]])
-        with patch.object(upstream_cgi, "export_bounded", return_value={}), \
-             patch.object(upstream_cgi.subprocess, "run", side_effect=failure) as native:
-            with self.assertRaises(subprocess.CalledProcessError):
-                upstream_cgi.serve(self.config, self.env, io.BytesIO(b"0000"))
-        self.assertEqual(native.call_count, 1)
-        self.assertEqual(native.call_args.args[0][0], "/native-upstream-cgi")
-        self.assertFalse(Path(self.config["trace"]).exists())
+        with self.rejected_native(side_effect=failure), self.assertRaises(subprocess.CalledProcessError):
+            upstream_cgi.serve(self.config, self.env, io.BytesIO(b"0000"))
 
     def test_unattested_or_oversized_native_response_never_publishes_success(self):
         header = b"Status: 200 OK\r\n"
@@ -134,13 +139,8 @@ class CgiTests(unittest.TestCase):
         for stdout, stderr, error in cases:
             result = SimpleNamespace(stdout=stdout, stderr=stderr)
             with self.subTest(error=error, response_bytes=len(stdout)), \
-                 patch.object(upstream_cgi, "export_bounded", return_value={}), \
-                 patch.object(upstream_cgi.subprocess, "run", return_value=result) as native:
-                with self.assertRaisesRegex(ValueError, error):
-                    upstream_cgi.serve(self.config, self.env, io.BytesIO(b"0000"))
-            native.assert_called_once()
-            self.assertEqual(native.call_args.args[0][0], self.config["native"])
-            self.assertFalse(Path(self.config["trace"]).exists())
+                 self.rejected_native(return_value=result), self.assertRaisesRegex(ValueError, error):
+                upstream_cgi.serve(self.config, self.env, io.BytesIO(b"0000"))
 
 
 class PortHandoffTests(unittest.TestCase):
@@ -224,6 +224,16 @@ class PortHandoffTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "linux", "Linux subreaper and /proc ownership")
 class LifecycleTests(unittest.TestCase):
+    def test_cleanup_failure_restores_previous_adoption_state(self):
+        previous = upstream_process.adoption_state()
+        self.addCleanup(upstream_process.adoption_control,
+                        upstream_process.PR_SET_CHILD_SUBREAPER, previous)
+        with patch.object(upstream_process, "cleanup", side_effect=RuntimeError("cleanup failed")) as cleanup, \
+             self.assertRaisesRegex(RuntimeError, "cleanup failed"), upstream_process.subreaper():
+            self.assertEqual(upstream_process.adoption_state(), 1)
+        cleanup.assert_called_once()
+        self.assertEqual(upstream_process.adoption_state(), previous)
+
     def test_threaded_host_is_rejected_before_launch(self):
         release = threading.Event()
         worker = threading.Thread(target=release.wait)

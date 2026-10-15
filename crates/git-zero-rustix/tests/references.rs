@@ -181,72 +181,97 @@ fn compare_format(state: &str, object_format: &str) {
     });
 }
 
-// Exercise the loader's resource boundary independently of downstream Git
-// object-ID/body and graph validation, which the real-Git oracles cover below.
-#[test]
-fn raw_fixture_loader_enforces_exact_and_exceeded_limits() {
-    let root = std::env::temp_dir().join(format!("git-zero-loader-limits-{}", std::process::id()));
-    std::fs::create_dir(&root).unwrap();
-    let _cleanup = Cleanup(root.clone());
-    std::fs::create_dir(root.join("raw")).unwrap();
-    let id = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
-    let raw = root.join("raw").join(id);
-    std::fs::write(&raw, []).unwrap();
-    let row = format!("{id}\tblob\n");
-    let objects = root.join("objects.txt");
-    let refs = root.join("refs.txt");
-    let head = root.join("head.txt");
-    std::fs::write(&refs, "").unwrap();
-    std::fs::write(&head, format!("{id}\n\n")).unwrap();
+const EMPTY_BLOB_ID: &str = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
 
+// Resource parsing is tested independently of downstream object-ID/body and
+// graph validation, which the unchanged real-Git oracles cover below.
+fn raw_fixture(name: &str) -> Cleanup {
+    let root = std::env::temp_dir().join(format!("git-zero-loader-{name}-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let cleanup = Cleanup(root);
+    let root = &cleanup.0;
+    std::fs::create_dir(root.join("raw")).unwrap();
+    std::fs::write(root.join("raw").join(EMPTY_BLOB_ID), []).unwrap();
+    std::fs::write(root.join("objects.txt"), format!("{EMPTY_BLOB_ID}\tblob\n")).unwrap();
+    std::fs::write(root.join("refs.txt"), "").unwrap();
+    std::fs::write(root.join("head.txt"), format!("{EMPTY_BLOB_ID}\n\n")).unwrap();
+    cleanup
+}
+
+#[test]
+fn raw_fixture_object_count_accepts_256_and_rejects_257() {
+    let cleanup = raw_fixture("objects");
+    let root = &cleanup.0;
+    let row = format!("{EMPTY_BLOB_ID}\tblob\n");
+    let objects = root.join("objects.txt");
     std::fs::write(&objects, row.repeat(OBJECT_CAPACITY)).unwrap();
     assert_eq!(
-        Fixture::load(&root).unwrap().objects().len(),
+        Fixture::load(root).unwrap().objects().len(),
         OBJECT_CAPACITY
     );
     std::fs::write(&objects, row.repeat(OBJECT_CAPACITY + 1)).unwrap();
-    assert_loader_error(&root, "object count exceeds limit");
-    std::fs::write(&objects, &row).unwrap();
+    assert_loader_error(root, "object count exceeds limit");
+}
 
-    let file = std::fs::File::options().write(true).open(&raw).unwrap();
+#[test]
+fn raw_fixture_bytes_accept_8_mib_and_reject_larger_bodies() {
+    let cleanup = raw_fixture("bytes");
+    let root = &cleanup.0;
+    let file = std::fs::File::options()
+        .write(true)
+        .open(root.join("raw").join(EMPTY_BLOB_ID))
+        .unwrap();
     file.set_len(fixture::OBJECT_BYTES).unwrap();
     assert_eq!(
-        Fixture::load(&root).unwrap().objects()[0].info().size,
+        Fixture::load(root).unwrap().objects()[0].info().size,
         fixture::OBJECT_BYTES
     );
     file.set_len(fixture::OBJECT_BYTES + 1).unwrap();
-    assert_loader_error(&root, "object bytes exceed limit");
-    file.set_len(0).unwrap();
+    assert_loader_error(root, "object bytes exceed limit");
+}
 
-    let mut text = format!("{id}\n\n").into_bytes();
+#[test]
+fn raw_fixture_metadata_accepts_64_kib_and_rejects_larger_files() {
+    let cleanup = raw_fixture("metadata");
+    let root = &cleanup.0;
+    let head = root.join("head.txt");
+    let mut text = format!("{EMPTY_BLOB_ID}\n\n").into_bytes();
     text.resize(65_536, b'\n');
     std::fs::write(&head, &text).unwrap();
-    assert!(Fixture::load(&root).unwrap().head().is_ok());
+    assert!(Fixture::load(root).unwrap().head().is_ok());
     text.push(b'\n');
     std::fs::write(&head, &text).unwrap();
-    assert_loader_error(&root, "metadata exceeds limit");
-    std::fs::write(&head, format!("{id}\n\n")).unwrap();
+    assert_loader_error(root, "metadata exceeds limit");
+}
 
-    let reference = format!("refs/heads/main\t{id}\t-\t-\n");
+#[test]
+fn raw_fixture_ref_count_accepts_32_and_rejects_33() {
+    let cleanup = raw_fixture("refs");
+    let root = &cleanup.0;
+    let refs = root.join("refs.txt");
+    let reference = format!("refs/heads/main\t{EMPTY_BLOB_ID}\t-\t-\n");
     std::fs::write(&refs, reference.repeat(32)).unwrap();
-    assert_eq!(
-        Fixture::load(&root).unwrap().references().unwrap().len(),
-        32
-    );
+    assert_eq!(Fixture::load(root).unwrap().references().unwrap().len(), 32);
     std::fs::write(&refs, reference.repeat(33)).unwrap();
     assert!(
-        Fixture::load(&root)
+        Fixture::load(root)
             .unwrap()
             .references()
             .unwrap_err()
             .to_string()
             .contains("ref count exceeds limit")
     );
-    std::fs::write(&refs, "").unwrap();
+}
 
+#[test]
+fn raw_fixture_objects_accept_regular_files_and_reject_symlinks() {
+    let cleanup = raw_fixture("symlink");
+    let root = &cleanup.0;
+    let raw = root.join("raw").join(EMPTY_BLOB_ID);
+    assert_eq!(Fixture::load(root).unwrap().objects().len(), 1);
     std::fs::rename(&raw, root.join("backing-object")).unwrap();
     std::os::unix::fs::symlink(root.join("backing-object"), &raw).unwrap();
-    assert_loader_error(&root, "file object");
+    assert_loader_error(root, "file object");
 }
 
 fn assert_loader_error(root: &Path, expected: &str) {

@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 from interop import environment, run
-from upstream_http import compare_repository, object_manifest
+from upstream_http import compare_repository
 from upstream_process import subreaper
 
 
@@ -157,8 +157,7 @@ def configure_trial(args, root, backend, protocol, object_format, port):
 def fixture_manifest(root, document, env):
     trash = document.parent.parent
     bare = document / "repo.git"
-    compare_repository(bare, trash / "clone", "--all", env)
-    manifest = object_manifest(bare, "--all", env)
+    manifest = compare_repository(bare, trash / "clone", "--all", env)
     artifact = root / "manifest.json"
     artifact.write_text(json.dumps({oid.decode(): {
         "kind": kind.decode(), "bytes": len(body), "body_sha256": hashlib.sha256(body).hexdigest(),
