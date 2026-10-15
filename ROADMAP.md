@@ -261,8 +261,10 @@ remain regression coverage; server completion is measured with real Git clients.
   V0 capability conflicts, ACK/have phases and sideband responses and v2 command
   framing, ls-refs/fetch, unsupported extensions and HTTP gzip envelopes have
   seeded mutations. Shallow/filter mutations now exercise selected synchronous
-  and pull responses, boundary framing, budgets and cancellation; concurrent
-  host state remains planned.
+  and pull responses, boundary framing, budgets and cancellation. Native header
+  intake now retains scan progress, with a 64 KiB one-byte-fragment work bound
+  and socket cases for malformed/truncated input, storage limits and reuse.
+  Continuous native framing and concurrent host-state campaigns remain planned.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.
