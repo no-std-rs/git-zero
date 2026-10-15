@@ -62,6 +62,10 @@ required-features = ["cli"]
 name = "decoder-read"
 required-features = ["cli"]
 
+[[example]]
+name = "upstream-cgi"
+required-features = ["cli"]
+
 [package.metadata.docs.rs]
 all-features = true
 
