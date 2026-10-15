@@ -1,15 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { gzipSync } from "node:zlib";
 import { createWorker } from "../src/worker.mjs";
+import { withServer as serve } from "./http.mjs";
 
 const execute = promisify(execFile);
 const module = await WebAssembly.compile(await readFile(new URL("../build/git_zero_worker_wasm.wasm", import.meta.url)));
@@ -18,6 +16,10 @@ const env = { EXPOSED_VARS: "DEMO_NAME,PUBLIC_JSON", DEMO_NAME: "test", PUBLIC_J
 
 function request(url, init) {
   const result = new Request(url, init);
+  return withMetadata(result);
+}
+
+function withMetadata(result) {
   Object.defineProperty(result, "cf", { value: { asn: 13335, colo: "CDG", country: "FR", tlsVersion: "TLSv1.3" } });
   return result;
 }
@@ -28,30 +30,7 @@ async function snapshot(origin = "https://demo.example") {
   return (await response.json()).clone_url;
 }
 
-async function withServer(callback) {
-  const server = createServer(async (incoming, outgoing) => {
-    try {
-      const parts = [];
-      for await (const part of incoming) parts.push(part);
-      const url = `http://127.0.0.1:${server.address().port}${incoming.url}`;
-      const init = { method: incoming.method, headers: incoming.headers };
-      if (incoming.method === "POST") init.body = Buffer.concat(parts);
-      const response = await worker.fetch(request(url, init), env);
-      outgoing.writeHead(response.status, Object.fromEntries(response.headers));
-      await pipeline(Readable.fromWeb(response.body), outgoing);
-    } catch (error) {
-      if (outgoing.headersSent) outgoing.destroy(error);
-      else { outgoing.writeHead(500); outgoing.end(String(error)); }
-    }
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    await callback(`http://127.0.0.1:${server.address().port}`);
-  } finally {
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
-  }
-}
+const withServer = (callback) => serve((incoming) => worker.fetch(withMetadata(incoming), env), callback);
 
 test("Wasm uses no host imports or allocator", () => {
   assert.deepEqual(WebAssembly.Module.imports(module), []);

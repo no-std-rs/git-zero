@@ -1,3 +1,5 @@
+import { readBytes } from "./bytes.mjs";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 export const MAX_SNAPSHOT_BYTES = 8192;
@@ -54,27 +56,6 @@ export async function persistSnapshot(bytes, env) {
   return { path: `/s/${backend}/${id}/repo.git`, expiresAt };
 }
 
-async function readBounded(stream) {
-  if (!stream || typeof stream.getReader !== "function") throw new Error("Invalid stored snapshot");
-  const reader = stream.getReader();
-  const bytes = new Uint8Array(MAX_RECORD_BYTES);
-  let length = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) return bytes.subarray(0, length);
-      if (length + value.length > bytes.length) throw new Error("Stored snapshot exceeds limit");
-      bytes.set(value, length);
-      length += value.length;
-    }
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 export async function loadSnapshot(env, backend, id) {
   const store = binding(env, backend);
   let stored;
@@ -86,7 +67,7 @@ export async function loadSnapshot(env, backend, id) {
   if (stored === null) throw new SnapshotError("Snapshot not found, expired or not yet available", 404);
   let record;
   try {
-    const bytes = await readBounded(backend === "kv" ? stored : stored.body);
+    const bytes = await readBytes(backend === "kv" ? stored : stored.body, MAX_RECORD_BYTES);
     if (await digest(bytes) !== id) throw new Error("Stored snapshot digest mismatch");
     record = JSON.parse(decoder.decode(bytes));
     if (record.version !== 1 || !Number.isSafeInteger(record.expiresAt)) throw new Error("Invalid stored snapshot");

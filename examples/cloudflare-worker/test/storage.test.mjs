@@ -2,19 +2,32 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import { createWorker } from "../src/worker.mjs";
+import { withServer } from "./http.mjs";
 
 const execute = promisify(execFile);
 const module = await WebAssembly.compile(await readFile(new URL("../build/git_zero_worker_wasm.wasm", import.meta.url)));
 const encoder = new TextEncoder();
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+function streamBytes(bytes, state) {
+  let offset = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      await Promise.resolve();
+      if (state.failStream) return controller.error(new Error("private stream failure"));
+      if (offset === bytes.length) return controller.close();
+      const end = Math.min(offset + 127, bytes.length);
+      controller.enqueue(bytes.slice(offset, end));
+      offset = end;
+    },
+    cancel() { state.cancelled++; },
+  }, { highWaterMark: 0 });
+}
 
 function fixture(backend) {
   const records = new Map();
@@ -42,18 +55,7 @@ function fixture(backend) {
       if (backend === "kv" && expirations.get(key) <= Date.now() + state.offsetMs) records.delete(key);
       const bytes = records.get(key);
       if (!bytes) return null;
-      let offset = 0;
-      const body = new ReadableStream({
-        async pull(controller) {
-          await Promise.resolve();
-          if (state.failStream) return controller.error(new Error("private stream failure"));
-          if (offset === bytes.length) return controller.close();
-          const end = Math.min(offset + 127, bytes.length);
-          controller.enqueue(bytes.slice(offset, end));
-          offset = end;
-        },
-        cancel() { state.cancelled++; },
-      }, { highWaterMark: 0 });
+      const body = streamBytes(bytes, state);
       return backend === "kv" ? body : { body, size: bytes.length };
     },
   };
@@ -71,6 +73,23 @@ async function capture(env, origin = "https://demo.example") {
   const response = await createWorker(module).fetch(request(origin), env);
   assert.equal(response.status, 200);
   return response.json();
+}
+
+async function verifyClone(directory, snapshot, captured, dumb) {
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
+    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0",
+    ...(dumb ? { GIT_SMART_HTTP: "0" } : {}),
+  };
+  const git = (...args) => execute("git", ["-c", "protocol.version=2", ...args], { env, timeout: 30000 });
+  const clone = join(directory, dumb ? "dumb" : "smart");
+  await git("clone", "-q", snapshot.clone_url, clone);
+  await git("-C", clone, "fsck", "--strict");
+  for (const [index, file] of ["cf.json", "headers.json", "vars.json", "runtime.json"].entries()) {
+    assert.equal(await readFile(join(clone, file), "utf8"), captured[index]);
+  }
+  await git("-C", clone, "fetch", "origin");
+  return (await git("-C", clone, "rev-parse", "HEAD")).stdout.trim();
 }
 
 for (const backend of ["kv", "r2"]) {
@@ -164,49 +183,20 @@ for (const backend of ["kv", "r2"]) {
 
   test(`real Git clones and fetches ${backend} snapshots over smart and dumb HTTP across isolates`, async () => {
     const { env, records } = fixture(backend);
-    const server = createServer(async (incoming, outgoing) => {
+    // Reconstruct the host per request, as isolate changes must use persisted
+    // bytes rather than the current capture environment.
+    await withServer((incoming) => createWorker(module).fetch(incoming, env), async (origin) => {
+      const directory = await mkdtemp(join(tmpdir(), "git-zero-storage-"));
       try {
-        const body = [];
-        for await (const chunk of incoming) body.push(chunk);
-        const url = `http://127.0.0.1:${server.address().port}${incoming.url}`;
-        const init = { method: incoming.method, headers: incoming.headers, ...(incoming.method === "POST" ? { body: Buffer.concat(body) } : {}) };
-        // Deliberately reconstruct the host for every request, as isolate changes
-        // must use persisted bytes rather than the current capture environment.
-        const response = await createWorker(module).fetch(new Request(url, init), env);
-        outgoing.writeHead(response.status, Object.fromEntries(response.headers));
-        await pipeline(Readable.fromWeb(response.body), outgoing);
-      } catch (error) {
-        if (outgoing.headersSent) outgoing.destroy(error);
-        else { outgoing.writeHead(500); outgoing.end(String(error)); }
+        const snapshot = await capture(env, origin);
+        const captured = JSON.parse(new TextDecoder().decode([...records.values()][0])).parts;
+        env.PUBLIC = "later environment";
+        const heads = await Promise.all([false, true].map((dumb) => verifyClone(directory, snapshot, captured, dumb)));
+        assert.equal(heads[0], heads[1]);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
       }
     });
-    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const directory = await mkdtemp(join(tmpdir(), "git-zero-storage-"));
-    const gitEnv = {
-      ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
-      GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0",
-    };
-    try {
-      const snapshot = await capture(env, `http://127.0.0.1:${server.address().port}`);
-      const captured = JSON.parse(new TextDecoder().decode([...records.values()][0])).parts;
-      env.PUBLIC = "later environment";
-      const heads = await Promise.all([false, true].map(async (dumb) => {
-        const git = (...args) => execute("git", ["-c", "protocol.version=2", ...args], { env: { ...gitEnv, ...(dumb ? { GIT_SMART_HTTP: "0" } : {}) }, timeout: 30000 });
-        const clone = join(directory, dumb ? "dumb" : "smart");
-        await git("clone", "-q", snapshot.clone_url, clone);
-        await git("-C", clone, "fsck", "--strict");
-        for (const [index, file] of ["cf.json", "headers.json", "vars.json", "runtime.json"].entries()) {
-          assert.equal(await readFile(join(clone, file), "utf8"), captured[index]);
-        }
-        await git("-C", clone, "fetch", "origin");
-        return (await git("-C", clone, "rev-parse", "HEAD")).stdout.trim();
-      }));
-      assert.equal(heads[0], heads[1]);
-    } finally {
-      server.closeAllConnections();
-      await new Promise((resolve) => server.close(resolve));
-      await rm(directory, { recursive: true, force: true });
-    }
   });
 }
 

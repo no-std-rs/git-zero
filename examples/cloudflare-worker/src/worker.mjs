@@ -1,4 +1,5 @@
 import { decodeSnapshot, loadSnapshot, MAX_SNAPSHOT_BYTES, persistSnapshot, SnapshotError } from "./snapshots.mjs";
+import { readBytes } from "./bytes.mjs";
 
 const encoder = new TextEncoder();
 const MAX_TOKEN_LENGTH = Math.ceil(MAX_SNAPSHOT_BYTES / 3) * 4;
@@ -108,24 +109,7 @@ async function readBody(request, maximum) {
     },
   }));
   const stream = encoding === "gzip" ? bounded.pipeThrough(new DecompressionStream("gzip")) : bounded;
-  const reader = stream.getReader();
-  const storage = new Uint8Array(maximum);
-  let length = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (length + value.length > maximum) throw new Error("Request too large");
-      storage.set(value, length);
-      length += value.length;
-    }
-  } catch (error) {
-    await reader.cancel();
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-  return storage.subarray(0, length);
+  return readBytes(stream, maximum);
 }
 
 export function createWorker(module) {
