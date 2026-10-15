@@ -83,7 +83,7 @@ export async function loadSnapshot(env, backend, id) {
   } catch {
     throw new SnapshotError("Snapshot storage is unavailable", 503);
   }
-  if (stored === null) throw new SnapshotError("Snapshot not found or not yet available", 404);
+  if (stored === null) throw new SnapshotError("Snapshot not found, expired or not yet available", 404);
   let record;
   try {
     const bytes = await readBounded(backend === "kv" ? stored : stored.body);

@@ -18,7 +18,8 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function fixture(backend) {
   const records = new Map();
-  const state = { reads: 0, writes: 0, cancelled: 0 };
+  const expirations = new Map();
+  const state = { reads: 0, writes: 0, cancelled: 0, offsetMs: 0 };
   const store = {
     async put(key, value, options) {
       state.writes++;
@@ -26,7 +27,10 @@ function fixture(backend) {
       if (state.failWrite) throw new Error("private storage failure");
       const bytes = new Uint8Array(value).slice();
       assert.equal(key, `snapshots/v1/${hash(bytes)}`);
-      if (backend === "kv") assert.equal(options.expirationTtl, 86400);
+      if (backend === "kv") {
+        assert.equal(options.expirationTtl, 86400);
+        expirations.set(key, Date.now() + state.offsetMs + options.expirationTtl * 1000);
+      }
       else assert.equal(options.sha256, hash(bytes));
       records.set(key, bytes);
       return backend === "kv" ? undefined : { key };
@@ -35,6 +39,7 @@ function fixture(backend) {
       state.reads++;
       assert.equal(type, backend === "kv" ? "stream" : undefined);
       if (state.failRead) throw new Error("private storage failure");
+      if (backend === "kv" && expirations.get(key) <= Date.now() + state.offsetMs) records.delete(key);
       const bytes = records.get(key);
       if (!bytes) return null;
       let offset = 0;
@@ -208,4 +213,15 @@ for (const backend of ["kv", "r2"]) {
 test("unknown snapshot storage settings fail without silently publishing inline data", async () => {
   const response = await createWorker(module).fetch(request("https://demo.example"), { SNAPSHOT_STORAGE: "other" });
   assert.equal(response.status, 503);
+});
+
+test("KV's physical TTL deletion reports a missing/expired snapshot without recapturing", async () => {
+  const { env, records, state } = fixture("kv");
+  const snapshot = await capture(env);
+  state.offsetMs = 86400001;
+  const response = await createWorker(module).fetch(new Request(`${snapshot.clone_url}/HEAD`), env);
+  assert.equal(records.size, 0);
+  assert.equal(response.status, 404);
+  assert.match(await response.text(), /expired/);
+  assert.equal(state.writes, 1);
 });

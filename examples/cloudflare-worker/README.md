@@ -93,8 +93,11 @@ An already prepared response remains valid if storage expires or is evicted
 while its consumer is paused; later requests fail without recapturing metadata.
 
 Storage is read through a stream capped at 8320 bytes, including record overhead.
-Missing records return 404, expired records 410, integrity/stream failures 502,
-and configuration/read/write failures 503, before any Git response bytes. Error
+Missing records return 404, records still present after their logical expiry
+return 410, integrity/stream failures 502, and configuration/read/write failures
+503, before any Git response bytes. KV physically deletes TTL-expired records;
+these return 404, indistinguishably from eviction or a key that never existed.
+The adapter retains no tombstones beyond the configured retention. Error
 responses use `Cache-Control: no-store`; storage read errors include
 `Retry-After: 60`. KV is eventually consistent: another location can temporarily
 miss a completed write, and concurrent writes of the same key can be rate limited.
