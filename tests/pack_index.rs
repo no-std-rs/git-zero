@@ -77,59 +77,67 @@ fn streamed_indexes_match_gits_independent_indexer_in_both_formats() {
         let mut commit = [0; 512];
         let repository = Snapshot::new_with_format(&files, &mut tree, &mut commit, format).unwrap();
         for capacity in [1, 13, 65536] {
-            let (pack, index, entries) = encode(&repository, None, capacity);
-            let pack_path = directory.0.join("generated.pack");
-            let index_path = directory.0.join("generated.idx");
-            std::fs::write(&pack_path, &pack).unwrap();
-            std::fs::write(&index_path, &index).unwrap();
-            let result = git(&directory.0)
-                .args(["verify-pack", "-v"])
-                .arg(&index_path)
-                .output()
-                .unwrap();
-            assert!(
-                result.status.success(),
-                "{}",
-                String::from_utf8_lossy(&result.stderr)
-            );
-            let reference = directory.0.join("reference.idx");
-            let result = git(&directory.0)
-                .args(["index-pack", "--strict", "--index-version=2", "-o"])
-                .arg(&reference)
-                .arg(&pack_path)
-                .output()
-                .unwrap();
-            assert!(
-                result.status.success(),
-                "{}",
-                String::from_utf8_lossy(&result.stderr)
-            );
-            assert_eq!(std::fs::read(reference).unwrap(), index);
-            check_entries(&pack, &entries);
-            let mut expected = vec![0; pack.len()];
-            let mut output = SliceWriter::new(&mut expected);
-            pack::write_with_scratch(&repository, &mut vec![0; capacity], &mut output).unwrap();
-            assert_eq!(output.as_bytes(), pack);
+            check_index_with_git(&directory, &repository, capacity);
         }
-        let empty = EmptyRepository::new_with_format("refs/heads/main", format).unwrap();
-        let (pack, index, entries) = encode(&empty, None, 0);
-        assert!(entries.is_empty());
-        let pack_path = directory.0.join("empty.pack");
-        let index_path = directory.0.join("empty.idx");
-        std::fs::write(&pack_path, pack).unwrap();
-        let result = git(&directory.0)
-            .args(["index-pack", "--index-version=2", "-o"])
-            .arg(&index_path)
-            .arg(pack_path)
-            .output()
-            .unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        assert_eq!(std::fs::read(index_path).unwrap(), index);
+        check_empty_index(&directory, format);
     }
+}
+
+fn check_index_with_git(directory: &Directory, repository: &impl Repository, capacity: usize) {
+    let (pack, index, entries) = encode(repository, None, capacity);
+    let pack_path = directory.0.join("generated.pack");
+    let index_path = directory.0.join("generated.idx");
+    std::fs::write(&pack_path, &pack).unwrap();
+    std::fs::write(&index_path, &index).unwrap();
+    let result = git(&directory.0)
+        .args(["verify-pack", "-v"])
+        .arg(&index_path)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let reference = directory.0.join("reference.idx");
+    let result = git(&directory.0)
+        .args(["index-pack", "--strict", "--index-version=2", "-o"])
+        .arg(&reference)
+        .arg(&pack_path)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(std::fs::read(reference).unwrap(), index);
+    check_entries(&pack, &entries);
+    let mut expected = vec![0; pack.len()];
+    let mut output = SliceWriter::new(&mut expected);
+    pack::write_with_scratch(repository, &mut vec![0; capacity], &mut output).unwrap();
+    assert_eq!(output.as_bytes(), pack);
+}
+
+fn check_empty_index(directory: &Directory, format: ObjectFormat) {
+    let empty = EmptyRepository::new_with_format("refs/heads/main", format).unwrap();
+    let (pack, index, entries) = encode(&empty, None, 0);
+    assert!(entries.is_empty());
+    let pack_path = directory.0.join("empty.pack");
+    let index_path = directory.0.join("empty.idx");
+    std::fs::write(&pack_path, pack).unwrap();
+    let result = git(&directory.0)
+        .args(["index-pack", "--index-version=2", "-o"])
+        .arg(&index_path)
+        .arg(pack_path)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(std::fs::read(index_path).unwrap(), index);
 }
 
 fn encode(
