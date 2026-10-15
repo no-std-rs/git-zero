@@ -22,6 +22,13 @@ pub struct ValidationMetadata {
 }
 
 impl ValidationMetadata {
+    fn reset_walk(&mut self) {
+        self.reached = false;
+        self.checked = false;
+        self.depth = u32::MAX;
+        self.shallow = false;
+    }
+
     /// A reached commit at a requested history boundary (including root commits).
     pub fn is_shallow(&self) -> bool {
         self.reached && self.shallow
@@ -323,11 +330,8 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         work.copy_from_slice(self.objects);
         for slot in work.iter_mut() {
             let object = slot.as_mut().expect("validated metadata");
-            object.reached = false;
-            object.checked = false;
-            object.depth = u32::MAX;
+            object.reset_walk();
             object.client_shallow = false;
-            object.shallow = false;
         }
         let mut has_shallow = false;
         for id in shallow {
@@ -365,25 +369,17 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         for slot in work.iter_mut() {
             let object = slot.as_mut().expect("validated metadata");
             object.excluded = object.reached;
-            object.reached = false;
-            object.checked = false;
-            object.depth = u32::MAX;
-            object.shallow = false;
+            object.reset_walk();
         }
         let mut depth = fetch.depth.filter(|_| deepening);
         if fetch.deepen_relative && has_shallow {
             // Git 2.55 measures the nearest client boundary from the wants.
             // Unrelated shallow branches cannot influence or extend this cut.
-            for &id in roots {
-                let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-                reach(work, self.by_id, id, metadata(work, index).info.kind)?;
-            }
-            walk(
-                self,
+            self.walk_wants(
+                roots,
                 work,
-                self.by_id,
                 (read_scratch, parse_scratch),
-                Some(&mut remaining),
+                &mut remaining,
                 History {
                     limit: None,
                     client: true,
@@ -405,28 +401,20 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
                 })
                 .transpose()?;
             for slot in work.iter_mut() {
-                let object = slot.as_mut().expect("validated metadata");
-                object.reached = false;
-                object.checked = false;
-                object.depth = u32::MAX;
-                object.shallow = false;
+                slot.as_mut().expect("validated metadata").reset_walk();
             }
         }
-        for &id in roots {
-            let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-            reach(work, self.by_id, id, metadata(work, index).info.kind)?;
-        }
-        walk(
-            self,
+        let history = History {
+            limit: depth,
+            client: fetch.depth.is_none(),
+            distance: false,
+        };
+        self.walk_wants(
+            roots,
             work,
-            self.by_id,
             (read_scratch, parse_scratch),
-            Some(&mut remaining),
-            History {
-                limit: depth,
-                client: fetch.depth.is_none(),
-                distance: false,
-            },
+            &mut remaining,
+            history,
         )?;
         filter_blobs(work, roots, fetch.filter);
         if include_tags {
@@ -437,11 +425,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
                 self.by_id,
                 (read_scratch, parse_scratch),
                 Some(&mut remaining),
-                History {
-                    limit: depth,
-                    client: fetch.depth.is_none(),
-                    distance: false,
-                },
+                history,
             )?;
             filter_blobs(work, roots, fetch.filter);
         }
@@ -453,6 +437,21 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             }
         }
         Ok(&selected[..length])
+    }
+
+    fn walk_wants(
+        &self,
+        roots: &[ObjectId],
+        work: &mut [Option<ValidationMetadata>],
+        scratch: (&mut [u8], &mut [u8]),
+        remaining: &mut u64,
+        history: History,
+    ) -> Result<()> {
+        for &id in roots {
+            let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
+            reach(work, self.by_id, id, metadata(work, index).info.kind)?;
+        }
+        walk(self, work, self.by_id, scratch, Some(remaining), history)
     }
 
     fn include_matching_tags(&self, work: &mut [Option<ValidationMetadata>]) -> Result<()> {
