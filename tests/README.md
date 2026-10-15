@@ -260,6 +260,13 @@ sink failure retains a complete persistent pack for retry. Allocation guards
 cover these backend operations, and independent Git imports and object-body
 comparisons run in both formats with storage-only Rust features.
 
+Native coordination tests hold independent producer leases for the same and
+different keys, recheck a published entry to avoid duplicate generation, and
+release after cancellation or failed generation without allocation. Disabled
+mode creates no lock file; symlink, directory and nonempty lock entries fail
+without changing foreign bytes. A deterministic duplicated-descriptor test
+checks explicit unlock while another reference to the open file remains.
+
 ## Selective runs and CI sharding
 
 The eight original matrix cases run alongside sixteen independent differential

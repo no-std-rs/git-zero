@@ -1,6 +1,16 @@
 #[path = "../../../tests/common/allocations.rs"]
 mod allocations;
 
+#[cfg(not(any(
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "solaris",
+    target_os = "vita",
+    target_os = "wasi"
+)))]
+#[path = "disk_cache/coordination.rs"]
+mod coordination;
+
 use git_zero::{
     Error, File, ObjectFormat, ObjectId, Repository, Snapshot,
     cache::selected::{self, Buffers, Key, Outcome, PackCache, Selection},
