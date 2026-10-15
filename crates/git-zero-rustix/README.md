@@ -57,8 +57,9 @@ numeric address, for example `git-zero serve '[::1]:8080'`, and prints the bound
 URL. Its existing client transport still accepts IPv4 addresses only.
 
 On platforms with rustix `flock` support, `DiskCache::try_lease(key)` offers
-cooperative cold-miss coordination. It returns immediately with a guard or with
-`None` when disabled/busy. All producers in one namespace use the same lease
+cooperative cold-miss coordination. Contended locks return `None` without waiting;
+disabled caches also return `None`. File operations remain synchronous. All
+producers in one namespace use the same lease
 protocol: authorize/select, try the lease, recheck the cache after acquisition,
 then generate only on a remaining miss. The host controls retries and deadlines;
 dropping the guard explicitly unlocks and closes its descriptor on cancellation

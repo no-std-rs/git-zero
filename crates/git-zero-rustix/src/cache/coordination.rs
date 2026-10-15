@@ -3,7 +3,8 @@
 //! All producers for a namespace must use the same stable lock files. Do not
 //! unlink or replace `.lock` entries while any producer can use the directory:
 //! doing so would allow independent locks on different inodes for one key.
-//! Hosts choose retry, cancellation and waiting policy; no request blocks here.
+//! Contended locks return without waiting. Hosts choose retry and cancellation
+//! policy; descriptor and filesystem operations remain synchronous.
 //! Filesystem and mount settings determine the scope of advisory locking.
 //! See <https://man7.org/linux/man-pages/man2/flock.2.html>.
 
