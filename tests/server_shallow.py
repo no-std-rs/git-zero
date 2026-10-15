@@ -1,5 +1,7 @@
-"""Real-Git shallow/partial clone and absolute-deepening oracle comparisons."""
+"""Real-Git shallow/partial clone and absolute/relative-deepening oracle comparisons."""
 from itertools import product
+import re
+import urllib.request
 from interop import run
 from upstream_http import git, object_manifest, verify_checkout
 from server_references import all_object_ids
@@ -52,14 +54,111 @@ def compare_clone(root, bare, urls, env, version, branch, depth, filter_spec=Non
     assert object_manifest(left, "HEAD", env) == object_manifest(right, "HEAD", env)
     if depth != 1:
         return
-    # An unchanged shallow remote, absolute depth increase, then full history.
-    # --deepen is deliberately absent: it requests the unsupported relative form.
-    for options in ((), ("--depth=2",), ("--unshallow",)):
+    # An unchanged shallow remote, relative and absolute depth increases, then full history.
+    for options in ((), ("--deepen=1",), ("--depth=2",), ("--unshallow",)):
         for clone in clones:
             git(clone, "-c", f"protocol.version={version}", "fetch", "--no-tags", *options, "origin", env=env)
             git(clone, "fsck", "--strict", env=env)
         assert shallow_ids(left) == shallow_ids(right), (label, options)
         assert object_manifest(left, "HEAD", env) == object_manifest(right, "HEAD", env), (label, options)
+
+
+def compare_relative_boundaries(root, bare, urls, env, version):
+    # Since Git 2.54, only boundaries in the requested history influence the
+    # relative cut. Pin that policy and retain the older oracle's difference.
+    git_version = tuple(map(int, re.search(rb"(\d+)\.(\d+)", run("git", "version", env=env)).groups()))
+    side = git(bare, "rev-parse", "a-side", env=env).strip()
+    base = git(bare, "rev-parse", "z-main^", env=env).strip()
+    for selected_branch in (True, False):
+        clones = []
+        for name, url in urls:
+            clone = root / f"{name}-relative-all-v{version}-{selected_branch}"
+            run("git", "-c", f"protocol.version={version}", "clone", "-q", "--depth=1",
+                "--no-single-branch", "--no-tags", url, str(clone), env=env)
+            clones.append(clone)
+        for generation, options in enumerate((("--deepen=1",), ("--deepen=2",))):
+            for clone in clones:
+                git(clone, "-c", f"protocol.version={version}", "fetch", "--no-tags", *options,
+                    "origin", *(("z-main",) if selected_branch else ()), env=env)
+                git(clone, "fsck", "--strict", env=env)
+                verify_checkout(bare, clone, git(clone, "rev-parse", "HEAD", env=env).strip().decode(), env)
+            expected = ({base} if generation == 0 else set()) | ({side} if selected_branch else set())
+            reference_expected = expected - ({side} if selected_branch and git_version < (2, 54) else set())
+            assert shallow_ids(clones[0]) == reference_expected, (version, options, "reference", git_version)
+            assert shallow_ids(clones[1]) == expected, (version, options, "zero")
+            assert object_manifest(clones[0], "--all", env) == object_manifest(clones[1], "--all", env)
+
+
+def compare_relative_unrelated_tip(root, bare, urls, env, version):
+    # Git 2.55 returns no new boundary when the wanted history has no client
+    # boundary. This deliberately differs from 2.53's global-boundary walk.
+    git_version = tuple(map(int, re.search(rb"(\d+)\.(\d+)", run("git", "version", env=env)).groups()))
+    main = git(bare, "rev-parse", "z-main", env=env).strip()
+    side = git(bare, "rev-parse", "a-side", env=env).strip()
+    base = git(bare, "rev-parse", "z-main^", env=env).strip()
+    clones = []
+    for name, url in urls:
+        clone = root / f"{name}-relative-unrelated-v{version}"
+        run("git", "-c", f"protocol.version={version}", "clone", "-q", "--depth=1",
+            "--single-branch", "--branch=z-main", "--no-tags", url, str(clone), env=env)
+        git(clone, "-c", f"protocol.version={version}", "fetch", "--deepen=1", "--no-tags",
+            "origin", "a-side", env=env)
+        git(clone, "fsck", "--strict", env=env)
+        clones.append(clone)
+    assert shallow_ids(clones[1]) == {main}, (version, "zero unrelated boundary")
+    expected_reference = {main} if git_version >= (2, 55) else ({main, side} if git_version >= (2, 54) else {base})
+    assert shallow_ids(clones[0]) == expected_reference, (version, "reference unrelated boundary", git_version)
+    assert object_manifest(clones[1], "FETCH_HEAD", env) == object_manifest(bare, "a-side", env)
+    objects = delivered(clones[0], env)
+    compare_delivered_bodies(clones[0], bare, objects, env)
+    if git_version != (2, 54):
+        assert object_manifest(clones[0], "FETCH_HEAD", env) == object_manifest(clones[1], "FETCH_HEAD", env)
+        assert objects == delivered(clones[1], env)
+    else:
+        # Git 2.54 alone falls back to absolute depth N for this case; 2.55
+        # explicitly removed that fallback. Its side tip is still a boundary.
+        assert side in shallow_ids(clones[0])
+
+
+def compare_full_relative_fetch(root, bare, urls, env, version):
+    from server_references import packet
+    from server_negotiation import imported_pack
+    from server_protocol import command, packets, packfile
+    tip = git(bare, "rev-parse", "light", env=env).strip()
+    main = git(bare, "rev-parse", "z-main", env=env).strip()
+    fmt = b"sha256" if len(tip) == 64 else b"sha1"
+    for name, url in urls:
+        clone = clone_one(root, bare, name, url, f"full-relative-v{version}", env, version, "z-main", None, None)
+        before = object_manifest(clone, "HEAD", env)
+        git(clone, "-c", f"protocol.version={version}", "fetch", "--deepen=1", "--no-tags", "origin", env=env)
+        assert not shallow_ids(clone)
+        assert object_manifest(clone, "HEAD", env) == before
+        git(clone, "fsck", "--strict", env=env)
+        # Matched requests prove both the empty no-op pack and incremental
+        # pruning, rather than only checking the already complete checkout.
+        for index, (deepen, common) in enumerate(product((False, True), (tip, main))):
+            if version == 2:
+                body = command(b"fetch", fmt, [b"want " + tip, b"have " + common,
+                    *([b"deepen 1"] if deepen else []), b"deepen-relative", b"no-progress", b"done"])
+            else:
+                body = (packet(b"want " + tip + b" deepen-relative no-progress object-format=" + fmt + b"\n")
+                    + (packet(b"deepen 1\n") if deepen else b"") + b"0000"
+                    + packet(b"have " + common + b"\n") + packet(b"done\n"))
+            request = urllib.request.Request(url + "/git-upload-pack", data=body, headers={
+                "Git-Protocol": f"version={version}", "Content-Type": "application/x-git-upload-pack-request"})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                raw = response.read()
+            label = f"{name}-full-relative-v{version}-{index}"
+            (root / (label + ".response")).write_bytes(raw)
+            if version == 2:
+                lines = packets(raw)
+                if lines[0] == b"shallow-info\n":
+                    assert lines[:2] == [b"shallow-info\n", None]
+                    lines = lines[2:]
+                packed = packfile(lines)
+            else:
+                packed = raw[raw.index(b"PACK"):]
+            imported_pack(root, bare, label, packed, (tip,), (common,), env)
 
 
 def compare_bounded_fetch(root, bare, urls, env):
@@ -69,4 +168,7 @@ def compare_bounded_fetch(root, bare, urls, env):
     for version, filter_spec in product((0, 1, 2), ("blob:none", "blob:limit=5", "blob:limit=1k")):
         compare_clone(root, bare, urls, env, version, "light", None, filter_spec)
     for version in (0, 1, 2):
+        compare_relative_boundaries(root, bare, urls, env, version)
+        compare_relative_unrelated_tip(root, bare, urls, env, version)
+        compare_full_relative_fetch(root, bare, urls, env, version)
         compare_clone(root, bare, urls, env, version, "light", 1, "blob:none")

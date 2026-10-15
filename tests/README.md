@@ -88,7 +88,7 @@ same fixed memory ceiling in both formats, alongside real-Git SHA-1 clones.
 
 `server_shallow.py` adds independent Git comparisons for v0/v1/v2 shallow clones
 at depths 1, 2 and beyond the history, including merge tips, unchanged shallow
-fetches, absolute depth increases and unshallowing in SHA-1/SHA-256. It compares
+fetches, absolute and relative depth increases and unshallowing in SHA-1/SHA-256. It compares
 shallow files, delivered commit/tree/blob IDs and bodies, checkouts and strict
 integrity. Git v0 may additionally send include-tag annotations. Partial clones
 use --no-checkout and test blob:none, blob:limit=5, scaled limits and combined
@@ -100,6 +100,12 @@ isolation and guarded one-byte pulls. Worker real-Git
 clones test depth/unshallow and partial fetches; ABI tests repeat them in both
 formats across fragmented pulls, cancellation and independent instances within
 the unchanged 24-page memory ceiling.
+Relative selection follows Git 2.55: only wanted history determines the nearest
+client boundary. The multi-boundary/single-refspec case explicitly asserts the
+older Git 2.53 oracle's extra branch deepening, git-zero's preserved unrelated
+boundary, and identical reachable object bodies/checkouts. Matched all-branch
+deepening requires identical shallow files on every Git version.
+
 
 `tests/inflate.rs` compares the core zlib decoder with Python's standard zlib
 and a real Git-created loose object. Stored, fixed, dynamic and mixed blocks run

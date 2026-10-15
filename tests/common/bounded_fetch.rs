@@ -1,5 +1,5 @@
 use super::*;
-use git_zero::{BlobFilter, FetchOptions, SelectionOptions};
+use git_zero::{BlobFilter, FetchOptions, ObjectFormat, SelectionOptions, Snapshot};
 
 fn select(
     graph: &Graph,
@@ -70,6 +70,7 @@ fn depth_one_keeps_only_the_merge_tip_and_its_tree_closure() {
             &[merge],
             FetchOptions {
                 depth: Some(1),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -101,6 +102,7 @@ fn depth_two_cuts_both_merge_parents_and_removes_the_old_boundary() {
             &[merge],
             FetchOptions {
                 depth: Some(2),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -124,6 +126,256 @@ fn depth_two_cuts_both_merge_parents_and_removes_the_old_boundary() {
 }
 
 #[test]
+fn relative_depth_counts_from_client_boundaries_in_both_enumeration_orders() {
+    for reverse in [false, true] {
+        let mut graph = Graph::new();
+        let ids = graph.ids;
+        if reverse {
+            graph.objects.reverse();
+        }
+        let options = FetchOptions {
+            depth: Some(1),
+            deepen_relative: true,
+            filter: BlobFilter::All,
+        };
+        let (objects, boundaries, removed) = select(
+            &graph,
+            &[ids.merge.unwrap()],
+            &[],
+            &[ids.main.unwrap(), ids.side.unwrap()],
+            options,
+            false,
+        );
+        assert_eq!(objects, sorted(graph.merge_closure()));
+        assert_eq!(boundaries, vec![ids.base.unwrap()]);
+        assert_eq!(removed, expected(&[ids.main, ids.side]));
+        let (_, boundaries, removed) = select(
+            &graph,
+            &[ids.merge.unwrap()],
+            &[],
+            &[ids.main.unwrap(), ids.base.unwrap()],
+            options,
+            false,
+        );
+        assert_eq!(boundaries, vec![ids.base.unwrap()]);
+        assert_eq!(removed, vec![ids.main.unwrap()]);
+        let (_, boundaries, removed) = select(
+            &graph,
+            &[ids.merge.unwrap()],
+            &[],
+            &[ids.merge.unwrap()],
+            options,
+            false,
+        );
+        assert_eq!(boundaries, expected(&[ids.main, ids.side]));
+        assert_eq!(removed, vec![ids.merge.unwrap()]);
+        let (_, boundaries, removed) = select(
+            &graph,
+            &[ids.main.unwrap()],
+            &[],
+            &[ids.side.unwrap()],
+            options,
+            false,
+        );
+        assert!(boundaries.is_empty());
+        assert!(removed.is_empty());
+        let (_, boundaries, removed) =
+            select(&graph, &[ids.merge.unwrap()], &[], &[], options, false);
+        assert!(boundaries.is_empty());
+        assert!(removed.is_empty());
+    }
+}
+
+#[test]
+fn relative_requests_from_full_clients_preserve_common_history_pruning() {
+    let graph = Graph::new();
+    let options = FetchOptions {
+        depth: Some(1),
+        deepen_relative: true,
+        filter: BlobFilter::All,
+    };
+    for common in [graph.ids.main.unwrap(), graph.ids.merge.unwrap()] {
+        assert_eq!(
+            select(
+                &graph,
+                &[graph.ids.merge.unwrap()],
+                &[common],
+                &[],
+                options,
+                false
+            ),
+            select(
+                &graph,
+                &[graph.ids.merge.unwrap()],
+                &[common],
+                &[],
+                FetchOptions::default(),
+                false
+            )
+        );
+    }
+    assert!(
+        select(
+            &graph,
+            &[graph.ids.merge.unwrap()],
+            &[graph.ids.merge.unwrap()],
+            &[],
+            options,
+            false
+        )
+        .0
+        .is_empty()
+    );
+}
+
+#[test]
+fn unused_relative_negotiation_preserves_ordinary_fetches_and_client_boundaries() {
+    let graph = Graph::new();
+    let source = graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repository = &validation.validate(&source);
+    let boundary = [graph.ids.main.unwrap()];
+    for shallow in [&[][..], &boundary[..]] {
+        assert_eq!(
+            select(
+                &graph,
+                &[graph.head()],
+                &boundary,
+                shallow,
+                FetchOptions {
+                    deepen_relative: true,
+                    ..FetchOptions::default()
+                },
+                false
+            ),
+            select(
+                &graph,
+                &[graph.head()],
+                &boundary,
+                shallow,
+                FetchOptions::default(),
+                false
+            )
+        );
+        let args: Vec<_> = shallow.iter().map(|id| format!("shallow {id}")).collect();
+        for version in [0, 1, 2] {
+            compare_unused_relative(repository, version, &args);
+        }
+    }
+}
+
+fn compare_unused_relative(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    version: u8,
+    args: &[String],
+) {
+    let mut args: Vec<_> = args.iter().map(String::as_str).collect();
+    let bytes = body(repository.head(), version, &args, true);
+    let (result, expected) = Harness::default().serve(repository, request(&bytes, version), 32768);
+    result.unwrap();
+    args.push("deepen-relative");
+    let bytes = body(repository.head(), version, &args, true);
+    let mut harness = Harness::default();
+    let (result, actual) = harness.serve(repository, request(&bytes, version), 32768);
+    result.unwrap();
+    assert_same_response(&actual, &expected, version);
+    assert_same_response(
+        &harness.pull(repository, request(&bytes, version)),
+        &expected,
+        version,
+    );
+}
+
+#[test]
+fn complete_pack_apis_reject_unadvertised_relative_negotiation_before_output() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let mut tree = [0; 128];
+        let mut commit = [0; 512];
+        let snapshot = Snapshot::new_with_format(&[], &mut tree, &mut commit, format).unwrap();
+        for version in [0, 1, 2] {
+            reject_complete_relative(&snapshot, version);
+        }
+    }
+}
+
+fn reject_complete_relative(snapshot: &Snapshot<'_>, version: u8) {
+    let bytes = body(snapshot.head(), version, &["deepen-relative"], true);
+    let mut storage = [0; 4096];
+    let mut output = SliceWriter::new(&mut storage);
+    let result = allocations::without_allocations(|| {
+        http::serve(snapshot, request(&bytes, version), &mut output)
+    });
+    assert!(matches!(result, Err(Error::Unsupported)));
+    assert!(output.is_empty());
+    let mut called = false;
+    let result = allocations::without_allocations(|| {
+        http::serve_with_pack(
+            snapshot,
+            request(&bytes, version),
+            &mut [],
+            &mut output,
+            |_, _| {
+                called = true;
+                Ok(())
+            },
+        )
+    });
+    assert!(matches!(result, Err(Error::Unsupported)));
+    assert!(!called && output.is_empty());
+    let result = allocations::without_allocations(|| {
+        http::stream::ResponseEncoder::new(snapshot, request(&bytes, version), &mut [0; 4096])
+            .map(|_| ())
+    });
+    assert_eq!(result, Err(Error::Unsupported));
+}
+
+#[test]
+fn standalone_relative_arguments_are_rejected_in_v0_and_v1() {
+    let graph = Graph::new();
+    let source = graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repository = &validation.validate(&source);
+    for version in [0, 1] {
+        for capability in ["", " deepen-relative"] {
+            let mut bytes = Vec::new();
+            packet(&mut bytes, &format!("want {}{capability}", graph.head()));
+            packet(&mut bytes, "deepen 1");
+            packet(&mut bytes, "deepen-relative");
+            bytes.extend_from_slice(b"0000");
+            packet(&mut bytes, "done");
+            let (result, output) =
+                Harness::default().serve(repository, request(&bytes, version), 32768);
+            assert!(result.is_err());
+            assert!(output.is_empty());
+        }
+    }
+}
+
+#[test]
+fn relative_requests_validate_options_and_match_fragmented_streaming() {
+    let graph = Graph::new();
+    let source = graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repository = &validation.validate(&source);
+    for version in [0, 1, 2] {
+        let shallow = format!("shallow {}", graph.ids.merge.unwrap());
+        let args = [shallow.as_str(), "deepen 1", "deepen-relative"];
+        let bytes = body(graph.ids.merge.unwrap(), version, &args, true);
+        let mut harness = Harness::default();
+        let (failed, output) = harness.serve(repository, request(&bytes, version), 0);
+        assert!(matches!(failed, Err(Error::LimitExceeded)));
+        assert!(output.is_empty());
+        let (result, expected) = harness.serve(repository, request(&bytes, version), 32768);
+        result.unwrap();
+        assert_same_response(
+            &harness.pull(repository, request(&bytes, version)),
+            &expected,
+            version,
+        );
+    }
+}
+
+#[test]
 fn root_commits_exactly_at_the_depth_limit_remain_shallow() {
     let graph = Graph::new();
     let ids = graph.ids;
@@ -136,6 +388,7 @@ fn root_commits_exactly_at_the_depth_limit_remain_shallow() {
             &[merge],
             FetchOptions {
                 depth: Some(3),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -160,6 +413,7 @@ fn unshallow_retransmits_missing_history_even_when_the_tip_is_common() {
             &[merge],
             FetchOptions {
                 depth: Some(i32::MAX as u32),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -243,6 +497,7 @@ fn shorter_merge_paths_reopen_previously_cut_commits_in_any_enumeration_order() 
             &[],
             FetchOptions {
                 depth: Some(4),
+                deepen_relative: false,
                 filter: BlobFilter::None,
             },
             false,
@@ -294,6 +549,7 @@ fn blob_filters_retain_explicit_wants_and_respect_the_exact_size_cutoff() {
             &[],
             FetchOptions {
                 depth: None,
+                deepen_relative: false,
                 filter: BlobFilter::None,
             },
             false
@@ -308,6 +564,7 @@ fn blob_filters_retain_explicit_wants_and_respect_the_exact_size_cutoff() {
             &[],
             FetchOptions {
                 depth: None,
+                deepen_relative: false,
                 filter: BlobFilter::Limit(5),
             },
             false
@@ -322,6 +579,7 @@ fn blob_filters_retain_explicit_wants_and_respect_the_exact_size_cutoff() {
             &[],
             FetchOptions {
                 depth: None,
+                deepen_relative: false,
                 filter: BlobFilter::Limit(6),
             },
             false
@@ -358,6 +616,7 @@ fn included_tags_preserve_the_selected_commit_depth_and_blob_filter() {
             &[],
             FetchOptions {
                 depth: Some(2),
+                deepen_relative: false,
                 filter: BlobFilter::None,
             },
             true
@@ -391,6 +650,7 @@ fn explicitly_wanted_nested_tags_peel_to_a_depth_one_commit() {
             &[],
             FetchOptions {
                 depth: Some(1),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -414,15 +674,31 @@ fn body(tip: ObjectId, version: u8, args: &[&str], done: bool) -> Vec<u8> {
     let mut result = Vec::new();
     if version == 2 {
         packet(&mut result, "command=fetch");
-        packet(&mut result, "object-format=sha1");
+        packet(
+            &mut result,
+            core::str::from_utf8(tip.format().capability()).unwrap(),
+        );
         result.extend_from_slice(b"0001");
     }
-    let capabilities = if version == 2 { "" } else { " filter" };
+    let mut capabilities = if version == 2 {
+        String::new()
+    } else {
+        String::from(" filter")
+    };
+    if version != 2 {
+        for arg in args.iter().filter(|&&arg| arg == "deepen-relative") {
+            capabilities.push(' ');
+            capabilities.push_str(arg);
+        }
+    }
     packet(&mut result, &format!("want {tip}{capabilities}"));
-    for arg in args {
+    for arg in args
+        .iter()
+        .filter(|&&arg| version == 2 || arg != "deepen-relative")
+    {
         packet(&mut result, arg);
     }
-    if version == 0 {
+    if version != 2 {
         result.extend_from_slice(b"0000");
     }
     if done {
@@ -445,10 +721,10 @@ fn request(body: &[u8], version: u8) -> Request<'_> {
         query: None,
         body,
         content_type: Some("application/x-git-upload-pack-request"),
-        git_protocol: Some(if version == 2 {
-            "version=2"
-        } else {
-            "version=0"
+        git_protocol: Some(match version {
+            2 => "version=2",
+            1 => "version=1",
+            _ => "version=0",
         }),
     }
 }
@@ -564,7 +840,7 @@ fn malformed_extensions_leave_output_empty_in_both_protocols() {
         &["deepen +1"],
         &["filter blob:limit=+1"],
         &["deepen 2147483648"],
-        &["deepen-relative"],
+        &["deepen 1", "deepen-relative", "deepen-relative"],
         &["deepen-since 1"],
         &["deepen-not main"],
         &["filter tree:0"],
@@ -631,6 +907,50 @@ fn shallow_probe_ends_at_its_flush_without_an_ack() {
     packet(&mut expected, &format!("shallow {}", graph.head()));
     expected.extend_from_slice(b"0000");
     assert_eq!(output, expected);
+}
+
+#[test]
+fn relative_full_client_probes_need_no_graph_storage_or_read_budget() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let mut tree = [0; 128];
+        let mut commit = [0; 512];
+        let snapshot = Snapshot::new_with_format(&[], &mut tree, &mut commit, format).unwrap();
+        let mut validation = ValidationBuffers::new();
+        let repository = validation.validate(&snapshot);
+        for version in [0, 1] {
+            assert_relative_probe_without_graph(&repository, version);
+        }
+    }
+}
+
+fn assert_relative_probe_without_graph(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    version: u8,
+) {
+    let bytes = body(
+        repository.head(),
+        version,
+        &["deepen-relative", "deepen 1"],
+        false,
+    );
+    let request = request(&bytes, version);
+    let (result, output) = Harness::default().serve(repository, request, 0);
+    assert_eq!(result.unwrap().status, 200);
+    assert_eq!(output, b"0000");
+    let mut buffers = http::SelectionBuffers::<1, 0, 0, 0>::new();
+    let mut output = [0; 4];
+    let mut writer = SliceWriter::new(&mut output);
+    allocations::without_allocations(|| {
+        http::serve_with_selection(repository, request, &mut buffers.storage(0), &mut writer)
+    })
+    .unwrap();
+    assert_eq!(writer.as_bytes(), b"0000");
+    let mut control = [0; 4];
+    let mut encoder = prepare(repository, request, buffers.storage(0), &mut control).unwrap();
+    assert_eq!(
+        pull::collect(|output| encoder.read(repository, output), 1),
+        b"0000"
+    );
 }
 
 #[test]
@@ -817,6 +1137,7 @@ fn fallible_history_iterators_preserve_errors_and_allow_a_fresh_bounded_selectio
         },
         FetchOptions {
             depth: Some(1),
+            deepen_relative: false,
             filter: BlobFilter::None,
         },
     );
@@ -930,6 +1251,7 @@ fn an_explicit_blob_want_needs_no_structural_reads_or_parse_scratch() {
                 },
                 FetchOptions {
                     depth: Some(1),
+                    deepen_relative: false,
                     filter: BlobFilter::None,
                 },
             ),
