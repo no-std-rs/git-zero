@@ -87,28 +87,13 @@ def complete_manifest(bare, head, env):
 
 def prepare(root, state, object_format="sha1"):
     env = test_environment(root)
-    bare, head = fixture(root, state, env, object_format)
-    manifest = complete_manifest(bare, head, env)
-    objects = root / "raw"
-    objects.mkdir()
-    rows = []
-    for oid, (kind, body) in sorted(manifest.items()):
-        (objects / oid.decode()).write_bytes(body)
-        rows.append(oid.decode() + "\t" + kind.decode())
-    (root / "objects.txt").write_text("".join(row + "\n" for row in rows))
-    refs = []
-    for line in git(bare, "for-each-ref", "--format=%(refname)\t%(objectname)", env=env).splitlines():
-        name, oid = line.decode().split("\t")
-        symbolic = command("git", "-C", str(bare), "symbolic-ref", "-q", "--no-recurse", name, env=env)
-        target = symbolic.stdout.strip().decode() if symbolic.returncode == 0 else "-"
-        kind, _ = manifest[oid.encode()]
-        peeled = git(bare, "rev-parse", name + "^{}", env=env).strip().decode() if kind == b"tag" else "-"
-        refs.append("\t".join((name, oid, target, peeled)))
-    (root / "refs.txt").write_text("".join(row + "\n" for row in refs))
-    raw_head = (bare / "HEAD").read_text().strip()
-    target = raw_head.removeprefix("ref: ") if raw_head.startswith("ref: ") else ""
-    (root / "head.txt").write_text((head or "0" * (64 if object_format == "sha256" else 40)) + "\n" + target + "\n")
-    (root / "format.txt").write_text(object_format)
+    if state == "rich":
+        from server_rich import prepare as prepare_rich
+        prepare_rich(root, object_format, env)
+        return
+    bare, _ = fixture(root, state, env, object_format)
+    from server_fixture import export_fixture
+    export_fixture(root, bare, env)
 
 
 def get(url):
@@ -242,6 +227,9 @@ def compare_wants(root, bare, urls, env):
 
 def compare(root, zero, state):
     env = test_environment(root)
+    if state == "rich":
+        from server_rich import compare as compare_rich
+        return compare_rich(root, zero, env)
     bare = root / "repo.git"
     head = None if state in ("unborn", "empty", "empty-custom") else git(bare, "rev-parse", "HEAD", env=env).strip().decode()
     for smart in (True, False):
@@ -272,7 +260,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("prepare", "compare"))
     parser.add_argument("--root", required=True, type=Path)
-    parser.add_argument("--state", required=True, choices=("symbolic", "symbolic-tag", "detached", "unborn", "empty", "empty-custom"))
+    parser.add_argument("--state", required=True, choices=("symbolic", "symbolic-tag", "detached", "unborn", "empty", "empty-custom", "rich"))
     parser.add_argument("--object-format", default="sha1", choices=("sha1", "sha256"))
     parser.add_argument("--zero-url")
     args = parser.parse_args()
