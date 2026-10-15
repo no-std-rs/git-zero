@@ -65,7 +65,9 @@ pub(crate) struct UploadRequest<'a> {
     pub done: bool,
     capabilities: Capabilities,
     haves: &'a [u8],
-    v2: Option<crate::v2::Fetch<'a>>,
+    v2: bool,
+    #[cfg(feature = "read")]
+    include_tags: bool,
 }
 
 pub(crate) fn id(bytes: &[u8], format: ObjectFormat) -> Result<ObjectId> {
@@ -146,8 +148,10 @@ impl<'a> UploadRequest<'a> {
             return Ok(Self {
                 done: fetch.done,
                 capabilities: Capabilities::default(),
-                haves: &[],
-                v2: Some(fetch),
+                haves: command.args,
+                v2: true,
+                #[cfg(feature = "read")]
+                include_tags: fetch.include_tags,
             });
         }
         let capabilities = parse_wants(&mut bytes, format, want)?;
@@ -155,7 +159,9 @@ impl<'a> UploadRequest<'a> {
             done: parse_haves(bytes, format)?,
             capabilities,
             haves: bytes,
-            v2: None,
+            v2: false,
+            #[cfg(feature = "read")]
+            include_tags: false,
         })
     }
 
@@ -166,24 +172,19 @@ impl<'a> UploadRequest<'a> {
         repository: &'r impl Repository,
     ) -> impl Iterator<Item = Result<ObjectId>> + 'r {
         let mut bytes = self.haves;
-        let legacy = core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten())
+        core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten())
             .filter_map(have_id)
-            .filter_map(move |id| common_commit(repository, id).transpose());
-        legacy.chain(
-            self.v2
-                .iter()
-                .flat_map(move |fetch| fetch.common(repository)),
-        )
+            .filter_map(move |id| common_commit(repository, id).transpose())
     }
 
     #[cfg(feature = "read")]
     pub fn include_tags(&self) -> bool {
-        self.v2.as_ref().is_some_and(|fetch| fetch.include_tags)
+        self.include_tags
     }
 
     pub fn acknowledge(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
-        if let Some(fetch) = &self.v2 {
-            return fetch.acknowledge(repository, output);
+        if self.v2 {
+            return crate::v2::acknowledge(self.done, self.common(repository), output);
         }
         let mut last = None;
         for id in self.common(repository) {
@@ -208,8 +209,8 @@ impl<'a> UploadRequest<'a> {
     }
 
     pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
-        if let Some(fetch) = &self.v2 {
-            return fetch.output(output);
+        if self.v2 {
+            return PackOutput::sideband(output);
         }
         PackOutput {
             output,

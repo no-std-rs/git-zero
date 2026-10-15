@@ -231,16 +231,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             Some(&mut remaining),
         )?;
         if include_tags {
-            for reference in 0..self.reference_count() {
-                let Some(peeled) = self.reference_peeled(reference) else {
-                    continue;
-                };
-                let index = find(work, self.by_id, peeled).ok_or(Error::ObjectNotFound)?;
-                if metadata(work, index).reached {
-                    let id = self.reference_id(reference).ok_or(Error::InvalidObject)?;
-                    reach(work, self.by_id, id, ObjectKind::Tag)?;
-                }
-            }
+            self.include_matching_tags(work)?;
             walk(
                 self,
                 work,
@@ -258,6 +249,20 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             }
         }
         Ok(&selected[..length])
+    }
+
+    fn include_matching_tags(&self, work: &mut [Option<ValidationMetadata>]) -> Result<()> {
+        for reference in 0..self.reference_count() {
+            let Some(peeled) = self.reference_peeled(reference) else {
+                continue;
+            };
+            let index = find(work, self.by_id, peeled).ok_or(Error::ObjectNotFound)?;
+            if metadata(work, index).reached {
+                let id = self.reference_id(reference).ok_or(Error::InvalidObject)?;
+                reach(work, self.by_id, id, ObjectKind::Tag)?;
+            }
+        }
+        Ok(())
     }
 }
 

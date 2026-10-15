@@ -178,21 +178,7 @@ pub fn serve_with_pack<W: Write>(
         ("GET", "info/refs") => match route::service(request.query)? {
             Some("git-upload-pack") => {
                 response.content_type = "application/x-git-upload-pack-advertisement";
-                pktline::write(output, b"# service=git-upload-pack\n")?;
-                output.write_all(b"0000")?;
-                if version == Version::V2 {
-                    v2::advertise(repository.object_format(), output)?;
-                    return Ok(response);
-                }
-                if version == Version::V1 {
-                    pktline::write(output, b"version 1\n")?
-                }
-                let head = repository.head_state();
-                if head.id().is_some() || repository.reference_count() == 0 {
-                    advertise_head(repository, output)?;
-                }
-                advertise_references(repository, true, output)?;
-                output.write_all(b"0000")?;
+                advertise_smart(repository, version, output)?;
             }
             None => {
                 advertise_references(repository, false, output)?;
@@ -201,72 +187,14 @@ pub fn serve_with_pack<W: Write>(
         },
         ("POST", "git-upload-pack") => {
             response.content_type = "application/x-git-upload-pack-result";
-            if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
-                return Ok(response);
-            }
-            if !uses_only_head(repository) {
-                return Err(Error::Unsupported);
-            }
-            let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
-            let upload =
-                UploadRequest::parse(request.body, repository.object_format(), version, |id| {
-                    if id == head {
-                        Ok(())
-                    } else {
-                        Err(Error::InvalidRequest)
-                    }
-                })?;
-            upload.acknowledge(repository, output)?;
-            if upload.done {
-                let mut packed = upload.output(output);
-                write_pack(scratch, &mut packed)?;
-                packed.finish()?;
-            }
+            write_upload(repository, request, scratch, output, write_pack)?;
         }
         ("GET", "objects/info/packs") => {}
         ("GET", _) if path.starts_with("refs/") => {
-            if let Some(index) = (0..repository.reference_count()).find(|&index| {
-                repository
-                    .reference_name(index)
-                    .is_some_and(|name| ref_path_matches(path, name))
-            }) {
-                if let Some(target) = repository.reference_symbolic_target(index) {
-                    output.write_all(b"ref: ")?;
-                    output.write_all(target.as_bytes())?;
-                } else {
-                    output.write_all(
-                        &repository
-                            .reference_id(index)
-                            .ok_or(Error::InvalidObject)?
-                            .to_hex(),
-                    )?;
-                }
-                output.write_all(b"\n")?;
-            } else {
-                response.status = 404;
-            }
+            response.status = serve_reference(repository, path, output)?;
         }
         ("GET", _) if path.starts_with("objects/") => {
-            let object_path = &path.as_bytes()[8..];
-            let format = repository.object_format();
-            if object_path.len() != format.hex_length() + 1 || object_path[2] != b'/' {
-                response.status = 404;
-            } else {
-                let mut storage = [0; 64];
-                let hex = &mut storage[..format.hex_length()];
-                hex[..2].copy_from_slice(&object_path[..2]);
-                hex[2..].copy_from_slice(&object_path[3..]);
-                if let Ok(id) = ObjectId::from_hex(hex) {
-                    if let Some(index) = repository.find_index(id) {
-                        response.content_type = "application/x-git-loose-object";
-                        pack::write_loose_with_scratch(repository, index, scratch, output)?;
-                    } else {
-                        response.status = 404;
-                    }
-                } else {
-                    response.status = 404;
-                }
-            }
+            response = serve_loose(repository, &path.as_bytes()[8..], scratch, output)?;
         }
         ("GET" | "POST", _) => response.status = 404,
         _ => response.status = 405,
@@ -274,8 +202,112 @@ pub fn serve_with_pack<W: Write>(
     Ok(response)
 }
 
-fn ref_path_matches(path: &str, name: &str) -> bool {
-    route::decoded(path).eq(name.bytes().map(Ok))
+fn advertise_smart(
+    repository: &impl Repository,
+    version: Version,
+    output: &mut impl Write,
+) -> Result<()> {
+    pktline::write(output, b"# service=git-upload-pack\n")?;
+    output.write_all(b"0000")?;
+    if version == Version::V2 {
+        return v2::advertise(repository.object_format(), output);
+    }
+    if version == Version::V1 {
+        pktline::write(output, b"version 1\n")?;
+    }
+    if repository.head_state().id().is_some() || repository.reference_count() == 0 {
+        advertise_head(repository, output)?;
+    }
+    advertise_references(repository, true, output)?;
+    output.write_all(b"0000")
+}
+
+fn write_upload<W: Write>(
+    repository: &impl Repository,
+    request: Request<'_>,
+    scratch: &mut [u8],
+    output: &mut W,
+    write_pack: impl FnOnce(&mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
+) -> Result<()> {
+    let version = route::version(request.git_protocol)?;
+    if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
+        return Ok(());
+    }
+    if !uses_only_head(repository) {
+        return Err(Error::Unsupported);
+    }
+    let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
+    let upload = UploadRequest::parse(request.body, repository.object_format(), version, |id| {
+        if id == head {
+            Ok(())
+        } else {
+            Err(Error::InvalidRequest)
+        }
+    })?;
+    upload.acknowledge(repository, output)?;
+    if upload.done {
+        let mut packed = upload.output(output);
+        write_pack(scratch, &mut packed)?;
+        packed.finish()?;
+    }
+    Ok(())
+}
+
+fn serve_reference(
+    repository: &impl Repository,
+    path: &str,
+    output: &mut impl Write,
+) -> Result<u16> {
+    let index = (0..repository.reference_count()).find(|&index| {
+        repository
+            .reference_name(index)
+            .is_some_and(|name| route::decoded(path).eq(name.bytes().map(Ok)))
+    });
+    let Some(index) = index else { return Ok(404) };
+    if let Some(target) = repository.reference_symbolic_target(index) {
+        output.write_all(b"ref: ")?;
+        output.write_all(target.as_bytes())?;
+    } else {
+        output.write_all(
+            &repository
+                .reference_id(index)
+                .ok_or(Error::InvalidObject)?
+                .to_hex(),
+        )?;
+    }
+    output.write_all(b"\n")?;
+    Ok(200)
+}
+
+fn serve_loose(
+    repository: &impl Repository,
+    path: &[u8],
+    scratch: &mut [u8],
+    output: &mut impl Write,
+) -> Result<Response> {
+    let missing = Response {
+        status: 404,
+        content_type: "text/plain; charset=utf-8",
+    };
+    let width = repository.object_format().hex_length();
+    if path.len() != width + 1 || path[2] != b'/' {
+        return Ok(missing);
+    }
+    let mut storage = [0; 64];
+    let hex = &mut storage[..width];
+    hex[..2].copy_from_slice(&path[..2]);
+    hex[2..].copy_from_slice(&path[3..]);
+    let index = ObjectId::from_hex(hex)
+        .ok()
+        .and_then(|id| repository.find_index(id));
+    let Some(index) = index else {
+        return Ok(missing);
+    };
+    pack::write_loose_with_scratch(repository, index, scratch, output)?;
+    Ok(Response {
+        status: 200,
+        content_type: "application/x-git-loose-object",
+    })
 }
 
 fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {

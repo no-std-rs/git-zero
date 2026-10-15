@@ -1,5 +1,5 @@
 //! Bounded, stateless protocol v2. Validate the whole command before output.
-use crate::upload::{self, PackOutput};
+use crate::upload;
 use git_zero_core::{
     Error, Head, ObjectFormat, ObjectId, Repository, Result,
     io::Write,
@@ -210,20 +210,18 @@ impl<'a> Refs<'a> {
     }
 }
 
-pub(crate) struct Fetch<'a> {
-    args: &'a [u8],
+pub(crate) struct Fetch {
     pub done: bool,
     pub include_tags: bool,
 }
 
-impl<'a> Fetch<'a> {
+impl Fetch {
     pub fn parse(
-        args: &'a [u8],
+        args: &[u8],
         format: ObjectFormat,
         mut want: impl FnMut(ObjectId) -> Result<()>,
     ) -> Result<Self> {
         let mut fetch = Self {
-            args,
             done: false,
             include_tags: false,
         };
@@ -249,35 +247,25 @@ impl<'a> Fetch<'a> {
         }
         Ok(fetch)
     }
+}
 
-    pub fn common<'r>(
-        &'r self,
-        repository: &'r impl Repository,
-    ) -> impl Iterator<Item = Result<ObjectId>> + 'r {
-        arguments(self.args)
-            .filter_map(|arg| arg.strip_prefix(b"have "))
-            .filter_map(|hex| ObjectId::from_hex(hex).ok())
-            .filter_map(move |id| upload::common_commit(repository, id).transpose())
+pub(crate) fn acknowledge(
+    done: bool,
+    common: impl Iterator<Item = Result<ObjectId>>,
+    output: &mut impl Write,
+) -> Result<()> {
+    if done {
+        return pktline::write(output, b"packfile\n");
     }
-
-    pub fn acknowledge(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
-        if self.done {
-            return pktline::write(output, b"packfile\n");
-        }
-        pktline::write(output, b"acknowledgments\n")?;
-        let mut known = false;
-        for id in self.common(repository) {
-            pktline::write_parts(output, &[b"ACK ", &id?.to_hex(), b"\n"])?;
-            known = true;
-        }
-        if !known {
-            pktline::write(output, b"NAK\n")?
-        }
-        // Wait for done; never claim an early sufficient cut point.
-        output.write_all(b"0000")
+    pktline::write(output, b"acknowledgments\n")?;
+    let mut known = false;
+    for id in common {
+        pktline::write_parts(output, &[b"ACK ", &id?.to_hex(), b"\n"])?;
+        known = true;
     }
-
-    pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
-        PackOutput::sideband(output)
+    if !known {
+        pktline::write(output, b"NAK\n")?
     }
+    // Wait for done; never claim an early sufficient cut point.
+    output.write_all(b"0000")
 }
