@@ -32,15 +32,9 @@ class BenchmarkConfigTests(unittest.TestCase):
                        {"delta_depth": -1}, {"delta_depth": 4096}):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 configuration(**values)
-        runner = Path(__file__).with_name("benchmark.py")
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "invalid.json"
-            result = subprocess.run([sys.executable, str(runner), "--git-profile", "upstream-defaults",
-                                     "--git-compression", "0", "--output", str(output)],
-                                    capture_output=True, timeout=30)
-            self.assertEqual(result.returncode, 2)
-            self.assertIn(b"cannot be combined", result.stderr)
-            self.assertFalse(output.exists())
+            self.assert_invalid_command(Path(directory), ["--git-profile", "upstream-defaults",
+                                                          "--git-compression", "0"], b"cannot be combined")
 
     def test_real_encoded_inputs_follow_matched_defaults_and_custom_delta_policies(self):
         env = environment()
@@ -64,6 +58,28 @@ class BenchmarkConfigTests(unittest.TestCase):
                     self.assertGreater(pack["delta_objects"], 0)
                     self.assertLessEqual(pack["max_delta_depth"], config.delta_depth or 50)
                 self.assertEqual(config.algorithms()["equivalent_server_features"], config.profile == "matched")
+
+    def test_sampling_configuration_and_tree_limits_fail_before_starting_servers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = root / "limits.json"
+            policy.write_text(json.dumps({"schema_version": 1, "limits": [{
+                "workload": "server-clone-smart", "implementation": "zero",
+                "metric": "server.process_tree_peak_rss_kib", "maximum": 65536}]}))
+            cases = [(["--rss-sample-ms", str(value)], b"rss-sample-ms") for value in (-1, 1, 9, 1001)]
+            cases.append((["--limits", str(policy)], b"require --rss-sample-ms"))
+            for arguments, message in cases:
+                with self.subTest(arguments=arguments):
+                    self.assert_invalid_command(root, arguments, message)
+
+    def assert_invalid_command(self, root, arguments, message):
+        runner = Path(__file__).with_name("benchmark.py")
+        output = root / "invalid.json"
+        result = subprocess.run([sys.executable, str(runner), "--output", str(output), *arguments],
+                                capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(message, result.stderr)
+        self.assertFalse(output.exists())
 
     def assert_git_inputs(self, bare, config, objects, env):
         """Independently check the loose bytes and the selected Git configuration."""

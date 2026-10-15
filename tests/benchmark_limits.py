@@ -12,6 +12,7 @@ METRICS = {
     "server.cpu_s": ("samples", "server", "cpu_s"),
     "server.frontend_peak_rss_kib": ("samples", "server", "frontend_peak_rss_kib"),
     "server.backend_child_peak_rss_kib": ("samples", "server", "backend_child_peak_rss_kib"),
+    "server.process_tree_peak_rss_kib": ("samples", "server", "process_tree_rss", "peak_rss_kib"),
     "startup.wall_s": ("server_startup", "startup_wall_s"),
     "startup.cpu_s": ("server_startup", "startup_cpu_s"),
     "startup.frontend_peak_rss_kib": ("server_startup", "frontend_peak_rss_kib"),
@@ -47,22 +48,37 @@ def load(path, workloads):
     return policy
 
 
+def field(value, path):
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def observation_value(metric, observation):
+    # Numeric sampled-tree peaks are usable only with a complete observation.
+    if metric == "server.process_tree_peak_rss_kib":
+        if field(observation, ("server", "process_tree_rss", "status")) != "sampled":
+            return None
+    return field(observation, METRICS[metric][1:])
+
+
+def observation_values(result, limit):
+    metric = limit["metric"]
+    group = METRICS[metric][0]
+    observations = result.get(group, {}).get(limit["implementation"], [])
+    if group == "server_startup":
+        observations = [observations] if observations else []
+    return [observation_value(metric, observation) for observation in observations]
+
+
 def evaluate(policy, results):
     """Check the largest observation; missing/invalid observations never pass."""
     by_workload = {result["workload"]: result for result in results}
     evaluations = []
     for limit in policy["limits"]:
-        result = by_workload.get(limit["workload"], {})
-        group, *path = METRICS[limit["metric"]]
-        observations = result.get(group, {}).get(limit["implementation"], [])
-        if group == "server_startup":
-            observations = [observations] if observations else []
-        values = []
-        for observation in observations:
-            value = observation
-            for key in path:
-                value = value.get(key) if isinstance(value, dict) else None
-            values.append(value)
+        values = observation_values(by_workload.get(limit["workload"], {}), limit)
         complete = bool(values) and all(nonnegative_number(value) for value in values)
         maximum = max(values) if complete else None
         status = ("missing_or_invalid" if not complete else

@@ -114,6 +114,47 @@ jobs:
           assert evaluation['status'] == 'exceeded' and evaluation['maximum'] == 0
           assert evaluation['observed_maximum'] > 0 and evaluation['observations'] == 1
           PY
+          python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
+            --binary target/debug/git-zero --allow-unpinned-git --files 4 --blob-bytes 256 --commits 3 \
+            --case server-clone-smart --samples 2 --warmup 0 --rss-sample-ms 10 \
+            --limits tests/benchmark-tree-limits.json \
+            --output /tmp/git-zero-benchmark-tree.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('/tmp/git-zero-benchmark-tree.json').read_text())
+          assert report['status'] == 'complete' and report['server_rss_sampling']['enabled']
+          assert report['budget_evaluations'][0]['status'] == 'passed'
+          for implementation, samples in report['results'][0]['samples'].items():
+              for sample in samples:
+                  tree = sample['server']['process_tree_rss']
+                  assert tree['samples'] >= 2 and tree['observed_peak_rss_kib'] > 0
+                  assert tree['observer_cpu_s'] >= 0 and tree['max_sample_wall_s'] > 0
+                  if tree['status'] == 'partial':
+                      assert implementation == 'git' and tree['peak_rss_kib'] is None
+                  else:
+                      assert tree['status'] == 'sampled' and tree['peak_rss_kib'] > 0
+          policy = {'schema_version': 1, 'limits': [{
+              'workload': 'server-clone-smart', 'implementation': 'zero',
+              'metric': 'server.process_tree_peak_rss_kib', 'maximum': 0}]}
+          Path('/tmp/git-zero-benchmark-tree-impossible.json').write_text(json.dumps(policy))
+          PY
+          if python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
+            --binary target/debug/git-zero --allow-unpinned-git --files 4 --blob-bytes 256 --commits 3 \
+            --case server-clone-smart --samples 1 --warmup 0 --rss-sample-ms 10 \
+            --limits /tmp/git-zero-benchmark-tree-impossible.json \
+            --output /tmp/git-zero-benchmark-tree-failure.json; then
+            echo "Expected sampled-tree RSS to exceed the deliberately impossible limit"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('/tmp/git-zero-benchmark-tree-failure.json').read_text())
+          assert report['status'] == 'failed' and not report['errors']
+          assert report['budget_evaluations'][0]['status'] == 'exceeded'
+          assert report['budget_evaluations'][0]['observed_maximum'] > 0
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
