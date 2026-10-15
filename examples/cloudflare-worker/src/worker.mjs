@@ -1,6 +1,7 @@
+import { decodeSnapshot, loadSnapshot, MAX_SNAPSHOT_BYTES, persistSnapshot, SnapshotError } from "./snapshots.mjs";
+import { readBytes } from "./bytes.mjs";
+
 const encoder = new TextEncoder();
-const decoder = new TextDecoder("utf-8", { fatal: true });
-const MAX_SNAPSHOT_BYTES = 8192;
 const MAX_TOKEN_LENGTH = Math.ceil(MAX_SNAPSHOT_BYTES / 3) * 4;
 const CONTENT_TYPES = [
   "text/plain; charset=utf-8",
@@ -17,12 +18,7 @@ function decodeToken(token) {
   if (token.length > MAX_TOKEN_LENGTH || !/^[A-Za-z0-9_-]+$/.test(token)) throw new Error("Invalid snapshot token");
   const base64 = token.replaceAll("-", "+").replaceAll("_", "/");
   const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
-  if (bytes.length > MAX_SNAPSHOT_BYTES) throw new Error("Snapshot exceeds 8 KiB");
-  const snapshot = JSON.parse(decoder.decode(bytes));
-  if (!Array.isArray(snapshot) || snapshot.length !== 4 || snapshot.some((part) => typeof part !== "string")) {
-    throw new Error("Invalid snapshot data");
-  }
-  return snapshot;
+  return decodeSnapshot(bytes);
 }
 
 function capture(request, env) {
@@ -113,24 +109,7 @@ async function readBody(request, maximum) {
     },
   }));
   const stream = encoding === "gzip" ? bounded.pipeThrough(new DecompressionStream("gzip")) : bounded;
-  const reader = stream.getReader();
-  const storage = new Uint8Array(maximum);
-  let length = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (length + value.length > maximum) throw new Error("Request too large");
-      storage.set(value, length);
-      length += value.length;
-    }
-  } catch (error) {
-    await reader.cancel();
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-  return storage.subarray(0, length);
+  return readBytes(stream, maximum);
 }
 
 export function createWorker(module) {
@@ -141,21 +120,34 @@ export function createWorker(module) {
         const parts = capture(request, env);
         const bytes = encoder.encode(JSON.stringify(parts));
         if (bytes.length > MAX_SNAPSHOT_BYTES) return new Response("Metadata snapshot exceeds 8 KiB\n", { status: 413 });
-        // The URL carries an immutable public snapshot. Any isolate can rebuild
-        // exactly the same objects, without KV, local state, or redirect races.
-        const cloneUrl = `${url.origin}/r/${encodeToken(bytes)}/repo.git`;
-        return Response.json({ clone_url: cloneUrl, files: ["cf.json", "headers.json", "runtime.json", "vars.json"] }, {
-          headers: { "Cache-Control": "no-store" },
-        });
+        try {
+          // Storage writes finish before publishing a URL. Reads always verify
+          // the immutable record; no isolate-local mutable snapshot is reused.
+          const stored = env.SNAPSHOT_STORAGE && env.SNAPSHOT_STORAGE !== "inline"
+            ? await persistSnapshot(bytes, env) : null;
+          const path = stored?.path ?? `/r/${encodeToken(bytes)}/repo.git`;
+          return Response.json({
+            clone_url: `${url.origin}${path}`,
+            files: ["cf.json", "headers.json", "runtime.json", "vars.json"],
+            ...(stored ? { expires_at: new Date(stored.expiresAt * 1000).toISOString() } : {}),
+          }, { headers: { "Cache-Control": "no-store" } });
+        } catch (error) {
+          if (!(error instanceof SnapshotError)) throw error;
+          return new Response(`${error.message}\n`, { status: error.status, headers: { "Cache-Control": "no-store" } });
+        }
       }
-      const match = /^\/r\/([A-Za-z0-9_-]+)\/repo\.git\/(.*)$/.exec(url.pathname);
-      if (!match) return new Response("Repository not found\n", { status: 404 });
+      const inline = /^\/r\/([A-Za-z0-9_-]+)\/repo\.git\/(.*)$/.exec(url.pathname);
+      const stored = /^\/s\/(kv|r2)\/([a-f0-9]{64})\/repo\.git\/(.*)$/.exec(url.pathname);
+      if (!inline && !stored) return new Response("Repository not found\n", { status: 404 });
       if (!["GET", "POST"].includes(request.method)) return new Response("Method not allowed\n", { status: 405 });
       try {
-        const parts = decodeToken(match[1]);
+        const parts = inline ? decodeToken(inline[1]) : await loadSnapshot(env, stored[1], stored[2]);
         const body = await readBody(request, 32768);
-        return invoke(module, parts, `${match[2]}${url.search}`, body, request.method, request.headers);
-      } catch {
+        return invoke(module, parts, `${inline ? inline[2] : stored[3]}${url.search}`, body, request.method, request.headers);
+      } catch (error) {
+        if (error instanceof SnapshotError) {
+          return new Response(`${error.message}\n`, { status: error.status, headers: { "Cache-Control": "no-store", "Retry-After": "60" } });
+        }
         return new Response("Invalid snapshot or request\n", { status: 400 });
       }
     },
