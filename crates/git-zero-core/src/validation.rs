@@ -370,39 +370,16 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             object.excluded = object.reached;
             object.reset_walk();
         }
-        let mut depth = fetch.depth.filter(|_| deepening);
-        if fetch.deepen_relative && deepening {
-            // Git 2.55 measures the nearest client boundary from the wants.
-            // Unrelated shallow branches cannot influence or extend this cut.
-            self.walk_wants(
+        let depth = match fetch.depth.filter(|_| deepening) {
+            Some(depth) if fetch.deepen_relative => self.relative_depth(
                 roots,
                 work,
                 (read_scratch, parse_scratch),
                 &mut remaining,
-                History {
-                    limit: None,
-                    client: true,
-                    distance: true,
-                },
-            )?;
-            // Git 2.55 get_shallow_commits returns no new boundaries when none
-            // match. Unlike Git 2.54, this leaves wanted history complete.
-            depth = work
-                .iter()
-                .flatten()
-                .filter(|object| object.reached && object.client_shallow)
-                .map(|object| object.depth)
-                .min()
-                .map(|boundary| {
-                    boundary
-                        .checked_add(fetch.depth.expect("relative depth"))
-                        .ok_or(Error::LimitExceeded)
-                })
-                .transpose()?;
-            for slot in work.iter_mut() {
-                slot.as_mut().expect("validated metadata").reset_walk();
-            }
-        }
+                depth,
+            )?,
+            depth => depth,
+        };
         let history = History {
             limit: depth,
             client: fetch.depth.is_none(),
@@ -436,6 +413,43 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             }
         }
         Ok(&selected[..length])
+    }
+
+    fn relative_depth(
+        &self,
+        roots: &[ObjectId],
+        work: &mut [Option<ValidationMetadata>],
+        scratch: (&mut [u8], &mut [u8]),
+        remaining: &mut u64,
+        depth: u32,
+    ) -> Result<Option<u32>> {
+        // Git 2.55 measures the nearest client boundary from the wants.
+        // Unrelated shallow branches cannot influence or extend this cut.
+        self.walk_wants(
+            roots,
+            work,
+            scratch,
+            remaining,
+            History {
+                limit: None,
+                client: true,
+                distance: true,
+            },
+        )?;
+        // Git 2.55 get_shallow_commits returns no new boundaries when none
+        // match. Unlike Git 2.54, this leaves wanted history complete.
+        let limit = work
+            .iter()
+            .flatten()
+            .filter(|object| object.reached && object.client_shallow)
+            .map(|object| object.depth)
+            .min()
+            .map(|boundary| boundary.checked_add(depth).ok_or(Error::LimitExceeded))
+            .transpose()?;
+        for slot in work.iter_mut() {
+            slot.as_mut().expect("validated metadata").reset_walk();
+        }
+        Ok(limit)
     }
 
     fn walk_wants(

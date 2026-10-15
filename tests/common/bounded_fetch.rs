@@ -257,28 +257,33 @@ fn unused_relative_negotiation_preserves_ordinary_fetches_and_client_boundaries(
                 false
             )
         );
-        let mut args: Vec<_> = shallow.iter().map(|id| format!("shallow {id}")).collect();
+        let args: Vec<_> = shallow.iter().map(|id| format!("shallow {id}")).collect();
         for version in [0, 1, 2] {
-            let plain: Vec<_> = args.iter().map(String::as_str).collect();
-            let bytes = body(graph.head(), version, &plain, true);
-            let (result, expected) =
-                Harness::default().serve(repository, request(&bytes, version), 32768);
-            result.unwrap();
-            args.push(String::from("deepen-relative"));
-            let relative: Vec<_> = args.iter().map(String::as_str).collect();
-            let bytes = body(graph.head(), version, &relative, true);
-            let mut harness = Harness::default();
-            let (result, actual) = harness.serve(repository, request(&bytes, version), 32768);
-            result.unwrap();
-            assert_same_response(&actual, &expected, version);
-            assert_same_response(
-                &harness.pull(repository, request(&bytes, version)),
-                &expected,
-                version,
-            );
-            args.pop();
+            compare_unused_relative(repository, version, &args);
         }
     }
+}
+
+fn compare_unused_relative(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    version: u8,
+    args: &[String],
+) {
+    let mut args: Vec<_> = args.iter().map(String::as_str).collect();
+    let bytes = body(repository.head(), version, &args, true);
+    let (result, expected) = Harness::default().serve(repository, request(&bytes, version), 32768);
+    result.unwrap();
+    args.push("deepen-relative");
+    let bytes = body(repository.head(), version, &args, true);
+    let mut harness = Harness::default();
+    let (result, actual) = harness.serve(repository, request(&bytes, version), 32768);
+    result.unwrap();
+    assert_same_response(&actual, &expected, version);
+    assert_same_response(
+        &harness.pull(repository, request(&bytes, version)),
+        &expected,
+        version,
+    );
 }
 
 #[test]
@@ -288,47 +293,40 @@ fn complete_pack_apis_reject_unadvertised_relative_negotiation_before_output() {
         let mut commit = [0; 512];
         let snapshot = Snapshot::new_with_format(&[], &mut tree, &mut commit, format).unwrap();
         for version in [0, 1, 2] {
-            let bytes = body(snapshot.head(), version, &["deepen-relative"], true);
-            let mut storage = [0; 4096];
-            let mut output = SliceWriter::new(&mut storage);
-            assert_eq!(
-                allocations::without_allocations(|| {
-                    http::serve(&snapshot, request(&bytes, version), &mut output).map(|_| ())
-                }),
-                Err(Error::Unsupported)
-            );
-            assert!(output.is_empty());
-            let mut called = false;
-            assert_eq!(
-                allocations::without_allocations(|| {
-                    http::serve_with_pack(
-                        &snapshot,
-                        request(&bytes, version),
-                        &mut [],
-                        &mut output,
-                        |_, _| {
-                            called = true;
-                            Ok(())
-                        },
-                    )
-                    .map(|_| ())
-                }),
-                Err(Error::Unsupported)
-            );
-            assert!(!called && output.is_empty());
-            assert!(matches!(
-                allocations::without_allocations(|| {
-                    http::stream::ResponseEncoder::new(
-                        &snapshot,
-                        request(&bytes, version),
-                        &mut [0; 4096],
-                    )
-                    .map(|_| ())
-                }),
-                Err(Error::Unsupported)
-            ));
+            reject_complete_relative(&snapshot, version);
         }
     }
+}
+
+fn reject_complete_relative(snapshot: &Snapshot<'_>, version: u8) {
+    let bytes = body(snapshot.head(), version, &["deepen-relative"], true);
+    let mut storage = [0; 4096];
+    let mut output = SliceWriter::new(&mut storage);
+    let result = allocations::without_allocations(|| {
+        http::serve(snapshot, request(&bytes, version), &mut output)
+    });
+    assert!(matches!(result, Err(Error::Unsupported)));
+    assert!(output.is_empty());
+    let mut called = false;
+    let result = allocations::without_allocations(|| {
+        http::serve_with_pack(
+            snapshot,
+            request(&bytes, version),
+            &mut [],
+            &mut output,
+            |_, _| {
+                called = true;
+                Ok(())
+            },
+        )
+    });
+    assert!(matches!(result, Err(Error::Unsupported)));
+    assert!(!called && output.is_empty());
+    let result = allocations::without_allocations(|| {
+        http::stream::ResponseEncoder::new(snapshot, request(&bytes, version), &mut [0; 4096])
+            .map(|_| ())
+    });
+    assert_eq!(result, Err(Error::Unsupported));
 }
 
 #[test]
