@@ -110,6 +110,13 @@ pub(crate) struct Refs<'a> {
     unborn: bool,
 }
 
+fn attribute<'a>(marker: &'a [u8], value: Option<&'a [u8]>) -> [&'a [u8]; 2] {
+    match value {
+        Some(value) => [marker, value],
+        None => [b"", b""],
+    }
+}
+
 impl<'a> Refs<'a> {
     pub fn parse(args: &'a [u8]) -> Result<Self> {
         let mut refs = Self {
@@ -153,27 +160,22 @@ impl<'a> Refs<'a> {
             .as_ref()
             .map_or(b"unborn".as_slice(), |hex| hex.as_ref());
         let peeled_hex = peeled.filter(|_| self.peel).map(|id| id.to_hex());
-        let symbolic = symbolic.filter(|_| self.symrefs);
+        let [symbolic_marker, symbolic] = attribute(
+            b" symref-target:",
+            symbolic.filter(|_| self.symrefs).map(str::as_bytes),
+        );
+        let [peeled_marker, peeled] =
+            attribute(b" peeled:", peeled_hex.as_ref().map(|hex| hex.as_ref()));
         pktline::write_parts(
             output,
             &[
                 id,
                 b" ",
                 name.as_bytes(),
-                if symbolic.is_some() {
-                    b" symref-target:"
-                } else {
-                    b""
-                },
-                symbolic.unwrap_or("").as_bytes(),
-                if peeled_hex.is_some() {
-                    b" peeled:"
-                } else {
-                    b""
-                },
-                peeled_hex
-                    .as_ref()
-                    .map_or(b"".as_slice(), |hex| hex.as_ref()),
+                symbolic_marker,
+                symbolic,
+                peeled_marker,
+                peeled,
                 b"\n",
             ],
         )

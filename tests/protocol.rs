@@ -55,11 +55,21 @@ fn response(repository: &impl Repository, request: Request<'_>) -> (u16, Vec<u8>
     (response.status, output.as_bytes().to_vec())
 }
 
+fn assert_packet(wire: &mut &[u8], expected: &[u8]) {
+    assert_eq!(pktline::read(wire).unwrap(), Some(Packet::Data(expected)));
+}
+
+fn assert_end(wire: &mut &[u8]) {
+    assert_eq!(pktline::read(wire).unwrap(), Some(Packet::Flush));
+    assert!(wire.is_empty());
+}
+
 #[test]
-fn discovery_v1_v2_and_ls_refs_are_format_aware_and_allocation_free() {
+fn discovery_v1_v2_capabilities_are_exact_and_format_aware() {
     each_format(|repository| {
-        for version in ["version=1", "version=2"] {
-            let (_, wire) = response(
+        for version in [1, 2] {
+            let header = format!("version={version}");
+            let (_, bytes) = response(
                 repository,
                 Request {
                     method: "GET",
@@ -67,22 +77,37 @@ fn discovery_v1_v2_and_ls_refs_are_format_aware_and_allocation_free() {
                     query: Some("service=git-upload-pack"),
                     body: &[],
                     content_type: None,
-                    git_protocol: Some(version),
+                    git_protocol: Some(&header),
                 },
             );
-            assert!(
-                wire.windows(version.len())
-                    .any(|w| w == version.replace('=', " ").as_bytes())
-            );
-            assert!(
-                wire.windows(repository.object_format().capability().len())
-                    .any(|w| w == repository.object_format().capability())
-            );
-            if version == "version=2" {
-                assert!(wire.windows(9).any(|w| w == b"ls-refs=u"));
-                assert!(!wire.windows(7).any(|w| w == b"shallow" || w == b"filter="));
+            let mut wire = bytes.as_slice();
+            assert_packet(&mut wire, b"# service=git-upload-pack\n");
+            assert_eq!(pktline::read(&mut wire).unwrap(), Some(Packet::Flush));
+            assert_packet(&mut wire, format!("version {version}\n").as_bytes());
+            if version == 2 {
+                for capability in [
+                    b"agent=git-zero/0.1\n".as_slice(),
+                    b"ls-refs=unborn\n",
+                    b"fetch\n",
+                ] {
+                    assert_packet(&mut wire, capability);
+                }
+                let format = core::str::from_utf8(repository.object_format().capability()).unwrap();
+                assert_packet(&mut wire, format!("{format}\n").as_bytes());
+                assert_end(&mut wire);
+            } else {
+                assert!(
+                    wire.windows(repository.object_format().capability().len())
+                        .any(|w| w == repository.object_format().capability())
+                );
             }
         }
+    });
+}
+
+#[test]
+fn ls_refs_filters_head_and_resolves_its_symbolic_target() {
+    each_format(|repository| {
         let body = command(
             "ls-refs",
             repository.object_format(),
@@ -92,17 +117,27 @@ fn discovery_v1_v2_and_ls_refs_are_format_aware_and_allocation_free() {
                 "ref-prefix HEAD\n".into(),
             ],
         );
-        let (_, wire) = response(repository, request(&body));
-        let mut wire = wire.as_slice();
-        assert_eq!(
-            pktline::read(&mut wire).unwrap(),
-            Some(Packet::Data(
-                format!("{} HEAD symref-target:refs/heads/main\n", repository.head()).as_bytes()
-            ))
+        let (_, bytes) = response(repository, request(&body));
+        let mut wire = bytes.as_slice();
+        assert_packet(
+            &mut wire,
+            format!("{} HEAD symref-target:refs/heads/main\n", repository.head()).as_bytes(),
         );
-        assert_eq!(pktline::read(&mut wire).unwrap(), Some(Packet::Flush));
-        assert!(wire.is_empty());
+        assert_end(&mut wire);
     });
+}
+
+fn sideband_pack(mut wire: &[u8]) -> Vec<u8> {
+    assert_packet(&mut wire, b"packfile\n");
+    let mut packed = Vec::new();
+    loop {
+        let Some(Packet::Data(data)) = pktline::read(&mut wire).unwrap() else {
+            assert!(wire.is_empty());
+            return packed;
+        };
+        assert_eq!(data[0], 1);
+        packed.extend_from_slice(&data[1..]);
+    }
 }
 
 #[test]
@@ -120,56 +155,32 @@ fn v2_fetch_done_omits_ack_section_and_always_frames_pack() {
                 "done\n".into(),
             ],
         );
-        let (_, wire) = response(repository, request(&body));
-        let mut wire = wire.as_slice();
-        assert_eq!(
-            pktline::read(&mut wire).unwrap(),
-            Some(Packet::Data(b"packfile\n"))
-        );
-        let mut packed = Vec::new();
-        while let Some(Packet::Data(data)) = pktline::read(&mut wire).unwrap() {
-            assert_eq!(data[0], 1);
-            packed.extend_from_slice(&data[1..]);
-        }
-        assert!(wire.is_empty());
-        pack::validate_with_format(&packed, repository.object_format()).unwrap();
+        let (_, bytes) = response(repository, request(&body));
+        pack::validate_with_format(&sideband_pack(&bytes), repository.object_format()).unwrap();
     });
 }
 
 #[test]
 fn v2_rounds_ack_known_commits_and_do_not_mix_nak_or_pack() {
     each_format(|repository| {
-        let unknown = ObjectId::from_bytes(
-            repository.object_format(),
-            &[9; 32][..repository.object_format().id_length()],
-        )
-        .unwrap();
-        for known in [false, true] {
-            let mut args = vec![
-                format!("want {}\n", repository.head()),
-                format!("have {unknown}\n"),
-            ];
-            if known {
-                args.push(format!("have {}\n", repository.head()));
-            }
-            let body = command("fetch", repository.object_format(), &args);
-            let (_, wire) = response(repository, request(&body));
-            let mut wire = wire.as_slice();
-            assert_eq!(
-                pktline::read(&mut wire).unwrap(),
-                Some(Packet::Data(b"acknowledgments\n"))
-            );
-            let ack = if known {
-                format!("ACK {}\n", repository.head())
-            } else {
-                "NAK\n".into()
-            };
-            assert_eq!(
-                pktline::read(&mut wire).unwrap(),
-                Some(Packet::Data(ack.as_bytes()))
-            );
-            assert_eq!(pktline::read(&mut wire).unwrap(), Some(Packet::Flush));
-            assert!(wire.is_empty());
+        let format = repository.object_format();
+        let unknown = ObjectId::from_bytes(format, &[9; 32][..format.id_length()]).unwrap();
+        let want = format!("want {}\n", repository.head());
+        let unknown_have = format!("have {unknown}\n");
+        let known_have = format!("have {}\n", repository.head());
+        for (args, expected) in [
+            (vec![want.clone(), unknown_have.clone()], "NAK\n".to_owned()),
+            (
+                vec![want, unknown_have, known_have],
+                format!("ACK {}\n", repository.head()),
+            ),
+        ] {
+            let body = command("fetch", format, &args);
+            let (_, bytes) = response(repository, request(&body));
+            let mut wire = bytes.as_slice();
+            assert_packet(&mut wire, b"acknowledgments\n");
+            assert_packet(&mut wire, expected.as_bytes());
+            assert_end(&mut wire);
         }
     });
 }
@@ -189,16 +200,13 @@ fn unborn_ls_refs_requires_symrefs_to_describe_the_missing_head_target() {
         ObjectFormat::Sha1,
         &["unborn\n".into(), "symrefs\n".into()],
     );
-    let (_, wire) = response(&repository, request(&body));
-    let mut wire = wire.as_slice();
-    assert_eq!(
-        pktline::read(&mut wire).unwrap(),
-        Some(Packet::Data(
-            b"unborn HEAD symref-target:refs/heads/new/default\n"
-        ))
+    let (_, bytes) = response(&repository, request(&body));
+    let mut wire = bytes.as_slice();
+    assert_packet(
+        &mut wire,
+        b"unborn HEAD symref-target:refs/heads/new/default\n",
     );
-    assert_eq!(pktline::read(&mut wire).unwrap(), Some(Packet::Flush));
-    assert!(wire.is_empty());
+    assert_end(&mut wire);
 }
 
 fn rejected(repository: &impl Repository, body: &[u8]) {
@@ -268,6 +276,14 @@ fn malformed_v2_commands_are_rejected_before_output_or_pack_hooks() {
     });
 }
 
+fn invalid_http(repository: &impl Repository, request: Request<'_>, expected: Error) {
+    let mut bytes = [0; 4096];
+    let mut output = SliceWriter::new(&mut bytes);
+    let result = allocations::without_allocations(|| http::serve(repository, request, &mut output));
+    assert!(matches!(result, Err(error) if error == expected));
+    assert!(output.is_empty());
+}
+
 #[test]
 fn strict_http_metadata_and_canonical_routes_precede_all_output() {
     each_format(|repository| {
@@ -328,48 +344,37 @@ fn strict_http_metadata_and_canonical_routes_precede_all_output() {
             "refs\\main",
             "HEAD#x",
         ] {
-            let mut bytes = [0; 128];
-            let mut output = SliceWriter::new(&mut bytes);
-            assert!(
-                http::serve(
-                    repository,
-                    Request {
-                        path,
-                        method: "GET",
-                        ..baseline
-                    },
-                    &mut output
-                )
-                .is_err(),
-                "{path}"
-            );
-            assert!(output.is_empty());
-        }
-        for protocol in ["version=3", "version=2:version=1", "version=2\r\n"] {
-            let mut bytes = [0; 128];
-            assert!(
-                http::serve(
-                    repository,
-                    Request {
-                        git_protocol: Some(protocol),
-                        ..baseline
-                    },
-                    &mut SliceWriter::new(&mut bytes)
-                )
-                .is_err()
-            );
-        }
-        let mut bytes = [0; 128];
-        assert!(
-            http::serve(
+            invalid_http(
                 repository,
                 Request {
-                    query: Some("service=git-upload-pack&service=git-upload-pack"),
+                    path,
+                    method: "GET",
                     ..baseline
                 },
-                &mut SliceWriter::new(&mut bytes)
-            )
-            .is_err()
+                Error::InvalidRequest,
+            );
+        }
+        for (protocol, error) in [
+            ("version=3", Error::Unsupported),
+            ("version=2:version=1", Error::InvalidRequest),
+            ("version=2\r\n", Error::InvalidRequest),
+        ] {
+            invalid_http(
+                repository,
+                Request {
+                    git_protocol: Some(protocol),
+                    ..baseline
+                },
+                error,
+            );
+        }
+        invalid_http(
+            repository,
+            Request {
+                query: Some("service=git-upload-pack&service=git-upload-pack"),
+                ..baseline
+            },
+            Error::InvalidRequest,
         );
     });
 }

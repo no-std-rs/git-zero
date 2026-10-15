@@ -52,33 +52,61 @@ def compare_client(root, bare, urls, head, version, env):
     listings = [run("git", "-c", f"protocol.version={version}", "ls-remote", "--symref", url, env=traces)
                 for _, url in urls]
     assert sorted(listings[0].splitlines()) == sorted(listings[1].splitlines())
-    clone_heads = []
-    for name, url in urls:
-        clone = root / f"{name}-v{version}-clone"
-        run("git", "-c", f"protocol.version={version}", "clone", "-q", url, str(clone), env=traces)
-        git(clone, "fsck", "--strict", env=traces)
-        assert object_manifest(clone, "--all", env) == object_manifest(bare, "--all", env)
-        if head:
-            assert git(clone, "rev-parse", "HEAD", env=env).strip().decode() == head
-            verify_checkout(bare, clone, head, env)
-        else:
-            actual = git(clone, "symbolic-ref", "HEAD", env=env)
-            clone_heads.append(actual)
-            if version == 2:
-                assert actual == git(bare, "symbolic-ref", "HEAD", env=env)
-        if git(bare, "for-each-ref", env=env):
-            branch = root / f"{name}-v{version}-incremental"
-            run("git", "-c", f"protocol.version={version}", "clone", "-q", "--single-branch", "--no-tags",
-                "--branch", "z-main", url, str(branch), env=traces)
-            git(branch, "-c", f"protocol.version={version}", "fetch", "--no-tags", "origin", "refs/tags/light", env=traces)
-            tip = git(bare, "rev-parse", "light", env=env).strip().decode()
-            assert git(branch, "rev-parse", "FETCH_HEAD", env=env).strip().decode() == tip
-            assert object_manifest(branch, tip, env) == object_manifest(bare, tip, env)
-            git(branch, "checkout", "-q", "--detach", tip, env=env)
-            verify_checkout(bare, branch, tip, env)
-            git(branch, "fsck", "--strict", env=env)
-    if clone_heads:
-        assert clone_heads[0] == clone_heads[1]
+    clone_heads = [clone_repository(root, bare, name, url, head, version, traces)
+                   for name, url in urls]
+    assert clone_heads[0] == clone_heads[1]
+    if git(bare, "for-each-ref", env=env):
+        for name, url in urls:
+            incremental_fetch(root, bare, name, url, version, traces)
+
+
+def clone_repository(root, bare, name, url, head, version, env):
+    clone = root / f"{name}-v{version}-clone"
+    run("git", "-c", f"protocol.version={version}", "clone", "-q", url, str(clone), env=env)
+    git(clone, "fsck", "--strict", env=env)
+    assert object_manifest(clone, "--all", env) == object_manifest(bare, "--all", env)
+    if head:
+        assert git(clone, "rev-parse", "HEAD", env=env).strip().decode() == head
+        verify_checkout(bare, clone, head, env)
+        return head
+    actual = git(clone, "symbolic-ref", "HEAD", env=env)
+    if version == 2:
+        assert actual == git(bare, "symbolic-ref", "HEAD", env=env)
+    return actual
+
+
+def incremental_fetch(root, bare, name, url, version, env):
+    branch = root / f"{name}-v{version}-incremental"
+    run("git", "-c", f"protocol.version={version}", "clone", "-q", "--single-branch", "--no-tags",
+        "--branch", "z-main", url, str(branch), env=env)
+    git(branch, "-c", f"protocol.version={version}", "fetch", "--no-tags", "origin", "refs/tags/light", env=env)
+    tip = git(bare, "rev-parse", "light", env=env).strip().decode()
+    assert git(branch, "rev-parse", "FETCH_HEAD", env=env).strip().decode() == tip
+    assert object_manifest(branch, tip, env) == object_manifest(bare, tip, env)
+    git(branch, "checkout", "-q", "--detach", tip, env=env)
+    verify_checkout(bare, branch, tip, env)
+    git(branch, "fsck", "--strict", env=env)
+
+
+def packfile(lines):
+    assert lines[0] == b"packfile\n"
+    payload = lines[1:]
+    assert all(line[0] == 1 for line in payload)
+    return b"".join(line[1:] for line in payload)
+
+
+def fetch_response(lines, name, haves, unknown, done):
+    if done:
+        return packfile(lines)
+    expected = [b"acknowledgments\n"] + [b"ACK " + oid + b"\n" for oid in haves if oid != unknown]
+    if len(expected) == 1:
+        expected.append(b"NAK\n")
+    if b"ready\n" not in lines:
+        assert lines == expected, (name, lines, expected)
+        return None
+    assert name == "reference" and lines[:len(expected)] == expected
+    assert lines[len(expected):len(expected) + 2] == [b"ready\n", None]
+    return packfile(lines[len(expected) + 2:])
 
 
 def compare_fetch(root, bare, urls, fmt, env):
@@ -99,34 +127,28 @@ def compare_fetch(root, bare, urls, fmt, env):
             label = f"{name}-v2-fetch-{index}"
             (root / (label + ".response")).write_bytes(raw)
             lines = packets(raw)
-            if done:
-                assert lines.pop(0) == b"packfile\n"
-                assert all(line[0] == 1 for line in lines)
-                imported_pack(root, bare, label, b"".join(line[1:] for line in lines), wants, haves, env)
-            else:
-                expected = [b"acknowledgments\n"] + [b"ACK " + oid + b"\n" for oid in haves if oid != unknown]
-                if len(expected) == 1:
-                    expected.append(b"NAK\n")
-                if b"ready\n" in lines:
-                    assert name == "reference" and lines[:len(expected)] == expected
-                    assert lines[len(expected):len(expected) + 3] == [b"ready\n", None, b"packfile\n"]
-                    packed = b"".join(line[1:] for line in lines[len(expected) + 3:])
-                    imported_pack(root, bare, label, packed, wants, haves, env)
-                else:
-                    assert lines == expected, (name, lines, expected)
+            packed = fetch_response(lines, name, haves, unknown, done)
+            if packed is not None:
+                imported_pack(root, bare, label, packed, wants, haves, env)
+    compare_tags(root, bare, urls, fmt, side, env)
+
+
+def included_tags(bare, sent, env):
+    for oid in git(bare, "for-each-ref", "--format=%(objectname)", "refs/tags", env=env).splitlines():
+        if git(bare, "cat-file", "-t", oid.decode(), env=env).strip() != b"tag":
+            continue
+        if git(bare, "rev-parse", oid.decode() + "^{}", env=env).strip() in sent:
+            yield oid
+
+
+def compare_tags(root, bare, urls, fmt, side, env):
     # Exercise nested annotated tags and blob/tree peels through include-tag.
     roots = (side,)
     sent = wanted_manifest(bare, roots, env)
-    tags = []
-    for row in git(bare, "for-each-ref", "--format=%(objectname)", "refs/tags", env=env).splitlines():
-        if git(bare, "cat-file", "-t", row.decode(), env=env).strip() == b"tag":
-            if git(bare, "rev-parse", row.decode() + "^{}", env=env).strip() in sent:
-                tags.append(row)
+    tags = tuple(included_tags(bare, sent, env))
     for name, url in urls:
         raw = post(url, command(b"fetch", fmt, [b"want " + side, b"include-tag", b"no-progress", b"done"]))
-        lines = packets(raw)
-        assert lines.pop(0) == b"packfile\n"
-        imported_pack(root, bare, name + "-v2-tags", b"".join(line[1:] for line in lines), (*roots, *tags), (), env)
+        imported_pack(root, bare, name + "-v2-tags", packfile(packets(raw)), (*roots, *tags), (), env)
 
 
 def compare_protocol(root, bare, urls, head, env):

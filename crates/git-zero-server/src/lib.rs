@@ -275,25 +275,7 @@ pub fn serve_with_pack<W: Write>(
 }
 
 fn ref_path_matches(path: &str, name: &str) -> bool {
-    let mut bytes = path.bytes();
-    for expected in name.bytes() {
-        let Some(mut byte) = bytes.next() else {
-            return false;
-        };
-        if byte == b'%' {
-            let Some(high) = bytes.next().and_then(|byte| (byte as char).to_digit(16)) else {
-                return false;
-            };
-            let Some(low) = bytes.next().and_then(|byte| (byte as char).to_digit(16)) else {
-                return false;
-            };
-            byte = ((high << 4) | low) as u8;
-        }
-        if byte != expected {
-            return false;
-        }
-    }
-    bytes.next().is_none()
+    route::decoded(path).eq(name.bytes().map(Ok))
 }
 
 fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {
