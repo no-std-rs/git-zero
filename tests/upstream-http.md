@@ -63,9 +63,9 @@ git-zero's single-branch clones require the exact object set. V0 ACK/sideband
 comparisons also check common-history exclusion. `server_protocol.py` compares
 v1/v2 discovery, ls-refs, clone, incremental fetch, ACK rounds and exact selected
 packs in SHA-1/SHA-256, including v2 nested include-tag behavior. `server_shallow.py`
-adds depth-limited clones, absolute deepening/unshallow and blob-filtered
+adds depth-limited clones, absolute/relative deepening/unshallow and blob-filtered
 no-checkout clones, comparing shallow files and delivered objects in both formats
-and all three smart protocols. Relative/time/exclusion deepening, promised-object
+and all three smart protocols. Time/exclusion deepening, promised-object
 retrieval and v0 include-tag remain planned. The [server acceptance matrix](server-acceptance.md)
 separates this server evidence from the client and Git-only baselines.
 
@@ -193,3 +193,15 @@ cross-job fixture or port sharing and no fail-fast cancellation. Failed jobs
 upload their diagnostic directories. Local Cargo invokes the same full runner;
 `GIT_ZERO_TEST_JOBS`, `GIT_ZERO_TEST_GIT`, and `GIT_ZERO_TEST_ARTIFACTS` configure
 it without changing test code.
+
+Relative deepening pins the wanted-history policy from
+[Git 2.55 `shallow.c`](https://github.com/git/git/blob/v2.55.0/shallow.c):
+compute the nearest client boundary from requested tips, then extend that depth.
+[Git 2.53 `upload-pack.c`](https://github.com/git/git/blob/v2.53.0/upload-pack.c)
+instead extends every reachable client boundary. The versioned multi-boundary
+oracle retains this deliberate difference when fetching only one branch, verifies
+each exact expected shallow file and compares all imported objects/checkouts.
+Fetching all branches requires exact shallow-file equality for both algorithms.
+The unrelated-tip case also pins Git 2.55's explicit no-matching-boundary rule:
+leave existing client boundaries intact and add no boundary to the wanted history.
+It compares every delivered object body and the requested FETCH_HEAD closure.

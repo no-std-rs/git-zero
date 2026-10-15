@@ -36,12 +36,20 @@ satisfy the hints. Done requests omit ACKs and send a sideband packfile section;
 other rounds return ACKs or NAK and wait for done. Selection includes annotated
 and nested tags only when their final target is being sent, sharing one graph
 budget. Whole-pack hooks retain their documented HEAD-only restriction.
-Selection APIs advertise `shallow filter` (v0/v1) or `fetch=shallow filter` (v2).
-They support absolute `deepen` depths, shallow/unshallow boundaries, blob:none
+Selection APIs advertise `shallow deepen-relative filter` (v0/v1) or `fetch=shallow filter` (v2).
+They support absolute and relative `deepen` depths, shallow/unshallow boundaries, blob:none
 and blob:limit filters, sharing the graph budget and object/index arrays.
+Relative depth uses the nearest client boundary in wanted history, matching
+Git 2.55. Unrelated branch boundaries remain intact; with no matching boundary,
+the wanted history is complete (within the graph budget). Full clients keep
+ordinary common-history pruning, including empty packs for no-op deepening.
+V0/v1 negotiate relative depth on the first want; only v2 accepts its argument.
+Without a depth, that negotiation leaves the ordinary fetch unchanged. Git 2.53 and
+earlier extend all reachable client boundaries, so this case deliberately differs;
+the versioned native oracle asserts both outcomes and identical imported objects.
 Depth requests retransmit their bounded closure; ordinary shallow haves stop
 common traversal at the client's boundary. Root commits at the depth limit stay
-shallow, matching Git. Relative/time/exclusion deepening and other filters are
+shallow, matching Git. Time/exclusion deepening and other filters are
 rejected. The advertised-ID want policy still requires partial clones to use
 `--no-checkout`; lazy promised-object retrieval is deferred. Legacy complete-pack
 APIs omit these capabilities and reject extended requests before output.
