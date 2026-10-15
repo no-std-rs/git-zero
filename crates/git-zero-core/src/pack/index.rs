@@ -41,11 +41,38 @@ pub fn write_indexed_with_scratch(
     pack_output: &mut impl Write,
     index_output: &mut impl Write,
 ) -> Result<ObjectId> {
+    let entries = prepare_entries(repository, order, entries, scratch)?;
+    let mut output = PackWriter {
+        output: pack_output,
+        hash: repository.object_format().hash(),
+        offset: 0,
+        crc: Crc32::new(),
+    };
+    output.write_all(b"PACK")?;
+    output.write_all(&2_u32.to_be_bytes())?;
+    output.write_all(&(entries.len() as u32).to_be_bytes())?;
+    for (position, entry) in entries.iter_mut().enumerate() {
+        let index = order.map_or(position, |order| order[position]);
+        *entry = output.write_entry(repository, index, scratch)?;
+    }
+    let checksum = output.hash.finish();
+    output.output.write_all(checksum.as_bytes())?;
+    entries.sort_unstable_by_key(|entry| entry.id);
+    write_index(entries, checksum, index_output)?;
+    Ok(checksum)
+}
+
+fn prepare_entries<'entries>(
+    repository: &impl Repository,
+    order: Option<&[usize]>,
+    entries: &'entries mut [IndexEntry],
+    scratch: &[u8],
+) -> Result<&'entries mut [IndexEntry]> {
     if let Some(order) = order {
         encode::validate_order(repository, order)?;
     }
     let count = order.map_or(repository.object_count(), <[usize]>::len);
-    let count32 = u32::try_from(count).map_err(|_| Error::Unsupported)?;
+    u32::try_from(count).map_err(|_| Error::Unsupported)?;
     let entries = entries.get_mut(..count).ok_or(Error::BufferTooSmall)?;
     if count != 0 && scratch.is_empty() {
         return Err(Error::BufferTooSmall);
@@ -68,41 +95,7 @@ pub fn write_indexed_with_scratch(
         return Err(Error::InvalidObject);
     }
 
-    let mut output = PackWriter {
-        output: pack_output,
-        hash: repository.object_format().hash(),
-        offset: 0,
-        crc: Crc32::new(),
-    };
-    output.write_all(b"PACK")?;
-    output.write_all(&2_u32.to_be_bytes())?;
-    output.write_all(&count32.to_be_bytes())?;
-    for (position, entry) in entries.iter_mut().enumerate() {
-        let index = order.map_or(position, |order| order[position]);
-        let info = repository.object_info(index)?;
-        let id = repository.object_id(index).ok_or(Error::ObjectNotFound)?;
-        let offset = output.offset;
-        output.crc = Crc32::new();
-        encode::write_entry_header(info, &mut output)?;
-        let mut encoder = LooseEncoder::from_info(index, info, false)?;
-        loop {
-            let count = encoder.read(repository, scratch)?;
-            if count == 0 {
-                break;
-            }
-            output.write_all(&scratch[..count])?;
-        }
-        *entry = IndexEntry {
-            id,
-            offset,
-            crc32: output.crc.value(),
-        };
-    }
-    let checksum = output.hash.finish();
-    output.output.write_all(checksum.as_bytes())?;
-    entries.sort_unstable_by_key(|entry| entry.id);
-    write_index(entries, checksum, index_output)?;
-    Ok(checksum)
+    Ok(entries)
 }
 
 /// Stream a Git version-2 index for already verified pack metadata. Supports
@@ -140,33 +133,14 @@ pub fn write_index(
     };
     output.write_all(b"\xfftOc")?;
     output.write_all(&2_u32.to_be_bytes())?;
-    let mut position = 0;
-    for first in 0..=255_u8 {
-        while position < entries.len() && entries[position].id.as_bytes()[0] <= first {
-            position += 1;
-        }
-        output.write_all(&(position as u32).to_be_bytes())?;
-    }
+    output.write_fanout(entries)?;
     for entry in entries {
         output.write_all(entry.id.as_bytes())?;
     }
     for entry in entries {
         output.write_all(&entry.crc32.to_be_bytes())?;
     }
-    let mut large = 0_u32;
-    for entry in entries {
-        let offset = if entry.offset < 0x8000_0000 {
-            entry.offset as u32
-        } else {
-            let offset = 0x8000_0000 | large;
-            large += 1;
-            offset
-        };
-        output.write_all(&offset.to_be_bytes())?;
-    }
-    for entry in entries.iter().filter(|entry| entry.offset >= 0x8000_0000) {
-        output.write_all(&entry.offset.to_be_bytes())?;
-    }
+    output.write_offsets(entries)?;
     output.write_all(pack_checksum.as_bytes())?;
     let checksum = output.hash.finish();
     output.output.write_all(checksum.as_bytes())?;
@@ -178,6 +152,34 @@ struct PackWriter<'a, W> {
     hash: Hash,
     offset: u64,
     crc: Crc32,
+}
+
+impl<W: Write> PackWriter<'_, W> {
+    fn write_entry(
+        &mut self,
+        repository: &impl Repository,
+        index: usize,
+        scratch: &mut [u8],
+    ) -> Result<IndexEntry> {
+        let info = repository.object_info(index)?;
+        let id = repository.object_id(index).ok_or(Error::ObjectNotFound)?;
+        let offset = self.offset;
+        self.crc = Crc32::new();
+        encode::write_entry_header(info, self)?;
+        let mut encoder = LooseEncoder::from_info(index, info, false)?;
+        loop {
+            let count = encoder.read(repository, scratch)?;
+            if count == 0 {
+                break;
+            }
+            self.write_all(&scratch[..count])?;
+        }
+        Ok(IndexEntry {
+            id,
+            offset,
+            crc32: self.crc.value(),
+        })
+    }
 }
 
 impl<W: Write> Write for PackWriter<'_, W> {
@@ -197,6 +199,37 @@ impl<W: Write> Write for PackWriter<'_, W> {
 struct IndexWriter<'a, W> {
     output: &'a mut W,
     hash: Hash,
+}
+
+impl<W: Write> IndexWriter<'_, W> {
+    fn write_fanout(&mut self, entries: &[IndexEntry]) -> Result<()> {
+        let mut position = 0;
+        for first in 0..=255_u8 {
+            while position < entries.len() && entries[position].id.as_bytes()[0] <= first {
+                position += 1;
+            }
+            self.write_all(&(position as u32).to_be_bytes())?;
+        }
+        Ok(())
+    }
+
+    fn write_offsets(&mut self, entries: &[IndexEntry]) -> Result<()> {
+        let mut large = 0_u32;
+        for entry in entries {
+            let offset = if entry.offset < 0x8000_0000 {
+                entry.offset as u32
+            } else {
+                let offset = 0x8000_0000 | large;
+                large += 1;
+                offset
+            };
+            self.write_all(&offset.to_be_bytes())?;
+        }
+        for entry in entries.iter().filter(|entry| entry.offset >= 0x8000_0000) {
+            self.write_all(&entry.offset.to_be_bytes())?;
+        }
+        Ok(())
+    }
 }
 
 impl<W: Write> Write for IndexWriter<'_, W> {
