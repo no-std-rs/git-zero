@@ -16,9 +16,13 @@ pub use materialize::{
 #[cfg(feature = "write")]
 mod encode;
 #[cfg(feature = "write")]
+mod stream;
+#[cfg(feature = "write")]
 pub use encode::{
     write, write_loose, write_loose_with_scratch, write_selected_with_scratch, write_with_scratch,
 };
+#[cfg(feature = "write")]
+pub use stream::{Encoder, LooseEncoder};
 
 /// Check the framing and checksum of a downloaded pack. Object/delta validation
 /// and indexing are separate responsibilities; this does not decode objects.

@@ -50,9 +50,11 @@ request bodies are limited to 32 KiB. The Rust ABI has 64 KiB input and 128 KiB
 output buffers. Larger repositories and shorter snapshot URLs need the planned
 persistent snapshot/cache backend.
 
-The Worker instantiates the precompiled module for each synchronous call and
-copies the response before returning. That keeps Rust's fixed buffers independent
-across overlapping requests. There are no Wasm imports, Rust allocator, Rust
+The Worker instantiates the precompiled module once per response. A ReadableStream
+pull callback advances Rust only when the consumer requests bytes, copies each
+chunk before reusing Wasm output, and forwards cancellation to Rust. Each instance
+pins its own immutable snapshot and cursor across asynchronous pulls. Overlapping
+responses own separate fixed buffers. There are no Wasm imports, Rust allocator, Rust
 `std`, `wasm-bindgen`, or Rust Worker SDK dependencies. The JavaScript host uses
 normal runtime allocation.
 
@@ -89,7 +91,7 @@ References: [Workers Wasm](https://developers.cloudflare.com/workers/runtime-api
 [request metadata](https://developers.cloudflare.com/workers/runtime-apis/request/),
 [environment bindings](https://developers.cloudflare.com/workers/configuration/environment-variables/).
 
-The host forwards `Git-Protocol` and `Content-Type` through the `serve_http` ABI.
+The host forwards `Git-Protocol` and `Content-Type` through the streaming ABI.
 Smart discovery/fetch supports v0/v1/v2; the client chooses the version. Gzip
 uploads are decoded with `DecompressionStream`, with both wire length and expanded
 body limited to 32 KiB. The extended ABI frame adds two u32-LE lengths and the
@@ -97,3 +99,15 @@ Git-Protocol/Content-Type bytes after the target, before the body. Existing `ser
 and `serve_with_format` frames remain available for embedded callers that have
 already validated HTTP metadata. Worker tests run real-Git v0/v1/v2 clones;
 ABI tests cover SHA-1/SHA-256 commands and fixed memory without allocator imports.
+
+`stream_start(length, method, format)` uses the extended HTTP input frame, validates
+it, pins the snapshot and returns 3 bytes of response metadata in OUTPUT (u16-LE
+status, u8 content-type code). `stream_read(capacity)` returns up to that many body
+bytes in OUTPUT, 0 at EOF, -1 for invalid capacity and -2 for invalid/failed state.
+Capacities must be 1 through `output_capacity()`. Copy successful bytes before
+pulling again. `stream_cancel()` releases the session. A new start, a legacy serve
+call, or `input_ptr()` cancels the old session before buffer reuse. Never mutate
+INPUT during a live session; calls are synchronous, single-threaded and
+non-reentrant. Failed starts leave no old session; read failures cancel and the
+host aborts the response. A prepared response can exceed OUTPUT's capacity.
+Requests are still accumulated within the fixed INPUT limit before starting.

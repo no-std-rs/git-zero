@@ -268,11 +268,8 @@ fn real_git_clones_generated_objects_with_bounded_read_scratch() {
     std::thread::scope(|scope| {
         scope.spawn(|| {
             let mut request_storage = [0; 4096];
-            // The current native HTTP host buffers responses. Object generation
-            // in the core uses a separate 17-byte read budget for every object.
-            // Sideband adds five framing bytes per 1 KiB payload packet.
-            let mut response_storage = vec![0; SIZE + SIZE.div_ceil(1024) * 5 + 4096];
-            let mut scratch = [0; 17];
+            let mut control = [0; 4096];
+            let mut staging = [0; 17];
             loop {
                 let socket = accept(&listener).unwrap();
                 if stopped.load(Ordering::SeqCst) {
@@ -280,10 +277,10 @@ fn real_git_clones_generated_objects_with_bounded_read_scratch() {
                 }
                 let mut request = read_request(&socket, &mut request_storage).unwrap();
                 request.path = request.path.strip_prefix("/repo.git/").unwrap();
-                let mut output = SliceWriter::new(&mut response_storage);
-                let response =
-                    http::serve_with_scratch(&repo, request, &mut scratch, &mut output).unwrap();
-                respond(&socket, response, output.as_bytes()).unwrap();
+                let mut encoder =
+                    http::stream::ResponseEncoder::new(&repo, request, &mut control).unwrap();
+                git_zero_rustix::respond_stream(&socket, &repo, &mut encoder, &mut staging)
+                    .unwrap();
             }
         });
         let _stop = Stop {

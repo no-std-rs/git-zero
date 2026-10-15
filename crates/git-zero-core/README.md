@@ -14,3 +14,11 @@ reads, so caches may evict the previous object on every lookup. Hosts supply
 hash-verified objects and implement permissions, filesystem limits and I/O.
 
 Part of [git-zero](https://github.com/no-std-rs/git-zero).
+
+With `write`, `pack::Encoder` and `pack::LooseEncoder` expose resumable pulls into
+caller-owned output slices. They retain stored-DEFLATE framing, Adler-32 and pack
+hash state without object-sized scratch. Packs accept a borrowed selection or all
+objects. Hold repository metadata, bodies and selected indices stable until EOF;
+a host can recreate the repository from immutable inputs between pulls. Each call
+performs at most one body read. Preserve unsent output before advancing again.
+Encoding matches the synchronous stored-block writers in both object formats.

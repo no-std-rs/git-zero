@@ -1,21 +1,8 @@
 //! Streaming pack and loose-object encoding.
 use crate::{
-    Error, Object, ObjectId, ObjectInfo, ObjectReader, Repository, Result, io::Write, object::Hash,
+    Error, Object, ObjectId, ObjectInfo, ObjectReader, Repository, Result, io::Write,
     reader::DEFAULT_READ_BUFFER_SIZE, zlib,
 };
-
-struct HashWriter<'a, W> {
-    output: &'a mut W,
-    hash: Hash,
-}
-
-impl<W: Write> Write for HashWriter<'_, W> {
-    fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
-        self.output.write_all(bytes)?;
-        self.hash.update(bytes);
-        Ok(())
-    }
-}
 
 /// Generate a complete version-2 pack with no deltas, without buffering the pack.
 /// Reserves 1 KiB of read scratch on the stack for streaming-only providers.
@@ -33,7 +20,7 @@ pub fn write_with_scratch(
     scratch: &mut [u8],
     output: &mut impl Write,
 ) -> Result<ObjectId> {
-    write_order(repository, 0..repository.object_count(), scratch, output)
+    write_encoder(repository, None, scratch, output)
 }
 
 /// Write exactly the chosen object indices, in caller-specified order. Indices
@@ -46,6 +33,10 @@ pub fn write_selected_with_scratch(
     scratch: &mut [u8],
     output: &mut impl Write,
 ) -> Result<ObjectId> {
+    write_encoder(repository, Some(indices), scratch, output)
+}
+
+pub(super) fn validate_order(repository: &impl Repository, indices: &[usize]) -> Result<()> {
     let ordered = indices.windows(2).all(|pair| pair[0] < pair[1]);
     for (position, &index) in indices.iter().enumerate() {
         if index >= repository.object_count() {
@@ -55,39 +46,52 @@ pub fn write_selected_with_scratch(
             return Err(Error::InvalidObject);
         }
     }
-    write_order(repository, indices.iter().copied(), scratch, output)
+    Ok(())
 }
 
-fn write_order(
+fn write_encoder(
     repository: &impl Repository,
-    order: impl ExactSizeIterator<Item = usize>,
+    indices: Option<&[usize]>,
     scratch: &mut [u8],
     output: &mut impl Write,
 ) -> Result<ObjectId> {
-    let count = u32::try_from(order.len()).map_err(|_| Error::Unsupported)?;
-    let mut output = HashWriter {
-        output,
-        hash: repository.object_format().hash(),
-    };
-    output.write_all(b"PACK")?;
-    output.write_all(&2_u32.to_be_bytes())?;
-    output.write_all(&count.to_be_bytes())?;
-    for index in order {
-        if let Some(object) = repository.object(index) {
-            write_entry_header(object.info(), &mut output)?;
-            zlib::write_parts(&mut output, &[object.data])?;
-        } else {
-            let mut reader = ObjectReader::new(repository, index)?;
-            write_entry_header(reader.info(), &mut output)?;
-            zlib::write_reader(&mut output, &[], &mut reader, scratch)?;
+    let mut encoder = super::Encoder::new(repository, indices)?;
+    if scratch.is_empty() {
+        // Preserve the historical scratchless borrowed-object API. Generated
+        // nonempty bodies still require caller-provided read storage.
+        let count = indices.map_or(repository.object_count(), <[usize]>::len);
+        for position in 0..count {
+            let index = indices.map_or(position, |indices| indices[position]);
+            if repository.object(index).is_none() && repository.object_info(index)?.size != 0 {
+                return Err(Error::BufferTooSmall);
+            }
         }
+        return drain_encoder(
+            repository,
+            &mut encoder,
+            &mut [0; DEFAULT_READ_BUFFER_SIZE],
+            output,
+        );
     }
-    let checksum = output.hash.finish();
-    output.output.write_all(checksum.as_bytes())?;
-    Ok(checksum)
+    drain_encoder(repository, &mut encoder, scratch, output)
 }
 
-fn write_entry_header(info: ObjectInfo, output: &mut impl Write) -> Result<()> {
+fn drain_encoder(
+    repository: &impl Repository,
+    encoder: &mut super::Encoder<'_>,
+    scratch: &mut [u8],
+    output: &mut impl Write,
+) -> Result<ObjectId> {
+    loop {
+        let count = encoder.read(repository, scratch)?;
+        if count == 0 {
+            return encoder.checksum().ok_or(Error::InvalidObject);
+        }
+        output.write_all(&scratch[..count])?;
+    }
+}
+
+pub(super) fn write_entry_header(info: ObjectInfo, output: &mut impl Write) -> Result<()> {
     let mut size = info.size;
     let mut byte = ((info.kind as u8) << 4) | (size as u8 & 15);
     size >>= 4;

@@ -147,6 +147,40 @@ pub fn respond(socket: &impl AsFd, response: Response, body: &[u8]) -> Result<()
     SocketWriter(socket.as_fd()).write_all(body)
 }
 
+/// Send a prepared pull response with HTTP/1.0 close-delimited framing and
+/// caller-owned staging. Each successful socket write precedes the next pull.
+/// On any failure cancel the cursor and close the socket; never retry headers.
+pub fn respond_stream(
+    socket: &impl AsFd,
+    repository: &impl git_zero::Repository,
+    encoder: &mut git_zero::http::stream::ResponseEncoder<'_>,
+    staging: &mut [u8],
+) -> Result<()> {
+    let result = (|| {
+        if staging.is_empty() {
+            return Err(Error::BufferTooSmall);
+        }
+        let response = encoder.response();
+        let mut storage = [0; 512];
+        let mut header = SliceWriter::new(&mut storage);
+        write!(&mut header, "HTTP/1.0 {} Response\r\nContent-Type: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", response.status, response.content_type)
+            .map_err(|_| Error::BufferTooSmall)?;
+        let mut writer = SocketWriter(socket.as_fd());
+        writer.write_all(header.as_bytes())?;
+        loop {
+            let count = encoder.read(repository, staging)?;
+            if count == 0 {
+                return Ok(());
+            }
+            writer.write_all(&staging[..count])?;
+        }
+    })();
+    if result.is_err() {
+        encoder.cancel();
+    }
+    result
+}
+
 /// Write framing for a body streamed separately by the host. The host must
 /// then write exactly `body_length` bytes and close the connection on failure.
 pub fn respond_headers(socket: &impl AsFd, response: Response, body_length: u64) -> Result<()> {
@@ -190,5 +224,38 @@ mod tests {
             Some("application/x-git-upload-pack-request")
         );
         assert_eq!(request.git_protocol, Some("version=2"));
+    }
+
+    #[test]
+    fn disconnected_stream_cancels_before_any_more_output() {
+        let (socket, peer) = net::socketpair(
+            net::AddressFamily::UNIX,
+            net::SocketType::STREAM,
+            SOCKET_FLAGS,
+            None,
+        )
+        .unwrap();
+        let repository = git_zero::EmptyRepository::new("refs/heads/main").unwrap();
+        let request = Request {
+            method: "GET",
+            path: "HEAD",
+            query: None,
+            content_type: None,
+            git_protocol: None,
+            body: &[],
+        };
+        let mut control = [0; 128];
+        let mut encoder =
+            git_zero::http::stream::ResponseEncoder::new(&repository, request, &mut control)
+                .unwrap();
+        drop(peer);
+        assert_eq!(
+            respond_stream(&socket, &repository, &mut encoder, &mut [0; 3]),
+            Err(Error::Backend)
+        );
+        assert_eq!(
+            encoder.read(&repository, &mut [0; 3]),
+            Err(Error::InvalidRequest)
+        );
     }
 }

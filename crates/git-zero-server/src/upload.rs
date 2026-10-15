@@ -165,6 +165,27 @@ impl<'a> UploadRequest<'a> {
         })
     }
 
+    #[cfg(feature = "read")]
+    pub(crate) fn parse_selected(
+        repository: &impl Repository,
+        body: &'a [u8],
+        version: crate::route::Version,
+        wants: &mut [ObjectId],
+    ) -> Result<(Self, usize)> {
+        let mut count = 0;
+        let upload = Self::parse(body, repository.object_format(), version, |id| {
+            if !crate::advertised(repository, id) {
+                return Err(Error::InvalidRequest);
+            }
+            if !wants[..count].contains(&id) {
+                *wants.get_mut(count).ok_or(Error::BufferTooSmall)? = id;
+                count += 1;
+            }
+            Ok(())
+        })?;
+        Ok((upload, count))
+    }
+
     /// Revisit validated packets without retaining an array of have IDs. Only
     /// present commits are acknowledged or used to exclude complete history.
     pub fn common<'r>(
@@ -211,11 +232,15 @@ impl<'a> UploadRequest<'a> {
     pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
         PackOutput {
             output,
-            // V2 always frames its packfile section on sideband channel 1.
-            band: if self.v2 { 2 } else { self.capabilities.band() },
+            band: self.band(),
             buffer: [0; 1024],
             length: 0,
         }
+    }
+
+    pub(crate) fn band(&self) -> u8 {
+        // V2 always frames its packfile section on sideband channel 1.
+        if self.v2 { 2 } else { self.capabilities.band() }
     }
 }
 

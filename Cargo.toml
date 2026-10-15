@@ -101,6 +101,10 @@ name = "pack_git"
 required-features = ["write"]
 
 [[test]]
+name = "pack_streaming"
+required-features = ["read", "write"]
+
+[[test]]
 name = "pack_reader"
 required-features = ["read", "write"]
 
@@ -127,6 +131,10 @@ required-features = ["read", "server"]
 [[test]]
 name = "smart_client"
 required-features = ["client"]
+
+[[test]]
+name = "streaming"
+required-features = ["read", "server"]
 
 [[test]]
 name = "validation"

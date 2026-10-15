@@ -268,3 +268,75 @@ test("independent Wasm instances preserve their own buffers", () => {
   assert.deepEqual(Buffer.from(new Uint8Array(first.memory.buffer, first.output_ptr(), firstOutput.length)), firstOutput);
   assert.deepEqual(call(first, frame(parts, "info/refs")), original);
 });
+
+
+function streamingCall(exports, input, method, format, capacity) {
+  const memory = exports.memory.buffer;
+  new Uint8Array(memory, exports.input_ptr(), input.length).set(input);
+  assert.equal(exports.stream_start(input.length, method, format), 3, `method=${method} format=${format} frame=${input.toString()}`);
+  const metadata = Buffer.from(new Uint8Array(memory, exports.output_ptr(), 3));
+  const chunks = [];
+  assert.equal(exports.stream_read(0), -1);
+  assert.equal(exports.stream_read(OUTPUT_BYTES + 1), -1);
+  while (true) {
+    const count = exports.stream_read(capacity);
+    assert.ok(count >= 0 && count <= capacity);
+    if (count === 0) break;
+    chunks.push(Buffer.from(new Uint8Array(memory, exports.output_ptr(), count)));
+  }
+  assert.equal(exports.stream_read(capacity), 0);
+  assert.equal(exports.memory.buffer, memory);
+  return { status: metadata.readUInt16LE(0), type: metadata[2], body: Buffer.concat(chunks) };
+}
+
+function assertStreamMatches(actual, expected, sideband) {
+  assert.equal(actual.status, expected.status);
+  assert.equal(actual.type, expected.type);
+  if (sideband) {
+    assert.deepEqual(decodeNegotiation(actual.body, "side-band-64k"), decodeNegotiation(expected.body, "side-band-64k"));
+  } else assert.deepEqual(actual, expected);
+}
+
+function checkStreamingTarget(first, second, input, method, format, sideband) {
+  const expected = call(first, input, method, format, true);
+  for (const capacity of [1, 7, 1024, OUTPUT_BYTES]) {
+    assertStreamMatches(streamingCall(first, input, method, format, capacity), expected, sideband);
+  }
+  new Uint8Array(first.memory.buffer, first.input_ptr(), input.length).set(input);
+  assert.equal(first.stream_start(input.length, method, format), 3);
+  assert.ok(first.stream_read(1) > 0);
+  // Another instance can finish while the first is paused.
+  streamingCall(second, input, method, format, 13);
+  first.stream_cancel();
+  assert.equal(first.stream_read(1), -2);
+  assert.deepEqual(call(first, input, method, format, true), expected);
+}
+
+function checkStreamingVersion(first, second, format, version, head) {
+  const body = version === 2 ? Buffer.concat([
+    packet("command=fetch\n"), packet(`object-format=${format === 0 ? "sha1" : "sha256"}\n`),
+    Buffer.from("0001"), packet(`want ${head}\n`), packet("done\n"), Buffer.from("0000"),
+  ]) : Buffer.concat([packet(`want ${head}\n`), Buffer.from("0000"), packet("done\n")]);
+  const protocol = version === 0 ? "" : `version=${version}`;
+  const cases = [
+    ["info/refs?service=git-upload-pack", Buffer.alloc(0), 0],
+    ["git-upload-pack", body, 1],
+    [`objects/${head.slice(0,2)}/${head.slice(2)}`, Buffer.alloc(0), 0],
+  ];
+  for (const [target, requestBody, method] of cases) {
+    checkStreamingTarget(first, second, httpFrame(target, requestBody, protocol), method, format, version === 2 && method === 1);
+  }
+}
+
+test("pull ABI preserves responses, cancellation and independent instances without memory growth", () => {
+  const first = instance();
+  const second = instance();
+  for (const format of [0, 1]) {
+    const head = new RegExp(`([0-9a-f]{${format === 0 ? 40 : 64}}) HEAD\\0`).exec(call(first, frame(parts, "info/refs?service=git-upload-pack"), 0, format).body.toString())[1];
+    for (const version of [0, 1, 2]) checkStreamingVersion(first, second, format, version, head);
+  }
+  assert.equal(first.stream_start(INPUT_BYTES + 1, 0, 0), -1);
+  assert.equal(first.stream_read(1), -2);
+  assert.equal(first.stream_start(0, 0, 0), -2);
+  assert.equal(first.stream_read(1), -2);
+});

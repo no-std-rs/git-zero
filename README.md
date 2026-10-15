@@ -37,6 +37,9 @@ for checks and repository connection requirements.
   enumeration and binary-search lookup without repeated scans or hashing.
 - Bounded readers and resumable hashing for large/generated objects, with
   caller-sized scratch for pack and loose-object responses.
+- Pull-based pack/HTTP response cursors with bounded inline state, backpressure,
+  cancellation and caller-owned request intake. Native close-delimited responses
+  and the Worker start/read/cancel ABI stream without response-sized buffers.
 - Opt-in validation and indexing of custom repositories, checking object IDs,
   tree order and links, commit parents, tag targets, and exact reachability from
   HEAD and independent refs. Symbolic ref chains and final peeled tags are supported.

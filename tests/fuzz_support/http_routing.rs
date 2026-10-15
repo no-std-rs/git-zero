@@ -48,13 +48,76 @@ pub fn routing(data: &[u8]) {
     if let Ok(response) = http::serve_with_scratch(&repository, request, &mut [0; 1], &mut output) {
         assert!(matches!(response.status, 200 | 403 | 404 | 405 | 415));
         assert!(output.len() <= capacity);
-        if response.content_type == "application/x-git-upload-pack-result" {
-            if request.git_protocol == Some("version=2") {
-                check_v2(output.as_bytes());
-            } else {
-                check_upload(output.as_bytes());
-            }
+        check_response(response, request.git_protocol, output.as_bytes());
+    }
+    streaming(
+        &repository,
+        request,
+        capacity,
+        1 + usize::from(data[1]) % 31,
+    );
+}
+
+fn streaming(
+    repository: &impl git_zero::Repository,
+    request: Request<'_>,
+    capacity: usize,
+    fragment_size: usize,
+) {
+    // Replay intake with arbitrary fragmentation, then drive an independent
+    // cursor through guarded output slices and terminal cancellation.
+    let mut intake = [0; MAX_INPUT];
+    let mut incoming =
+        http::stream::RequestBody::new(&mut intake, Some(request.body.len())).unwrap();
+    for fragment in request.body.chunks(fragment_size) {
+        incoming.push(fragment).unwrap();
+    }
+    let body = incoming.finish().unwrap();
+    let mut control = [0; MAX_INPUT];
+    let request = Request { body, ..request };
+    if let Ok(mut encoder) =
+        http::stream::ResponseEncoder::new(repository, request, &mut control[..capacity])
+    {
+        let response = encoder.response();
+        let mut bytes = [0; MAX_INPUT];
+        let mut staged = SliceWriter::new(&mut bytes);
+        drain_response(repository, &mut encoder, fragment_size, &mut staged);
+        check_response(response, request.git_protocol, staged.as_bytes());
+        encoder.cancel();
+        assert_eq!(
+            encoder.read(repository, &mut [0; 1]),
+            Err(git_zero::Error::InvalidRequest)
+        );
+    }
+}
+
+fn drain_response(
+    repository: &impl git_zero::Repository,
+    encoder: &mut http::stream::ResponseEncoder<'_>,
+    fragment_size: usize,
+    staged: &mut SliceWriter<'_>,
+) {
+    for _ in 0..MAX_INPUT * 2 {
+        let mut guard = [0xa5; 66];
+        let end = 1 + fragment_size;
+        let count = encoder.read(repository, &mut guard[1..end]).unwrap();
+        assert_eq!(guard[0], 0xa5);
+        assert!(guard[end..].iter().all(|&byte| byte == 0xa5));
+        if count == 0 {
+            break;
         }
+        git_zero::io::Write::write_all(staged, &guard[1..1 + count]).unwrap();
+    }
+    assert_eq!(encoder.read(repository, &mut [0; 1]).unwrap(), 0);
+}
+
+fn check_response(response: http::Response, version: Option<&str>, wire: &[u8]) {
+    if response.content_type != "application/x-git-upload-pack-result" {
+        return;
+    }
+    match version {
+        Some("version=2") => check_v2(wire),
+        _ => check_upload(wire),
     }
 }
 
