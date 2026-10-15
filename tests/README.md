@@ -249,6 +249,17 @@ set verification. Backend/sink failures, byte/ID budgets, failed-miss preservati
 and scratchless hits retain retry behavior. Concurrent host coordination and
 persistent backend policy remain future work.
 
+The native `disk_cache` suite exercises persistent hits across independent
+backend instances, disabled mode, eviction, bounded regular-file reads, corrupt
+and truncated data, symlink rejection and capacity failures. Exclusive temporary
+name collisions preserve foreign files; failed publication cleans its own
+staging file and preserves the prior entry. Concurrent cold producers publish
+complete packs with different valid object orders while readers verify exact
+canonical sets. Resident readers remain independent through eviction/replacement;
+sink failure retains a complete persistent pack for retry. Allocation guards
+cover these backend operations, and independent Git imports and object-body
+comparisons run in both formats with storage-only Rust features.
+
 ## Selective runs and CI sharding
 
 The eight original matrix cases run alongside sixteen independent differential

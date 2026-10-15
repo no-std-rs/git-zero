@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "storage")]
+pub mod cache;
+#[cfg(feature = "storage")]
 pub mod storage;
 #[cfg(feature = "storage")]
 pub use storage::{FileObject, FileRepository};
