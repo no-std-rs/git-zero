@@ -31,6 +31,8 @@ pub fn listen_on(address: SocketAddr) -> Result<OwnedFd> {
         net::AddressFamily::INET6
     };
     let socket = socket(family)?;
+    // OpenBSD IPv6 sockets are always IPv6-only and this option is read-only.
+    #[cfg(not(target_os = "openbsd"))]
     if address.is_ipv6() {
         sockopt::set_ipv6_v6only(&socket, true).map_err(|_| Error::Backend)?;
     }
