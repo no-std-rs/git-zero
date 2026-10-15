@@ -409,7 +409,7 @@ fn format_negotiation_rejects_mismatch_and_malformed_requests_before_output() {
         " object-format=sha256 object-format=sha256",
         " ",
         " object-format=sha256 ",
-        " side-band",
+        " filter",
     ] {
         invalid.push(upload(snapshot.head(), capability, ""));
     }

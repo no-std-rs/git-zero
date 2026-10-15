@@ -3,15 +3,17 @@
 #![forbid(unsafe_code)]
 
 use git_zero_core::{
-    Error, Head, ObjectFormat, ObjectId, Repository, Result,
+    Error, Head, ObjectId, Repository, Result,
     io::Write,
-    pack,
-    pktline::{self, Packet},
+    pack, pktline,
     reader::DEFAULT_READ_BUFFER_SIZE,
     repository::{resolve_reference, uses_only_head},
 };
+mod upload;
 #[cfg(feature = "read")]
 use git_zero_core::{ValidatedRepository, ValidationMetadata};
+use upload::UploadRequest;
+pub use upload::{PackOutput, write_upload_error};
 
 /// Default HEAD body. The server writes `Repository::head_state` dynamically.
 pub const HEAD: &[u8] = b"ref: refs/heads/main\n";
@@ -36,8 +38,10 @@ pub struct SelectionStorage<'a> {
 /// Serve independent refs, tags and multiple wanted IDs with caller-owned
 /// selection storage. Accept only advertised ref/peeled/HEAD IDs, rejecting
 /// arbitrary or merely reachable wants. Select the exact union before writing
-/// the NAK or pack. No-done requests receive only NAK. Haves are parsed but do
-/// not remove objects: ACK/delta negotiation remains unadvertised. Errors
+/// ACKs or pack. Present commit haves exclude their complete reachable history;
+/// unknown and non-commit haves are ignored. Requests are stateless: clients
+/// replay wants and acknowledged haves each round. No-done rounds only negotiate.
+/// Shallow/filter requests are rejected before excluding any history. Errors
 /// invalidate all output; selection failures produce no output at all.
 #[cfg(feature = "read")]
 pub fn serve_with_selection<R: Repository + ?Sized>(
@@ -50,7 +54,7 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
         return serve_with_scratch(repository, request, storage.read, output);
     }
     let mut count = 0;
-    let done = upload_request(request.body, repository.object_format(), |id| {
+    let upload = UploadRequest::parse(request.body, repository.object_format(), |id| {
         if !advertised(repository, id) {
             return Err(Error::InvalidRequest);
         }
@@ -60,19 +64,21 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
         }
         Ok(())
     })?;
-    if done {
-        let indices = repository.select_objects(
+    if upload.done {
+        let indices = repository.select_missing_objects(
             &storage.wants[..count],
+            upload.common(repository),
             storage.objects,
             storage.indices,
-            storage.read,
-            storage.parse,
+            (storage.read, storage.parse),
             storage.graph_read_limit,
         )?;
-        pktline::write(output, b"NAK\n")?;
-        pack::write_selected_with_scratch(repository, indices, storage.read, output)?;
+        upload.acknowledge(repository, output)?;
+        let mut packed = upload.output(output);
+        pack::write_selected_with_scratch(repository, indices, storage.read, &mut packed)?;
+        packed.finish()?;
     } else {
-        pktline::write(output, b"NAK\n")?;
+        upload.acknowledge(repository, output)?;
     }
     Ok(Response {
         status: 200,
@@ -120,19 +126,20 @@ pub fn serve_with_scratch(
 }
 
 /// Serve with a host-provided complete-pack writer. It is called once only for
-/// a valid upload-pack request ending in `done`, after writing the NAK packet.
+/// a valid upload-pack request ending in `done`, after writing ACK/NAK packets.
 /// The writer must emit a complete checksummed pack containing exactly this
 /// repository's objects, and respect the repository's stability contract.
 /// All refs must alias HEAD; independent roots return `Unsupported` before
 /// output or invoking the writer. Use `serve_with_selection` for those roots.
-/// Other routes and no-done requests use the ordinary core behavior. On any
-/// error discard the entire partial response, including the NAK.
+/// The supplied sink handles negotiated sideband framing. Complete-pack hooks
+/// may resend common history; use selection to omit it. Other routes and no-done
+/// requests use the ordinary behavior. On error discard the entire response.
 pub fn serve_with_pack<W: Write>(
     repository: &impl Repository,
     request: Request<'_>,
     scratch: &mut [u8],
     output: &mut W,
-    write_pack: impl FnOnce(&mut [u8], &mut W) -> Result<()>,
+    write_pack: impl FnOnce(&mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<Response> {
     let path = request.path.trim_start_matches('/');
     let mut response = Response {
@@ -172,17 +179,18 @@ pub fn serve_with_pack<W: Write>(
                 return Err(Error::Unsupported);
             }
             let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
-            if upload_request(request.body, repository.object_format(), |id| {
+            let upload = UploadRequest::parse(request.body, repository.object_format(), |id| {
                 if id == head {
                     Ok(())
                 } else {
                     Err(Error::InvalidRequest)
                 }
-            })? {
-                pktline::write(output, b"NAK\n")?;
-                write_pack(scratch, output)?;
-            } else {
-                pktline::write(output, b"NAK\n")?;
+            })?;
+            upload.acknowledge(repository, output)?;
+            if upload.done {
+                let mut packed = upload.output(output);
+                write_pack(scratch, &mut packed)?;
+                packed.finish()?;
             }
         }
         ("GET", "objects/info/packs") => {}
@@ -288,11 +296,15 @@ fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Resu
                 target.as_bytes(),
                 b" ",
                 format.capability(),
+                upload::CAPABILITIES,
                 b"\n",
             ],
         )
     } else {
-        pktline::write_parts(output, &[&id, name, format.capability(), b"\n"])
+        pktline::write_parts(
+            output,
+            &[&id, name, format.capability(), upload::CAPABILITIES, b"\n"],
+        )
     }
 }
 
@@ -339,6 +351,11 @@ fn reference_line(
                 } else {
                     b""
                 },
+                if capabilities {
+                    upload::CAPABILITIES
+                } else {
+                    b""
+                },
                 b"\n",
             ],
         )
@@ -349,75 +366,4 @@ fn reference_line(
         output.write_all(suffix)?;
         output.write_all(b"\n")
     }
-}
-
-fn want_id(bytes: &[u8], first: bool, format: ObjectFormat) -> Result<ObjectId> {
-    let split = bytes.iter().position(|&byte| byte == b' ');
-    if !first && split.is_some() {
-        return Err(Error::InvalidRequest);
-    }
-    let (hex, capabilities) = split.map_or((bytes, None), |position| {
-        (&bytes[..position], Some(&bytes[position + 1..]))
-    });
-    if first {
-        // Git's v0 client selects the advertised format but does not repeat
-        // object-format on its first want. Enforce it when explicitly supplied.
-        let mut selected = format;
-        if let Some(capabilities) = capabilities {
-            let mut seen = false;
-            for capability in capabilities.split(|&byte| byte == b' ') {
-                if seen || capability.is_empty() {
-                    return Err(Error::InvalidRequest);
-                }
-                selected = match capability {
-                    b"object-format=sha1" => ObjectFormat::Sha1,
-                    b"object-format=sha256" => ObjectFormat::Sha256,
-                    _ => return Err(Error::Unsupported),
-                };
-                seen = true;
-            }
-        }
-        if selected != format {
-            return Err(Error::InvalidRequest);
-        }
-    }
-    let id = ObjectId::from_hex(hex)?;
-    if id.format() != format {
-        return Err(Error::InvalidRequest);
-    }
-    Ok(id)
-}
-
-fn upload_request(
-    mut bytes: &[u8],
-    format: ObjectFormat,
-    mut want: impl FnMut(ObjectId) -> Result<()>,
-) -> Result<bool> {
-    let mut wanted = false;
-    let mut done = false;
-    while let Some(packet) = pktline::read(&mut bytes)? {
-        let Packet::Data(line) = packet else {
-            continue;
-        };
-        let line = line.strip_suffix(b"\n").unwrap_or(line);
-        if done {
-            return Err(Error::InvalidRequest);
-        }
-        if let Some(id) = line.strip_prefix(b"want ") {
-            want(want_id(id, !wanted, format)?)?;
-            wanted = true;
-        } else if let Some(have) = line.strip_prefix(b"have ") {
-            if ObjectId::from_hex(have)?.format() != format {
-                return Err(Error::InvalidRequest);
-            }
-        } else if line == b"done" {
-            done = true;
-        } else {
-            return Err(Error::Unsupported);
-        }
-    }
-    if !wanted {
-        return Err(Error::InvalidRequest);
-    }
-    Ok(done)
 }

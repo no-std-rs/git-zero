@@ -45,6 +45,62 @@ function packet(line) {
 
 const parts = ["{\"colo\":\"CDG\"}\n", "{}\n", "{\"public\":true}\n", "{\"format\":1}\n"];
 
+function decodeNegotiation(wire, band) {
+  const lines = [];
+  const packed = [];
+  while (wire.length) {
+    const length = Number.parseInt(wire.subarray(0, 4).toString(), 16);
+    if (length === 0) { assert.equal(wire.length, 4); break; }
+    assert.ok(length <= (band === "side-band" ? 1000 : 65520));
+    const line = wire.subarray(4, length);
+    wire = wire.subarray(length);
+    if (line[0] === 1) packed.push(line.subarray(1));
+    else lines.push(line.toString());
+  }
+  return { lines, pack: Buffer.concat(packed) };
+}
+
+function assertNegotiatedResponse(response, head, mode, band, hash) {
+  assert.equal(response.status, 200);
+  const { lines, pack } = decodeNegotiation(response.body, band);
+  assert.deepEqual(lines, [`ACK ${head} ${mode === "multi_ack" ? "continue" : "common"}\n`, `ACK ${head}\n`]);
+  const checksumBytes = head.length / 2;
+  assert.equal(pack.subarray(0, 4).toString(), "PACK");
+  assert.deepEqual(createHash(hash).update(pack.subarray(0, -checksumBytes)).digest(), pack.subarray(-checksumBytes));
+}
+
+function checkRepeatedNegotiation(exports, format, head, mode, band) {
+  const memory = exports.memory.buffer;
+  const want = packet(`want ${head} ${mode} ${band} no-progress\n`);
+  const upload = Buffer.concat([want, Buffer.from("0000"), packet(`have ${head}\n`), packet("done\n")]);
+  const input = frame(parts, "git-upload-pack", upload);
+  const hash = format === 0 ? "sha1" : "sha256";
+  const expected = call(exports, input, 1, format);
+  assertNegotiatedResponse(expected, head, mode, band, hash);
+  for (let round = 1; round < 32; round++) {
+    const response = call(exports, input, 1, format);
+    assertNegotiatedResponse(response, head, mode, band, hash);
+    assert.deepEqual(response, expected);
+  }
+  assert.equal(exports.memory.buffer, memory);
+}
+
+test("negotiated ACK and sideband responses keep fixed Wasm memory in both formats", () => {
+  const exports = instance();
+  const memory = exports.memory.buffer;
+  for (const format of [0, 1]) {
+    const width = format === 0 ? 40 : 64;
+    const discovery = call(exports, frame(parts, "info/refs?service=git-upload-pack"), 0, format);
+    const head = new RegExp(`([0-9a-f]{${width}}) HEAD\\0`).exec(discovery.body.toString())[1];
+    for (const mode of ["multi_ack", "multi_ack_detailed"]) {
+      for (const band of ["side-band", "side-band-64k"]) {
+        checkRepeatedNegotiation(exports, format, head, mode, band);
+        assert.equal(exports.memory.buffer, memory);
+      }
+    }
+  }
+});
+
 test("Wasm keeps fixed memory across repeated discovery, pack and loose-object requests", () => {
   const exports = instance();
   const memory = exports.memory.buffer;

@@ -268,7 +268,8 @@ fn real_git_clones_generated_objects_with_bounded_read_scratch() {
             let mut request_storage = [0; 4096];
             // The current native HTTP host buffers responses. Object generation
             // in the core uses a separate 17-byte read budget for every object.
-            let mut response_storage = vec![0; SIZE + 4096];
+            // Sideband adds five framing bytes per 1 KiB payload packet.
+            let mut response_storage = vec![0; SIZE + SIZE.div_ceil(1024) * 5 + 4096];
             let mut scratch = [0; 17];
             loop {
                 let socket = accept(&listener).unwrap();

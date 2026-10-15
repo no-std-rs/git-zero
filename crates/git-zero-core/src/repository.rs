@@ -1,5 +1,10 @@
 use crate::{Error, Object, ObjectFormat, ObjectId, ObjectInfo, Result};
 
+/// V0 upload capabilities, including their leading separator. Shared with the
+/// server so repository ref-name limits include the complete advertisement.
+pub const UPLOAD_CAPABILITIES: &[u8] =
+    b" multi_ack multi_ack_detailed side-band side-band-64k no-progress";
+
 /// Maximum SHA-1 ref name size that fits a smart HTTP advertisement.
 pub const MAX_REF_NAME_LENGTH: usize = crate::pktline::MAX_LENGTH - 4 - 40 - b" \n".len();
 
@@ -16,10 +21,18 @@ pub const fn ref_name_limit(format: ObjectFormat) -> usize {
     crate::pktline::MAX_LENGTH - 4 - format.hex_length() - b" \n".len()
 }
 pub const fn head_ref_limit(format: ObjectFormat) -> usize {
-    ref_name_limit(format) - b"HEAD\0symref=HEAD:".len() - 1 - format.capability().len()
+    ref_name_limit(format)
+        - b"HEAD\0symref=HEAD:".len()
+        - 1
+        - format.capability().len()
+        - UPLOAD_CAPABILITIES.len()
 }
 pub const fn unborn_ref_limit(format: ObjectFormat) -> usize {
-    ref_name_limit(format) - b"capabilities^{}\0symref=HEAD:".len() - 1 - format.capability().len()
+    ref_name_limit(format)
+        - b"capabilities^{}\0symref=HEAD:".len()
+        - 1
+        - format.capability().len()
+        - UPLOAD_CAPABILITIES.len()
 }
 
 /// One resolved advertised ref, with optional symbolic and annotated-tag data.
@@ -553,7 +566,10 @@ fn validate_reference(
     if repository.reference_peeled(index).is_some() && name.len() > ref_limit - 3 {
         return Err(Error::InvalidReference);
     }
-    if head.id().is_none() && index == 0 && name.len() > ref_limit - 1 - format.capability().len() {
+    if head.id().is_none()
+        && index == 0
+        && name.len() > ref_limit - 1 - format.capability().len() - UPLOAD_CAPABILITIES.len()
+    {
         return Err(Error::InvalidReference);
     }
     resolve_reference(repository, name)?;

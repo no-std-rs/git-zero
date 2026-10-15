@@ -57,8 +57,10 @@ wants and peeled IDs. Unadvertised IDs are rejected even when reachable. Git's
 smart client requests `include-tag` even with `--no-tags`; the Git reference clone
 may physically receive extra tags peeling to its selected closure. Only that
 oracle case permits those extra objects; matched no-capability requests and
-git-zero's single-branch clones require the exact object set. ACK, include-tag,
-shallow/filter and v1/v2 negotiation remain planned.
+git-zero's single-branch clones require the exact object set. V0 ACK/sideband
+comparisons now also check common-history exclusion; include-tag, shallow/filter
+and v1/v2 remain planned. The [server acceptance matrix](server-acceptance.md)
+separates this server evidence from the client and Git-only baselines.
 
 `upstream-snapshot-{smart,dumb}` constructs blob/tree/commit bytes using Git's
 own commands, with the demo's exact content and identity. Both servers must
@@ -78,7 +80,7 @@ from git-zero's own response.
 | t5551:293–308 | Protocol disabling and discovery content-type validation. Server routes support both modes; the native client does not yet validate media types. |
 | t5551:399–496 | Large ref/request budgets, chunked framing and reachable/arbitrary-object wants. Bounded selection accepts advertised HEAD/ref/peeled IDs; merely reachable IDs are rejected. Chunked framing and configurable broader want policies remain planned. |
 | t5551:515–546 | Client ref updates and selecting wanted refs/IDs. The primitive smart fetch accepts an explicit ID; the demo fetch selects HEAD and does not maintain local refs. |
-| t5551:593–596 | Smart error packets and more precise remote error propagation. |
+| t5551:593–596 | Buffered hosts can write terminal server ERR packets; client-side remote error decoding and exact upstream diagnostics remain planned. |
 | t5551:675–686 | DNS and caller-provided hostname resolution. Native URLs currently require numeric loopback IPv4. |
 | t5551:758–765 | Consistent trailing-slash URL normalization across host transports. |
 | t5551:767–789 | Annotated-tag selection/following with shallow negotiation. Discovery and explicitly wanted tag closures are covered by native `references`; include-tag and shallow negotiation remain planned. |

@@ -258,6 +258,9 @@ def compare(root, zero, state):
                 clone_branch(root, bare, urls, protocol, "a-side", client_env)
                 if smart:
                     compare_wants(root, bare, urls, env)
+                    if state == "symbolic":
+                        from server_negotiation import compare_negotiation
+                        compare_negotiation(root, bare, urls, env)
 
 
 if __name__ == "__main__":

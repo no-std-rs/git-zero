@@ -78,7 +78,7 @@ fn empty_repository_advertises_unborn_head() {
     );
     assert_eq!(pktline::read(&mut packets), Ok(Some(Packet::Flush)));
     assert_eq!(pktline::read(&mut packets), Ok(Some(Packet::Data(
-        b"0000000000000000000000000000000000000000 capabilities^{}\0symref=HEAD:refs/heads/new object-format=sha1\n"
+        b"0000000000000000000000000000000000000000 capabilities^{}\0symref=HEAD:refs/heads/new object-format=sha1 multi_ack multi_ack_detailed side-band side-band-64k no-progress\n"
     ))));
     assert_eq!(pktline::read(&mut packets), Ok(Some(Packet::Flush)));
     assert!(packets.is_empty());

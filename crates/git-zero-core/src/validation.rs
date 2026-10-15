@@ -15,6 +15,7 @@ pub struct ValidationMetadata {
     pub info: ObjectInfo,
     reached: bool,
     checked: bool,
+    excluded: bool,
 }
 
 /// Validate and index a stable repository, including streaming-only providers.
@@ -133,6 +134,32 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         parse_scratch: &mut [u8],
         graph_read_limit: u64,
     ) -> Result<&'selected [usize]> {
+        self.select_missing_objects(
+            roots,
+            core::iter::empty(),
+            work,
+            selected,
+            (read_scratch, parse_scratch),
+            graph_read_limit,
+        )
+    }
+
+    /// Select the wanted closure minus the complete closure of `common` roots.
+    /// Common roots must be present, and are trusted to describe complete client
+    /// history (shallow clients must be rejected by the protocol layer). Both
+    /// traversals share one graph-read budget and the same caller-owned arrays.
+    /// Common-root iteration may fail (for example, a host metadata read); errors
+    /// propagate. Unknown roots fail; retries reset exclusions and traversal state.
+    pub fn select_missing_objects<'selected>(
+        &self,
+        roots: &[ObjectId],
+        common: impl IntoIterator<Item = Result<ObjectId>>,
+        work: &mut [Option<ValidationMetadata>],
+        selected: &'selected mut [usize],
+        scratch: (&mut [u8], &mut [u8]),
+        graph_read_limit: u64,
+    ) -> Result<&'selected [usize]> {
+        let (read_scratch, parse_scratch) = scratch;
         if roots.is_empty() {
             return Err(Error::InvalidRequest);
         }
@@ -147,11 +174,30 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             object.reached = false;
             object.checked = false;
         }
-        for &id in roots {
+        for id in common {
+            let id = id?;
             let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
             reach(work, self.by_id, id, metadata(work, index).info.kind)?;
         }
         let mut remaining = graph_read_limit;
+        walk(
+            self,
+            work,
+            self.by_id,
+            read_scratch,
+            parse_scratch,
+            Some(&mut remaining),
+        )?;
+        for slot in work.iter_mut() {
+            let object = slot.as_mut().expect("validated metadata");
+            object.excluded = object.reached;
+            object.reached = false;
+            object.checked = false;
+        }
+        for &id in roots {
+            let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
+            reach(work, self.by_id, id, metadata(work, index).info.kind)?;
+        }
         walk(
             self,
             work,
@@ -245,6 +291,7 @@ fn initialize_index(
             info,
             reached: false,
             checked: false,
+            excluded: false,
         });
         by_id[index] = index;
     }
@@ -372,7 +419,9 @@ fn reach(
     if object.info.kind != kind {
         return Err(Error::InvalidObject);
     }
-    object.reached = true;
+    if !object.excluded {
+        object.reached = true;
+    }
     Ok(())
 }
 

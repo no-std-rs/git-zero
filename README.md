@@ -343,7 +343,8 @@ pack for valid smart upload requests; dumb loose-object routes encode raw bodies
 To route through a validated index, pass its repository to
 `http::serve_with_pack` and supply a closure calling the file repository's pack
 writer. The closure runs once only when a valid upload request ends in `done`,
-after the NAK packet. Other requests keep the existing routing and validation.
+after ACK/NAK negotiation. Its `PackOutput` sink applies negotiated sideband
+framing; the closure writes ordinary complete pack bytes.
 Scratch and output limits remain explicit; discard partial output on any error.
 
 ## Embed the core
@@ -433,7 +434,7 @@ and minutes 00–59 and do not adjust those seconds. Malformed metadata returns
 `InvalidObject`. Very large timestamps need not be displayable by every host Git.
 Names must fit smart discovery packets. `repository::ref_name_limit(format)`,
 `head_ref_limit(format)` and `unborn_ref_limit(format)` account for ID width,
-symref and object-format capabilities; peeled rows reserve three more bytes.
+symref, object-format and upload capabilities; peeled rows reserve three more bytes.
 The `MAX_REF_NAME_LENGTH` and HEAD/unborn/peeled constants give the SHA-1 limits.
 Changing refs leaves object IDs and pack-cache keys stable.
 `http::Request::path` is a URL path: percent-encode reserved bytes in ref URLs.
@@ -568,14 +569,37 @@ distinct requested ID. Scratch follows validation's header/tree-name limits;
 rereads. Selection uses no body-sized buffer or allocation. Only advertised HEAD,
 ref and peeled IDs are accepted; unknown or merely reachable IDs are rejected.
 Duplicate and overlapping wants produce each object once. Requests without `done`
-return NAK without traversal. Selection failures occur before response output,
-and the same storage can be reused on retry. Haves are parsed but do not prune
-objects; ACK, sideband and include-tag capabilities remain unadvertised.
+negotiate ACK/NAK without graph traversal. Selection failures occur before output,
+and the same storage can be reused on retry. Known commit haves omit their complete
+closure, sharing `graph_read_limit` across common and wanted traversals. Unknown
+and non-commit haves are ignored. Requests replay wants and common haves each
+round; no connection state or have-ID array is retained. Shallow clients are
+rejected before history exclusion.
+
+V0 advertisements include `multi_ack`, `multi_ack_detailed`, `side-band`,
+`side-band-64k` and `no-progress`. A client chooses at most one ACK mode and one
+sideband mode on the first want. Without an ACK capability, the first common
+commit gets one ACK. Multi modes acknowledge common commits and finish a no-done
+round with NAK; a done round ends negotiation with a final ACK (or NAK if none
+are common), then the pack. No `ready`/`no-done` shortcuts are advertised.
+Sideband sends channel-1 pack bytes through a fixed 1 KiB buffer and a terminal
+flush; no progress messages are emitted. Unsupported, conflicting or duplicated
+capabilities, misplaced wants/haves and incomplete requests fail before output.
+`include-tag`, shallow/filter and v1/v2 remain unadvertised.
+
+On a failed buffered upload, discard the complete failed body. A host can call
+`http::write_upload_error(error, output)` on an empty sink to produce a terminal
+`ERR` packet with a bounded public message, and choose its HTTP status. Never
+append it to a partial raw pack. Streaming hosts must close failed transfers.
 
 `ValidatedRepository::select_objects` also accepts any present root for host use;
+`select_missing_objects` subtracts explicit complete common closures with the
+same array and read budgets. Neither primitive implements shallow history.
 `pack::write_selected_with_scratch` emits the resulting unique object indices.
 The legacy `http::serve`, `serve_with_scratch`, `serve_with_pack` and HEAD-key
 `cache::write` support complete HEAD closures whose refs all alias HEAD.
+Complete-pack hooks still negotiate and frame sideband, but may resend common
+objects. Use `serve_with_selection` to omit them.
 Independent roots require selection; legacy upload-pack/cache paths return
 `Unsupported` before invoking pack/cache backends. Requested-closure cache keys
 and prepacked reuse remain roadmap work.

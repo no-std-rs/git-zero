@@ -157,13 +157,15 @@ fn serve<R: Repository + ?Sized>(
                     Error::Backend => 500,
                     _ => 400,
                 };
+                let mut failure = SliceWriter::new(&mut response_storage);
+                http::write_upload_error(error, &mut failure).unwrap();
                 respond(
                     &socket,
                     Response {
                         status,
-                        content_type: "text/plain",
+                        content_type: "application/x-git-upload-pack-result",
                     },
-                    b"invalid request\n",
+                    failure.as_bytes(),
                 )
                 .unwrap();
             }

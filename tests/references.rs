@@ -290,6 +290,71 @@ fn selected_ids(repository: &impl Repository, indices: &[usize]) -> Vec<ObjectId
             .collect(),
     )
 }
+
+fn check_missing_closure(
+    graph: &Graph,
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    common: &[ObjectId],
+    work: &mut [Option<git_zero::ValidationMetadata>],
+    indices: &mut [usize],
+) {
+    let excluded = if common.is_empty() {
+        vec![]
+    } else {
+        let selected = repository
+            .select_objects(common, work, indices, &mut [0; 1], &mut [0; 128], 4096)
+            .unwrap();
+        selected_ids(repository, selected)
+    };
+    let selected = allocations::without_allocations(|| {
+        repository
+            .select_missing_objects(
+                &[graph.ids.merge.unwrap()],
+                common.iter().copied().map(Ok),
+                work,
+                indices,
+                (&mut [0; 1], &mut [0; 128]),
+                8192,
+            )
+            .unwrap()
+    });
+    let expected = graph
+        .objects
+        .iter()
+        .filter(|object| object.kind != ObjectKind::Tag && !excluded.contains(&object.id))
+        .map(|object| object.id)
+        .collect();
+    assert_eq!(selected_ids(repository, selected), sorted(expected));
+}
+
+#[test]
+fn common_commit_closures_exclude_shared_merge_history_and_reset_between_requests() {
+    let graph = Graph::new();
+    validated(&graph.repository(), |repository| {
+        let mut work = [None; CAPACITY];
+        let mut indices = [0; CAPACITY];
+        assert_eq!(
+            repository.select_missing_objects(
+                &[graph.ids.merge.unwrap()],
+                [Err(Error::Backend)],
+                &mut work,
+                &mut indices,
+                (&mut [0; 1], &mut [0; 128]),
+                8192,
+            ),
+            Err(Error::Backend)
+        );
+        for common in [
+            vec![graph.ids.base.unwrap()],
+            vec![graph.ids.main.unwrap(), graph.ids.side.unwrap()],
+            vec![graph.ids.side.unwrap(), graph.ids.side.unwrap()],
+            vec![],
+        ] {
+            check_missing_closure(&graph, repository, &common, &mut work, &mut indices);
+        }
+    });
+}
+
 fn request(roots: &[ObjectId], done: bool) -> Vec<u8> {
     let mut bytes = Vec::new();
     for id in roots {
@@ -364,6 +429,25 @@ fn symbolic_head_can_resolve_through_a_lightweight_tag() {
     });
 }
 
+fn assert_selected_objects(
+    repo: &ValidatedRepository<'_, '_, impl Repository>,
+    (roots, expected): (&[ObjectId], Vec<ObjectId>),
+    work: &mut [Option<git_zero::ValidationMetadata>],
+    indices: &mut [usize],
+) {
+    let selected = allocations::without_allocations(|| {
+        repo.select_objects(roots, work, indices, &mut [0; 1], &mut [0; 128], 4096)
+            .unwrap()
+    });
+    assert_eq!(selected_ids(repo, selected), sorted(expected));
+    assert!(work[repo.object_count()..].iter().all(Option::is_none));
+    assert!(
+        indices[repo.object_count()..]
+            .iter()
+            .all(|&index| index == usize::MAX)
+    );
+}
+
 #[test]
 fn selected_closures_deduplicate_roots_and_reset_state_without_allocating() {
     let graph = Graph::new();
@@ -390,24 +474,7 @@ fn selected_closures_deduplicate_roots_and_reset_state_without_allocating() {
             ),
             (vec![graph.head()], graph.main_closure()),
         ] {
-            let selected = allocations::without_allocations(|| {
-                repo.select_objects(
-                    &roots,
-                    &mut work,
-                    &mut indices,
-                    &mut [0; 1],
-                    &mut [0; 128],
-                    4096,
-                )
-                .unwrap()
-            });
-            assert_eq!(selected_ids(repo, selected), sorted(expected));
-            assert!(work[repo.object_count()..].iter().all(Option::is_none));
-            assert!(
-                indices[repo.object_count()..]
-                    .iter()
-                    .all(|&index| index == usize::MAX)
-            );
+            assert_selected_objects(repo, (&roots, expected), &mut work, &mut indices);
         }
         let mut other_work = [None; CAPACITY];
         let mut other_indices = [0; CAPACITY];

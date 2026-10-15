@@ -109,6 +109,10 @@ name = "snapshot"
 required-features = ["client", "server"]
 
 [[test]]
+name = "upload"
+required-features = ["read", "server"]
+
+[[test]]
 name = "smart_client"
 required-features = ["client"]
 

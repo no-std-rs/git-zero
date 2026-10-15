@@ -83,9 +83,15 @@ annotated tags, deep trees, merge histories, binary blobs, and both object forma
   explicit policy for unadvertised, unreachable, and arbitrary-object wants.
   Only advertised HEAD, ref and peeled IDs are accepted. Unknown and merely
   reachable wants fail before output; validation rejects unreachable provider
-  objects. Duplicate/overlapping wants share objects. Haves are parsed but do not
-  prune the closure; ACK, sideband and include-tag capabilities remain unadvertised.
-- [ ] Broader v0 capability negotiation, ACK/have negotiation, sideband and error packets.
+  objects. Duplicate/overlapping wants share objects. Known commit haves now prune
+  complete common history; include-tag remains unadvertised.
+- [x] Broader v0 capability negotiation, ACK/have negotiation, sideband and error packets.
+  Single ACK, multi_ack and multi_ack_detailed rounds, both sideband modes,
+  no-progress and host-written terminal ERR packets have allocation-free tests.
+  Stateless requests replay wants/common haves; selected packs omit their closure
+  within one shared graph-read budget. Native Git-oracle comparisons check exact
+  incremental objects and imports in SHA-1/SHA-256. Wasm tests check framing,
+  ACKs, checksums and fixed memory; complete-pack hooks may resend common history.
 - [ ] Protocol v1/v2 (`ls-refs`, `fetch`) with accurate capability advertisements.
 - [ ] Incremental requests and responses, backpressure, cancellation, and resume points.
 - [ ] Shallow/filter requests with bounded traversal and documented rejection paths.
@@ -149,10 +155,12 @@ remain regression coverage; server completion is measured with real Git clients.
 
 - [x] Map upstream `t5550`/`t5551` cases to supported/planned/out-of-scope features;
   see `tests/upstream-http.md` for the pinned reference and independent comparisons.
-- [ ] Extend that map into a server acceptance matrix with a named local case,
+- [x] Extend that map into a server acceptance matrix with a named local case,
   reference-server comparison, host/protocol/object-format coverage, and explicit
   remaining gap for every in-scope feature. Separate server results from client
   limitations; a Git-only reference baseline does not prove git-zero server parity.
+  `tests/server-acceptance.md` records native/Worker, protocol and format coverage,
+  independent oracle evidence and explicit unimplemented or untested gaps.
 - [ ] Reusable upstream fixture adapter where Git's harness allows replacing a server;
   record GPL provenance for any copied tests rather than copying them silently.
 - [ ] Empty/bare repositories, arbitrary refs, tags, large binary blobs, deep histories,
@@ -176,6 +184,8 @@ remain regression coverage; server completion is measured with real Git clients.
 - [ ] Expand server fuzz coverage for capability/want/have negotiation, v2 commands,
   shallow/filter state, incremental HTTP framing, and concurrent/cancelled request
   state. Retain regressions and check bounded work, state reset, and output guards.
+  V0 capability conflicts, ACK/have phases and sideband responses now have seeded
+  routing mutations; v2, shallow/filter and asynchronous state remain planned.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.
@@ -238,8 +248,8 @@ kernel-scale benchmarks separate from mandatory, reproducible correctness checks
   configured limits, and remaining optional work; no advertised feature lacks tests.
 
 Start further client development after this gate passes. The next implementation
-step is broader v0 capability and ACK/have negotiation, sideband and error
-packets, with independent Git comparisons in both object formats.
+step is protocol v1/v2 discovery and fetch, with accurate capabilities and
+independent Git comparisons in both object formats.
 
 ## 7. Read/write server support
 
