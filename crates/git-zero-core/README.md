@@ -32,23 +32,36 @@ Encoding matches the synchronous stored-block writers in both object formats.
 `cache::selected` caches raw stored-block packs by their exact object set. It
 supports independent refs and partial selections in SHA-1/SHA-256. Complete
 authorization, visible-ref/reachability checks, graph selection and traversal
-budgets before every call. Pass strictly ascending selected indices with `Selection::Indices` (or `Selection::All`
-for all objects). ACK-only rounds and shallow-list probes skip the cache; their
+budgets before every call. Pass strictly ascending selected indices with
+`Selection::Indices` (or `Selection::All` for all objects). ACK-only rounds and shallow-list probes skip the cache; their
 control packets are generated separately.
 
 ```rust
 # use git_zero_core::{cache::selected::{self, Buffers, FixedCache, Selection}, ObjectId, Repository, io::Write, Result};
-# fn serve(repository: &impl Repository, indices: &[usize], output: &mut impl Write) -> Result<()> {
-let mut cache_bytes = [0; 8192]; // Keep this host-owned backend across requests.
+# fn example(repository: &impl Repository, indices: &[usize], first_response: &mut impl Write, second_response: &mut impl Write) -> Result<()> {
+fn serve(
+    repository: &impl Repository,
+    indices: &[usize],
+    cache: &mut FixedCache<'_>,
+    output: &mut impl Write,
+) -> Result<()> {
+    let mut ids = [ObjectId::Sha1([0; 20]); 64]; // One slot per selected object.
+    let mut staging = [0; 8192];
+    selected::write(repository, Selection::Indices(indices), cache, Buffers {
+        ids: &mut ids,
+        pack: &mut staging,
+        read: &mut [0; 1024],
+        byte_limit: 8192,
+    }, output)?;
+    Ok(())
+}
+
+// The host retains this cache and supplies a fresh response sink for each call.
+let mut cache_bytes = [0; 8192];
 let mut cache = FixedCache::new(&mut cache_bytes);
-let mut ids = [ObjectId::Sha1([0; 20]); 64]; // One slot per selected object.
-let mut staging = [0; 8192];
-selected::write(repository, Selection::Indices(indices), &mut cache, Buffers {
-    ids: &mut ids,
-    pack: &mut staging,
-    read: &mut [0; 1024],
-    byte_limit: 8192,
-}, output)?;
+serve(repository, indices, &mut cache, first_response)?;
+serve(repository, indices, &mut cache, second_response)?;
+# assert_eq!(cache.statistics().hits, 1);
 # Ok(())
 # }
 ```
