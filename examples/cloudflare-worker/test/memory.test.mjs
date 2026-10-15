@@ -109,12 +109,44 @@ function assertFilteredPack(response, head, format, version) {
 function checkShallowFiltered(first, second, format, version) {
   const discovery = call(first, frame(parts, "info/refs?service=git-upload-pack"), 0, format);
   const head = new RegExp(`([0-9a-f]{${format === 0 ? 40 : 64}}) HEAD\\0`).exec(discovery.body.toString())[1];
+  for (const shallow of [[], [`shallow ${head}`]]) {
+    const ordinary = fetchBody(head, format, version, shallow);
+    const expected = call(first, httpFrame("git-upload-pack", ordinary, `version=${version}`), 1, format, true);
+    const unused = fetchBody(head, format, version,
+      [...shallow, ...(version === 2 ? ["deepen-relative"] : [])], " deepen-relative");
+    const input = httpFrame("git-upload-pack", unused, `version=${version}`);
+    assert.deepEqual(call(first, input, 1, format, true), expected);
+    checkStreamingTarget(first, second, input, 1, format, version === 2, expected);
+  }
   const body = fetchBody(head, format, version, ["deepen 1", "filter blob:none"], ` filter object-format=${format === 0 ? "sha1" : "sha256"}`);
   const input = httpFrame("git-upload-pack", body, `version=${version}`);
   const expected = call(first, input, 1, format, true);
   assertFilteredPack(expected, head, format, version);
   for (let round = 0; round < 16; round++) {
     checkStreamingTarget(first, second, input, 1, format, version === 2, expected);
+  }
+  const relative = fetchBody(head, format, version,
+    [`shallow ${head}`, "deepen 1", ...(version === 2 ? ["deepen-relative"] : [])],
+    ` deepen-relative object-format=${format === 0 ? "sha1" : "sha256"}`);
+  const relativeInput = httpFrame("git-upload-pack", relative, `version=${version}`);
+  const deepened = call(first, relativeInput, 1, format, true);
+  assert.equal(deepened.status, 200);
+  assert.ok(deepened.body.includes(packet(`unshallow ${head}\n`)));
+  assert.ok(!deepened.body.includes(packet(`shallow ${head}\n`)));
+  for (let round = 0; round < 16; round++) {
+    checkStreamingTarget(first, second, relativeInput, 1, format, version === 2, deepened);
+  }
+  const full = version === 2
+    ? command(format, "fetch", [`want ${head}`, `have ${head}`, "deepen 1", "deepen-relative", "done"])
+    : Buffer.concat([packet(`want ${head} deepen-relative object-format=${format === 0 ? "sha1" : "sha256"}\n`),
+      packet("deepen 1\n"), Buffer.from("0000"), packet(`have ${head}\n`), packet("done\n")]);
+  const fullInput = httpFrame("git-upload-pack", full, `version=${version}`);
+  const unchanged = call(first, fullInput, 1, format, true);
+  const { lines, pack } = decodeNegotiation(version === 2 ? unchanged.body : unchanged.body.subarray(4), version === 2 ? "side-band-64k" : null);
+  assert.deepEqual(lines, version === 2 ? ["packfile\n"] : [`ACK ${head}\n`]);
+  assert.equal(pack.readUInt32BE(8), 0, "a full client's common history must not be resent");
+  for (let round = 0; round < 16; round++) {
+    checkStreamingTarget(first, second, fullInput, 1, format, version === 2, unchanged);
   }
 }
 

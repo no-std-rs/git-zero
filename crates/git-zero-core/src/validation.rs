@@ -22,6 +22,13 @@ pub struct ValidationMetadata {
 }
 
 impl ValidationMetadata {
+    fn reset_walk(&mut self) {
+        self.reached = false;
+        self.checked = false;
+        self.depth = u32::MAX;
+        self.shallow = false;
+    }
+
     /// A reached commit at a requested history boundary (including root commits).
     pub fn is_shallow(&self) -> bool {
         self.reached && self.shallow
@@ -37,6 +44,7 @@ impl ValidationMetadata {
 struct History {
     limit: Option<u32>,
     client: bool,
+    distance: bool,
 }
 
 /// Traversal budget and annotated-tag policy for a selected fetch pack.
@@ -231,6 +239,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
     /// Select shallow/filtered history with caller-owned arrays. Client shallow
     /// IDs must name present commits. Common traversal stops at those commits;
     /// depth requests instead resend their closure without trusting common haves.
+    /// Relative requests from full clients preserve ordinary common exclusion.
+    /// Relative depth measures the nearest boundary from wanted history, then
+    /// extends that absolute cut (Git 2.55). Both passes share the budget.
     /// Work metadata retains shallow/unshallow markers until the next selection.
     /// All structural reads, including revisits after a shorter merge path,
     /// consume one budget. Retries reset depths, exclusions and boundary markers.
@@ -272,7 +283,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
     ///     &wanted, (core::iter::empty(), core::iter::empty()),
     ///     &mut work, &mut indices, (&mut [0; 64], &mut [0; 128]),
     ///     (SelectionOptions { graph_read_limit: 4096, include_tags: false },
-    ///      FetchOptions { depth: Some(1), filter: BlobFilter::None }),
+    ///      FetchOptions { depth: Some(1), filter: BlobFilter::None, ..FetchOptions::default() }),
     /// )?;
     /// assert_eq!(selected.len(), 2); // Commit and tree, with no blob.
     /// let boundary = work.iter().flatten().find(|object| object.is_shallow()).unwrap();
@@ -318,12 +329,10 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         work.copy_from_slice(self.objects);
         for slot in work.iter_mut() {
             let object = slot.as_mut().expect("validated metadata");
-            object.reached = false;
-            object.checked = false;
-            object.depth = u32::MAX;
+            object.reset_walk();
             object.client_shallow = false;
-            object.shallow = false;
         }
+        let mut has_shallow = false;
         for id in shallow {
             let index = find(work, self.by_id, id?).ok_or(Error::InvalidRequest)?;
             let object = work[index].as_mut().expect("validated metadata");
@@ -331,11 +340,15 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
                 return Err(Error::InvalidRequest);
             }
             object.client_shallow = true;
+            has_shallow = true;
         }
+        // A relative request from a full client is an ordinary incremental
+        // fetch. Its depth cannot expose missing history behind a boundary.
+        let deepening = fetch.depth.is_some() && (!fetch.deepen_relative || has_shallow);
         for id in common {
             let id = id?;
             let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-            if fetch.depth.is_none() {
+            if !deepening {
                 reach(work, self.by_id, id, metadata(work, index).info.kind)?;
             }
         }
@@ -349,30 +362,35 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             History {
                 limit: None,
                 client: true,
+                distance: false,
             },
         )?;
         for slot in work.iter_mut() {
             let object = slot.as_mut().expect("validated metadata");
             object.excluded = object.reached;
-            object.reached = false;
-            object.checked = false;
-            object.depth = u32::MAX;
-            object.shallow = false;
+            object.reset_walk();
         }
-        for &id in roots {
-            let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-            reach(work, self.by_id, id, metadata(work, index).info.kind)?;
-        }
-        walk(
-            self,
+        let depth = match fetch.depth.filter(|_| deepening) {
+            Some(depth) if fetch.deepen_relative => self.relative_depth(
+                roots,
+                work,
+                (read_scratch, parse_scratch),
+                &mut remaining,
+                depth,
+            )?,
+            depth => depth,
+        };
+        let history = History {
+            limit: depth,
+            client: fetch.depth.is_none(),
+            distance: false,
+        };
+        self.walk_wants(
+            roots,
             work,
-            self.by_id,
             (read_scratch, parse_scratch),
-            Some(&mut remaining),
-            History {
-                limit: fetch.depth,
-                client: fetch.depth.is_none(),
-            },
+            &mut remaining,
+            history,
         )?;
         filter_blobs(work, roots, fetch.filter);
         if include_tags {
@@ -383,10 +401,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
                 self.by_id,
                 (read_scratch, parse_scratch),
                 Some(&mut remaining),
-                History {
-                    limit: fetch.depth,
-                    client: fetch.depth.is_none(),
-                },
+                history,
             )?;
             filter_blobs(work, roots, fetch.filter);
         }
@@ -398,6 +413,58 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             }
         }
         Ok(&selected[..length])
+    }
+
+    fn relative_depth(
+        &self,
+        roots: &[ObjectId],
+        work: &mut [Option<ValidationMetadata>],
+        scratch: (&mut [u8], &mut [u8]),
+        remaining: &mut u64,
+        depth: u32,
+    ) -> Result<Option<u32>> {
+        // Git 2.55 measures the nearest client boundary from the wants.
+        // Unrelated shallow branches cannot influence or extend this cut.
+        self.walk_wants(
+            roots,
+            work,
+            scratch,
+            remaining,
+            History {
+                limit: None,
+                client: true,
+                distance: true,
+            },
+        )?;
+        // Git 2.55 get_shallow_commits returns no new boundaries when none
+        // match. Unlike Git 2.54, this leaves wanted history complete.
+        let limit = work
+            .iter()
+            .flatten()
+            .filter(|object| object.reached && object.client_shallow)
+            .map(|object| object.depth)
+            .min()
+            .map(|boundary| boundary.checked_add(depth).ok_or(Error::LimitExceeded))
+            .transpose()?;
+        for slot in work.iter_mut() {
+            slot.as_mut().expect("validated metadata").reset_walk();
+        }
+        Ok(limit)
+    }
+
+    fn walk_wants(
+        &self,
+        roots: &[ObjectId],
+        work: &mut [Option<ValidationMetadata>],
+        scratch: (&mut [u8], &mut [u8]),
+        remaining: &mut u64,
+        history: History,
+    ) -> Result<()> {
+        for &id in roots {
+            let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
+            reach(work, self.by_id, id, metadata(work, index).info.kind)?;
+        }
+        walk(self, work, self.by_id, scratch, Some(remaining), history)
     }
 
     fn include_matching_tags(&self, work: &mut [Option<ValidationMetadata>]) -> Result<()> {
@@ -561,7 +628,7 @@ fn walk(
                     parse_scratch,
                     objects,
                     by_id,
-                    (!stop).then_some(if history.limit.is_some() {
+                    (!stop).then_some(if history.limit.is_some() || history.distance {
                         object.depth.saturating_add(1)
                     } else {
                         1
