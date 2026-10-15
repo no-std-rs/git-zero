@@ -32,6 +32,10 @@ other rounds return ACKs or NAK and wait for done. Selection includes annotated
 and nested tags only when their final target is being sent, sharing one graph
 budget. Whole-pack hooks retain their documented HEAD-only restriction.
 Shallow/filter, ready shortcuts and other optional v2 features stay unadvertised.
+V2 preflights every selected ls-refs line, including its attributes, against the
+65,520-byte packet limit. Oversized attribute combinations return `LimitExceeded`
+before output; hosts can report a resource error. A narrower ref-prefix or a
+request without those attributes can still serve the same valid repository.
 
 Hosts populate `content_type` and `git_protocol`. Uploads require
 `application/x-git-upload-pack-request` (415 otherwise). Known routes reject wrong

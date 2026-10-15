@@ -62,7 +62,8 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
     let mut request = parse_request(wire, end)?;
     let header = core::str::from_utf8(&wire[..end]).map_err(|_| Error::InvalidRequest)?;
     match header_value(header, "content-encoding")? {
-        None | Some("identity") => {}
+        None => {}
+        Some(value) if value.eq_ignore_ascii_case("identity") => {}
         Some(value) if value.eq_ignore_ascii_case("gzip") => {
             use git_zero::zlib::{InflateLimits, WINDOW_SIZE, decode_gzip};
             let length = decode_gzip(
@@ -153,4 +154,41 @@ pub fn respond_headers(socket: &impl AsFd, response: Response, body_length: u64)
     let mut header = SliceWriter::new(&mut storage);
     write!(&mut header, "HTTP/1.0 {} Response\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", response.status, response.content_type, body_length).map_err(|_| Error::BufferTooSmall)?;
     SocketWriter(socket.as_fd()).write_all(header.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+
+    #[test]
+    fn identity_coding_is_case_insensitive_and_preserves_git_metadata() {
+        for encoding in ["identity", "Identity", "IDENTITY", "iDeNtItY"] {
+            check_identity_coding(encoding);
+        }
+    }
+
+    fn check_identity_coding(encoding: &str) {
+        let (reader, writer) = net::socketpair(
+            net::AddressFamily::UNIX,
+            net::SocketType::STREAM,
+            SOCKET_FLAGS,
+            None,
+        )
+        .unwrap();
+        let wire = std::format!(
+            "POST /repo.git/git-upload-pack HTTP/1.1\r\nContent-Length: 4\r\nContent-Encoding: {encoding}\r\nContent-Type: application/x-git-upload-pack-request\r\nGit-Protocol: version=2\r\n\r\n0000"
+        );
+        SocketWriter(writer.as_fd())
+            .write_all(wire.as_bytes())
+            .unwrap();
+        let mut storage = [0; 1024];
+        let request = read_request(&reader, &mut storage).unwrap();
+        assert_eq!(request.body, b"0000");
+        assert_eq!(
+            request.content_type,
+            Some("application/x-git-upload-pack-request")
+        );
+        assert_eq!(request.git_protocol, Some("version=2"));
+    }
 }

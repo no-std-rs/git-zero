@@ -9,6 +9,14 @@ pub(crate) enum Version {
     V2,
 }
 
+/// Metadata parsed once before dispatch, including an optional HTTP rejection.
+pub(crate) struct Route<'a> {
+    pub path: &'a str,
+    pub version: Version,
+    pub service: Option<&'a str>,
+    pub rejection: Option<Response>,
+}
+
 pub(crate) fn version(header: Option<&str>) -> Result<Version> {
     let mut version = None;
     for field in header.into_iter().flat_map(|value| value.split(':')) {
@@ -94,9 +102,9 @@ pub(crate) fn service(query: Option<&str>) -> Result<Option<&str>> {
     Ok(service)
 }
 
-pub(crate) fn validate(request: Request<'_>) -> Result<Option<Response>> {
+pub(crate) fn validate(request: Request<'_>) -> Result<Route<'_>> {
     let path = path(request.path)?;
-    version(request.git_protocol)?;
+    let version = version(request.git_protocol)?;
     let service = service(request.query)?;
     let status = match (request.method, path) {
         ("POST", "git-upload-pack") => upload_status(request.content_type),
@@ -108,13 +116,16 @@ pub(crate) fn validate(request: Request<'_>) -> Result<Option<Response>> {
         ("POST", _) => 200,
         _ => 405,
     };
-    if status == 200 {
-        return Ok(None);
-    }
-    Ok(Some(Response {
+    let rejection = (status != 200).then_some(Response {
         status,
         content_type: "text/plain; charset=utf-8",
-    }))
+    });
+    Ok(Route {
+        path,
+        version,
+        service,
+        rejection,
+    })
 }
 
 fn upload_status(content_type: Option<&str>) -> u16 {

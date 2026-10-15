@@ -18,6 +18,19 @@ pub struct ValidationMetadata {
     excluded: bool,
 }
 
+/// Traversal budget and annotated-tag policy for a selected fetch pack.
+#[derive(Clone, Copy, Debug)]
+pub struct SelectionOptions {
+    /// Maximum structural bytes read across common history, wanted objects and
+    /// included tags. Buffered reads and rereads consume the same budget.
+    pub graph_read_limit: u64,
+    /// Include advertised annotated and nested tags whose final peeled target
+    /// is being sent. A target excluded as common history does not qualify.
+    /// Tags use the existing object/index arrays and traversal budget; no extra
+    /// collection or allocation is required. False selects only explicit wants.
+    pub include_tags: bool,
+}
+
 /// Validate and index a stable repository, including streaming-only providers.
 ///
 /// Checks repository-format IDs, unique enumeration, links and target kinds,
@@ -165,14 +178,16 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             work,
             selected,
             scratch,
-            (graph_read_limit, false),
+            SelectionOptions {
+                graph_read_limit,
+                include_tags: false,
+            },
         )
     }
 
     /// Select missing objects and optionally include advertised annotated tags
     /// whose final peeled targets are being sent. Tag traversal shares the
     /// graph-read budget with wanted and common history; retries reset all state.
-    /// `options` contains (graph-read byte limit, include tags).
     pub fn select_fetch_objects<'selected>(
         &self,
         roots: &[ObjectId],
@@ -180,9 +195,12 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         work: &mut [Option<ValidationMetadata>],
         selected: &'selected mut [usize],
         scratch: (&mut [u8], &mut [u8]),
-        options: (u64, bool),
+        options: SelectionOptions,
     ) -> Result<&'selected [usize]> {
-        let (graph_read_limit, include_tags) = options;
+        let SelectionOptions {
+            graph_read_limit,
+            include_tags,
+        } = options;
         let (read_scratch, parse_scratch) = scratch;
         if roots.is_empty() {
             return Err(Error::InvalidRequest);

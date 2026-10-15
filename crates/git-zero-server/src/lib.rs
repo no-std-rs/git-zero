@@ -13,7 +13,7 @@ mod route;
 mod upload;
 mod v2;
 #[cfg(feature = "read")]
-use git_zero_core::{ValidatedRepository, ValidationMetadata};
+use git_zero_core::{SelectionOptions, ValidatedRepository, ValidationMetadata};
 use route::Version;
 use upload::UploadRequest;
 pub use upload::{PackOutput, write_upload_error};
@@ -53,13 +53,14 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
     storage: &mut SelectionStorage<'_>,
     output: &mut impl Write,
 ) -> Result<Response> {
-    if let Some(response) = route::validate(request)? {
+    let route = route::validate(request)?;
+    if let Some(response) = route.rejection {
         return Ok(response);
     }
-    if request.method != "POST" || route::path(request.path)? != "git-upload-pack" {
+    if request.method != "POST" || route.path != "git-upload-pack" {
         return serve_with_scratch(repository, request, storage.read, output);
     }
-    let version = route::version(request.git_protocol)?;
+    let version = route.version;
     if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
         return Ok(upload_response());
     }
@@ -81,7 +82,10 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
             storage.objects,
             storage.indices,
             (storage.read, storage.parse),
-            (storage.graph_read_limit, upload.include_tags()),
+            SelectionOptions {
+                graph_read_limit: storage.graph_read_limit,
+                include_tags: upload.include_tags(),
+            },
         )?;
         upload.acknowledge(repository, output)?;
         let mut packed = upload.output(output);
@@ -156,11 +160,12 @@ pub fn serve_with_pack<W: Write>(
     output: &mut W,
     write_pack: impl FnOnce(&mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<Response> {
-    if let Some(response) = route::validate(request)? {
+    let route = route::validate(request)?;
+    if let Some(response) = route.rejection {
         return Ok(response);
     }
-    let path = route::path(request.path)?;
-    let version = route::version(request.git_protocol)?;
+    let path = route.path;
+    let version = route.version;
     let mut response = Response {
         status: 200,
         content_type: "text/plain; charset=utf-8",
@@ -175,7 +180,7 @@ pub fn serve_with_pack<W: Write>(
             }
             output.write_all(b"\n")?;
         }
-        ("GET", "info/refs") => match route::service(request.query)? {
+        ("GET", "info/refs") => match route.service {
             Some("git-upload-pack") => {
                 response.content_type = "application/x-git-upload-pack-advertisement";
                 advertise_smart(repository, version, output)?;
@@ -187,7 +192,7 @@ pub fn serve_with_pack<W: Write>(
         },
         ("POST", "git-upload-pack") => {
             response.content_type = "application/x-git-upload-pack-result";
-            write_upload(repository, request, scratch, output, write_pack)?;
+            write_upload(repository, request, version, scratch, output, write_pack)?;
         }
         ("GET", "objects/info/packs") => {}
         ("GET", _) if path.starts_with("refs/") => {
@@ -225,11 +230,11 @@ fn advertise_smart(
 fn write_upload<W: Write>(
     repository: &impl Repository,
     request: Request<'_>,
+    version: Version,
     scratch: &mut [u8],
     output: &mut W,
     write_pack: impl FnOnce(&mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<()> {
-    let version = route::version(request.git_protocol)?;
     if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
         return Ok(());
     }
@@ -319,31 +324,28 @@ fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Resu
     } else {
         b" capabilities^{}\0"
     };
-    if let Some(target) = head.target() {
-        let target = if matches!(head, Head::Symbolic { .. }) {
-            resolve_reference(repository, target)?.0
-        } else {
-            target
-        };
-        pktline::write_parts(
-            output,
-            &[
-                &id,
-                name,
-                b"symref=HEAD:",
-                target.as_bytes(),
-                b" ",
-                format.capability(),
-                upload::CAPABILITIES,
-                b"\n",
-            ],
-        )
-    } else {
-        pktline::write_parts(
-            output,
-            &[&id, name, format.capability(), upload::CAPABILITIES, b"\n"],
-        )
-    }
+    let target = match head {
+        Head::Symbolic { target, .. } => Some(resolve_reference(repository, target)?.0),
+        Head::Unborn(target) => Some(target),
+        Head::Detached(_) => None,
+    };
+    let (symref, separator): (&[u8], &[u8]) = match target {
+        Some(_) => (b"symref=HEAD:", b" "),
+        None => (b"", b""),
+    };
+    pktline::write_parts(
+        output,
+        &[
+            &id,
+            name,
+            symref,
+            target.unwrap_or("").as_bytes(),
+            separator,
+            format.capability(),
+            upload::CAPABILITIES,
+            b"\n",
+        ],
+    )
 }
 
 fn advertise_references(
@@ -376,6 +378,11 @@ fn reference_line(
     let format = id.format();
     let id = id.to_hex();
     if smart {
+        let parts: [&[u8]; 3] = if capabilities {
+            [b"\0", format.capability(), upload::CAPABILITIES]
+        } else {
+            [b"", b"", b""]
+        };
         pktline::write_parts(
             output,
             &[
@@ -383,17 +390,9 @@ fn reference_line(
                 b" ",
                 name.as_bytes(),
                 suffix,
-                if capabilities { b"\0" } else { b"" },
-                if capabilities {
-                    format.capability()
-                } else {
-                    b""
-                },
-                if capabilities {
-                    upload::CAPABILITIES
-                } else {
-                    b""
-                },
+                parts[0],
+                parts[1],
+                parts[2],
                 b"\n",
             ],
         )

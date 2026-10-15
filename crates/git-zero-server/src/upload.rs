@@ -209,12 +209,10 @@ impl<'a> UploadRequest<'a> {
     }
 
     pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
-        if self.v2 {
-            return PackOutput::sideband(output);
-        }
         PackOutput {
             output,
-            band: self.capabilities.band(),
+            // V2 always frames its packfile section on sideband channel 1.
+            band: if self.v2 { 2 } else { self.capabilities.band() },
             buffer: [0; 1024],
             length: 0,
         }
@@ -267,17 +265,6 @@ impl<W: Write> PackOutput<'_, W> {
             self.output.write_all(b"0000")?;
         }
         Ok(())
-    }
-}
-
-impl<'a, W: Write> PackOutput<'a, W> {
-    pub(crate) fn sideband(output: &'a mut W) -> Self {
-        Self {
-            output,
-            band: 2,
-            buffer: [0; 1024],
-            length: 0,
-        }
     }
 }
 

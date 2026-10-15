@@ -62,36 +62,43 @@ impl<'a> Command<'a> {
         if !matches!(name, b"ls-refs" | b"fetch") {
             return Err(Error::Unsupported);
         }
-        let mut agent = false;
-        let mut object_format = None;
-        while !bytes.starts_with(b"0001") {
-            let cap = data(&mut bytes)?;
-            if let Some(value) = cap.strip_prefix(b"agent=") {
-                if agent || value.is_empty() || !value.iter().all(|b| (33..=126).contains(b)) {
-                    return Err(Error::InvalidRequest);
-                }
-                agent = true;
-            } else if cap.starts_with(b"object-format=") {
-                if object_format.replace(cap).is_some() || cap != format.capability() {
-                    return Err(Error::InvalidRequest);
-                }
-            } else {
-                return Err(Error::Unsupported);
+        let args = command_arguments(bytes, format)?;
+        validate_arguments(args)?;
+        Ok(Some(Self { name, args }))
+    }
+}
+
+fn command_arguments(mut bytes: &[u8], format: ObjectFormat) -> Result<&[u8]> {
+    let mut agent = false;
+    let mut format_seen = false;
+    while !bytes.starts_with(b"0001") {
+        let cap = data(&mut bytes)?;
+        if let Some(value) = cap.strip_prefix(b"agent=") {
+            if agent || value.is_empty() || !value.iter().all(|b| (33..=126).contains(b)) {
+                return Err(Error::InvalidRequest);
             }
-        }
-        if format == ObjectFormat::Sha256 && object_format.is_none() {
-            return Err(Error::InvalidRequest);
-        }
-        let args = &bytes[4..];
-        let mut remaining = args;
-        loop {
-            match pktline::read(&mut remaining)? {
-                Some(Packet::Data(_)) => {}
-                Some(Packet::Flush) if remaining.is_empty() => {
-                    return Ok(Some(Self { name, args }));
-                }
-                _ => return Err(Error::InvalidRequest),
+            agent = true;
+        } else if cap.starts_with(b"object-format=") {
+            if format_seen || cap != format.capability() {
+                return Err(Error::InvalidRequest);
             }
+            format_seen = true;
+        } else {
+            return Err(Error::Unsupported);
+        }
+    }
+    if format == ObjectFormat::Sha256 && !format_seen {
+        return Err(Error::InvalidRequest);
+    }
+    Ok(&bytes[4..])
+}
+
+fn validate_arguments(mut bytes: &[u8]) -> Result<()> {
+    loop {
+        match pktline::read(&mut bytes)? {
+            Some(Packet::Data(_)) => {}
+            Some(Packet::Flush) if bytes.is_empty() => return Ok(()),
+            _ => return Err(Error::InvalidRequest),
         }
     }
 }
@@ -108,6 +115,13 @@ pub(crate) struct Refs<'a> {
     symrefs: bool,
     peel: bool,
     unborn: bool,
+}
+
+struct Discard;
+impl Write for Discard {
+    fn write_all(&mut self, _bytes: &[u8]) -> Result<()> {
+        Ok(())
+    }
 }
 
 fn attribute<'a>(marker: &'a [u8], value: Option<&'a [u8]>) -> [&'a [u8]; 2] {
@@ -182,6 +196,17 @@ impl<'a> Refs<'a> {
     }
 
     pub fn write(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
+        // Reuse the exact encoder to preflight every selected line, including
+        // optional attributes. Valid v0 ref names can exceed v2's packet budget.
+        self.write_refs(repository, &mut Discard)
+            .map_err(|error| match error {
+                Error::InvalidPacket => Error::LimitExceeded,
+                error => error,
+            })?;
+        self.write_refs(repository, output)
+    }
+
+    fn write_refs(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
         let head = repository.head_state();
         if head.id().is_some() || (self.unborn && self.symrefs) {
             let target = match head {
