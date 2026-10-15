@@ -225,12 +225,16 @@ remain regression coverage; server completion is measured with real Git clients.
   limitations; a Git-only reference baseline does not prove git-zero server parity.
   `tests/server-acceptance.md` records native/Worker, protocol and format coverage,
   independent oracle evidence and explicit unimplemented or untested gaps.
-- [ ] Reusable upstream fixture adapter where Git's harness allows replacing a server;
+- [x] Reusable upstream fixture adapter where Git's harness allows replacing a server;
   record GPL provenance for any copied tests rather than copying them silently.
   `tests/server_fixture.py` now exports any Git-created fixture's reachable raw
   objects, refs and HEAD for the native file-provider harness, including packed
-  sources and both object formats. This independently authored adapter does not
-  substitute into Git's Apache-specific upstream harness; that integration remains.
+  sources and both object formats. `tests/upstream_harness.py` now runs six exact
+  unchanged Git v2.53.0 `t5551` cases (2–7) with a private CGI substitution and a
+  separate Git reference, v0/v2 × SHA-1/SHA-256. Native traces prove discovery,
+  upload-pack and both publication heads without fallback. External GPL shell
+  tests/configuration stay unchanged; Linux Apache is required. Whole-suite,
+  Worker and Apache's static dumb Alias substitution remain separate gaps.
 - [ ] Empty/bare repositories, arbitrary refs, tags, large binary blobs, deep histories,
   nested trees, aggressive packing, and deltas served by git-zero in the real-Git
   client interoperability matrix, including protocol versions and object formats.

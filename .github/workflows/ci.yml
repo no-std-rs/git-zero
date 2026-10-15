@@ -183,7 +183,7 @@ jobs:
         if: matrix.git != 'system' && runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev zlib1g-dev
+          sudo apt-get install -y libcurl4-openssl-dev zlib1g-dev apache2
       - name: Build pinned upstream Git
         if: matrix.git != 'system'
         env:
@@ -205,6 +205,48 @@ jobs:
         run: cargo test -p git-zero-rustix --test head_states --locked
       - name: SHA-1/SHA-256 refs, tags and selected-object server comparisons
         run: cargo test -p git-zero-rustix --test references --locked
+      - name: Unchanged pinned Git smart HTTP fixtures against both CGI backends
+        if: runner.os == 'Linux' && matrix.git != 'system' && matrix.shard == '0/2'
+        run: |
+          cargo build -p git-zero-rustix --example upstream-cgi --locked
+          python3 tests/upstream_harness.py \
+            --source "$RUNNER_TEMP/git-source" --git "$GIT_ZERO_TEST_GIT" \
+            --native target/debug/examples/upstream-cgi \
+            --apache /usr/sbin/apache2 --modules /usr/lib/apache2/modules \
+            --output "$RUNNER_TEMP/upstream-fixtures"
+          if python3 tests/upstream_harness.py \
+            --source "$RUNNER_TEMP/git-source" --git "$GIT_ZERO_TEST_GIT" \
+            --native /bin/false --apache /usr/sbin/apache2 \
+            --modules /usr/lib/apache2/modules --output "$RUNNER_TEMP/upstream-fixtures-negative"; then
+            echo "Expected a failed native CGI to fail the unchanged upstream cases"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'upstream-fixtures-negative'
+          report = json.loads((root / 'report.json').read_text())
+          assert report['status'] == 'failed' and report['errors']
+          assert [row['backend'] for row in report['results']] == ['git-reference']
+          assert not (root / 'sha1-v0-git-zero/cgi.jsonl').exists()
+          PY
+      - name: Archive upstream fixture evidence with helper symlinks intact
+        if: always() && runner.os == 'Linux' && matrix.git != 'system' && matrix.shard == '0/2'
+        working-directory: ${{ runner.temp }}
+        run: |
+          shopt -s nullglob
+          fixture_dirs=(upstream-fixtures*/)
+          if ((${#fixture_dirs[@]})); then
+            tar -czf upstream-fixtures.tar.gz -- "${fixture_dirs[@]}"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Linux' && matrix.git != 'system' && matrix.shard == '0/2'
+        with:
+          name: upstream-fixtures-${{ github.event_name }}
+          path: ${{ runner.temp }}/upstream-fixtures.tar.gz
+          compression-level: 0
+          if-no-files-found: ignore
       - name: Pinned Git compression, delta and decoder benchmark coverage
         if: runner.os == 'Linux' && matrix.git != 'system' && matrix.shard == '0/2'
         run: |

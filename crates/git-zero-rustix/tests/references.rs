@@ -1,23 +1,22 @@
 #[path = "../../../tests/common/allocations.rs"]
 mod allocations;
+#[path = "../examples/support/fixture.rs"]
+mod fixture;
 
 use git_zero::{
-    Error, Head, ObjectId, ObjectKind, RefRepository, Reference, Repository, ValidatedRepository,
+    Error, ObjectId, RefRepository, Repository, ValidatedRepository,
     http::{self, Response, SelectionStorage},
     io::SliceWriter,
 };
-use git_zero_rustix::{
-    FileObject, FileRepository, accept, listen, local_port, read_request, respond,
-};
+use git_zero_rustix::{FileRepository, accept, listen, local_port, read_request, respond};
 use std::{
-    ffi::CString,
     net::TcpStream,
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-const OBJECT_CAPACITY: usize = 256;
+use fixture::{Fixture, OBJECTS as OBJECT_CAPACITY};
 
 struct Cleanup(PathBuf);
 impl Drop for Cleanup {
@@ -65,57 +64,6 @@ fn python(root: &Path, phase: &str, state: &str, object_format: &str, url: Optio
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn kind(value: &str) -> ObjectKind {
-    match value {
-        "commit" => ObjectKind::Commit,
-        "tree" => ObjectKind::Tree,
-        "blob" => ObjectKind::Blob,
-        "tag" => ObjectKind::Tag,
-        _ => panic!("unexpected Git object kind {value}"),
-    }
-}
-
-fn objects(root: &Path) -> Vec<FileObject> {
-    std::fs::read_to_string(root.join("objects.txt"))
-        .unwrap()
-        .lines()
-        .map(|line| {
-            let (hex, value) = line.split_once('\t').unwrap();
-            let id = ObjectId::from_hex(hex.as_bytes()).unwrap();
-            let path = root.join("raw").join(hex);
-            let fd = rustix::fs::open(
-                CString::new(path.as_os_str().as_encoded_bytes())
-                    .unwrap()
-                    .as_c_str(),
-                rustix::fs::OFlags::RDONLY
-                    | rustix::fs::OFlags::CLOEXEC
-                    | rustix::fs::OFlags::NOFOLLOW,
-                rustix::fs::Mode::empty(),
-            )
-            .unwrap();
-            FileObject::from_fd(fd, kind(value), id).unwrap()
-        })
-        .collect()
-}
-
-fn references(text: &str) -> Vec<Reference<'_>> {
-    text.lines()
-        .map(|line| {
-            let fields: Vec<_> = line.split('\t').collect();
-            Reference {
-                name: fields[0],
-                id: ObjectId::from_hex(fields[1].as_bytes()).unwrap(),
-                symbolic_target: (fields[2] != "-").then_some(fields[2]),
-                peeled: if fields[3] == "-" {
-                    None
-                } else {
-                    Some(ObjectId::from_hex(fields[3].as_bytes()).unwrap())
-                },
-            }
-        })
-        .collect()
 }
 
 fn serve<R: Repository + ?Sized>(
@@ -197,21 +145,10 @@ fn compare_format(state: &str, object_format: &str) {
     std::fs::create_dir(&root).unwrap();
     let _cleanup = Cleanup(root.clone());
     python(&root, "prepare", state, object_format, None);
-    let objects = objects(&root);
-    let refs_text = std::fs::read_to_string(root.join("refs.txt")).unwrap();
-    let refs = references(&refs_text);
-    let head_text = std::fs::read_to_string(root.join("head.txt")).unwrap();
-    let mut lines = head_text.lines();
-    let id = ObjectId::from_hex(lines.next().unwrap().as_bytes()).unwrap();
-    let target = lines.next().unwrap_or("");
-    let head = if id.is_zero() {
-        Head::Unborn(target)
-    } else if target.is_empty() {
-        Head::Detached(id)
-    } else {
-        Head::Symbolic { target, id }
-    };
-    let files = FileRepository::new(id, &objects);
+    let fixture = Fixture::load(&root).unwrap();
+    let (id, head) = fixture.head().unwrap();
+    let refs = fixture.references().unwrap();
+    let files = FileRepository::new(id, fixture.objects());
     let repository = RefRepository::new(&files, head, &refs).unwrap();
     let mut metadata = [None; OBJECT_CAPACITY];
     let mut by_id = [0; OBJECT_CAPACITY];
@@ -242,6 +179,106 @@ fn compare_format(state: &str, object_format: &str) {
             Some(&format!("http://127.0.0.1:{port}/repo.git")),
         );
     });
+}
+
+const EMPTY_BLOB_ID: &str = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+
+// Resource parsing is tested independently of downstream object-ID/body and
+// graph validation, which the unchanged real-Git oracles cover below.
+fn raw_fixture(name: &str) -> Cleanup {
+    let root = std::env::temp_dir().join(format!("git-zero-loader-{name}-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let cleanup = Cleanup(root);
+    let root = &cleanup.0;
+    std::fs::create_dir(root.join("raw")).unwrap();
+    std::fs::write(root.join("raw").join(EMPTY_BLOB_ID), []).unwrap();
+    std::fs::write(root.join("objects.txt"), format!("{EMPTY_BLOB_ID}\tblob\n")).unwrap();
+    std::fs::write(root.join("refs.txt"), "").unwrap();
+    std::fs::write(root.join("head.txt"), format!("{EMPTY_BLOB_ID}\n\n")).unwrap();
+    cleanup
+}
+
+#[test]
+fn raw_fixture_object_count_accepts_256_and_rejects_257() {
+    let cleanup = raw_fixture("objects");
+    let root = &cleanup.0;
+    let row = format!("{EMPTY_BLOB_ID}\tblob\n");
+    let objects = root.join("objects.txt");
+    std::fs::write(&objects, row.repeat(OBJECT_CAPACITY)).unwrap();
+    assert_eq!(
+        Fixture::load(root).unwrap().objects().len(),
+        OBJECT_CAPACITY
+    );
+    std::fs::write(&objects, row.repeat(OBJECT_CAPACITY + 1)).unwrap();
+    assert_loader_error(root, "object count exceeds limit");
+}
+
+#[test]
+fn raw_fixture_bytes_accept_8_mib_and_reject_larger_bodies() {
+    let cleanup = raw_fixture("bytes");
+    let root = &cleanup.0;
+    let file = std::fs::File::options()
+        .write(true)
+        .open(root.join("raw").join(EMPTY_BLOB_ID))
+        .unwrap();
+    file.set_len(fixture::OBJECT_BYTES).unwrap();
+    assert_eq!(
+        Fixture::load(root).unwrap().objects()[0].info().size,
+        fixture::OBJECT_BYTES
+    );
+    file.set_len(fixture::OBJECT_BYTES + 1).unwrap();
+    assert_loader_error(root, "object bytes exceed limit");
+}
+
+#[test]
+fn raw_fixture_metadata_accepts_64_kib_and_rejects_larger_files() {
+    let cleanup = raw_fixture("metadata");
+    let root = &cleanup.0;
+    let head = root.join("head.txt");
+    let mut text = format!("{EMPTY_BLOB_ID}\n\n").into_bytes();
+    text.resize(65_536, b'\n');
+    std::fs::write(&head, &text).unwrap();
+    assert!(Fixture::load(root).unwrap().head().is_ok());
+    text.push(b'\n');
+    std::fs::write(&head, &text).unwrap();
+    assert_loader_error(root, "metadata exceeds limit");
+}
+
+#[test]
+fn raw_fixture_ref_count_accepts_32_and_rejects_33() {
+    let cleanup = raw_fixture("refs");
+    let root = &cleanup.0;
+    let refs = root.join("refs.txt");
+    let reference = format!("refs/heads/main\t{EMPTY_BLOB_ID}\t-\t-\n");
+    std::fs::write(&refs, reference.repeat(32)).unwrap();
+    assert_eq!(Fixture::load(root).unwrap().references().unwrap().len(), 32);
+    std::fs::write(&refs, reference.repeat(33)).unwrap();
+    assert!(
+        Fixture::load(root)
+            .unwrap()
+            .references()
+            .unwrap_err()
+            .to_string()
+            .contains("ref count exceeds limit")
+    );
+}
+
+#[test]
+fn raw_fixture_objects_accept_regular_files_and_reject_symlinks() {
+    let cleanup = raw_fixture("symlink");
+    let root = &cleanup.0;
+    let raw = root.join("raw").join(EMPTY_BLOB_ID);
+    assert_eq!(Fixture::load(root).unwrap().objects().len(), 1);
+    std::fs::rename(&raw, root.join("backing-object")).unwrap();
+    std::os::unix::fs::symlink(root.join("backing-object"), &raw).unwrap();
+    assert_loader_error(root, "file object");
+}
+
+fn assert_loader_error(root: &Path, expected: &str) {
+    let error = Fixture::load(root)
+        .err()
+        .expect("oversized or unsafe fixture accepted");
+    assert!(error.to_string().contains(expected), "{error}");
 }
 
 #[test]
