@@ -56,7 +56,16 @@ mod abi {
         },
     }
     static SESSION: Exclusive<Option<Session>> = Exclusive(UnsafeCell::new(None));
-    static IMPORTED: Exclusive<raw::Imported> = Exclusive(UnsafeCell::new(raw::Imported::new()));
+    // Keep the zero arena separate from initialized descriptors so Wasm does not
+    // copy 128 KiB of zero data on every instance, including legacy-only hosts.
+    static IMPORTED_BODIES: Buffer<{ raw::BODY_CAPACITY }> =
+        Buffer(UnsafeCell::new([0; raw::BODY_CAPACITY]));
+    // SAFETY: IMPORTED owns the sole reference to this unexported arena. All
+    // access follows its phase guards and the exclusive ABI contract above.
+    static IMPORTED: Exclusive<raw::Imported> =
+        Exclusive(UnsafeCell::new(raw::Imported::new(unsafe {
+            &mut *IMPORTED_BODIES.0.get()
+        })));
 
     /// Cancel any active response before obtaining input storage for a new frame.
     #[unsafe(no_mangle)]

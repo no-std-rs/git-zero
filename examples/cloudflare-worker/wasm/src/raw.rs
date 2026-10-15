@@ -70,7 +70,7 @@ enum Phase {
 }
 
 pub(crate) struct Imported {
-    bodies: [u8; BODY_CAPACITY],
+    bodies: &'static mut [u8; BODY_CAPACITY],
     names: [u8; NAME_CAPACITY],
     objects: [Record; OBJECTS],
     refs: [Ref; REFS],
@@ -85,9 +85,9 @@ pub(crate) struct Imported {
 }
 
 impl Imported {
-    pub(crate) const fn new() -> Self {
+    pub(crate) const fn new(bodies: &'static mut [u8; BODY_CAPACITY]) -> Self {
         Self {
-            bodies: [0; BODY_CAPACITY],
+            bodies,
             names: [0; NAME_CAPACITY],
             objects: [Record::EMPTY; OBJECTS],
             refs: [Ref::EMPTY; REFS],
