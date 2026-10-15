@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "limits": [
+    {
+      "workload": "server-clone-smart",
+      "implementation": "zero",
+      "metric": "server.process_tree_peak_rss_kib",
+      "maximum": 65536
+    }
+  ]
+}
