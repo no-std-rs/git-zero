@@ -237,8 +237,13 @@ remain regression coverage; server completion is measured with real Git clients.
   file-provider export through a shared Rust HTTP host. Paired discovery/clone/fetch
   measurements retain client and server wall/CPU/RSS, child usage, response bytes,
   startup costs and buffer budgets. Encoded files share a sendfile path with bounded
-  fallbacks; optional Rust loose caching charges preparation to startup. Wasm and
-  simultaneous process-tree memory remain explicit future work.
+  fallbacks; optional Rust loose caching charges preparation to startup. Opt-in
+  bounded Linux `/proc` sweeps now sample each server frontend and its live
+  descendants together per HTTP operation, recording aggregate RSS, process
+  counts and observer overhead separately from lifetime peaks. Missed short-lived
+  CGI descendants are explicit partial observations; observer failures/budget
+  exhaustion fail the workload. Sampling cannot establish between-sweep peaks or
+  unique physical memory. Wasm/isolate accounting remains future work.
   Git 2.53.0 is pinned for timing comparisons. Explicit matched/default/custom
   compression and delta policies identify equivalent server features. Two local
   object-read workloads now compare Git and the new decoder against identical
@@ -259,8 +264,9 @@ remain regression coverage; server completion is measured with real Git clients.
   input/output capacities and no growth across repeated, full-capacity and invalid
   requests. Explicit opt-in wall/CPU/RSS limits now check the largest raw
   benchmark observations, retain failures in schema-3 reports, and enforce native
-  memory caps in CI. JavaScript/isolate memory accounting and simultaneous process
-  tree RSS remain future work.
+  memory caps in CI. Native sampled-tree RSS now has an opt-in limit and CI
+  coverage; partial/missing observations cannot pass that cap. JavaScript/isolate
+  memory accounting remains future work.
 - [ ] Opt-in local Linux kernel repository benchmark using a caller-provided clone
   and pinned revision; compare supported clone/fetch and object-reading workloads
   with real Git over loopback, recording wall/CPU time, peak RSS, throughput,

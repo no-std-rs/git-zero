@@ -19,6 +19,7 @@ from interop import environment, run
 from upstream_http import refs
 from benchmark_fixture import create, verify
 from benchmark_harness import Server
+from benchmark_memory import LIMITS as RSS_LIMITS
 from benchmark_limits import evaluate, load
 from benchmark_source import create as create_source, read as read_source
 from benchmark_config import configuration, version_pin
@@ -31,12 +32,13 @@ HTTP_WORKLOADS = [f"{operation}-{protocol}" for operation in
 WORKLOADS = HTTP_WORKLOADS + OBJECT_WORKLOADS
 
 
-def measure(arguments, env, time_binary, data=b""):
+def measure(arguments, env, time_binary, data=b"", timeout_s=30):
     """wait4 attributes CPU/RSS to this command, even with concurrent workers.
 
     Output files avoid pipe deadlocks and host-side output parsing during timing.
     CPU includes the small GNU time observer and waited client descendants;
-    RSS measures the command tree after exec, excluding the Python launcher.
+    RSS is GNU time's largest waited-process lifetime peak after exec; it is
+    not simultaneous tree RSS and excludes the Python launcher.
     Both exclude HTTP server processes.
     """
     if arguments[0] == "git":
@@ -48,14 +50,17 @@ def measure(arguments, env, time_binary, data=b""):
         host_load = os.getloadavg()
         start = time.perf_counter()
         process = subprocess.Popen(observed, env=env, stdin=stdin, stdout=stdout, stderr=stderr, start_new_session=True)
+        expired = threading.Event()
 
         def timeout():
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            else:
+                expired.set()
 
-        watchdog = threading.Timer(30, timeout)
+        watchdog = threading.Timer(timeout_s, timeout)
         watchdog.start()
         try:
             _, status, usage = os.wait4(process.pid, 0)
@@ -64,6 +69,14 @@ def measure(arguments, env, time_binary, data=b""):
         finally:
             watchdog.cancel()
             watchdog.join()
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            if process.returncode is None:
+                process.wait()
+        if expired.is_set():
+            raise TimeoutError(f"benchmark command exceeded {timeout_s} seconds: {arguments!r}")
         stdout.seek(0)
         stderr.seek(0)
         output = stdout.read()
@@ -95,6 +108,12 @@ def summary(samples):
     # RSS high-water marks are lifetime observations, never counter deltas.
     for key in ("frontend_peak_rss_kib", "backend_child_peak_rss_kib"):
         result["server_" + key] = max(sample["server"][key] for sample in samples)
+    if "process_tree_rss" in samples[0]["server"]:
+        memory = [sample["server"]["process_tree_rss"] for sample in samples]
+        result["server_process_tree_peak_rss_kib"] = (
+            max(item["peak_rss_kib"] for item in memory) if all(item["status"] == "sampled" for item in memory) else None)
+        result["server_process_tree_observed_peak_rss_kib"] = max(item["observed_peak_rss_kib"] for item in memory)
+        result["server_process_tree_sampling_status"] = "sampled" if all(item["status"] == "sampled" for item in memory) else "partial"
     return result
 
 
@@ -110,7 +129,7 @@ def workload_command(operation, implementation, binary, url, target):
 
 
 def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, samples, warmup,
-              time_binary, response_limit, file_transfer, zero_loose_cache, zero_selection):
+              time_binary, response_limit, file_transfer, zero_loose_cache, zero_selection, rss_interval_s=0):
     operation, protocol = name.rsplit("-", 1)
     smart = protocol == "smart"
     with tempfile.TemporaryDirectory(prefix=f"git-zero-benchmark-{name}-") as directory:
@@ -147,8 +166,11 @@ def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, 
                 arguments = workload_command(operation, implementation, binary, url, target)
                 server = servers[implementation]
                 mark = len(server.records())
-                output, measurements = measure(arguments, env, time_binary)
+                with server.observe_rss(rss_interval_s) as memory:
+                    output, measurements = measure(arguments, env, time_binary)
                 measurements["server"] = server.measurements(mark)
+                if memory is not None:
+                    measurements["server"]["process_tree_rss"] = memory.report()
                 if operation.endswith("discovery"):
                     assert refs(output) == expected_refs
                 else:
@@ -168,6 +190,8 @@ def main():
     parser.add_argument("--decoder", type=Path, default=Path(__file__).resolve().parents[1] / "target/release/examples/decoder-read")
     parser.add_argument("--git", default=os.environ.get("GIT_ZERO_TEST_GIT", "git"))
     parser.add_argument("--time", default="/usr/bin/time", help="GNU time executable for command RSS")
+    parser.add_argument("--rss-sample-ms", type=int, default=0,
+                        help="Opt-in server/descendant RSS sampling interval (10..1000 ms); 0 disables it")
     parser.add_argument("--zero-selection", action="store_true", help="Exercise bounded requested-closure serving instead of the complete-pack path")
     parser.add_argument("--samples", type=int, default=25)
     parser.add_argument("--warmup", type=int, default=3)
@@ -204,6 +228,8 @@ def main():
         default if value is None else value for value, default in zip(dimensions, (64, 16384, 16)))
     if args.samples < 1 or args.warmup < 0 or args.jobs < 1:
         parser.error("samples/jobs must be positive and warmup nonnegative")
+    if args.rss_sample_ms != 0 and not 10 <= args.rss_sample_ms <= 1000:
+        parser.error("rss-sample-ms must be 0 or between 10 and 1000")
     if min(args.max_source_objects, args.max_source_bytes) < 1:
         parser.error("source object and byte limits must be positive")
     if min(args.files, args.commits, args.response_limit) < 1 or args.blob_bytes < 0:
@@ -212,6 +238,8 @@ def main():
     try:
         config = configuration(args.git_profile, args.git_compression, args.git_delta_window, args.git_delta_depth)
         limits = load(args.limits, cases) if args.limits else {"schema_version": 1, "limits": []}
+        if not args.rss_sample_ms and any(entry["metric"] == "server.process_tree_peak_rss_kib" for entry in limits["limits"]):
+            raise ValueError("server process-tree RSS limits require --rss-sample-ms")
     except (OSError, ValueError) as error:
         parser.error(str(error))
     if platform.system() != "Linux" or not hasattr(os, "wait4"):
@@ -254,6 +282,11 @@ def main():
         "platform": platform.platform(), "cpu_count": os.cpu_count(),
         "cpu_affinity": sorted(os.sched_getaffinity(0)), "host_load_start_1_5_15": os.getloadavg(),
         "rss_observer": run(args.time, "--version", env=env).decode().splitlines()[0],
+        "server_rss_sampling": {"enabled": bool(args.rss_sample_ms), "interval_ms": args.rss_sample_ms,
+                                "per_sample_limits": RSS_LIMITS,
+                                "scope": "Server plus live descendants during each HTTP client operation; "
+                                         "sampled sweeps can miss short-lived processes and between-sample peaks; "
+                                         "RSS counts shared pages per process, not unique physical memory"},
         "samples_per_implementation": args.samples, "warmup_rounds": args.warmup, "jobs": args.jobs,
         "file_transfer": args.file_transfer, "zero_loose_cache": args.zero_loose_cache,
         "zero_http_pack_policy": "requested-closure" if args.zero_selection else "complete-repository",
@@ -268,6 +301,7 @@ def main():
                              "Server request CPU includes frontend and reaped Git children via getrusage deltas. "
                              "Server RSS separates frontend /proc VmRSS/VmHWM and largest-child lifetime ru_maxrss; "
                              "these peaks are not simultaneous aggregate memory and must not be added. "
+                             "Optional process_tree_rss records live aggregate sampling sweeps, observer overhead and partial observations. "
                              "Server initialization, control barriers and metric reporting are outside request intervals. "
                              "Rust generates stored-DEFLATE responses without deltas; explicit algorithm policies record Git settings. "
                              "Local object-read cases use identical encoded inputs and include process/file/materialization costs.",
@@ -310,7 +344,7 @@ def main():
                 else:
                     future = executor.submit(benchmark, name, binary, harness, git, backend, fixture, expected, metadata,
                                              args.samples, args.warmup, args.time, args.response_limit,
-                                             args.file_transfer, args.zero_loose_cache, args.zero_selection)
+                                             args.file_transfer, args.zero_loose_cache, args.zero_selection, args.rss_sample_ms / 1000)
                 futures[future] = name
             for future in concurrent.futures.as_completed(futures):
                 try:

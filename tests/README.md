@@ -402,6 +402,60 @@ frontend and child peaks.** No CPU/RSS claim is inferred from client counters.
 Git's smart CGI process interface remains part of the measured backend cost;
 the shared frontend does not turn Git into an in-process server library.
 
+`--rss-sample-ms 10` opts into Linux server process-tree sampling (10–1000 ms;
+the default 0 disables it). Each HTTP operation samples its own live frontend,
+all thread child lists and recursive descendants. `server.process_tree_rss`
+records the largest RSS sum from **one sweep**, process counts, sample count,
+actual maximum gap, and observer wall/CPU overhead. It never adds independent
+lifetime peaks. Sampling starts after the metric barrier and stops before
+reporting; startup, control requests, the client and the Python observer are
+outside this server scope. The observer runs in the runner, so its CPU is not
+charged to server or client CPU. Its synchronous initial/final reads are outside
+client timing; background reads can perturb execution, which is why this is
+opt-in and the overhead is retained.
+
+These are sampled lower bounds, not atomic snapshots or exact memory ceilings.
+Short-lived CGI processes and between-sweep peaks can be missed, and shared
+pages count in every process's RSS; no unique physical/PSS or JS-isolate memory
+claim follows. Smart Git operations that never observe a live CGI descendant
+report `status: partial`, retain `observed_peak_rss_kib`, and leave
+`peak_rss_kib` null. Partial observations cannot pass a sampled-tree budget or
+produce a complete peak summary. Each sweep is bounded to 256 processes, 1024
+tasks, 1 MiB of reads (64 KiB per file), and 250 ms; the observer sleeps between
+sweeps. Read/permission errors, a replaced/exited frontend or exceeded bounds
+fail the workload and retain an explicit report error rather than silently
+publishing a smaller sum. Cancellation/timeouts stop the observer and clean up
+the owned command/server process groups, including descendants left after the
+frontend exits.
+
+A local observer check used pinned Git 2.53.0, unchanged release host/client
+binaries from `e3dc303`, the matched profile, 16 files × 65,536 bytes × 8
+commits, 10 paired samples, two warmups and one workload worker. Every run had
+the same 39 objects, 1,514,520 raw bytes and fixture fingerprint
+`153972d7110b0bd10d61f6881b2046c027cfcce0d3b291b103cfe462af5e8abb`.
+The `server-clone-smart` median wall observations were:
+
+| Runner | Git ms | git-zero ms |
+| --- | ---: | ---: |
+| Unchanged base, first control | 56.93 | 44.63 |
+| New runner, observer disabled | 66.14 | 50.98 |
+| New runner, 10 ms observer | 60.42 | 51.57 |
+| Unchanged base, repeated control | 60.49 | 53.00 |
+
+The unchanged base controls also moved substantially on this shared host;
+these observations do not isolate a latency regression or speedup. Both HTTP
+backends and release binaries were identical. The enabled observer recorded a
+median 2.00/1.46 ms of its own CPU per Git/git-zero operation, with individual
+sweeps below 1.25 ms. Its largest sampled tree sums were 16,320/3,732 KiB with
+four/one simultaneous processes. These remain sampled RSS observations rather
+than exact physical-memory peaks. Reproduce the enabled run with:
+
+```sh
+python3 tests/benchmark.py --files 16 --blob-bytes 65536 --commits 8 \
+  --case server-clone-smart --samples 10 --warmup 2 --jobs 1 \
+  --rss-sample-ms 10 --output /tmp/git-zero-tree-observer.json
+```
+
 The JSON schema is version 3 and preserves raw client/server samples, startup
 measurements, host/tool/binary identities, buffer budgets, fixture parameters and
 fingerprints. `--fixture-dir` retains Git's repository, raw export and metadata
@@ -424,7 +478,11 @@ python3 tests/benchmark.py --files 4 --blob-bytes 256 --commits 3 \
 Supported metrics are `client.wall_s`, `client.cpu_s`, `client.max_rss_kib`,
 `server.wall_s`, `server.cpu_s`, `server.frontend_peak_rss_kib`,
 `server.backend_child_peak_rss_kib`, `startup.wall_s`, `startup.cpu_s` and
-`startup.frontend_peak_rss_kib`. Each limit checks the largest raw measured
+`startup.frontend_peak_rss_kib`. `server.process_tree_peak_rss_kib` additionally
+checks valid sampled aggregate observations and requires `--rss-sample-ms`.
+For example, `--rss-sample-ms 10 --limits tests/benchmark-tree-limits.json`
+adds a 65,536 KiB sampled-tree cap to the tiny CI fixture's Rust smart clone.
+Each limit checks the largest raw measured
 observation, so a single outlier fails even when the median passes. Startup
 limits check the one startup observation for that server. Wall/CPU observations
 exclude discarded warmups; lifetime RSS peaks still include preparation/warmups.

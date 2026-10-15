@@ -65,6 +65,25 @@ class BenchmarkConfigTests(unittest.TestCase):
                     self.assertLessEqual(pack["max_delta_depth"], config.delta_depth or 50)
                 self.assertEqual(config.algorithms()["equivalent_server_features"], config.profile == "matched")
 
+    def test_sampling_configuration_and_tree_limits_fail_before_starting_servers(self):
+        runner = Path(__file__).with_name("benchmark.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = root / "limits.json"
+            policy.write_text(json.dumps({"schema_version": 1, "limits": [{
+                "workload": "server-clone-smart", "implementation": "zero",
+                "metric": "server.process_tree_peak_rss_kib", "maximum": 65536}]}))
+            cases = [(["--rss-sample-ms", str(value)], b"rss-sample-ms") for value in (-1, 1, 9, 1001)]
+            cases.append((["--limits", str(policy)], b"require --rss-sample-ms"))
+            for arguments, message in cases:
+                with self.subTest(arguments=arguments):
+                    output = root / "invalid.json"
+                    result = subprocess.run([sys.executable, str(runner), "--output", str(output), *arguments],
+                                            capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn(message, result.stderr)
+                    self.assertFalse(output.exists())
+
     def assert_git_inputs(self, bare, config, objects, env):
         """Independently check the loose bytes and the selected Git configuration."""
         actual = git(bare, "config", "--local", "--list", env=env).decode()

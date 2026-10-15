@@ -12,6 +12,7 @@ METRICS = {
     "server.cpu_s": ("samples", "server", "cpu_s"),
     "server.frontend_peak_rss_kib": ("samples", "server", "frontend_peak_rss_kib"),
     "server.backend_child_peak_rss_kib": ("samples", "server", "backend_child_peak_rss_kib"),
+    "server.process_tree_peak_rss_kib": ("samples", "server", "process_tree_rss", "peak_rss_kib"),
     "startup.wall_s": ("server_startup", "startup_wall_s"),
     "startup.cpu_s": ("server_startup", "startup_cpu_s"),
     "startup.frontend_peak_rss_kib": ("server_startup", "frontend_peak_rss_kib"),
@@ -62,6 +63,12 @@ def evaluate(policy, results):
             value = observation
             for key in path:
                 value = value.get(key) if isinstance(value, dict) else None
+            if limit["metric"] == "server.process_tree_peak_rss_kib":
+                tree = observation
+                for key in ("server", "process_tree_rss"):
+                    tree = tree.get(key) if isinstance(tree, dict) else None
+                if not isinstance(tree, dict) or tree.get("status") != "sampled":
+                    value = None
             values.append(value)
         complete = bool(values) and all(nonnegative_number(value) for value in values)
         maximum = max(values) if complete else None
