@@ -910,6 +910,50 @@ fn shallow_probe_ends_at_its_flush_without_an_ack() {
 }
 
 #[test]
+fn relative_full_client_probes_need_no_graph_storage_or_read_budget() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let mut tree = [0; 128];
+        let mut commit = [0; 512];
+        let snapshot = Snapshot::new_with_format(&[], &mut tree, &mut commit, format).unwrap();
+        let mut validation = ValidationBuffers::new();
+        let repository = validation.validate(&snapshot);
+        for version in [0, 1] {
+            assert_relative_probe_without_graph(&repository, version);
+        }
+    }
+}
+
+fn assert_relative_probe_without_graph(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    version: u8,
+) {
+    let bytes = body(
+        repository.head(),
+        version,
+        &["deepen-relative", "deepen 1"],
+        false,
+    );
+    let request = request(&bytes, version);
+    let (result, output) = Harness::default().serve(repository, request, 0);
+    assert_eq!(result.unwrap().status, 200);
+    assert_eq!(output, b"0000");
+    let mut buffers = http::SelectionBuffers::<1, 0, 0, 0>::new();
+    let mut output = [0; 4];
+    let mut writer = SliceWriter::new(&mut output);
+    allocations::without_allocations(|| {
+        http::serve_with_selection(repository, request, &mut buffers.storage(0), &mut writer)
+    })
+    .unwrap();
+    assert_eq!(writer.as_bytes(), b"0000");
+    let mut control = [0; 4];
+    let mut encoder = prepare(repository, request, buffers.storage(0), &mut control).unwrap();
+    assert_eq!(
+        pull::collect(|output| encoder.read(repository, output), 1),
+        b"0000"
+    );
+}
+
+#[test]
 fn boundary_control_capacity_is_checked_before_a_stream_can_start() {
     let graph = Graph::new();
     let source = graph.repository();
