@@ -6,8 +6,9 @@ test. It does not declare the overall server parity gate complete.
 
 The upstream case map is [upstream-http.md](upstream-http.md), pinned to Git
 v2.53.0. Fixtures and assertions here are independently authored under MIT OR
-Apache-2.0; no GPL upstream test bodies are copied. Running unchanged upstream
-tests against Git is a reference baseline, without proving git-zero coverage.
+Apache-2.0; no GPL upstream test bodies are copied. `upstream_harness.py` runs six
+unchanged external smart HTTP cases against a substituted native git-zero CGI
+and a separate Git reference. A Git-only baseline does not prove server coverage.
 
 ## Evidence and reproduction
 
@@ -78,7 +79,7 @@ behavior. Rust allocation counters and Wasm memory ceilings are distinct checks.
 | Fixed-budget and optional kernel benchmarks | `test_benchmark_limits.py`, `test_benchmark_source.py`, `test_benchmark_memory.py`; CI benchmark smoke/default-policy and pinned-caller fixtures, opt-in sampled process-tree RSS caps | N, S0/D, SHA-1, paired Git host and identical prepared objects; aggregate server RSS/observer overhead per HTTP operation | Kernel-scale preparation, controlled cold-cache runs and exact/unique physical memory peaks remain planned. Partial or failed observations cannot pass sampled-tree limits. Timing does not establish parity. |
 | Fuzzing malformed input and bounded state | `fuzz::seeded_fuzz_targets_replay_and_mutate_the_corpus`, including v0/v2 routing/negotiation/sideband, shallow/filter selection and gzip seeds; CI ASan campaigns | C, bounded packets/graphs/decoders/routing | Pack-index/HTTP framing and concurrent host state need coverage as their APIs are implemented. |
 | Retained traces and cross-platform coverage | Native `references` retains fixtures, responses, packs and Git packet/curl logs on failure; `interop.py` retains sharded artifacts | Linux/macOS × system/Git 2.53.0; W CI Node host | Deployed Worker and unsupported protocol/format combinations remain gaps. |
-| Upstream fixture substitution | Reusable `server_fixture.py::export_fixture` exports reachable objects, refs and HEAD from Git-created packed/loose fixtures; optional `scripts/test-upstream-git.sh` baseline | Native local comparisons, 1/256; reused by refs and rich server fixtures | No substitution into Git's Apache harness. Adapter and assertions are independently authored; preserve GPL provenance if upstream bodies are ever copied. |
+| Upstream fixture substitution | `upstream_harness.py` runs unchanged external Git v2.53.0 `t5551` cases 2–7 through private CGI substitution and a separate Git reference; reuses `server_fixture.py::export_fixture` | Native test CGI, S0/S2, 1/256; six exact executed cases per backend/dimension, strict object/checkout comparisons and no-fallback/two-head traces; Linux pinned CI | Apache/modules and a built exact Git source checkout are required. Whole-suite, Worker, HTTP/2 and static dumb Alias substitution remain gaps. External GPL tests/configuration remain unchanged; adapter/host are MIT OR Apache-2.0. |
 | Read-only server completion gate | Rows above are the auditable worklist | Partial S0/D coverage | Shallow/filter, streaming/concurrency, packed dumb publication and full native/Worker oracle coverage must pass before claiming parity or starting further client work. |
 
 Git-zero client discovery/download/decoder tests remain regression coverage.

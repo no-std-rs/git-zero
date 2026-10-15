@@ -13,7 +13,9 @@ assertions here retain this repository's MIT OR Apache-2.0 licensing.
 downloaded packs, enumerate reachable objects, and inspect checkout bytes/modes.
 It compares git-zero with Git's oracle. It does not execute upstream shell tests
 against git-zero or claim their complete Apache/client assertions pass.
-`scripts/test-upstream-git.sh` remains the unchanged-suite Git reference runner.
+The separate `upstream_harness.py` adapter now executes the narrow unchanged
+external smart subset described below. `scripts/test-upstream-git.sh` remains
+the whole-suite Git reference runner.
 
 ## Supported comparisons
 
@@ -84,8 +86,45 @@ loose sources without changing them and exports raw bodies plus exact object
 format, refs, symbolic targets, peeled IDs and HEAD. Existing empty/unborn,
 detached and symbolic-ref fixtures use the same adapter. A separate export can
 be prepared with `python3 tests/server_fixture.py --repo /path/to/fixture.git
---root /tmp/exported-fixture`. This is not substitution into Git's Apache harness;
-no upstream GPL fixture bodies have been copied.
+--root /tmp/exported-fixture`. The Apache adapter below reuses that export on
+each request so a newly published commit is visible without restarting Apache.
+
+## Unchanged external smart fixtures
+
+`upstream_harness.py` selects six exact Git v2.53.0 `t5551` cases, numbered 2–7:
+repository setup, publication, askpass-helper setup, clone, changed fetch and
+upload-pack access-log assertions. The helper contributes its own executed test.
+The script verifies the source commit and key file hashes, checks tracked source
+changes before and after execution, and keeps upstream shell/configuration files
+external and unchanged. Git's GPL-2.0 license and copyright remain with those
+files; no upstream shell bodies are copied into this MIT OR Apache-2.0 project.
+
+Git's supported `GIT_TEST_INSTALLED`/`GIT_TEST_EXEC_PATH` hook supplies an isolated
+helper directory. Only `git-http-backend` is replaced with our independently
+authored CGI adapter and native `upstream-cgi` test host. Each request exports
+current raw objects/refs/HEAD and uses FileRepository, RefRepository, validation
+and the core HTTP encoder. Private traces require that native executable's
+successful attestation, discovery and upload-pack traffic, protocol selection,
+and two publication heads. A failed native invocation cannot fall back to Git.
+Apache remains the common HTTP frontend, including its standard CGI cache headers.
+
+Separate reference and git-zero runs cover v0/v2 × SHA-1/SHA-256. Each selected
+case must execute successfully; missing, renamed, duplicated or skipped cases
+fail the adapter. Real Git strict fsck and exact object-body/tree comparisons
+check each clone, and both backends must produce the same fixture manifest.
+The export allows at most 256 objects, 32 refs and 8 MiB of raw objects; requests
+are at most 64 KiB and encoded responses at most 8 MiB. These test-host limits
+are independent of production host policies. Linux subreaper ownership, PID
+identity checks and pidfd signals stop/reap detached Apache and CGI descendants
+after success, failure or timeout. Regression tests include TERM-resistant CGI.
+
+This opt-in adapter requires non-root Linux, Apache 2.4 with its CGI/prefork and
+standard modules, and a built, clean Git v2.53.0 checkout with test helpers plus
+an installed Git 2.53.0. Linux pinned CI runs it and retains TAP, Apache logs,
+fixtures, manifests and traces. See [README.md](README.md#gits-existing-http-tests)
+for invocation. Full upstream-suite, HTTP/2, Worker and v1 transcript coverage
+remain outside this adapter. Apache's dumb endpoints use a static Alias and are
+not replaced by this CGI hook; existing independent dumb comparisons remain.
 
 `upstream-snapshot-{smart,dumb}` constructs blob/tree/commit bytes using Git's
 own commands, with the demo's exact content and identity. Both servers must

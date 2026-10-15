@@ -822,10 +822,29 @@ Apache dependencies to the optional runner:
 sh scripts/test-upstream-git.sh /path/to/git-source 4
 ```
 
-This runs those upstream suites unchanged against Git itself. It is a baseline,
-not additional git-zero coverage. Direct substitution of git-zero into those
-tests remains a roadmap item. The [coverage map](upstream-http.md) groups their
-assertions into supported comparisons, planned features and operations outside
-the initial scope. Our independently authored fixture adapter uses real Git
-commands and HTTP servers, without copying GPL test bodies. The parallel local
-matrix and differential cases are the current git-zero compatibility gate.
+This runs those upstream suites unchanged against Git itself as a reference
+baseline. A separate opt-in adapter runs six unchanged Git **v2.53.0** `t5551`
+cases (2–7, including askpass-helper setup) against native git-zero and Git CGI
+backends, over v0/v2 × SHA-1/SHA-256:
+
+```sh
+cargo build -p git-zero-rustix --example upstream-cgi --locked
+python3 tests/upstream_harness.py \
+  --source /path/to/built/git-2.53.0 --git /path/to/install/bin/git \
+  --native target/debug/examples/upstream-cgi \
+  --apache /usr/sbin/apache2 --modules /usr/lib/apache2/modules \
+  --output /tmp/git-zero-upstream-fixtures
+```
+
+Run as a non-root Linux user with `/proc` child lists, Python pidfd support,
+Apache 2.4 and its CGI/prefork modules (Ubuntu:
+`apache2`). The source checkout must be clean at the exact tag commit, with
+`GIT-BUILD-OPTIONS` and `t/helper/test-tool` built. The output directory must be
+new; it retains every trial's TAP, bare/client repositories, Apache logs, private
+CGI trace and the final `report.json`, including failures. Each trial has a
+120-second deadline, configurable with `--timeout`; detached daemon/CGI cleanup
+is bounded and tested on normal completion and timeout. Native failures, skipped
+selected tests, absent/foreign traces or mismatched object graphs fail the run.
+Both Git's source and installation remain unchanged. The [coverage map](upstream-http.md)
+documents provenance, limits and the exact substitution hook. The broader suites,
+HTTP/2, Worker and Apache's static dumb Alias remain separate coverage gaps.
