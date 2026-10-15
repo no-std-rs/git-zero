@@ -74,22 +74,27 @@ impl<'a> Encoder<'a> {
                 self.object = None;
                 self.next += 1;
             }
-            if self.next == self.count {
-                let checksum = self.hash.clone().finish();
-                self.pending[..checksum.as_bytes().len()].copy_from_slice(checksum.as_bytes());
-                self.position = 0;
-                self.length = checksum.as_bytes().len();
-                self.checksum = Some(checksum);
-                continue;
-            }
-            let index = self.order.map_or(self.next, |order| order[self.next]);
-            let info = repository.object_info(index)?;
-            let mut header = SliceWriter::new(&mut self.pending);
-            write_entry_header(info, &mut header)?;
-            self.length = header.len();
-            self.position = 0;
-            self.object = Some(LooseEncoder::from_info(index, info, false)?);
+            self.next_entry(repository)?;
         }
+    }
+
+    fn next_entry(&mut self, repository: &impl Repository) -> Result<()> {
+        if self.next == self.count {
+            let checksum = self.hash.clone().finish();
+            self.pending[..checksum.as_bytes().len()].copy_from_slice(checksum.as_bytes());
+            self.position = 0;
+            self.length = checksum.as_bytes().len();
+            self.checksum = Some(checksum);
+            return Ok(());
+        }
+        let index = self.order.map_or(self.next, |order| order[self.next]);
+        let info = repository.object_info(index)?;
+        let mut header = SliceWriter::new(&mut self.pending);
+        write_entry_header(info, &mut header)?;
+        self.length = header.len();
+        self.position = 0;
+        self.object = Some(LooseEncoder::from_info(index, info, false)?);
+        Ok(())
     }
 
     /// Checksum becomes available after its complete trailer has been drained.
@@ -164,50 +169,64 @@ impl LooseEncoder {
             }
             self.position = 0;
             self.length = 0;
-            match self.phase {
-                Phase::Prefix => {
-                    self.phase = Phase::Block;
-                    if self.prefix_length != 0 {
-                        self.block_header(self.prefix_length as u16);
-                        self.pending[5..5 + self.prefix_length]
-                            .copy_from_slice(&self.prefix[..self.prefix_length]);
-                        self.length += self.prefix_length;
-                        self.adler.update(&self.prefix[..self.prefix_length]);
-                    }
-                }
-                Phase::Block => {
-                    if self.offset == self.size {
-                        self.phase = Phase::End;
-                    } else {
-                        self.block = (self.size - self.offset).min(u64::from(u16::MAX)) as u16;
-                        self.block_header(self.block);
-                        self.phase = Phase::Body;
-                    }
-                }
-                Phase::Body => {
-                    let capacity = usize::from(self.block).min(output.len());
-                    let count =
-                        repository.read_object(self.index, self.offset, &mut output[..capacity])?;
-                    if count == 0 || count > capacity {
-                        return Err(Error::InvalidObject);
-                    }
-                    self.offset += count as u64;
-                    self.block -= count as u16;
-                    self.adler.update(&output[..count]);
-                    if self.block == 0 {
-                        self.phase = Phase::Block;
-                    }
-                    return Ok(count);
-                }
-                Phase::End => {
-                    self.pending[..5].copy_from_slice(&[1, 0, 0, 0xff, 0xff]);
-                    self.pending[5..9].copy_from_slice(&self.adler.value().to_be_bytes());
-                    self.length = 9;
-                    self.phase = Phase::Done;
-                }
-                Phase::Done => unreachable!(),
+            if let Some(count) = self.step(repository, output)? {
+                return Ok(count);
             }
         }
+    }
+
+    fn step(&mut self, repository: &impl Repository, output: &mut [u8]) -> Result<Option<usize>> {
+        match self.phase {
+            Phase::Prefix => self.start_prefix(),
+            Phase::Block => self.start_block(),
+            Phase::Body => return self.read_body(repository, output).map(Some),
+            Phase::End => self.end(),
+            Phase::Done => unreachable!(),
+        }
+        Ok(None)
+    }
+
+    fn start_prefix(&mut self) {
+        self.phase = Phase::Block;
+        if self.prefix_length == 0 {
+            return;
+        }
+        self.block_header(self.prefix_length as u16);
+        self.pending[5..5 + self.prefix_length].copy_from_slice(&self.prefix[..self.prefix_length]);
+        self.length += self.prefix_length;
+        self.adler.update(&self.prefix[..self.prefix_length]);
+    }
+
+    fn start_block(&mut self) {
+        if self.offset == self.size {
+            self.phase = Phase::End;
+            return;
+        }
+        self.block = (self.size - self.offset).min(u64::from(u16::MAX)) as u16;
+        self.block_header(self.block);
+        self.phase = Phase::Body;
+    }
+
+    fn read_body(&mut self, repository: &impl Repository, output: &mut [u8]) -> Result<usize> {
+        let capacity = usize::from(self.block).min(output.len());
+        let count = repository.read_object(self.index, self.offset, &mut output[..capacity])?;
+        if count == 0 || count > capacity {
+            return Err(Error::InvalidObject);
+        }
+        self.offset += count as u64;
+        self.block -= count as u16;
+        self.adler.update(&output[..count]);
+        if self.block == 0 {
+            self.phase = Phase::Block;
+        }
+        Ok(count)
+    }
+
+    fn end(&mut self) {
+        self.pending[..5].copy_from_slice(&[1, 0, 0, 0xff, 0xff]);
+        self.pending[5..9].copy_from_slice(&self.adler.value().to_be_bytes());
+        self.length = 9;
+        self.phase = Phase::Done;
     }
 
     fn block_header(&mut self, length: u16) {

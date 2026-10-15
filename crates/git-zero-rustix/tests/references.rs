@@ -159,26 +159,28 @@ fn serve<R: Repository + ?Sized>(
                 git_zero_rustix::respond_stream(&socket, repository, &mut encoder, &mut staging)
                     .unwrap()
             }
-            Err(error) => {
-                let status = match error {
-                    Error::BufferTooSmall | Error::LimitExceeded => 413,
-                    Error::Backend => 500,
-                    _ => 400,
-                };
-                let mut failure = SliceWriter::new(&mut response_storage);
-                http::write_upload_error(error, &mut failure).unwrap();
-                respond(
-                    &socket,
-                    Response {
-                        status,
-                        content_type: "application/x-git-upload-pack-result",
-                    },
-                    failure.as_bytes(),
-                )
-                .unwrap();
-            }
+            Err(error) => respond_failure(&socket, error, &mut response_storage),
         }
     }
+}
+
+fn respond_failure(socket: &impl rustix::fd::AsFd, error: Error, storage: &mut [u8]) {
+    let status = match error {
+        Error::BufferTooSmall | Error::LimitExceeded => 413,
+        Error::Backend => 500,
+        _ => 400,
+    };
+    let mut failure = SliceWriter::new(storage);
+    http::write_upload_error(error, &mut failure).unwrap();
+    respond(
+        socket,
+        Response {
+            status,
+            content_type: "application/x-git-upload-pack-result",
+        },
+        failure.as_bytes(),
+    )
+    .unwrap();
 }
 
 fn compare(state: &str) {

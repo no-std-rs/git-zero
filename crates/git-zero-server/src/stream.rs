@@ -71,6 +71,12 @@ enum Body<'a> {
     Loose(pack::LooseEncoder),
 }
 
+enum Plan {
+    Buffered(Response),
+    Loose(usize),
+    Upload(route::Version),
+}
+
 /// An independent response cursor with bounded inline framing state. The host
 /// owns the repository, request and control buffers. Keep the same stable
 /// repository for every `read`; it may be recreated from immutable inputs.
@@ -98,19 +104,18 @@ impl<'a> ResponseEncoder<'a> {
         control: &'a mut [u8],
     ) -> Result<Self> {
         let mut output = SliceWriter::new(control);
-        if let Some(response) = Self::ordinary(repository, request, &mut output)? {
-            return Self::ordinary_response(repository, request, response, output.finish());
-        }
+        let plan = Self::ordinary(repository, request, &mut output)?;
+        let Plan::Upload(version) = plan else {
+            return Self::ordinary_response(repository, plan, output.finish());
+        };
         if !uses_only_head(repository) {
             return Err(Error::Unsupported);
         }
         let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
-        let upload = UploadRequest::parse(
-            request.body,
-            repository.object_format(),
-            route::validate(request)?.version,
-            |id| (id == head).then_some(()).ok_or(Error::InvalidRequest),
-        )?;
+        let upload =
+            UploadRequest::parse(request.body, repository.object_format(), version, |id| {
+                (id == head).then_some(()).ok_or(Error::InvalidRequest)
+            })?;
         upload.acknowledge(repository, &mut output)?;
         let mut encoder = Self::buffered(upload_response(), output.finish());
         if upload.done {
@@ -131,45 +136,15 @@ impl<'a> ResponseEncoder<'a> {
         control: &'a mut [u8],
     ) -> Result<Self> {
         let mut output = SliceWriter::new(control);
-        if let Some(response) = Self::ordinary(repository, request, &mut output)? {
-            return Self::ordinary_response(repository, request, response, output.finish());
-        }
-        let mut count = 0;
-        let upload = UploadRequest::parse(
-            request.body,
-            repository.object_format(),
-            route::validate(request)?.version,
-            |id| {
-                if !crate::advertised(repository, id) {
-                    return Err(Error::InvalidRequest);
-                }
-                if !storage.wants[..count].contains(&id) {
-                    *storage.wants.get_mut(count).ok_or(Error::BufferTooSmall)? = id;
-                    count += 1;
-                }
-                Ok(())
-            },
-        )?;
-        let indices = if upload.done {
-            Some(repository.select_fetch_objects(
-                &storage.wants[..count],
-                upload.common(repository),
-                storage.objects,
-                storage.indices,
-                (storage.read, storage.parse),
-                git_zero_core::SelectionOptions {
-                    graph_read_limit: storage.graph_read_limit,
-                    include_tags: upload.include_tags(),
-                },
-            )?)
-        } else {
-            None
+        let plan = Self::ordinary(repository, request, &mut output)?;
+        let Plan::Upload(version) = plan else {
+            return Self::ordinary_response(repository, plan, output.finish());
         };
-        upload.acknowledge(repository, &mut output)?;
+        let selected = crate::prepare_fetch(repository, request, version, storage, &mut output)?;
         let mut encoder = Self::buffered(upload_response(), output.finish());
-        if let Some(indices) = indices {
+        if let Some(indices) = selected.indices {
             encoder.body = Body::Pack(pack::Encoder::new(repository, Some(indices))?);
-            encoder.band = upload.band();
+            encoder.band = selected.upload.band();
         }
         Ok(encoder)
     }
@@ -178,30 +153,26 @@ impl<'a> ResponseEncoder<'a> {
         repository: &impl Repository,
         request: Request<'_>,
         output: &mut SliceWriter<'_>,
-    ) -> Result<Option<Response>> {
+    ) -> Result<Plan> {
         let route = route::validate(request)?;
         if let Some(response) = route.rejection {
-            return Ok(Some(response));
+            return Ok(Plan::Buffered(response));
         }
         if request.method == "POST" && route.path == "git-upload-pack" {
             if route.version == route::Version::V2
                 && crate::v2::serve_refs(repository, request.body, output)?
             {
-                return Ok(Some(upload_response()));
+                return Ok(Plan::Buffered(upload_response()));
             }
-            return Ok(None);
+            return Ok(Plan::Upload(route.version));
         }
         // Loose bodies are prepared separately, without buffering their bytes.
-        if request.method == "GET"
-            && route.path.starts_with("objects/")
-            && crate::loose_index(repository, &route.path.as_bytes()[8..]).is_some()
-        {
-            return Ok(Some(Response {
-                status: 200,
-                content_type: "application/x-git-loose-object",
-            }));
+        if request.method == "GET" && route.path.starts_with("objects/") {
+            if let Some(index) = crate::loose_index(repository, &route.path.as_bytes()[8..]) {
+                return Ok(Plan::Loose(index));
+            }
         }
-        crate::serve_with_scratch(repository, request, &mut [], output).map(Some)
+        crate::serve_with_scratch(repository, request, &mut [], output).map(Plan::Buffered)
     }
 
     fn buffered(response: Response, prefix: &'a [u8]) -> Self {
@@ -221,18 +192,24 @@ impl<'a> ResponseEncoder<'a> {
 
     fn ordinary_response(
         repository: &impl Repository,
-        request: Request<'_>,
-        response: Response,
+        plan: Plan,
         prefix: &'a [u8],
     ) -> Result<Self> {
-        let mut encoder = Self::buffered(response, prefix);
-        if response.content_type == "application/x-git-loose-object" {
-            let route = route::validate(request)?;
-            let index = crate::loose_index(repository, &route.path.as_bytes()[8..])
-                .ok_or(Error::ObjectNotFound)?;
-            encoder.body = Body::Loose(pack::LooseEncoder::new(repository, index)?);
+        match plan {
+            Plan::Buffered(response) => Ok(Self::buffered(response, prefix)),
+            Plan::Loose(index) => {
+                let mut encoder = Self::buffered(
+                    Response {
+                        status: 200,
+                        content_type: "application/x-git-loose-object",
+                    },
+                    prefix,
+                );
+                encoder.body = Body::Loose(pack::LooseEncoder::new(repository, index)?);
+                Ok(encoder)
+            }
+            Plan::Upload(_) => unreachable!(),
         }
-        Ok(encoder)
     }
 
     pub fn response(&self) -> Response {
@@ -261,25 +238,9 @@ impl<'a> ResponseEncoder<'a> {
             if output.is_empty() {
                 return Err(Error::BufferTooSmall);
             }
-            let capacity = if self.band == 1 { 995 } else { 1024 };
-            let Body::Pack(pack) = &mut self.body else {
-                unreachable!()
-            };
-            let length = pack.read(repository, &mut self.packet[5..5 + capacity])?;
-            self.packet_position = 0;
-            if length == 0 {
-                self.packet[..4].copy_from_slice(b"0000");
-                self.packet_length = 4;
-                self.terminated = true;
-            } else {
-                let size = length + 5;
-                for (index, byte) in self.packet[..4].iter_mut().enumerate() {
-                    *byte = b"0123456789abcdef"[(size >> ((3 - index) * 4)) & 15];
-                }
-                self.packet[4] = 1;
-                self.packet_length = size;
-            }
+            self.next_packet(repository)?;
         }
+
         if self.packet_position == self.packet_length {
             return Ok(0);
         }
@@ -288,6 +249,28 @@ impl<'a> ResponseEncoder<'a> {
             &mut self.packet_position,
             output,
         )
+    }
+
+    fn next_packet(&mut self, repository: &impl Repository) -> Result<()> {
+        let capacity = if self.band == 1 { 995 } else { 1024 };
+        let Body::Pack(pack) = &mut self.body else {
+            unreachable!()
+        };
+        let length = pack.read(repository, &mut self.packet[5..5 + capacity])?;
+        self.packet_position = 0;
+        if length == 0 {
+            self.packet[..4].copy_from_slice(b"0000");
+            self.packet_length = 4;
+            self.terminated = true;
+        } else {
+            let size = length + 5;
+            for (index, byte) in self.packet[..4].iter_mut().enumerate() {
+                *byte = b"0123456789abcdef"[(size >> ((3 - index) * 4)) & 15];
+            }
+            self.packet[4] = 1;
+            self.packet_length = size;
+        }
+        Ok(())
     }
 
     fn read_body(&mut self, repository: &impl Repository, output: &mut [u8]) -> Result<usize> {

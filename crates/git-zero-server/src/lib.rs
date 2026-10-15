@@ -65,19 +65,34 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
     if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
         return Ok(upload_response());
     }
-    let mut count = 0;
-    let upload = UploadRequest::parse(request.body, repository.object_format(), version, |id| {
-        if !advertised(repository, id) {
-            return Err(Error::InvalidRequest);
-        }
-        if !storage.wants[..count].contains(&id) {
-            *storage.wants.get_mut(count).ok_or(Error::BufferTooSmall)? = id;
-            count += 1;
-        }
-        Ok(())
-    })?;
-    if upload.done {
-        let indices = repository.select_fetch_objects(
+    let selected = prepare_fetch(repository, request, version, storage, output)?;
+    if let Some(indices) = selected.indices {
+        let mut packed = selected.upload.output(output);
+        pack::write_selected_with_scratch(repository, indices, selected.read, &mut packed)?;
+        packed.finish()?;
+    }
+    Ok(upload_response())
+}
+
+#[cfg(feature = "read")]
+struct SelectedFetch<'storage, 'body> {
+    upload: UploadRequest<'body>,
+    indices: Option<&'storage [usize]>,
+    read: &'storage mut [u8],
+}
+
+#[cfg(feature = "read")]
+fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    request: Request<'body>,
+    version: Version,
+    storage: &'storage mut SelectionStorage<'_>,
+    output: &mut impl Write,
+) -> Result<SelectedFetch<'storage, 'body>> {
+    let (upload, count) =
+        UploadRequest::parse_selected(repository, request.body, version, storage.wants)?;
+    let indices = if upload.done {
+        Some(repository.select_fetch_objects(
             &storage.wants[..count],
             upload.common(repository),
             storage.objects,
@@ -87,15 +102,16 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
                 graph_read_limit: storage.graph_read_limit,
                 include_tags: upload.include_tags(),
             },
-        )?;
-        upload.acknowledge(repository, output)?;
-        let mut packed = upload.output(output);
-        pack::write_selected_with_scratch(repository, indices, storage.read, &mut packed)?;
-        packed.finish()?;
+        )?)
     } else {
-        upload.acknowledge(repository, output)?;
-    }
-    Ok(upload_response())
+        None
+    };
+    upload.acknowledge(repository, output)?;
+    Ok(SelectedFetch {
+        upload,
+        indices,
+        read: storage.read,
+    })
 }
 
 #[cfg(feature = "read")]
@@ -165,45 +181,80 @@ pub fn serve_with_pack<W: Write>(
     if let Some(response) = route.rejection {
         return Ok(response);
     }
-    let path = route.path;
-    let version = route.version;
+    if request.method == "GET" {
+        return serve_get(repository, &route, scratch, output);
+    }
+    if request.method == "POST" && route.path == "git-upload-pack" {
+        write_upload(
+            repository,
+            request,
+            route.version,
+            scratch,
+            output,
+            write_pack,
+        )?;
+        return Ok(Response {
+            status: 200,
+            content_type: "application/x-git-upload-pack-result",
+        });
+    }
+    Ok(Response {
+        status: if request.method == "POST" { 404 } else { 405 },
+        content_type: "text/plain; charset=utf-8",
+    })
+}
+
+fn serve_get(
+    repository: &impl Repository,
+    route: &route::Route<'_>,
+    scratch: &mut [u8],
+    output: &mut impl Write,
+) -> Result<Response> {
     let mut response = Response {
         status: 200,
         content_type: "text/plain; charset=utf-8",
     };
-    match (request.method, path) {
-        ("GET", "HEAD") => {
-            if let Some(target) = repository.head_state().target() {
-                output.write_all(b"ref: ")?;
-                output.write_all(target.as_bytes())?;
-            } else {
-                output.write_all(&repository.head().to_hex())?;
-            }
-            output.write_all(b"\n")?;
+    match route.path {
+        "HEAD" => write_head(repository, output)?,
+        "info/refs" => return serve_info_refs(repository, route, output),
+        "objects/info/packs" => {}
+        path if path.starts_with("refs/") => {
+            response.status = serve_reference(repository, path, output)?
         }
-        ("GET", "info/refs") => match route.service {
-            Some("git-upload-pack") => {
-                response.content_type = "application/x-git-upload-pack-advertisement";
-                advertise_smart(repository, version, output)?;
-            }
-            None => {
-                advertise_references(repository, false, output)?;
-            }
-            _ => response.status = 403,
-        },
-        ("POST", "git-upload-pack") => {
-            response.content_type = "application/x-git-upload-pack-result";
-            write_upload(repository, request, version, scratch, output, write_pack)?;
+        path if path.starts_with("objects/") => {
+            return serve_loose(repository, &path.as_bytes()[8..], scratch, output);
         }
-        ("GET", "objects/info/packs") => {}
-        ("GET", _) if path.starts_with("refs/") => {
-            response.status = serve_reference(repository, path, output)?;
+        _ => response.status = 404,
+    }
+    Ok(response)
+}
+
+fn write_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {
+    if let Some(target) = repository.head_state().target() {
+        output.write_all(b"ref: ")?;
+        output.write_all(target.as_bytes())?;
+    } else {
+        output.write_all(&repository.head().to_hex())?;
+    }
+    output.write_all(b"\n")
+}
+
+fn serve_info_refs(
+    repository: &impl Repository,
+    route: &route::Route<'_>,
+    output: &mut impl Write,
+) -> Result<Response> {
+    let mut response = Response {
+        status: 200,
+        content_type: "text/plain; charset=utf-8",
+    };
+    match route.service {
+        Some("git-upload-pack") => {
+            response.content_type = "application/x-git-upload-pack-advertisement";
+            advertise_smart(repository, route.version, output)?;
         }
-        ("GET", _) if path.starts_with("objects/") => {
-            response = serve_loose(repository, &path.as_bytes()[8..], scratch, output)?;
-        }
-        ("GET" | "POST", _) => response.status = 404,
-        _ => response.status = 405,
+        None => advertise_references(repository, false, output)?,
+        _ => response.status = 403,
     }
     Ok(response)
 }

@@ -149,9 +149,9 @@ also stream that blob over HTTP with 17-byte output staging and validate its
 checkout. The reference-ref suite uses 37-byte staging and 8 KiB of control storage
 instead of a complete response buffer in both formats and all protocol versions.
 
-`streaming.rs` compares pull and synchronous pack/loose encoders across stored
+`pack_streaming.rs` compares pull and synchronous pack/loose encoders across stored
 block boundaries, short reads, one-byte output slices, selection orders and both
-formats. It checks guards, allocation counts, state-size bounds, backend retry,
+formats. `streaming.rs` checks guards, allocation counts, state-size bounds, backend retry,
 independent cursors and terminal cancellation. Request intake checks fragment
 splits, length/EOF bounds and cancellation. The HTTP fuzz target replays fragmented
 intake and guarded response pulls. Native tests cancel disconnected streams.

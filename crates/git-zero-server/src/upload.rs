@@ -165,6 +165,27 @@ impl<'a> UploadRequest<'a> {
         })
     }
 
+    #[cfg(feature = "read")]
+    pub(crate) fn parse_selected(
+        repository: &impl Repository,
+        body: &'a [u8],
+        version: crate::route::Version,
+        wants: &mut [ObjectId],
+    ) -> Result<(Self, usize)> {
+        let mut count = 0;
+        let upload = Self::parse(body, repository.object_format(), version, |id| {
+            if !crate::advertised(repository, id) {
+                return Err(Error::InvalidRequest);
+            }
+            if !wants[..count].contains(&id) {
+                *wants.get_mut(count).ok_or(Error::BufferTooSmall)? = id;
+                count += 1;
+            }
+            Ok(())
+        })?;
+        Ok((upload, count))
+    }
+
     /// Revisit validated packets without retaining an array of have IDs. Only
     /// present commits are acknowledged or used to exclude complete history.
     pub fn common<'r>(
