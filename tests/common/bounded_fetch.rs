@@ -1,5 +1,5 @@
 use super::*;
-use git_zero::{BlobFilter, FetchOptions, SelectionOptions};
+use git_zero::{BlobFilter, FetchOptions, ObjectFormat, SelectionOptions, Snapshot};
 
 fn select(
     graph: &Graph,
@@ -277,6 +277,56 @@ fn unused_relative_negotiation_preserves_ordinary_fetches_and_client_boundaries(
                 version,
             );
             args.pop();
+        }
+    }
+}
+
+#[test]
+fn complete_pack_apis_reject_unadvertised_relative_negotiation_before_output() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let mut tree = [0; 128];
+        let mut commit = [0; 512];
+        let snapshot = Snapshot::new_with_format(&[], &mut tree, &mut commit, format).unwrap();
+        for version in [0, 1, 2] {
+            let bytes = body(snapshot.head(), version, &["deepen-relative"], true);
+            let mut storage = [0; 4096];
+            let mut output = SliceWriter::new(&mut storage);
+            assert_eq!(
+                allocations::without_allocations(|| {
+                    http::serve(&snapshot, request(&bytes, version), &mut output).map(|_| ())
+                }),
+                Err(Error::Unsupported)
+            );
+            assert!(output.is_empty());
+            let mut called = false;
+            assert_eq!(
+                allocations::without_allocations(|| {
+                    http::serve_with_pack(
+                        &snapshot,
+                        request(&bytes, version),
+                        &mut [],
+                        &mut output,
+                        |_, _| {
+                            called = true;
+                            Ok(())
+                        },
+                    )
+                    .map(|_| ())
+                }),
+                Err(Error::Unsupported)
+            );
+            assert!(!called && output.is_empty());
+            assert!(matches!(
+                allocations::without_allocations(|| {
+                    http::stream::ResponseEncoder::new(
+                        &snapshot,
+                        request(&bytes, version),
+                        &mut [0; 4096],
+                    )
+                    .map(|_| ())
+                }),
+                Err(Error::Unsupported)
+            ));
         }
     }
 }
@@ -626,7 +676,10 @@ fn body(tip: ObjectId, version: u8, args: &[&str], done: bool) -> Vec<u8> {
     let mut result = Vec::new();
     if version == 2 {
         packet(&mut result, "command=fetch");
-        packet(&mut result, "object-format=sha1");
+        packet(
+            &mut result,
+            core::str::from_utf8(tip.format().capability()).unwrap(),
+        );
         result.extend_from_slice(b"0001");
     }
     let mut capabilities = if version == 2 {
