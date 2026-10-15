@@ -306,10 +306,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         options: (SelectionOptions, FetchOptions),
     ) -> Result<&'selected [usize]> {
         let (options, fetch) = options;
-        if (fetch.deepen_relative && fetch.depth.is_none())
-            || fetch
-                .depth
-                .is_some_and(|depth| depth == 0 || depth > i32::MAX as u32)
+        if fetch
+            .depth
+            .is_some_and(|depth| depth == 0 || depth > i32::MAX as u32)
         {
             return Err(Error::InvalidRequest);
         }
@@ -372,7 +371,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             object.reset_walk();
         }
         let mut depth = fetch.depth.filter(|_| deepening);
-        if fetch.deepen_relative && has_shallow {
+        if fetch.deepen_relative && deepening {
             // Git 2.55 measures the nearest client boundary from the wants.
             // Unrelated shallow branches cannot influence or extend this cut.
             self.walk_wants(

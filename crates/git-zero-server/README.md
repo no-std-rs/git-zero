@@ -43,7 +43,8 @@ Relative depth uses the nearest client boundary in wanted history, matching
 Git 2.55. Unrelated branch boundaries remain intact; with no matching boundary,
 the wanted history is complete (within the graph budget). Full clients keep
 ordinary common-history pruning, including empty packs for no-op deepening.
-V0/v1 negotiate relative depth on the first want; only v2 accepts its argument. Git 2.53 and
+V0/v1 negotiate relative depth on the first want; only v2 accepts its argument.
+Without a depth, that negotiation leaves the ordinary fetch unchanged. Git 2.53 and
 earlier extend all reachable client boundaries, so this case deliberately differs;
 the versioned native oracle asserts both outcomes and identical imported objects.
 Depth requests retransmit their bounded closure; ordinary shallow haves stop

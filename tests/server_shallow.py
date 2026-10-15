@@ -136,13 +136,14 @@ def compare_full_relative_fetch(root, bare, urls, env, version):
         git(clone, "fsck", "--strict", env=env)
         # Matched requests prove both the empty no-op pack and incremental
         # pruning, rather than only checking the already complete checkout.
-        for index, common in enumerate((tip, main)):
+        for index, (deepen, common) in enumerate(product((False, True), (tip, main))):
             if version == 2:
                 body = command(b"fetch", fmt, [b"want " + tip, b"have " + common,
-                    b"deepen 1", b"deepen-relative", b"no-progress", b"done"])
+                    *([b"deepen 1"] if deepen else []), b"deepen-relative", b"no-progress", b"done"])
             else:
                 body = (packet(b"want " + tip + b" deepen-relative no-progress object-format=" + fmt + b"\n")
-                    + packet(b"deepen 1\n") + b"0000" + packet(b"have " + common + b"\n") + packet(b"done\n"))
+                    + (packet(b"deepen 1\n") if deepen else b"") + b"0000"
+                    + packet(b"have " + common + b"\n") + packet(b"done\n"))
             request = urllib.request.Request(url + "/git-upload-pack", data=body, headers={
                 "Git-Protocol": f"version={version}", "Content-Type": "application/x-git-upload-pack-request"})
             with urllib.request.urlopen(request, timeout=10) as response:

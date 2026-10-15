@@ -37,9 +37,6 @@ impl Extensions {
     }
 
     pub fn require_filter_capability(&self, enabled: bool) -> Result<()> {
-        if self.options.deepen_relative && self.options.depth.is_none() {
-            return Err(Error::InvalidRequest);
-        }
         if self.filtered && !enabled {
             return Err(Error::InvalidRequest);
         }

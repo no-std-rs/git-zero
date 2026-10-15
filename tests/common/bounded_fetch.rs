@@ -229,6 +229,59 @@ fn relative_requests_from_full_clients_preserve_common_history_pruning() {
 }
 
 #[test]
+fn unused_relative_negotiation_preserves_ordinary_fetches_and_client_boundaries() {
+    let graph = Graph::new();
+    let source = graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repository = &validation.validate(&source);
+    let boundary = [graph.ids.main.unwrap()];
+    for shallow in [&[][..], &boundary[..]] {
+        assert_eq!(
+            select(
+                &graph,
+                &[graph.head()],
+                &boundary,
+                shallow,
+                FetchOptions {
+                    deepen_relative: true,
+                    ..FetchOptions::default()
+                },
+                false
+            ),
+            select(
+                &graph,
+                &[graph.head()],
+                &boundary,
+                shallow,
+                FetchOptions::default(),
+                false
+            )
+        );
+        let mut args: Vec<_> = shallow.iter().map(|id| format!("shallow {id}")).collect();
+        for version in [0, 1, 2] {
+            let plain: Vec<_> = args.iter().map(String::as_str).collect();
+            let bytes = body(graph.head(), version, &plain, true);
+            let (result, expected) =
+                Harness::default().serve(repository, request(&bytes, version), 32768);
+            result.unwrap();
+            args.push(String::from("deepen-relative"));
+            let relative: Vec<_> = args.iter().map(String::as_str).collect();
+            let bytes = body(graph.head(), version, &relative, true);
+            let mut harness = Harness::default();
+            let (result, actual) = harness.serve(repository, request(&bytes, version), 32768);
+            result.unwrap();
+            assert_same_response(&actual, &expected, version);
+            assert_same_response(
+                &harness.pull(repository, request(&bytes, version)),
+                &expected,
+                version,
+            );
+            args.pop();
+        }
+    }
+}
+
+#[test]
 fn standalone_relative_arguments_are_rejected_in_v0_and_v1() {
     let graph = Graph::new();
     let source = graph.repository();
@@ -736,7 +789,6 @@ fn malformed_extensions_leave_output_empty_in_both_protocols() {
         &["deepen +1"],
         &["filter blob:limit=+1"],
         &["deepen 2147483648"],
-        &["deepen-relative"],
         &["deepen 1", "deepen-relative", "deepen-relative"],
         &["deepen-since 1"],
         &["deepen-not main"],
