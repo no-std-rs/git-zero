@@ -58,7 +58,7 @@ def alive(pid):
     try:
         state = Path(f"/proc/{pid}/stat").read_bytes().rpartition(b")")[2].split()[0]
         return state not in (b"Z", b"X")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
 
 
@@ -68,6 +68,17 @@ def await_dead(pid):
         time.sleep(0.01)
     if alive(pid):
         raise AssertionError("fixture descendant survived process-group cleanup")
+
+
+class ProcessLivenessTests(unittest.TestCase):
+    def test_liveness_probe_handles_exit_during_stat_read(self):
+        for error in (FileNotFoundError(), ProcessLookupError()):
+            with self.subTest(error=type(error).__name__), \
+                    mock.patch.object(Path, "read_bytes", side_effect=error):
+                self.assertFalse(alive(123))
+        with mock.patch.object(Path, "read_bytes", side_effect=PermissionError()):
+            with self.assertRaises(PermissionError):
+                alive(123)
 
 
 def proc_record(root, pid, parent, pages, children=(), start=1, task=None):
