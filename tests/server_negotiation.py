@@ -65,6 +65,48 @@ def imported_pack(root, bare, label, packed, wants, haves, env):
     git(imported, "fsck", "--strict", env=env)
 
 
+def check_acks(name, acks, known, unknown, mode, done):
+    if not known:
+        assert acks == [b"NAK"], (name, acks)
+        return
+    if not mode:
+        assert acks == [b"ACK " + known[0]], (name, acks)
+        return
+    suffix = b" continue" if mode == b"multi_ack" else b" common"
+    assert all(b"ACK " + oid + suffix in acks for oid in known), (name, acks)
+    assert acks[-1] == (b"ACK " + known[-1] if done else b"NAK"), (name, acks)
+    assert all(unknown not in line for line in acks)
+
+
+def compare_round(root, bare, urls, tip, unknown, fmt, index, round_, env):
+    mode, band, haves, done = round_
+    caps = b" ".join(part for part in (fmt, mode, band, b"no-progress") if part)
+    request = upload_body((tip,), haves, caps, done)
+    known = tuple(oid for oid in haves if oid != unknown)
+    for name, url in urls:
+        raw = post(url, request)
+        label = f"{name}-negotiation-{index}"
+        (root / (label + ".response")).write_bytes(raw)
+        acks, packed = decode(raw, band)
+        check_acks(name, acks, known, unknown, mode, done)
+        if done:
+            imported_pack(root, bare, label, packed, (tip,), known, env)
+        else:
+            assert not packed
+
+
+def check_incremental_fetch(root, bare, name, url, tip, env):
+    clone = root / (name + "-negotiated-fetch")
+    run("git", "-c", "protocol.version=0", "clone", "-q", "--single-branch", "--no-tags",
+        "--branch", "z-main", url, str(clone), env=env)
+    git(clone, "-c", "protocol.version=0", "fetch", "--no-tags", "origin", "refs/tags/light", env=env)
+    assert git(clone, "rev-parse", "FETCH_HEAD", env=env).strip() == tip
+    assert object_manifest(clone, tip.decode(), env) == object_manifest(bare, tip.decode(), env)
+    git(clone, "checkout", "-q", "--detach", tip.decode(), env=env)
+    verify_checkout(bare, clone, tip.decode(), env)
+    git(clone, "fsck", "--strict", env=env)
+
+
 def compare_negotiation(root, bare, urls, env):
     tip = git(bare, "rev-parse", "refs/tags/light", env=env).strip()
     main = git(bare, "rev-parse", "z-main", env=env).strip()
@@ -81,42 +123,13 @@ def compare_negotiation(root, bare, urls, env):
         (b"multi_ack_detailed", b"side-band-64k", (main, side), True),
         (b"multi_ack_detailed", b"side-band-64k", (), True),
     ]
-    for index, (mode, band, haves, done) in enumerate(rounds):
-        caps = b" ".join(part for part in (fmt, mode, band, b"no-progress") if part)
-        request = upload_body((tip,), haves, caps, done)
-        known = tuple(oid for oid in haves if oid != unknown)
-        for name, url in urls:
-            raw = post(url, request)
-            label = f"{name}-negotiation-{index}"
-            (root / (label + ".response")).write_bytes(raw)
-            acks, packed = decode(raw, band)
-            if not known:
-                assert acks == [b"NAK"], (name, acks)
-            elif mode:
-                suffix = b" continue" if mode == b"multi_ack" else b" common"
-                for oid in known:
-                    assert b"ACK " + oid + suffix in acks, (name, acks)
-                assert acks[-1] == (b"ACK " + known[-1] if done else b"NAK"), (name, acks)
-                assert all(unknown not in line for line in acks)
-            else:
-                assert acks == [b"ACK " + known[0]], (name, acks)
-            if done:
-                imported_pack(root, bare, label, packed, (tip,), known, env)
-            else:
-                assert not packed
+    for index, round_ in enumerate(rounds):
+        compare_round(root, bare, urls, tip, unknown, fmt, index, round_, env)
 
     # The same immutable server supports a real client's incremental fetch from
     # one branch into the merge tip, with existing common history at the client.
     for name, url in urls:
-        clone = root / (name + "-negotiated-fetch")
-        run("git", "-c", "protocol.version=0", "clone", "-q", "--single-branch", "--no-tags",
-            "--branch", "z-main", url, str(clone), env=env)
-        git(clone, "-c", "protocol.version=0", "fetch", "--no-tags", "origin", "refs/tags/light", env=env)
-        assert git(clone, "rev-parse", "FETCH_HEAD", env=env).strip() == tip
-        assert object_manifest(clone, tip.decode(), env) == object_manifest(bare, tip.decode(), env)
-        git(clone, "checkout", "-q", "--detach", tip.decode(), env=env)
-        verify_checkout(bare, clone, tip.decode(), env)
-        git(clone, "fsck", "--strict", env=env)
+        check_incremental_fetch(root, bare, name, url, tip, env)
 
     # Buffered hosts replace a rejected request with a protocol ERR response.
     zero = urls[1][1]

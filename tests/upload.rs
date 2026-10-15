@@ -83,111 +83,136 @@ fn request(body: &[u8]) -> Request<'_> {
     }
 }
 
-#[test]
-fn stateless_ack_modes_ignore_unknown_and_non_commit_haves_without_allocating() {
+fn for_each_format(files: &[File<'_>], mut check: impl FnMut(&Snapshot<'_>)) {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let mut tree = [0; 128];
         let mut commit = [0; 512];
-        let snapshot = Snapshot::new_with_format(&[], &mut tree, &mut commit, format).unwrap();
-        let head = snapshot.head();
-        let unknown = ObjectId::from_bytes(format, &vec![9; format.id_length()]).unwrap();
+        let snapshot = Snapshot::new_with_format(files, &mut tree, &mut commit, format).unwrap();
+        check(&snapshot);
+    }
+}
+
+fn assert_packet(wire: &mut &[u8], expected: &[u8]) {
+    assert_eq!(pktline::read(wire).unwrap(), Some(Packet::Data(expected)));
+}
+
+fn check_ack_round(snapshot: &impl Repository, caps: &str, status: &str, done: bool) {
+    let head = snapshot.head();
+    let format = snapshot.object_format();
+    let unknown = ObjectId::from_bytes(format, &vec![9; format.id_length()]).unwrap();
+    let body = body(
+        head,
+        caps,
+        &[unknown, snapshot.object_id(1).unwrap(), head],
+        done,
+    );
+    let mut bytes = [0; 4096];
+    let mut output = SliceWriter::new(&mut bytes);
+    allocations::without_allocations(|| http::serve(snapshot, request(&body), &mut output))
+        .unwrap();
+    let mut wire = output.as_bytes();
+    assert_packet(&mut wire, format!("ACK {head}{status}\n").as_bytes());
+    if !caps.is_empty() {
+        let final_ack = if done {
+            format!("ACK {head}\n")
+        } else {
+            "NAK\n".to_owned()
+        };
+        assert_packet(&mut wire, final_ack.as_bytes());
+    }
+    if done {
+        pack::validate_with_format(wire, format).unwrap();
+    } else {
+        assert!(wire.is_empty());
+    }
+}
+
+#[test]
+fn stateless_ack_modes_ignore_unknown_and_non_commit_haves_without_allocating() {
+    for_each_format(&[], |snapshot| {
         for (caps, status) in [
             ("", ""),
             (" multi_ack", " continue"),
             (" multi_ack_detailed", " common"),
         ] {
-            for done in [false, true] {
-                let body = body(
-                    head,
-                    caps,
-                    &[unknown, snapshot.object_id(1).unwrap(), head],
-                    done,
-                );
-                let mut bytes = [0; 4096];
-                let mut output = SliceWriter::new(&mut bytes);
-                allocations::without_allocations(|| {
-                    http::serve(&snapshot, request(&body), &mut output)
-                })
-                .unwrap();
-                let mut wire = output.as_bytes();
-                let expected = format!("ACK {head}{status}\n");
-                assert_eq!(
-                    pktline::read(&mut wire).unwrap(),
-                    Some(Packet::Data(expected.as_bytes()))
-                );
-                if !caps.is_empty() {
-                    let expected = if done {
-                        format!("ACK {head}\n")
-                    } else {
-                        "NAK\n".to_owned()
-                    };
-                    assert_eq!(
-                        pktline::read(&mut wire).unwrap(),
-                        Some(Packet::Data(expected.as_bytes()))
-                    );
-                }
-                if done {
-                    pack::validate_with_format(wire, format).unwrap();
-                } else {
-                    assert!(wire.is_empty());
-                }
+            check_ack_round(snapshot, caps, status, false);
+            check_ack_round(snapshot, caps, status, true);
+        }
+    });
+}
+
+fn decode_sideband(mut wire: &[u8], limit: usize) -> Vec<u8> {
+    assert_packet(&mut wire, b"NAK\n");
+    let mut packed = Vec::new();
+    loop {
+        let before = wire.len();
+        let packet = pktline::read(&mut wire).unwrap().unwrap();
+        assert!(before - wire.len() <= limit);
+        match packet {
+            Packet::Data(data) => {
+                assert_eq!(data[0], 1);
+                packed.extend_from_slice(&data[1..]);
             }
+            Packet::Flush => break,
         }
     }
+    assert!(wire.is_empty());
+    packed
+}
+
+fn check_sideband(snapshot: &impl Repository, caps: &str, limit: usize, expected: &[u8]) {
+    let body = body(snapshot.head(), caps, &[], true);
+    let mut bytes = vec![0xcc; 85_002];
+    let mut output = SliceWriter::new(&mut bytes[1..85_001]);
+    allocations::without_allocations(|| http::serve(snapshot, request(&body), &mut output))
+        .unwrap();
+    let packed = decode_sideband(output.as_bytes(), limit);
+    assert_eq!(packed, expected);
+    pack::validate_with_format(&packed, snapshot.object_format()).unwrap();
+    assert_eq!((bytes[0], bytes[85_001]), (0xcc, 0xcc));
 }
 
 #[test]
 fn sideband_modes_preserve_large_pack_bytes_checksums_and_packet_bounds() {
     let contents = vec![0xab; 70_000];
-    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
-        let mut tree = [0; 128];
-        let mut commit = [0; 512];
-        let files = [File {
-            name: "large",
-            contents: &contents,
-        }];
-        let snapshot = Snapshot::new_with_format(&files, &mut tree, &mut commit, format).unwrap();
+    let files = [File {
+        name: "large",
+        contents: &contents,
+    }];
+    for_each_format(&files, |snapshot| {
         let mut expected_storage = vec![0; 80_000];
         let mut expected = SliceWriter::new(&mut expected_storage);
-        pack::write(&snapshot, &mut expected).unwrap();
-        for caps in [" side-band no-progress", " side-band-64k"] {
-            let body = body(snapshot.head(), caps, &[], true);
-            let mut bytes = vec![0xcc; 85_002];
-            let mut output = SliceWriter::new(&mut bytes[1..85_001]);
-            allocations::without_allocations(|| {
-                http::serve(&snapshot, request(&body), &mut output)
-            })
-            .unwrap();
-            let mut wire = output.as_bytes();
-            assert_eq!(
-                pktline::read(&mut wire).unwrap(),
-                Some(Packet::Data(b"NAK\n"))
-            );
-            let mut packed = Vec::new();
-            loop {
-                let before = wire.len();
-                match pktline::read(&mut wire).unwrap().unwrap() {
-                    Packet::Data(data) => {
-                        assert_eq!(data[0], 1);
-                        assert!(
-                            before - wire.len()
-                                <= if caps.starts_with(" side-band ") {
-                                    1000
-                                } else {
-                                    pktline::MAX_LENGTH
-                                }
-                        );
-                        packed.extend_from_slice(&data[1..]);
-                    }
-                    Packet::Flush => break,
-                }
-            }
-            assert!(wire.is_empty());
-            assert_eq!(packed, expected.as_bytes());
-            pack::validate_with_format(&packed, format).unwrap();
-            assert_eq!((bytes[0], bytes[85_001]), (0xcc, 0xcc));
-        }
-    }
+        pack::write(snapshot, &mut expected).unwrap();
+        check_sideband(
+            snapshot,
+            " side-band no-progress",
+            1000,
+            expected.as_bytes(),
+        );
+        check_sideband(
+            snapshot,
+            " side-band-64k",
+            pktline::MAX_LENGTH,
+            expected.as_bytes(),
+        );
+    });
+}
+
+fn assert_rejected(repository: &impl Repository, bytes: &[u8]) {
+    let mut storage = [0; 4096];
+    let mut output = SliceWriter::new(&mut storage);
+    let mut calls = 0;
+    assert!(
+        http::serve_with_pack(repository, request(bytes), &mut [], &mut output, |_, _| {
+            calls += 1;
+            Ok(())
+        })
+        .is_err(),
+        "accepted {:?}",
+        String::from_utf8_lossy(bytes)
+    );
+    assert_eq!(calls, 0);
+    assert!(output.is_empty());
 }
 
 #[test]
@@ -239,20 +264,7 @@ fn parser_rejects_phase_errors_conflicting_caps_and_truncations_before_output() 
         invalid.push(valid[..length].to_vec());
     }
     for bytes in invalid {
-        let mut storage = [0; 4096];
-        let mut output = SliceWriter::new(&mut storage);
-        let mut calls = 0;
-        assert!(
-            http::serve_with_pack(&snapshot, request(&bytes), &mut [], &mut output, |_, _| {
-                calls += 1;
-                Ok(())
-            })
-            .is_err(),
-            "accepted {:?}",
-            String::from_utf8_lossy(&bytes)
-        );
-        assert_eq!(calls, 0);
-        assert!(output.is_empty());
+        assert_rejected(&snapshot, &bytes);
     }
 }
 

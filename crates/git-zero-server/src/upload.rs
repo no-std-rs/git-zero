@@ -8,43 +8,28 @@ use git_zero_core::{
 pub(crate) use git_zero_core::repository::UPLOAD_CAPABILITIES as CAPABILITIES;
 
 #[derive(Clone, Copy, Default)]
-struct Capabilities {
-    ack: u8,
-    band: u8,
+struct Capabilities(u8);
+
+fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u8> {
+    match capability {
+        b"multi_ack" => Ok(1),
+        b"multi_ack_detailed" => Ok(2),
+        b"side-band" => Ok(4),
+        b"side-band-64k" => Ok(8),
+        b"no-progress" => Ok(16),
+        b"object-format=sha1" | b"object-format=sha256" if capability == format.capability() => {
+            Ok(32)
+        }
+        b"object-format=sha1" | b"object-format=sha256" | b"" => Err(Error::InvalidRequest),
+        _ => Err(Error::Unsupported),
+    }
 }
 
 impl Capabilities {
     fn parse(bytes: &[u8], format: ObjectFormat) -> Result<Self> {
-        let mut selected = Self::default();
         let mut seen = 0_u8;
         for capability in bytes.split(|&byte| byte == b' ') {
-            let flag = match capability {
-                b"multi_ack" => {
-                    selected.ack = 1;
-                    1
-                }
-                b"multi_ack_detailed" => {
-                    selected.ack = 2;
-                    2
-                }
-                b"side-band" => {
-                    selected.band = 1;
-                    4
-                }
-                b"side-band-64k" => {
-                    selected.band = 2;
-                    8
-                }
-                b"no-progress" => 16,
-                b"object-format=sha1" | b"object-format=sha256" => {
-                    if capability != format.capability() {
-                        return Err(Error::InvalidRequest);
-                    }
-                    32
-                }
-                b"" => return Err(Error::InvalidRequest),
-                _ => return Err(Error::Unsupported),
-            };
+            let flag = capability_flag(capability, format)?;
             if seen & flag != 0 {
                 return Err(Error::InvalidRequest);
             }
@@ -53,7 +38,26 @@ impl Capabilities {
         if seen & 3 == 3 || seen & 12 == 12 {
             return Err(Error::InvalidRequest);
         }
-        Ok(selected)
+        Ok(Self(seen))
+    }
+
+    fn want(&mut self, value: &[u8], first: bool, format: ObjectFormat) -> Result<ObjectId> {
+        let mut hex = value;
+        if let Some(split) = value.iter().position(|&byte| byte == b' ') {
+            if !first {
+                return Err(Error::InvalidRequest);
+            }
+            *self = Self::parse(&value[split + 1..], format)?;
+            hex = &value[..split];
+        }
+        id(hex, format)
+    }
+
+    fn ack(self) -> u8 {
+        self.0 & 3
+    }
+    fn band(self) -> u8 {
+        (self.0 >> 2) & 3
     }
 }
 
@@ -102,16 +106,7 @@ impl<'a> UploadRequest<'a> {
                 if haves.is_some() {
                     return Err(Error::InvalidRequest);
                 }
-                let hex = if let Some(split) = value.iter().position(|&byte| byte == b' ') {
-                    if wanted {
-                        return Err(Error::InvalidRequest);
-                    }
-                    capabilities = Capabilities::parse(&value[split + 1..], format)?;
-                    &value[..split]
-                } else {
-                    value
-                };
-                want(id(hex, format)?)?;
+                want(capabilities.want(value, !wanted, format)?)?;
                 wanted = true;
             } else if let Some(value) = line.strip_prefix(b"have ") {
                 if haves.is_none() {
@@ -146,35 +141,20 @@ impl<'a> UploadRequest<'a> {
         repository: &'r impl Repository,
     ) -> impl Iterator<Item = Result<ObjectId>> + 'r {
         let mut bytes = self.haves;
-        core::iter::from_fn(move || {
-            loop {
-                let Packet::Data(line) = pktline::read(&mut bytes).ok().flatten()? else {
-                    continue;
-                };
-                let Some(hex) = line.strip_prefix(b"have ") else {
-                    continue;
-                };
-                let id = ObjectId::from_hex(hex.strip_suffix(b"\n").unwrap_or(hex)).ok()?;
-                if let Some(index) = repository.find_index(id) {
-                    match repository.object_info(index) {
-                        Ok(info) if info.kind == ObjectKind::Commit => return Some(Ok(id)),
-                        Ok(_) => {}
-                        Err(error) => return Some(Err(error)),
-                    }
-                }
-            }
-        })
+        core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten())
+            .filter_map(have_id)
+            .filter_map(move |id| common_commit(repository, id).transpose())
     }
 
     pub fn acknowledge(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
         let mut last = None;
         for id in self.common(repository) {
             let id = id?;
-            if self.capabilities.ack == 0 {
+            if self.capabilities.ack() == 0 {
                 pktline::write_parts(output, &[b"ACK ", &id.to_hex(), b"\n"])?;
                 return Ok(());
             }
-            let status: &[u8] = if self.capabilities.ack == 1 {
+            let status: &[u8] = if self.capabilities.ack() == 1 {
                 b" continue\n"
             } else {
                 b" common\n"
@@ -192,11 +172,28 @@ impl<'a> UploadRequest<'a> {
     pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
         PackOutput {
             output,
-            band: self.capabilities.band,
+            band: self.capabilities.band(),
             buffer: [0; 1024],
             length: 0,
         }
     }
+}
+
+// The request parser already checked packet framing and ID syntax. These
+// helpers keep packet filtering separate from fallible repository metadata.
+fn have_id(packet: Packet<'_>) -> Option<ObjectId> {
+    let Packet::Data(line) = packet else {
+        return None;
+    };
+    let hex = line.strip_prefix(b"have ")?;
+    ObjectId::from_hex(hex.strip_suffix(b"\n").unwrap_or(hex)).ok()
+}
+
+fn common_commit(repository: &impl Repository, id: ObjectId) -> Result<Option<ObjectId>> {
+    let Some(index) = repository.find_index(id) else {
+        return Ok(None);
+    };
+    Ok((repository.object_info(index)?.kind == ObjectKind::Commit).then_some(id))
 }
 
 /// Complete-pack sink passed to host pack writers. It forwards raw pack bytes
