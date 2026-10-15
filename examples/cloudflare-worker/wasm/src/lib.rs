@@ -2,7 +2,13 @@
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
 #[cfg(target_arch = "wasm32")]
+mod raw;
+#[cfg(target_arch = "wasm32")]
+mod view;
+
+#[cfg(target_arch = "wasm32")]
 mod abi {
+    use crate::{raw, view::WorkerRepository};
     use core::cell::UnsafeCell;
     use git_zero::{
         Entry, EntryKind, Error, ObjectFormat, Snapshot, SnapshotBuilder, ValidatedRepository,
@@ -26,7 +32,7 @@ mod abi {
         tree: [u8; 1024],
         commit: [u8; 1024],
         control: [u8; 8192],
-        selection: SelectionBuffers<6, 6, 128, 128>,
+        selection: SelectionBuffers<64, 64, 512, 512>,
     }
     struct Exclusive<T>(UnsafeCell<T>);
     // SAFETY: Same synchronous, single-threaded, non-reentrant ABI as Buffer.
@@ -39,11 +45,18 @@ mod abi {
             control: [0; 8192],
             selection: SelectionBuffers::new(),
         }));
-    struct Session {
-        repository: Snapshot<'static>,
-        encoder: ResponseEncoder<'static>,
+    enum Session {
+        Snapshot {
+            repository: Snapshot<'static>,
+            encoder: ResponseEncoder<'static>,
+        },
+        Imported {
+            repository: &'static raw::Imported,
+            encoder: ResponseEncoder<'static>,
+        },
     }
     static SESSION: Exclusive<Option<Session>> = Exclusive(UnsafeCell::new(None));
+    static IMPORTED: Exclusive<raw::Imported> = Exclusive(UnsafeCell::new(raw::Imported::new()));
 
     /// Cancel any active response before obtaining input storage for a new frame.
     #[unsafe(no_mangle)]
@@ -148,6 +161,27 @@ mod abi {
         let headers = take(&mut input, lengths[1])?;
         let vars = take(&mut input, lengths[2])?;
         let runtime = take(&mut input, lengths[3])?;
+        let request = request(input, method, http_metadata)?;
+        let mut builder = SnapshotBuilder::new(entries, tree, commit);
+        for (name, contents) in [
+            ("cf.json", cf),
+            ("headers.json", headers),
+            ("vars.json", vars),
+            ("runtime.json", runtime),
+        ] {
+            builder.push(Entry {
+                name,
+                kind: EntryKind::File(contents),
+            })?;
+        }
+        Ok((builder.finish_with_format(format)?, request))
+    }
+
+    fn request(
+        mut input: &[u8],
+        method: u32,
+        http_metadata: bool,
+    ) -> git_zero::Result<Request<'_>> {
         let target_length = length(&mut input)?;
         let target = core::str::from_utf8(take(&mut input, target_length)?)
             .map_err(|_| Error::InvalidRequest)?;
@@ -173,30 +207,14 @@ mod abi {
             1 => "POST",
             _ => return Err(Error::InvalidRequest),
         };
-        let mut builder = SnapshotBuilder::new(entries, tree, commit);
-        for (name, contents) in [
-            ("cf.json", cf),
-            ("headers.json", headers),
-            ("vars.json", vars),
-            ("runtime.json", runtime),
-        ] {
-            builder.push(Entry {
-                name,
-                kind: EntryKind::File(contents),
-            })?;
-        }
-        let repository = builder.finish_with_format(format)?;
-        Ok((
-            repository,
-            Request {
-                content_type,
-                git_protocol,
-                method,
-                path,
-                query,
-                body: input,
-            },
-        ))
+        Ok(Request {
+            content_type,
+            git_protocol,
+            method,
+            path,
+            query,
+            body: input,
+        })
     }
 
     fn run(
@@ -220,8 +238,9 @@ mod abi {
         )?;
         let mut objects = [None; 6]; // Commit, root tree, up to four distinct blobs.
         let mut by_id = [0; 6];
+        let source = WorkerRepository::Snapshot(&repository);
         let repository = ValidatedRepository::new(
-            &repository,
+            &source,
             &mut objects,
             &mut by_id,
             &mut [0; 128],
@@ -297,8 +316,9 @@ mod abi {
         )?;
         let mut objects = [None; 6];
         let mut by_id = [0; 6];
+        let source = WorkerRepository::Snapshot(&repository);
         let validated = ValidatedRepository::new(
-            &repository,
+            &source,
             &mut objects,
             &mut by_id,
             &mut [0; 128],
@@ -311,7 +331,122 @@ mod abi {
             &mut storage.control,
         )?;
         response_header(encoder.response(), unsafe { &mut *OUTPUT.0.get() });
-        Ok::<_, Error>(Session {
+        Ok::<_, Error>(Session::Snapshot {
+            repository,
+            encoder,
+        })
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn repository_capacity() -> usize {
+        raw::BODY_CAPACITY
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn repository_manifest_capacity() -> usize {
+        raw::MANIFEST_CAPACITY
+    }
+
+    /// Begin version-1 raw import from INPUT. Cancels and invalidates the old
+    /// repository before parsing. Body chunks follow in manifest object order.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn repository_begin(input_length: usize) -> i32 {
+        stream_cancel();
+        // SAFETY: Cancelling drops every borrow before mutable import access.
+        let imported = unsafe { &mut *IMPORTED.0.get() };
+        if input_length > INPUT_CAPACITY {
+            imported.reset();
+            return -1;
+        }
+        let input = unsafe { &(&*INPUT.0.get())[..input_length] };
+        import_result(imported.begin(input))
+    }
+
+    /// Append INPUT to the body arena. Writes outside Importing fail without
+    /// disturbing an active response; overflows invalidate the partial import.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn repository_write(input_length: usize) -> i32 {
+        // SAFETY: Only Ready repositories can be borrowed by an active stream.
+        if !unsafe { (&*IMPORTED.0.get()).importing() } {
+            return -2;
+        }
+        let imported = unsafe { &mut *IMPORTED.0.get() };
+        if input_length > INPUT_CAPACITY {
+            imported.reset();
+            return -1;
+        }
+        let input = unsafe { &(&*INPUT.0.get())[..input_length] };
+        import_result(imported.append(input))
+    }
+
+    /// Authenticate the complete import before making it available to requests.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn repository_finish() -> i32 {
+        // SAFETY: Importing excludes every active borrow of IMPORTED.
+        if !unsafe { (&*IMPORTED.0.get()).importing() } {
+            return -2;
+        }
+        import_result(unsafe { (&mut *IMPORTED.0.get()).finish() })
+    }
+
+    fn import_result(result: git_zero::Result<()>) -> i32 {
+        match result {
+            Ok(()) => 0,
+            Err(Error::BufferTooSmall) => -1,
+            Err(_) => -2,
+        }
+    }
+
+    /// Request-only extended HTTP frame: target length/bytes, header lengths,
+    /// Git-Protocol/Content-Type bytes, then body. Format is fixed by the import.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn stream_start_repository(input_length: usize, method: u32) -> i32 {
+        stream_cancel();
+        if input_length > INPUT_CAPACITY {
+            return -1;
+        }
+        // SAFETY: Ready storage is immutable until repository_begin cancels the
+        // session. Neither its bodies nor copied names borrow request INPUT.
+        let imported = unsafe { &*IMPORTED.0.get() };
+        if !imported.ready() {
+            return -2;
+        }
+        let input = unsafe { &(&*INPUT.0.get())[..input_length] };
+        let storage = unsafe { &mut *SESSION_STORAGE.0.get() };
+        match start_imported_session(imported, input, storage, method) {
+            Ok(session) => {
+                unsafe { *SESSION.0.get() = Some(session) };
+                3
+            }
+            Err(Error::BufferTooSmall) => -1,
+            Err(_) => -2,
+        }
+    }
+
+    fn start_imported_session(
+        repository: &'static raw::Imported,
+        input: &'static [u8],
+        storage: &'static mut SessionStorage,
+        method: u32,
+    ) -> git_zero::Result<Session> {
+        let mut objects = [None; raw::OBJECTS];
+        let mut by_id = [0; raw::OBJECTS];
+        let source = WorkerRepository::Imported(repository);
+        let validated = ValidatedRepository::new(
+            &source,
+            &mut objects,
+            &mut by_id,
+            &mut [0; 512],
+            &mut [0; 512],
+        )?;
+        let encoder = ResponseEncoder::with_selection_storage(
+            &validated,
+            request(input, method, true)?,
+            storage.selection.storage(1_048_576),
+            &mut storage.control,
+        )?;
+        response_header(encoder.response(), unsafe { &mut *OUTPUT.0.get() });
+        Ok(Session::Imported {
             repository,
             encoder,
         })
@@ -330,9 +465,19 @@ mod abi {
         let Some(active) = session else {
             return -2;
         };
-        match active.encoder.read(&active.repository, unsafe {
-            &mut (&mut *OUTPUT.0.get())[..capacity]
-        }) {
+        let output = unsafe { &mut (&mut *OUTPUT.0.get())[..capacity] };
+        let (repository, encoder) = match active {
+            Session::Snapshot {
+                repository,
+                encoder,
+            } => (WorkerRepository::Snapshot(repository), encoder),
+            Session::Imported {
+                repository,
+                encoder,
+            } => (WorkerRepository::Imported(repository), encoder),
+        };
+        let result = encoder.read(&repository, output);
+        match result {
             Ok(length) => length as i32,
             Err(_) => {
                 *session = None;
