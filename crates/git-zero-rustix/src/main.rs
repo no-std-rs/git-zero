@@ -62,6 +62,7 @@ fn serve(port: u16) -> git_zero::Result<()> {
     let mut request_storage = [0; 65536];
     let mut control = [0; 8192];
     let mut staging = [0; 1024];
+    let mut selection = http::SelectionBuffers::<4, 3, 128, 128>::new();
     loop {
         let socket = accept(&listener)?;
         if let Err(error) = serve_connection(
@@ -70,6 +71,7 @@ fn serve(port: u16) -> git_zero::Result<()> {
             &mut request_storage,
             &mut control,
             &mut staging,
+            &mut selection,
         ) {
             eprintln!("response: {error:?}");
         }
@@ -77,11 +79,12 @@ fn serve(port: u16) -> git_zero::Result<()> {
 }
 
 fn serve_connection(
-    repository: &impl git_zero::Repository,
+    repository: &ValidatedRepository<'_, '_, impl git_zero::Repository>,
     socket: &impl rustix::fd::AsFd,
     request_storage: &mut [u8],
     control: &mut [u8],
     staging: &mut [u8],
+    selection: &mut http::SelectionBuffers<4, 3, 128, 128>,
 ) -> git_zero::Result<()> {
     let mut request = match read_request(socket, request_storage) {
         Ok(request) => request,
@@ -98,7 +101,12 @@ fn serve_connection(
         );
     };
     request.path = path;
-    let mut encoder = match http::stream::ResponseEncoder::new(repository, request, control) {
+    let mut encoder = match http::stream::ResponseEncoder::with_selection_storage(
+        repository,
+        request,
+        selection.storage(1_048_576),
+        control,
+    ) {
         Ok(encoder) => encoder,
         Err(error) => return reject_request(socket, error),
     };

@@ -569,6 +569,11 @@ let mut storage = http::SelectionStorage {
 let response = http::serve_with_selection(&repository, request, &mut storage, &mut output)?;
 ```
 
+`http::SelectionBuffers::<16, 128, 1024, 128>::new()` is an optional owner for
+want, object, read and parse buffers. Its `storage(graph_read_limit)` method lends
+the same descriptor used above; capacity and byte-footprint queries support host
+budget reporting. Separate owners keep overlapping responses independent.
+
 Both selection arrays need one slot per provider object. Wants need one slot per
 distinct requested ID. Scratch follows validation's header/tree-name limits;
 `graph_read_limit` caps actual structural read bytes, including buffered reads and

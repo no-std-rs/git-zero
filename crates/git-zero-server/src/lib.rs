@@ -15,7 +15,7 @@ pub mod stream;
 mod upload;
 mod v2;
 #[cfg(feature = "read")]
-use git_zero_core::{SelectionOptions, ValidatedRepository, ValidationMetadata};
+use git_zero_core::{SelectionOptions, ValidatedRepository};
 use route::Version;
 use upload::UploadRequest;
 pub use upload::{PackOutput, write_upload_error};
@@ -25,35 +25,10 @@ pub const HEAD: &[u8] = b"ref: refs/heads/main\n";
 
 pub use git_zero_core::http::{Request, Response};
 
-/// Independent per-request storage for bounded reachable-object selection.
-/// `wants` bounds distinct wanted IDs. `objects` and `indices` each need the
-/// repository's complete object count; their extra slots remain untouched.
-/// Read/parse scratch budgets match `ValidatedRepository::select_objects`.
 #[cfg(feature = "read")]
-pub struct SelectionStorage<'a> {
-    pub wants: &'a mut [ObjectId],
-    pub objects: &'a mut [Option<ValidationMetadata>],
-    pub indices: &'a mut [usize],
-    pub read: &'a mut [u8],
-    pub parse: &'a mut [u8],
-    /// Maximum structural bytes read while traversing a request's graph.
-    pub graph_read_limit: u64,
-}
-
+mod storage;
 #[cfg(feature = "read")]
-impl SelectionStorage<'_> {
-    /// Borrow the same arrays for one request without moving the host descriptor.
-    pub fn reborrow(&mut self) -> SelectionStorage<'_> {
-        SelectionStorage {
-            wants: self.wants,
-            objects: self.objects,
-            indices: self.indices,
-            read: self.read,
-            parse: self.parse,
-            graph_read_limit: self.graph_read_limit,
-        }
-    }
-}
+pub use storage::{SelectionBuffers, SelectionStorage};
 
 /// Serve independent refs, tags and multiple wanted IDs with caller-owned
 /// selection storage. Accept only advertised ref/peeled/HEAD IDs, rejecting
@@ -64,6 +39,21 @@ impl SelectionStorage<'_> {
 /// Absolute-depth shallow requests and blob filters use the same graph budget.
 /// Shallow haves never imply complete history. Errors
 /// invalidate all output; selection failures produce no output at all.
+///
+/// Requests must contain a complete, bounded body and the upload-pack media type.
+/// Absolute `deepen` requests may have an initial v0 shallow-list probe without
+/// `done`; that probe consumes the same graph budget as the eventual pack.
+/// A client must replay its shallow IDs and negotiation state on each request.
+/// Boundary output must fit the host's response/control budget. The streaming
+/// encoder prepares these packets before exposing HTTP success metadata.
+///
+/// Blob filters preserve explicitly wanted blobs but do not grant permission
+/// to request unadvertised promised objects. Partial clones currently need
+/// `--no-checkout`. Relative/time/exclusion deepening and other filter families
+/// return `Unsupported`; malformed options and invalid shallow IDs return
+/// `InvalidRequest`. Scratch/slot exhaustion returns `BufferTooSmall`, and graph
+/// read exhaustion returns `LimitExceeded`. A buffered host can replace a failed
+/// response with `write_upload_error`; a failed stream must be cancelled/closed.
 #[cfg(feature = "read")]
 pub fn serve_with_selection<R: Repository + ?Sized>(
     repository: &ValidatedRepository<'_, '_, R>,
@@ -114,7 +104,7 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
     let indices = if upload.done || upload.extensions.active() {
         Some(repository.select_bounded_fetch(
             &storage.wants[..count],
-            (upload.common(repository), upload.extensions.shallow()),
+            (upload.common(repository), upload.shallow()),
             storage.objects,
             storage.indices,
             (storage.read, storage.parse),

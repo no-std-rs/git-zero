@@ -43,20 +43,7 @@ pub fn routing(data: &[u8]) {
         body,
     };
     let capacity = [0, 1, 16, 64, MAX_INPUT][usize::from(data[1]) % 5];
-    let mut storage = [0; MAX_INPUT];
-    let mut output = SliceWriter::new(&mut storage[..capacity]);
-    if let Ok(response) = http::serve_with_scratch(&repository, request, &mut [0; 1], &mut output) {
-        assert!(matches!(response.status, 200 | 403 | 404 | 405 | 415));
-        assert!(output.len() <= capacity);
-        check_response(response, request.git_protocol, output.as_bytes());
-    }
-    streaming(
-        &repository,
-        request,
-        capacity,
-        1 + usize::from(data[1]) % 31,
-    );
-    selected(
+    exercise(
         &repository,
         request,
         capacity,
@@ -64,7 +51,7 @@ pub fn routing(data: &[u8]) {
     );
 }
 
-fn selected(
+fn exercise(
     repository: &impl git_zero::Repository,
     request: Request<'_>,
     capacity: usize,
@@ -98,56 +85,65 @@ fn selected(
     {
         check_response(response, request.git_protocol, output.as_bytes());
     }
-    let mut control = [0; MAX_INPUT];
-    if let Ok(mut encoder) = http::stream::ResponseEncoder::with_selection(
+    streaming(
         &repository,
         request,
+        capacity,
+        fragment_size,
         &mut selection,
-        &mut control[..capacity],
-    ) {
-        let mut bytes = [0; MAX_INPUT];
-        let mut output = SliceWriter::new(&mut bytes);
-        drain_response(&repository, &mut encoder, fragment_size, &mut output);
-        check_response(encoder.response(), request.git_protocol, output.as_bytes());
-        encoder.cancel();
-        assert_eq!(
-            encoder.read(&repository, &mut [0; 1]),
-            Err(git_zero::Error::InvalidRequest)
-        );
-    }
+    );
 }
 
 fn streaming(
-    repository: &impl git_zero::Repository,
+    repository: &git_zero::ValidatedRepository<'_, '_, impl git_zero::Repository>,
     request: Request<'_>,
     capacity: usize,
     fragment_size: usize,
+    selection: &mut http::SelectionStorage<'_>,
 ) {
-    // Replay intake with arbitrary fragmentation, then drive an independent
-    // cursor through guarded output slices and terminal cancellation.
     let mut intake = [0; MAX_INPUT];
     let mut incoming =
         http::stream::RequestBody::new(&mut intake, Some(request.body.len())).unwrap();
     for fragment in request.body.chunks(fragment_size) {
         incoming.push(fragment).unwrap();
     }
-    let body = incoming.finish().unwrap();
-    let mut control = [0; MAX_INPUT];
-    let request = Request { body, ..request };
-    if let Ok(mut encoder) =
-        http::stream::ResponseEncoder::new(repository, request, &mut control[..capacity])
-    {
-        let response = encoder.response();
-        let mut bytes = [0; MAX_INPUT];
-        let mut staged = SliceWriter::new(&mut bytes);
-        drain_response(repository, &mut encoder, fragment_size, &mut staged);
-        check_response(response, request.git_protocol, staged.as_bytes());
-        encoder.cancel();
-        assert_eq!(
-            encoder.read(repository, &mut [0; 1]),
-            Err(git_zero::Error::InvalidRequest)
-        );
+    let request = Request {
+        body: incoming.finish().unwrap(),
+        ..request
+    };
+    for selected in [false, true] {
+        let mut control = [0; MAX_INPUT];
+        let result = if selected {
+            http::stream::ResponseEncoder::with_selection(
+                repository,
+                request,
+                selection,
+                &mut control[..capacity],
+            )
+        } else {
+            http::stream::ResponseEncoder::new(repository, request, &mut control[..capacity])
+        };
+        if let Ok(mut encoder) = result {
+            check_stream(repository, request, fragment_size, &mut encoder);
+        }
     }
+}
+
+fn check_stream(
+    repository: &impl git_zero::Repository,
+    request: Request<'_>,
+    fragment_size: usize,
+    encoder: &mut http::stream::ResponseEncoder<'_>,
+) {
+    let mut bytes = [0; MAX_INPUT];
+    let mut staged = SliceWriter::new(&mut bytes);
+    drain_response(repository, encoder, fragment_size, &mut staged);
+    check_response(encoder.response(), request.git_protocol, staged.as_bytes());
+    encoder.cancel();
+    assert_eq!(
+        encoder.read(repository, &mut [0; 1]),
+        Err(git_zero::Error::InvalidRequest)
+    );
 }
 
 fn drain_response(

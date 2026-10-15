@@ -253,7 +253,7 @@ impl Fetch {
         args: &[u8],
         format: ObjectFormat,
         mut want: impl FnMut(ObjectId) -> Result<()>,
-        extensions: &mut crate::fetch::Extensions<'_>,
+        extensions: &mut crate::fetch::Extensions,
     ) -> Result<Self> {
         let mut fetch = Self {
             done: false,
@@ -261,19 +261,19 @@ impl Fetch {
         };
         let mut wanted = false;
         for arg in arguments(args) {
-            if let Some(hex) = arg.strip_prefix(b"want ") {
-                want(upload::id(hex, format)?)?;
-                wanted = true;
-            } else if let Some(hex) = arg.strip_prefix(b"have ") {
-                upload::id(hex, format)?;
-            } else {
-                match arg {
-                    b"done" if !fetch.done => fetch.done = true,
-                    b"include-tag" => fetch.include_tags = true,
-                    // Full, non-delta packs also satisfy thin-pack/ofs-delta requests.
-                    b"thin-pack" | b"ofs-delta" | b"no-progress" => {}
-                    _ => extensions.argument(arg, format)?,
+            match crate::fetch::argument_parts(arg) {
+                (b"want", Some(hex)) => {
+                    want(upload::id(hex, format)?)?;
+                    wanted = true;
                 }
+                (b"have", Some(hex)) => {
+                    upload::id(hex, format)?;
+                }
+                (b"done", None) if !fetch.done => fetch.done = true,
+                (b"include-tag", None) => fetch.include_tags = true,
+                // Full, non-delta packs also satisfy thin-pack/ofs-delta requests.
+                (b"thin-pack" | b"ofs-delta" | b"no-progress", None) => {}
+                _ => extensions.argument(arg, format)?,
             }
         }
         if !wanted {

@@ -1,61 +1,43 @@
 //! Request-local shallow/filter policy; packet storage remains owned by the host.
 use git_zero_core::{BlobFilter, Error, FetchOptions, ObjectFormat, Result};
-#[cfg(feature = "read")]
-use git_zero_core::{
-    ObjectId,
-    pktline::{self, Packet},
-};
-
-pub(crate) struct Extensions<'a> {
-    #[cfg(feature = "read")]
-    body: &'a [u8],
-    marker: core::marker::PhantomData<&'a [u8]>,
+#[derive(Default)]
+pub(crate) struct Extensions {
     pub options: FetchOptions,
     has_shallow: bool,
     filtered: bool,
 }
 
-impl<'a> Extensions<'a> {
-    pub fn new(_body: &'a [u8]) -> Self {
-        Self {
-            #[cfg(feature = "read")]
-            body: _body,
-            marker: core::marker::PhantomData,
-            options: FetchOptions::default(),
-            has_shallow: false,
-            filtered: false,
-        }
-    }
-
+impl Extensions {
     pub fn argument(&mut self, line: &[u8], format: ObjectFormat) -> Result<()> {
-        if let Some(value) = line.strip_prefix(b"shallow ") {
-            crate::upload::id(value, format)?;
-            self.has_shallow = true;
-        } else if let Some(value) = line.strip_prefix(b"deepen ") {
-            if self.options.depth.is_some() {
-                return Err(Error::InvalidRequest);
+        match argument_parts(line) {
+            (b"shallow", Some(value)) => {
+                crate::upload::id(value, format)?;
+                self.has_shallow = true;
             }
-            let depth = number(value)?;
-            if depth == 0 || depth > i32::MAX as u64 {
-                return Err(Error::InvalidRequest);
+            (b"deepen", Some(value)) => {
+                if self.options.depth.is_some() {
+                    return Err(Error::InvalidRequest);
+                }
+                let depth = number(value)?;
+                if depth == 0 || depth > i32::MAX as u64 {
+                    return Err(Error::InvalidRequest);
+                }
+                self.options.depth = Some(depth as u32);
             }
-            self.options.depth = Some(depth as u32);
-        } else if let Some(value) = line.strip_prefix(b"filter ") {
-            if self.filtered {
-                return Err(Error::InvalidRequest);
+            (b"filter", Some(value)) => {
+                if self.filtered {
+                    return Err(Error::InvalidRequest);
+                }
+                self.options.filter = filter(value)?;
+                self.filtered = true;
             }
-            self.options.filter = filter(value)?;
-            self.filtered = true;
-        } else {
-            return Err(Error::Unsupported);
+            _ => return Err(Error::Unsupported),
         }
         Ok(())
     }
 
-    pub fn validate(&self, shallow: bool, filter: bool) -> Result<()> {
-        if ((self.has_shallow || self.options.depth.is_some()) && !shallow)
-            || (self.filtered && !filter)
-        {
+    pub fn require_filter_capability(&self, enabled: bool) -> Result<()> {
+        if self.filtered && !enabled {
             return Err(Error::InvalidRequest);
         }
         Ok(())
@@ -64,29 +46,19 @@ impl<'a> Extensions<'a> {
     pub fn active(&self) -> bool {
         self.has_shallow || self.options.depth.is_some() || self.filtered
     }
+}
 
-    #[cfg(feature = "read")]
-    pub fn shallow(&self) -> impl Iterator<Item = Result<ObjectId>> + '_ {
-        let mut bytes = self.body;
-        core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten()).filter_map(|packet| {
-            let Packet::Data(line) = packet else {
-                return None;
-            };
-            let hex = line.strip_prefix(b"shallow ")?;
-            Some(ObjectId::from_hex(hex.strip_suffix(b"\n").unwrap_or(hex)))
-        })
-    }
+pub(crate) fn argument_parts(line: &[u8]) -> (&[u8], Option<&[u8]>) {
+    let mut parts = line.splitn(2, |&byte| byte == b' ');
+    (parts.next().unwrap_or_default(), parts.next())
 }
 
 fn number(value: &[u8]) -> Result<u64> {
-    if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
+    let text = core::str::from_utf8(value).map_err(|_| Error::InvalidRequest)?;
+    if text.starts_with('+') {
         return Err(Error::InvalidRequest);
     }
-    value.iter().try_fold(0_u64, |n, byte| {
-        n.checked_mul(10)
-            .and_then(|n| n.checked_add(u64::from(byte - b'0')))
-            .ok_or(Error::InvalidRequest)
-    })
+    text.parse().map_err(|_| Error::InvalidRequest)
 }
 
 fn filter(value: &[u8]) -> Result<BlobFilter> {
@@ -107,4 +79,62 @@ fn filter(value: &[u8]) -> Result<BlobFilter> {
             .checked_mul(multiplier)
             .ok_or(Error::InvalidRequest)?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blob_limits_preserve_full_width_and_scaled_integer_boundaries() {
+        let cases = [
+            ("blob:limit=0", 0),
+            ("blob:limit=0006", 6),
+            ("blob:limit=1024", 1024),
+            ("blob:limit=1k", 1024),
+            ("blob:limit=2k", 2048),
+            ("blob:limit=1m", 1_048_576),
+            ("blob:limit=1g", 1_073_741_824),
+            ("blob:limit=18446744073709551615", u64::MAX),
+            ("blob:limit=18014398509481983k", 18_446_744_073_709_550_592),
+            ("blob:limit=17592186044415m", 18_446_744_073_708_503_040),
+            ("blob:limit=17179869183g", 18_446_744_072_635_809_792),
+        ];
+        for (wire, expected) in cases {
+            assert_eq!(
+                filter(wire.as_bytes()),
+                Ok(BlobFilter::Limit(expected)),
+                "{wire}"
+            );
+        }
+        assert_eq!(filter(b"blob:none"), Ok(BlobFilter::None));
+    }
+
+    #[test]
+    fn scaled_limits_reject_overflow_at_the_first_unrepresentable_integer() {
+        for wire in [
+            "blob:limit=18446744073709551616",
+            "blob:limit=18014398509481984k",
+            "blob:limit=17592186044416m",
+            "blob:limit=17179869184g",
+            "blob:limit=+1",
+            "blob:limit=-1",
+            "blob:limit=1.5",
+            "blob:limit=1K",
+            "blob:limit=1M",
+            "blob:limit=1G",
+            "blob:limit=1t",
+            "blob:limit=k",
+            "blob:limit=1k ",
+            "blob:limit= 1k",
+            "blob:limit=",
+            "blob:limit=1\0",
+        ] {
+            assert_eq!(
+                filter(wire.as_bytes()),
+                Err(Error::InvalidRequest),
+                "{wire}"
+            );
+        }
+    }
 }

@@ -46,35 +46,39 @@ function httpFrame(target, body, protocol, media = "application/x-git-upload-pac
   return Buffer.concat([frame(parts, target), lengths, ...headers, body]);
 }
 
+function command(format, name, args) {
+  return Buffer.concat([
+    packet(`command=${name}\n`), packet(`object-format=${format === 0 ? "sha1" : "sha256"}\n`), Buffer.from("0001"),
+    ...args.map((arg) => packet(`${arg}\n`)), Buffer.from("0000"),
+  ]);
+}
+
+function checkV2Round(exports, format, head) {
+  for (const version of [1, 2]) {
+    const discovery = call(exports, httpFrame("info/refs?service=git-upload-pack", Buffer.alloc(0), `version=${version}`), 0, format, true);
+    assert.ok(discovery.body.includes(packet(`version ${version}\n`)));
+  }
+  const refs = command(format, "ls-refs", ["symrefs", "peel", "ref-prefix HEAD"]);
+  const result = call(exports, httpFrame("git-upload-pack", refs, "version=2"), 1, format, true);
+  assert.deepEqual(result.body, Buffer.concat([packet(`${head} HEAD symref-target:refs/heads/main\n`), Buffer.from("0000")]));
+  const fetch = command(format, "fetch", [`want ${head}`, "done"]);
+  const response = call(exports, httpFrame("git-upload-pack", fetch, "version=2"), 1, format, true);
+  const { lines, pack } = decodeNegotiation(response.body, "side-band-64k");
+  assert.deepEqual(lines, ["packfile\n"]);
+  const width = format === 0 ? 20 : 32;
+  assert.deepEqual(createHash(format === 0 ? "sha1" : "sha256").update(pack.subarray(0, -width)).digest(), pack.subarray(-width));
+  const invalid = call(exports, httpFrame("git-upload-pack", fetch, "version=2", "text/plain"), 1, format, true);
+  assert.equal(invalid.status, 415);
+  assert.equal(invalid.body.length, 0);
+  assert.equal(call(exports, httpFrame("git-upload-pack", fetch.subarray(0, -1), "version=2"), 1, format, true), -2);
+}
+
 test("v1/v2 discovery, ls-refs and fetch preserve fixed Wasm memory in both formats", () => {
   const exports = instance();
   for (const format of [0, 1]) {
-    const hash = format === 0 ? "sha1" : "sha256";
     const headV0 = call(exports, frame(parts, "info/refs?service=git-upload-pack"), 0, format).body.toString();
     const head = new RegExp(`([0-9a-f]{${format === 0 ? 40 : 64}}) HEAD\\0`).exec(headV0)[1];
-    const command = (name, args) => Buffer.concat([
-      packet(`command=${name}\n`), packet(`object-format=${hash}\n`), Buffer.from("0001"),
-      ...args.map((arg) => packet(`${arg}\n`)), Buffer.from("0000"),
-    ]);
-    for (let round = 0; round < 32; round++) {
-      for (const version of [1, 2]) {
-        const discovery = call(exports, httpFrame("info/refs?service=git-upload-pack", Buffer.alloc(0), `version=${version}`), 0, format, true);
-        assert.ok(discovery.body.includes(packet(`version ${version}\n`)));
-      }
-      const refs = command("ls-refs", ["symrefs", "peel", "ref-prefix HEAD"]);
-      const result = call(exports, httpFrame("git-upload-pack", refs, "version=2"), 1, format, true);
-      assert.deepEqual(result.body, Buffer.concat([packet(`${head} HEAD symref-target:refs/heads/main\n`), Buffer.from("0000")]));
-      const fetch = command("fetch", [`want ${head}`, "done"]);
-      const response = call(exports, httpFrame("git-upload-pack", fetch, "version=2"), 1, format, true);
-      const { lines, pack } = decodeNegotiation(response.body, "side-band-64k");
-      assert.deepEqual(lines, ["packfile\n"]);
-      const width = format === 0 ? 20 : 32;
-      assert.deepEqual(createHash(hash).update(pack.subarray(0, -width)).digest(), pack.subarray(-width));
-      const invalid = call(exports, httpFrame("git-upload-pack", fetch, "version=2", "text/plain"), 1, format, true);
-      assert.equal(invalid.status, 415);
-      assert.equal(invalid.body.length, 0);
-      assert.equal(call(exports, httpFrame("git-upload-pack", fetch.subarray(0, -1), "version=2"), 1, format, true), -2);
-    }
+    for (let round = 0; round < 32; round++) checkV2Round(exports, format, head);
   }
 });
 
@@ -84,36 +88,41 @@ function packet(line) {
 
 const parts = ["{\"colo\":\"CDG\"}\n", "{}\n", "{\"public\":true}\n", "{\"format\":1}\n"];
 
+function fetchBody(head, format, version, args = [], capabilities = "") {
+  const options = args.map((arg) => packet(`${arg}\n`));
+  if (version === 2) return command(format, "fetch", [`want ${head}`, ...args, "done"]);
+  return Buffer.concat([packet(`want ${head}${capabilities}\n`), ...options, Buffer.from("0000"), packet("done\n")]);
+}
+
+function assertFilteredPack(response, head, format, version) {
+  const prefix = Buffer.concat([
+    ...(version === 2 ? [packet("shallow-info\n")] : []), packet(`shallow ${head}\n`),
+    Buffer.from(version === 2 ? "0001" : "0000"),
+  ]);
+  assert.deepEqual(response.body.subarray(0, prefix.length), prefix);
+  const { pack } = decodeNegotiation(response.body.subarray(prefix.length), version === 2 ? "side-band-64k" : "");
+  assert.equal(pack.readUInt32BE(8), 2, "only commit and tree are sent");
+  const width = head.length / 2;
+  assert.deepEqual(createHash(format === 0 ? "sha1" : "sha256").update(pack.subarray(0, -width)).digest(), pack.subarray(-width));
+}
+
+function checkShallowFiltered(first, second, format, version) {
+  const discovery = call(first, frame(parts, "info/refs?service=git-upload-pack"), 0, format);
+  const head = new RegExp(`([0-9a-f]{${format === 0 ? 40 : 64}}) HEAD\\0`).exec(discovery.body.toString())[1];
+  const body = fetchBody(head, format, version, ["deepen 1", "filter blob:none"], ` filter object-format=${format === 0 ? "sha1" : "sha256"}`);
+  const input = httpFrame("git-upload-pack", body, `version=${version}`);
+  const expected = call(first, input, 1, format, true);
+  assertFilteredPack(expected, head, format, version);
+  for (let round = 0; round < 16; round++) {
+    checkStreamingTarget(first, second, input, 1, format, version === 2, expected);
+  }
+}
+
 test("shallow and filtered pulls retain fixed memory, format widths and exact packs", () => {
   const first = instance();
   const second = instance();
   for (const format of [0, 1]) {
-    const hash = format === 0 ? "sha1" : "sha256";
-    const head = new RegExp(`([0-9a-f]{${format === 0 ? 40 : 64}}) HEAD\\0`).exec(call(first, frame(parts, "info/refs?service=git-upload-pack"), 0, format).body.toString())[1];
-    for (const version of [0, 1, 2]) {
-      for (let round = 0; round < 16; round++) {
-        const args = ["deepen 1", "filter blob:none"];
-        const body = version === 2 ? Buffer.concat([
-          packet("command=fetch\n"), packet(`object-format=${hash}\n`), Buffer.from("0001"),
-          packet(`want ${head}\n`), ...args.map((a) => packet(`${a}\n`)), packet("done\n"), Buffer.from("0000"),
-        ]) : Buffer.concat([
-          packet(`want ${head} filter ${format === 0 ? "object-format=sha1" : "object-format=sha256"}\n`),
-          ...args.map((a) => packet(`${a}\n`)), Buffer.from("0000"), packet("done\n"),
-        ]);
-        const input = httpFrame("git-upload-pack", body, `version=${version}`);
-        const response = call(first, input, 1, format, true);
-        const prefix = Buffer.concat([
-          ...(version === 2 ? [packet("shallow-info\n")] : []), packet(`shallow ${head}\n`),
-          Buffer.from(version === 2 ? "0001" : "0000"),
-        ]);
-        assert.deepEqual(response.body.subarray(0, prefix.length), prefix);
-        const { pack } = decodeNegotiation(response.body.subarray(prefix.length), version === 2 ? "side-band-64k" : "");
-        assert.equal(pack.readUInt32BE(8), 2, "only commit and tree are sent");
-        const width = format === 0 ? 20 : 32;
-        assert.deepEqual(createHash(hash).update(pack.subarray(0, -width)).digest(), pack.subarray(-width));
-        checkStreamingTarget(first, second, input, 1, format, version === 2);
-      }
-    }
+    for (const version of [0, 1, 2]) checkShallowFiltered(first, second, format, version);
   }
 });
 
@@ -186,8 +195,8 @@ test("Wasm keeps fixed memory across repeated discovery, pack and loose-object r
   const head = /([0-9a-f]{40}) HEAD\0/.exec(discovery.body.toString())[1];
   const upload = Buffer.concat([packet(`want ${head}\n`), Buffer.from("0000"), packet("done\n")]);
   const target = `objects/${head.slice(0, 2)}/${head.slice(2)}`;
-  let expectedPack;
-  let expectedLoose;
+  const expectedPack = call(exports, frame(parts, "git-upload-pack", upload), 1);
+  const expectedLoose = call(exports, frame(parts, target));
   for (let round = 0; round < 128; round++) {
     assert.deepEqual(call(exports, frame(parts, "info/refs?service=git-upload-pack")), discovery);
     const pack = call(exports, frame(parts, "git-upload-pack", upload), 1);
@@ -200,15 +209,22 @@ test("Wasm keeps fixed memory across repeated discovery, pack and loose-object r
     assert.equal(loose.status, 200);
     assert.equal(loose.type, 3);
     assert.equal(createHash("sha1").update(inflateSync(loose.body)).digest("hex"), head);
-    if (round === 0) {
-      expectedPack = pack;
-      expectedLoose = loose;
-    }
     assert.deepEqual(pack, expectedPack);
     assert.deepEqual(loose, expectedLoose);
   }
   assert.equal(exports.memory.buffer, memory);
 });
+
+function checkSha256Objects(exports, head, commit, discovery, upload) {
+  const target = `objects/${head.slice(0, 2)}/${head.slice(2)}`;
+const pack = call(exports, frame(parts, "git-upload-pack", upload), 1, 1);
+assert.equal(pack.status, 200);
+const bytes = pack.body.subarray(8);
+assert.deepEqual(createHash("sha256").update(bytes.subarray(0, -32)).digest(), bytes.subarray(-32));
+const loose = call(exports, frame(parts, target), 0, 1);
+assert.deepEqual(inflateSync(loose.body), Buffer.concat([Buffer.from(`commit ${commit.length}\0`), commit]));
+assert.deepEqual(call(exports, frame(parts, "info/refs?service=git-upload-pack"), 0, 1), discovery);
+}
 
 test("SHA-256 Wasm snapshots match independent IDs and retain fixed memory", () => {
   const exports = instance();
@@ -222,17 +238,10 @@ test("SHA-256 Wasm snapshots match independent IDs and retain fixed memory", () 
   const head = /([0-9a-f]{64}) HEAD\0/.exec(discovery.body.toString())[1];
   assert.equal(head, expected);
   assert.ok(discovery.body.includes(Buffer.from("object-format=sha256")));
-  const target = `objects/${head.slice(0, 2)}/${head.slice(2)}`;
   for (const capability of ["", " object-format=sha256"]) {
     const upload = Buffer.concat([packet(`want ${head}${capability}\n`), Buffer.from("0000"), packet("done\n")]);
     for (let round = 0; round < 32; round++) {
-      const pack = call(exports, frame(parts, "git-upload-pack", upload), 1, 1);
-      assert.equal(pack.status, 200);
-      const bytes = pack.body.subarray(8);
-      assert.deepEqual(createHash("sha256").update(bytes.subarray(0, -32)).digest(), bytes.subarray(-32));
-      const loose = call(exports, frame(parts, target), 0, 1);
-      assert.deepEqual(inflateSync(loose.body), Buffer.concat([Buffer.from(`commit ${commit.length}\0`), commit]));
-      assert.deepEqual(call(exports, frame(parts, "info/refs?service=git-upload-pack"), 0, 1), discovery);
+      checkSha256Objects(exports, head, commit, discovery, upload);
     }
   }
   const mismatch = Buffer.concat([packet(`want ${head} object-format=sha1\n`), Buffer.from("0000"), packet("done\n")]);
@@ -329,18 +338,17 @@ function streamingCall(exports, input, method, format, capacity) {
 function assertStreamMatches(actual, expected, sideband) {
   assert.equal(actual.status, expected.status);
   assert.equal(actual.type, expected.type);
-  if (sideband) {
-    const marker = packet("packfile\n");
-    const start = expected.body.indexOf(marker);
-    if (start >= 0) {
-      assert.deepEqual(actual.body.subarray(0, start), expected.body.subarray(0, start));
-      assert.deepEqual(decodeNegotiation(actual.body.subarray(start), "side-band-64k"), decodeNegotiation(expected.body.subarray(start), "side-band-64k"));
-    } else assert.deepEqual(decodeNegotiation(actual.body, "side-band-64k"), decodeNegotiation(expected.body, "side-band-64k"));
-  } else assert.deepEqual(actual, expected);
+  if (!sideband) {
+    assert.deepEqual(actual, expected);
+    return;
+  }
+  const marker = packet("packfile\n");
+  const start = Math.max(0, expected.body.indexOf(marker));
+  assert.deepEqual(actual.body.subarray(0, start), expected.body.subarray(0, start));
+  assert.deepEqual(decodeNegotiation(actual.body.subarray(start), "side-band-64k"), decodeNegotiation(expected.body.subarray(start), "side-band-64k"));
 }
 
-function checkStreamingTarget(first, second, input, method, format, sideband) {
-  const expected = call(first, input, method, format, true);
+function checkStreamingTarget(first, second, input, method, format, sideband, expected = call(first, input, method, format, true)) {
   for (const capacity of [1, 7, 1024, OUTPUT_BYTES]) {
     assertStreamMatches(streamingCall(first, input, method, format, capacity), expected, sideband);
   }
@@ -355,10 +363,7 @@ function checkStreamingTarget(first, second, input, method, format, sideband) {
 }
 
 function checkStreamingVersion(first, second, format, version, head) {
-  const body = version === 2 ? Buffer.concat([
-    packet("command=fetch\n"), packet(`object-format=${format === 0 ? "sha1" : "sha256"}\n`),
-    Buffer.from("0001"), packet(`want ${head}\n`), packet("done\n"), Buffer.from("0000"),
-  ]) : Buffer.concat([packet(`want ${head}\n`), Buffer.from("0000"), packet("done\n")]);
+  const body = fetchBody(head, format, version);
   const protocol = version === 0 ? "" : `version=${version}`;
   const cases = [
     ["info/refs?service=git-upload-pack", Buffer.alloc(0), 0],

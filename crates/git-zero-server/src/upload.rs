@@ -16,21 +16,30 @@ pub(crate) fn capabilities(selection: bool) -> &'static [u8] {
 #[derive(Clone, Copy, Default)]
 struct Capabilities(u8);
 
+const CAPABILITY_FLAGS: &[(&[u8], u8)] = &[
+    (b"multi_ack", 1),
+    (b"multi_ack_detailed", 2),
+    (b"side-band", 4),
+    (b"side-band-64k", 8),
+    (b"no-progress", 16),
+    (b"shallow", 64),
+    (b"filter", 128),
+];
+
 fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u8> {
-    match capability {
-        b"multi_ack" => Ok(1),
-        b"multi_ack_detailed" => Ok(2),
-        b"side-band" => Ok(4),
-        b"side-band-64k" => Ok(8),
-        b"no-progress" => Ok(16),
-        b"shallow" => Ok(64),
-        b"filter" => Ok(128),
-        b"object-format=sha1" | b"object-format=sha256" if capability == format.capability() => {
-            Ok(32)
-        }
-        b"object-format=sha1" | b"object-format=sha256" | b"" => Err(Error::InvalidRequest),
-        _ => Err(Error::Unsupported),
+    if capability == format.capability() {
+        return Ok(32);
     }
+    if matches!(
+        capability,
+        b"object-format=sha1" | b"object-format=sha256" | b""
+    ) {
+        return Err(Error::InvalidRequest);
+    }
+    CAPABILITY_FLAGS
+        .iter()
+        .find_map(|&(name, flag)| (name == capability).then_some(flag))
+        .ok_or(Error::Unsupported)
 }
 
 impl Capabilities {
@@ -74,7 +83,9 @@ pub(crate) struct UploadRequest<'a> {
     capabilities: Capabilities,
     haves: &'a [u8],
     v2: bool,
-    pub extensions: crate::fetch::Extensions<'a>,
+    #[cfg(feature = "read")]
+    shallow_body: &'a [u8],
+    pub extensions: crate::fetch::Extensions,
     #[cfg(feature = "read")]
     include_tags: bool,
 }
@@ -103,7 +114,7 @@ fn parse_wants(
     bytes: &mut &[u8],
     format: ObjectFormat,
     mut want: impl FnMut(ObjectId) -> Result<()>,
-    extensions: &mut crate::fetch::Extensions<'_>,
+    extensions: &mut crate::fetch::Extensions,
 ) -> Result<Capabilities> {
     let mut wanted = false;
     let mut extended = false;
@@ -115,7 +126,7 @@ fn parse_wants(
             }
             // Shallow commands use the server's advertisement; Git does not
             // echo `shallow` in its want capabilities. Filter is negotiated.
-            extensions.validate(true, capabilities.0 & 128 != 0)?;
+            extensions.require_filter_capability(capabilities.0 & 128 != 0)?;
             return wanted.then_some(capabilities).ok_or(Error::InvalidRequest);
         };
         let line = request_line(line);
@@ -163,19 +174,22 @@ impl<'a> UploadRequest<'a> {
         version: crate::route::Version,
         want: impl FnMut(ObjectId) -> Result<()>,
     ) -> Result<Self> {
-        let mut extensions = crate::fetch::Extensions::new(bytes);
+        let mut extensions = crate::fetch::Extensions::default();
+        #[cfg(feature = "read")]
+        let shallow_body = bytes;
         if version == crate::route::Version::V2 {
             let command = crate::v2::Command::parse(bytes, format)?.ok_or(Error::InvalidRequest)?;
             if command.name != b"fetch" {
                 return Err(Error::InvalidRequest);
             }
-            extensions = crate::fetch::Extensions::new(command.args);
             let fetch = crate::v2::Fetch::parse(command.args, format, want, &mut extensions)?;
             return Ok(Self {
                 done: fetch.done,
                 capabilities: Capabilities::default(),
                 haves: command.args,
                 v2: true,
+                #[cfg(feature = "read")]
+                shallow_body: command.args,
                 extensions,
                 #[cfg(feature = "read")]
                 include_tags: fetch.include_tags,
@@ -187,6 +201,8 @@ impl<'a> UploadRequest<'a> {
             capabilities,
             haves: bytes,
             v2: false,
+            #[cfg(feature = "read")]
+            shallow_body,
             extensions,
             #[cfg(feature = "read")]
             include_tags: false,
@@ -209,25 +225,19 @@ impl<'a> UploadRequest<'a> {
         if self.extensions.options.depth.is_none() || (self.v2 && !self.done) {
             return Ok(());
         }
-        let changed = objects
+        let mut changes = objects
             .iter()
             .flatten()
-            .any(|object| object.is_shallow() || object.is_unshallow());
-        if self.v2 && !changed {
+            .filter_map(shallow_change)
+            .peekable();
+        if self.v2 && changes.peek().is_none() {
             return Ok(());
         }
         if self.v2 {
             pktline::write(output, b"shallow-info\n")?;
         }
-        for object in objects.iter().flatten() {
-            let marker: &[u8] = if object.is_shallow() {
-                b"shallow "
-            } else if object.is_unshallow() {
-                b"unshallow "
-            } else {
-                continue;
-            };
-            pktline::write_parts(output, &[marker, &object.id.to_hex(), b"\n"])?;
+        for (marker, id) in changes {
+            pktline::write_parts(output, &[marker, &id.to_hex(), b"\n"])?;
         }
         output.write_all(if self.v2 { b"0001" } else { b"0000" })
     }
@@ -263,6 +273,18 @@ impl<'a> UploadRequest<'a> {
         core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten())
             .filter_map(have_id)
             .filter_map(move |id| common_commit(repository, id).transpose())
+    }
+
+    #[cfg(feature = "read")]
+    pub fn shallow(&self) -> impl Iterator<Item = Result<ObjectId>> + '_ {
+        let mut bytes = self.shallow_body;
+        core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten()).filter_map(|packet| {
+            let Packet::Data(line) = packet else {
+                return None;
+            };
+            let hex = line.strip_prefix(b"shallow ")?;
+            Some(ObjectId::from_hex(hex.strip_suffix(b"\n").unwrap_or(hex)))
+        })
     }
 
     #[cfg(feature = "read")]
@@ -313,6 +335,17 @@ impl<'a> UploadRequest<'a> {
     pub(crate) fn band(&self) -> u8 {
         // V2 always frames its packfile section on sideband channel 1.
         if self.v2 { 2 } else { self.capabilities.band() }
+    }
+}
+
+#[cfg(feature = "read")]
+fn shallow_change(object: &git_zero_core::ValidationMetadata) -> Option<(&'static [u8], ObjectId)> {
+    if object.is_shallow() {
+        Some((b"shallow ", object.id))
+    } else if object.is_unshallow() {
+        Some((b"unshallow ", object.id))
+    } else {
+        None
     }
 }
 

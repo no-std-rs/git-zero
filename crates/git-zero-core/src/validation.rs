@@ -234,6 +234,54 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
     /// Work metadata retains shallow/unshallow markers until the next selection.
     /// All structural reads, including revisits after a shorter merge path,
     /// consume one budget. Retries reset depths, exclusions and boundary markers.
+    ///
+    /// `history` contains common roots followed by the client's shallow IDs.
+    /// Each work/index slice needs one slot per repository object. Extra slots
+    /// remain untouched. The returned indices use provider enumeration order;
+    /// inspect only the first `object_count()` work slots for boundary updates.
+    /// A depth request may resend common objects, while an ordinary request
+    /// subtracts common history only as far as the client's declared boundaries.
+    ///
+    /// Empty wants, zero/oversized depth and absent or non-commit shallow IDs
+    /// return `InvalidRequest`. Missing wanted/common objects return
+    /// `ObjectNotFound`; short arrays or scratch return `BufferTooSmall`, and
+    /// exhausted structural-read budgets return `LimitExceeded`. No result is
+    /// published on failure; reuse the same arrays for a fresh attempt.
+    ///
+    /// This example selects a depth-one snapshot without its blob. The root
+    /// commit is a shallow boundary even though it has no parents, matching Git.
+    /// The source, validation index and per-request work arrays are independent.
+    ///
+    /// ```
+    /// # #[cfg(feature = "write")]
+    /// # fn main() -> git_zero_core::Result<()> {
+    /// use git_zero_core::{
+    ///     BlobFilter, FetchOptions, File, Repository, SelectionOptions, Snapshot,
+    ///     ValidatedRepository,
+    /// };
+    /// let files = [File { name: "hello.txt", contents: b"hello\n" }];
+    /// let (mut tree, mut commit) = ([0; 128], [0; 512]);
+    /// let snapshot = Snapshot::new(&files, &mut tree, &mut commit)?;
+    /// let (mut metadata, mut by_id) = ([None; 3], [0; 3]);
+    /// let repository = ValidatedRepository::new(
+    ///     &snapshot, &mut metadata, &mut by_id, &mut [0; 64], &mut [0; 128],
+    /// )?;
+    /// let (mut work, mut indices) = ([None; 3], [0; 3]);
+    /// let wanted = [repository.head()];
+    /// let selected = repository.select_bounded_fetch(
+    ///     &wanted, (core::iter::empty(), core::iter::empty()),
+    ///     &mut work, &mut indices, (&mut [0; 64], &mut [0; 128]),
+    ///     (SelectionOptions { graph_read_limit: 4096, include_tags: false },
+    ///      FetchOptions { depth: Some(1), filter: BlobFilter::None }),
+    /// )?;
+    /// assert_eq!(selected.len(), 2); // Commit and tree, with no blob.
+    /// let boundary = work.iter().flatten().find(|object| object.is_shallow()).unwrap();
+    /// assert_eq!(boundary.id, repository.head());
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "write"))]
+    /// # fn main() {}
+    /// ```
     pub fn select_bounded_fetch<'selected>(
         &self,
         roots: &[ObjectId],
@@ -378,18 +426,16 @@ fn filter_blobs(
     roots: &[ObjectId],
     filter: BlobFilter,
 ) {
-    if filter == BlobFilter::All {
-        return;
-    }
+    let limit = match filter {
+        BlobFilter::All => return,
+        BlobFilter::None => 0,
+        BlobFilter::Limit(limit) => limit,
+    };
     for slot in objects {
         let object = slot.as_mut().expect("validated metadata");
         if object.info.kind == ObjectKind::Blob
             && !roots.contains(&object.id)
-            && match filter {
-                BlobFilter::All => false,
-                BlobFilter::None => true,
-                BlobFilter::Limit(limit) => object.info.size >= limit,
-            }
+            && object.info.size >= limit
         {
             object.reached = false;
         }
@@ -505,7 +551,7 @@ fn walk(
             .expect("initialized metadata")
             .checked = true;
         let mut body = Body::budgeted(repository, index, read_scratch, budget.as_deref_mut())?;
-        let object = metadata(objects, index);
+        let object = *metadata(objects, index);
         match object.info.kind {
             ObjectKind::Commit => {
                 let stop = history.limit.is_some_and(|limit| object.depth >= limit)
@@ -524,8 +570,7 @@ fn walk(
                 objects[index]
                     .as_mut()
                     .expect("initialized metadata")
-                    .shallow = history.limit.is_some_and(|limit| object.depth >= limit)
-                    || (history.client && object.client_shallow);
+                    .shallow = stop;
             }
             ObjectKind::Tree => validate_tree(&mut body, parse_scratch, objects, by_id)?,
             ObjectKind::Blob => {}
@@ -599,8 +644,8 @@ fn peel(
     Err(Error::InvalidObject)
 }
 
-fn metadata(objects: &[Option<ValidationMetadata>], index: usize) -> ValidationMetadata {
-    objects[index].expect("initialized metadata")
+fn metadata(objects: &[Option<ValidationMetadata>], index: usize) -> &ValidationMetadata {
+    objects[index].as_ref().expect("initialized metadata")
 }
 
 fn find(objects: &[Option<ValidationMetadata>], by_id: &[usize], id: ObjectId) -> Option<usize> {

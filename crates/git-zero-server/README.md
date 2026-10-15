@@ -11,6 +11,11 @@ Part of [git-zero](https://github.com/no-std-rs/git-zero).
 Enable `read` for `SelectionStorage` and `serve_with_selection`, which select
 bounded reachable packs from a validated repository with independent refs.
 
+`SelectionBuffers<WANTS, OBJECTS, READ, PARSE>` optionally owns those fixed arrays.
+Construction needs no allocator, and `storage(graph_read_limit)` lends a request
+view. Capacity and storage-byte queries expose its host memory budget. Hosts can
+still supply their own arrays through `SelectionStorage`.
+
 V0 supports single ACK, `multi_ack`, `multi_ack_detailed`, `side-band`,
 `side-band-64k` and `no-progress` in SHA-1/SHA-256. Requests replay wants and
 common commit haves each round. Selection excludes their complete reachable
