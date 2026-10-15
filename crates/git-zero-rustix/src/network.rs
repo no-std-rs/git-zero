@@ -16,7 +16,9 @@ pub use client::HttpTransport;
 #[cfg(feature = "server")]
 mod server;
 #[cfg(feature = "server")]
-pub use server::{accept, listen, local_port, read_request, respond, respond_headers};
+pub use server::{
+    accept, listen, local_port, read_request, respond, respond_headers, respond_stream,
+};
 
 #[cfg(not(target_vendor = "apple"))]
 const SOCKET_FLAGS: SocketFlags = SocketFlags::CLOEXEC;

@@ -46,6 +46,11 @@ pub fn write_selected_with_scratch(
     scratch: &mut [u8],
     output: &mut impl Write,
 ) -> Result<ObjectId> {
+    validate_order(repository, indices)?;
+    write_order(repository, indices.iter().copied(), scratch, output)
+}
+
+pub(super) fn validate_order(repository: &impl Repository, indices: &[usize]) -> Result<()> {
     let ordered = indices.windows(2).all(|pair| pair[0] < pair[1]);
     for (position, &index) in indices.iter().enumerate() {
         if index >= repository.object_count() {
@@ -55,7 +60,7 @@ pub fn write_selected_with_scratch(
             return Err(Error::InvalidObject);
         }
     }
-    write_order(repository, indices.iter().copied(), scratch, output)
+    Ok(())
 }
 
 fn write_order(
@@ -87,7 +92,7 @@ fn write_order(
     Ok(checksum)
 }
 
-fn write_entry_header(info: ObjectInfo, output: &mut impl Write) -> Result<()> {
+pub(super) fn write_entry_header(info: ObjectInfo, output: &mut impl Write) -> Result<()> {
     let mut size = info.size;
     let mut byte = ((info.kind as u8) << 4) | (size as u8 & 15);
     size >>= 4;

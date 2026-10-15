@@ -1,13 +1,13 @@
 /// Streaming Adler-32. Reducing every 5552 bytes bounds both sums even for 0xff.
 /// The pending count spans calls so one-byte inflation uses the same batching.
-pub(super) struct Adler32 {
+pub(crate) struct Adler32 {
     s1: u32,
     s2: u32,
     pending: u16,
 }
 
 impl Adler32 {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             s1: 1,
             s2: 0,
@@ -16,7 +16,7 @@ impl Adler32 {
     }
 
     #[inline]
-    pub(super) fn update(&mut self, mut bytes: &[u8]) {
+    pub(crate) fn update(&mut self, mut bytes: &[u8]) {
         let (mut s1, mut s2) = (self.s1, self.s2);
         while !bytes.is_empty() {
             let count = bytes.len().min(5552 - usize::from(self.pending));
@@ -36,7 +36,7 @@ impl Adler32 {
         self.s2 = s2;
     }
 
-    pub(super) fn value(&self) -> u32 {
+    pub(crate) fn value(&self) -> u32 {
         ((self.s2 % 65521) << 16) | (self.s1 % 65521)
     }
 }

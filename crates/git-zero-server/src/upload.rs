@@ -211,11 +211,15 @@ impl<'a> UploadRequest<'a> {
     pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
         PackOutput {
             output,
-            // V2 always frames its packfile section on sideband channel 1.
-            band: if self.v2 { 2 } else { self.capabilities.band() },
+            band: self.band(),
             buffer: [0; 1024],
             length: 0,
         }
+    }
+
+    pub(crate) fn band(&self) -> u8 {
+        // V2 always frames its packfile section on sideband channel 1.
+        if self.v2 { 2 } else { self.capabilities.band() }
     }
 }
 

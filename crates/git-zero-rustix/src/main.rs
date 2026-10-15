@@ -2,9 +2,10 @@ use git_zero::{
     Error, File, Snapshot, ValidatedRepository,
     client::{self, Protocol},
     http::{self, Response},
-    io::SliceWriter,
 };
-use git_zero_rustix::{HttpTransport, accept, listen, local_port, read_request, respond};
+use git_zero_rustix::{
+    HttpTransport, accept, listen, local_port, read_request, respond, respond_stream,
+};
 use std::{
     io::{self, Write as _},
     net::SocketAddrV4,
@@ -59,9 +60,11 @@ fn serve(port: u16) -> git_zero::Result<()> {
     println!("http://127.0.0.1:{}/repo.git", local_port(&listener)?);
     io::stdout().flush().map_err(|_| Error::Backend)?;
     let mut request_storage = [0; 65536];
-    let mut response_storage = [0; 131072];
+    let mut control = [0; 8192];
+    let mut staging = [0; 1024];
     loop {
         let socket = accept(&listener)?;
+        let mut started = false;
         let result = (|| {
             let mut request = read_request(&socket, &mut request_storage)?;
             let Some(path) = request.path.strip_prefix("/repo.git/") else {
@@ -75,9 +78,10 @@ fn serve(port: u16) -> git_zero::Result<()> {
                 );
             };
             request.path = path;
-            let mut output = SliceWriter::new(&mut response_storage);
-            let response = http::serve(&repository, request, &mut output)?;
-            respond(&socket, response, output.as_bytes())
+            let mut encoder =
+                http::stream::ResponseEncoder::new(&repository, request, &mut control)?;
+            started = true;
+            respond_stream(&socket, &repository, &mut encoder, &mut staging)
         })();
         if let Err(error) = result {
             let status = match error {
@@ -85,14 +89,16 @@ fn serve(port: u16) -> git_zero::Result<()> {
                 Error::Backend => 500,
                 _ => 400,
             };
-            let _ = respond(
-                &socket,
-                Response {
-                    status,
-                    content_type: "text/plain",
-                },
-                b"Request failed\n",
-            );
+            if !started {
+                let _ = respond(
+                    &socket,
+                    Response {
+                        status,
+                        content_type: "text/plain",
+                    },
+                    b"Request failed\n",
+                );
+            }
             eprintln!("request: {error:?}");
         }
     }

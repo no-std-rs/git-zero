@@ -44,7 +44,7 @@ function capture(request, env) {
 }
 
 function invoke(module, parts, target, body, method, headers) {
-  // Each synchronous call owns an instance, so overlapping fetches cannot share
+  // Each response owns an instance, so overlapping fetches cannot share
   // Rust's fixed input/output arrays. The compiled module itself is reusable.
   const { exports } = new WebAssembly.Instance(module, {});
   const encoded = parts.map((part) => encoder.encode(part));
@@ -71,13 +71,30 @@ function invoke(module, parts, target, body, method, headers) {
     offset += value.length;
   }
   input.set(body, offset);
-  const result = exports.serve_http(length, method === "POST" ? 1 : 0, 0);
+  const result = exports.stream_start(length, method === "POST" ? 1 : 0, 0);
   if (result < 0) return new Response("Invalid or oversized Git request\n", { status: result === -1 ? 413 : 400 });
-  const output = new Uint8Array(exports.memory.buffer, exports.output_ptr(), result);
-  const status = new DataView(output.buffer, output.byteOffset, result).getUint16(0, true);
-  return new Response(output.slice(3), {
+  const output = new Uint8Array(exports.memory.buffer, exports.output_ptr(), 3);
+  const status = new DataView(output.buffer, output.byteOffset, 3).getUint16(0, true);
+  const type = CONTENT_TYPES[output[2]];
+  const stream = new ReadableStream({
+    pull(controller) {
+      const count = exports.stream_read(16384);
+      if (count < 0) {
+        exports.stream_cancel();
+        controller.error(new Error("Git response failed"));
+      } else if (count === 0) {
+        exports.stream_cancel();
+        controller.close();
+      } else {
+        // Rust reuses OUTPUT on each pull; queued JS chunks own their bytes.
+        controller.enqueue(new Uint8Array(exports.memory.buffer, exports.output_ptr(), count).slice());
+      }
+    },
+    cancel() { exports.stream_cancel(); },
+  }, { highWaterMark: 0 });
+  return new Response(stream, {
     status,
-    headers: { "Content-Type": CONTENT_TYPES[output[2]], "Cache-Control": "no-store" },
+    headers: { "Content-Type": type, "Cache-Control": "no-store" },
   });
 }
 

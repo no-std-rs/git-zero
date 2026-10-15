@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { gzipSync } from "node:zlib";
 import { createWorker } from "../src/worker.mjs";
 
@@ -36,10 +38,10 @@ async function withServer(callback) {
       if (incoming.method === "POST") init.body = Buffer.concat(parts);
       const response = await worker.fetch(request(url, init), env);
       outgoing.writeHead(response.status, Object.fromEntries(response.headers));
-      outgoing.end(Buffer.from(await response.arrayBuffer()));
+      await pipeline(Readable.fromWeb(response.body), outgoing);
     } catch (error) {
-      outgoing.writeHead(500);
-      outgoing.end(String(error));
+      if (outgoing.headersSent) outgoing.destroy(error);
+      else { outgoing.writeHead(500); outgoing.end(String(error)); }
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -135,3 +137,29 @@ for (const version of [0, 1, 2, "dumb"]) {
     });
   });
 }
+
+
+test("slow and cancelled response consumers leave overlapping Worker streams independent", async () => {
+  const url = await snapshot();
+  const target = `${url}/info/refs?service=git-upload-pack`;
+  const first = await worker.fetch(new Request(target));
+  const second = await worker.fetch(new Request(target));
+  const reader = first.body.getReader();
+  const prefix = await reader.read();
+  assert.equal(prefix.done, false);
+  // Drain another response while this reader retains its chunk and pauses.
+  const expected = await second.text();
+  const chunks = [Buffer.from(prefix.value)];
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    chunks.push(Buffer.from(next.value));
+  }
+  assert.equal(Buffer.concat(chunks).toString(), expected);
+  const cancelled = await worker.fetch(new Request(target));
+  const cancelledReader = cancelled.body.getReader();
+  await cancelledReader.read();
+  await cancelledReader.cancel();
+  assert.equal((await cancelledReader.read()).done, true);
+  assert.equal(await (await worker.fetch(new Request(target))).text(), expected);
+});

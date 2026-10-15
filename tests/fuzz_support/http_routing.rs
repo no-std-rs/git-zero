@@ -56,6 +56,47 @@ pub fn routing(data: &[u8]) {
             }
         }
     }
+    // Replay intake with arbitrary fragmentation, then drive an independent
+    // cursor through guarded output slices and terminal cancellation.
+    let mut intake = [0; MAX_INPUT];
+    let mut incoming = http::stream::RequestBody::new(&mut intake, Some(body.len())).unwrap();
+    for fragment in body.chunks(1 + usize::from(data[1]) % 31) {
+        incoming.push(fragment).unwrap();
+    }
+    let body = incoming.finish().unwrap();
+    let mut control = [0; MAX_INPUT];
+    let request = Request { body, ..request };
+    if let Ok(mut encoder) =
+        http::stream::ResponseEncoder::new(&repository, request, &mut control[..capacity])
+    {
+        let response = encoder.response();
+        let mut bytes = [0; MAX_INPUT];
+        let mut staged = SliceWriter::new(&mut bytes);
+        for _ in 0..MAX_INPUT * 2 {
+            let mut guard = [0xa5; 66];
+            let end = 2 + usize::from(data[1]) % 64;
+            let count = encoder.read(&repository, &mut guard[1..end]).unwrap();
+            assert_eq!(guard[0], 0xa5);
+            assert!(guard[end..].iter().all(|&byte| byte == 0xa5));
+            if count == 0 {
+                break;
+            }
+            git_zero::io::Write::write_all(&mut staged, &guard[1..1 + count]).unwrap();
+        }
+        assert_eq!(encoder.read(&repository, &mut [0; 1]).unwrap(), 0);
+        if response.content_type == "application/x-git-upload-pack-result" {
+            if request.git_protocol == Some("version=2") {
+                check_v2(staged.as_bytes());
+            } else {
+                check_upload(staged.as_bytes());
+            }
+        }
+        encoder.cancel();
+        assert_eq!(
+            encoder.read(&repository, &mut [0; 1]),
+            Err(git_zero::Error::InvalidRequest)
+        );
+    }
 }
 
 fn check_v2(mut wire: &[u8]) {

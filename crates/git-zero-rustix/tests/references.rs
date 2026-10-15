@@ -124,7 +124,8 @@ fn serve<R: Repository + ?Sized>(
     stopped: &AtomicBool,
 ) {
     let mut request_storage = [0; 4096];
-    let mut response_storage = [0; 262_144];
+    let mut response_storage = [0; 8192];
+    let mut staging = [0; 37];
     let mut wants = [ObjectId::Sha1([0; 20]); 16];
     let mut metadata = [None; OBJECT_CAPACITY];
     let mut indices = [0; OBJECT_CAPACITY];
@@ -145,12 +146,19 @@ fn serve<R: Repository + ?Sized>(
         }
         let mut request = read_request(&socket, &mut request_storage).unwrap();
         request.path = request.path.strip_prefix("/repo.git/").unwrap();
-        let mut output = SliceWriter::new(&mut response_storage);
         let result = allocations::without_allocations(|| {
-            http::serve_with_selection(repository, request, &mut selection, &mut output)
+            http::stream::ResponseEncoder::with_selection(
+                repository,
+                request,
+                &mut selection,
+                &mut response_storage,
+            )
         });
         match result {
-            Ok(response) => respond(&socket, response, output.as_bytes()).unwrap(),
+            Ok(mut encoder) => {
+                git_zero_rustix::respond_stream(&socket, repository, &mut encoder, &mut staging)
+                    .unwrap()
+            }
             Err(error) => {
                 let status = match error {
                     Error::BufferTooSmall | Error::LimitExceeded => 413,

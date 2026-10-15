@@ -98,7 +98,14 @@ annotated tags, deep trees, merge histories, binary blobs, and both object forma
   Native real-Git comparisons cover SHA-1/SHA-256, all HEAD states, exact pack
   membership and incremental fetch; Worker Git clones cover v0/v1/v2 and its
   fixed-memory ABI checks both formats. Shallow/filter extensions stay absent.
-- [ ] Incremental requests and responses, backpressure, cancellation, and resume points.
+- [x] Incremental requests and responses, backpressure, cancellation, and resume points.
+  Caller-owned bounded request intake waits for complete framing before command
+  parsing. Pull cursors retain pack/hash/sideband state without response-sized
+  storage; hosts stage unsent bytes and resume when writable. Terminal cancellation
+  prevents further reads or success terminators. Native close-delimited streaming
+  passes the Git-oracle matrix in both formats; Worker pulls drive streamed
+  responses. HTTP chunked request decoding and nonblocking socket polling remain
+  adapter work in section 4.
 - [ ] Shallow/filter requests with bounded traversal and documented rejection paths.
 - [x] Proper method/content-type checks, service selection, protocol-version
   handling, route normalization, and a wider malformed-request corpus.
@@ -142,7 +149,12 @@ baseline without blocking server parity.
 - [ ] Native IPv6/listener and TLS integration, HTTP/1.1 request/response framing,
   chunked transfer, keep-alive, timeouts, and configurable connection/body limits.
 - [ ] Poll-based `rustix` server with independent per-connection caller-owned state.
-- [ ] Streaming Wasm server ABI and host I/O callbacks without Rust allocation.
+- [x] Streaming Wasm server ABI and host I/O callbacks without Rust allocation.
+  The start/read/cancel ABI pins one immutable snapshot per instance and streams
+  into bounded host staging through ReadableStream pull/cancel callbacks. Input
+  remains bounded and complete before prepare. Tests cover fragmented output,
+  cancellation, restart, independent instances, both formats and fixed memory;
+  real-Git Worker clones cover v0/v1/v2 and dumb HTTP.
 - [ ] Worker integration with async storage, streaming responses, and isolate-safe reuse.
 - [ ] Replace long embedded snapshot URLs with optional immutable persisted snapshots;
   preserve stable IDs across discovery and downloads, retries, and isolate changes.
@@ -259,8 +271,8 @@ kernel-scale benchmarks separate from mandatory, reproducible correctness checks
   configured limits, and remaining optional work; no advertised feature lacks tests.
 
 Start further client development after this gate passes. The next implementation
-step is incremental request/response state, backpressure, cancellation and
-resume points, followed by bounded shallow/filter traversal.
+step is bounded shallow/filter traversal, followed by packed dumb HTTP publication
+and the remaining native/Worker hosting work.
 
 ## 7. Read/write server support
 

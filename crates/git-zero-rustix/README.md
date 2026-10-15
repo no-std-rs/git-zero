@@ -19,3 +19,9 @@ compressed body and expanded body must all fit. Inflation borrows a fixed 32 KiB
 stack history window and validates the gzip checksum and size before routing.
 Duplicate framing/selector headers, truncated bodies and unsupported transfer or
 content encodings are rejected. Chunked framing remains unsupported.
+
+`respond_stream` sends a prepared `http::stream::ResponseEncoder` with HTTP/1.0
+close-delimited framing and caller-owned output staging. It writes all staged
+bytes before pulling again, cancels on errors, and requires the host to close the
+socket on return. It remains a blocking adapter; readiness polling, keep-alive,
+chunked input, TLS and HTTP/1.1 framing remain future work.

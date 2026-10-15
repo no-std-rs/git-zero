@@ -10,6 +10,7 @@ use git_zero_core::{
     repository::{resolve_reference, uses_only_head},
 };
 mod route;
+pub mod stream;
 mod upload;
 mod v2;
 #[cfg(feature = "read")]
@@ -294,18 +295,7 @@ fn serve_loose(
         status: 404,
         content_type: "text/plain; charset=utf-8",
     };
-    let width = repository.object_format().hex_length();
-    if path.len() != width + 1 || path[2] != b'/' {
-        return Ok(missing);
-    }
-    let mut storage = [0; 64];
-    let hex = &mut storage[..width];
-    hex[..2].copy_from_slice(&path[..2]);
-    hex[2..].copy_from_slice(&path[3..]);
-    let index = ObjectId::from_hex(hex)
-        .ok()
-        .and_then(|id| repository.find_index(id));
-    let Some(index) = index else {
+    let Some(index) = loose_index(repository, path) else {
         return Ok(missing);
     };
     pack::write_loose_with_scratch(repository, index, scratch, output)?;
@@ -313,6 +303,20 @@ fn serve_loose(
         status: 200,
         content_type: "application/x-git-loose-object",
     })
+}
+
+fn loose_index(repository: &impl Repository, path: &[u8]) -> Option<usize> {
+    let width = repository.object_format().hex_length();
+    if path.len() != width + 1 || path[2] != b'/' {
+        return None;
+    }
+    let mut storage = [0; 64];
+    let hex = &mut storage[..width];
+    hex[..2].copy_from_slice(&path[..2]);
+    hex[2..].copy_from_slice(&path[3..]);
+    ObjectId::from_hex(hex)
+        .ok()
+        .and_then(|id| repository.find_index(id))
 }
 
 fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {

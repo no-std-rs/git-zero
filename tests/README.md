@@ -145,9 +145,18 @@ objects match borrowed snapshot IDs and pack/HTTP bytes with read budgets from
 one byte to 64 KiB, across stored-DEFLATE block boundaries. A 1 MiB generated blob
 streams directly to Git's pack importer or loose files using bounded scratch;
 both object stores pass `fsck --strict`. Native smart/dumb clone and fetch tests
-also use that blob with 17-byte core read scratch and validate its checkout. The
-current native HTTP host still needs a complete response buffer, independently
-of the core object-read budget; streaming host I/O remains roadmap work.
+also stream that blob over HTTP with 17-byte output staging and validate its
+checkout. The reference-ref suite uses 37-byte staging and 8 KiB of control storage
+instead of a complete response buffer in both formats and all protocol versions.
+
+`streaming.rs` compares pull and synchronous pack/loose encoders across stored
+block boundaries, short reads, one-byte output slices, selection orders and both
+formats. It checks guards, allocation counts, state-size bounds, backend retry,
+independent cursors and terminal cancellation. Request intake checks fragment
+splits, length/EOF bounds and cancellation. The HTTP fuzz target replays fragmented
+intake and guarded response pulls. Native tests cancel disconnected streams.
+Worker ABI tests cover start/read/cancel, invalid capacities, restart, legacy
+compatibility and isolated instances within the existing 24-page ceiling.
 
 Builder tests check arrival-order independence, unchanged historical objects,
 slot capacity and failed-insertion atomicity, nested validation, exact commit

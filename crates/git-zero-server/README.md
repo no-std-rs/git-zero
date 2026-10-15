@@ -45,3 +45,22 @@ accept zero or one leading slash; refs decode reserved bytes exactly once.
 Service parameter names must be literal. Hosts own HTTP framing, content decoding,
 authentication and request/output capacities. Native and Worker examples bound
 both compressed and decompressed gzip bodies.
+
+`stream::RequestBody` accepts bounded fragments into caller-owned storage and
+checks declared length at EOF. Parsing still requires the complete bounded body;
+HTTP headers, gzip and chunked transfer decoding belong to the host.
+`stream::ResponseEncoder::new` prepares HEAD-only requests; `with_selection`
+prepares exact requested closures with the existing graph budgets. Preparation
+returns HTTP metadata after route/command/selection checks. Discovery, refs and
+ACKs must fit the caller's control buffer; pack and loose bodies use inline state
+and the slice supplied to each `read`. Keep the repository stable through EOF.
+
+A successful `read` advances the cursor. Stage its bytes until the transport has
+accepted them, including across short writes, then pull again. Pausing makes no
+object reads; each pull performs at most one provider-body read. Raw reads are
+bounded by output capacity; sideband uses at most 1 KiB of internal staging.
+`cancel` is terminal and suppresses further reads and success terminators. A
+backend read can be retried with the same stable provider; failed-call bytes are
+invalid. Once HTTP headers are sent, unrecoverable errors require aborting the
+transport. These cursors do not implement HTTP range requests or serialized
+cross-process checkpoints. Separate cursors and buffers permit overlapping work.

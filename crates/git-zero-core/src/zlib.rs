@@ -27,7 +27,7 @@
 //! # example().unwrap();
 //! # }
 //! ```
-mod adler;
+pub(crate) mod adler;
 
 /// zlib compressBound for its default window/memory settings (as used by Git).
 /// Includes wrapper/checksum overhead, with checked arithmetic. This is not a

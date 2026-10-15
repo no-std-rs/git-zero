@@ -129,6 +129,10 @@ name = "smart_client"
 required-features = ["client"]
 
 [[test]]
+name = "streaming"
+required-features = ["read", "server"]
+
+[[test]]
 name = "validation"
 required-features = ["read", "server"]
 
