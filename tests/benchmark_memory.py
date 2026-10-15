@@ -50,14 +50,16 @@ class TreeReader:
         self.start_time = None
         self.page_kib = os.sysconf("SC_PAGE_SIZE") // 1024
 
-    def stat(self, pid, budget):
-        data = budget.read(self.proc / str(pid) / "stat")
+    def parse_stat(self, data):
         if data is None:
             return None
         fields = data.rpartition(b")")[2].split()
         if len(fields) < 22:
             raise SamplingError("invalid /proc stat during process-tree RSS sampling")
         return fields[0], int(fields[1]), int(fields[19]), int(fields[21]) * self.page_kib
+
+    def stat(self, pid, budget):
+        return self.parse_stat(budget.read(self.proc / str(pid) / "stat"))
 
     def children(self, pid, budget):
         # Linux child lists are per thread; reading only the thread-group
@@ -68,7 +70,11 @@ class TreeReader:
                     if task.name.isdecimal():
                         budget.charge("tasks")
                         data = budget.read(Path(task.path) / "children")
-                        if data is not None:
+                        if data is None:
+                            live = self.parse_stat(budget.read(Path(task.path) / "stat"))
+                            if live is not None and live[0] not in (b"Z", b"X"):
+                                raise SamplingError("Linux proc children interface unavailable for live task")
+                        else:
                             yield from (int(value) for value in data.split())
         except (FileNotFoundError, ProcessLookupError):
             return

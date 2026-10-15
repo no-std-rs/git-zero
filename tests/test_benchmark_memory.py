@@ -16,6 +16,11 @@ from benchmark_memory import LIMITS, ProcessTreeRSS, SamplingError, TreeReader
 from interop import environment
 
 
+requires_children = unittest.skipUnless(
+    Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children").exists(),
+    "live sampling requires the Linux proc children interface")
+
+
 def line(process):
     with selectors.DefaultSelector() as selector:
         selector.register(process.stdout, selectors.EVENT_READ)
@@ -69,9 +74,11 @@ def proc_record(root, pid, parent, pages, children=(), start=1, task=None):
     directory = root / str(pid)
     directory.mkdir(exist_ok=True)
     fields = ["S", str(parent)] + ["0"] * 17 + [str(start), "0", str(pages)]
-    (directory / "stat").write_text(f"{pid} (name with ) parentheses) " + " ".join(fields))
+    stat = f"{pid} (name with ) parentheses) " + " ".join(fields)
+    (directory / "stat").write_text(stat)
     thread = directory / "task" / str(task or pid)
     thread.mkdir(parents=True, exist_ok=True)
+    (thread / "stat").write_text(stat)
     (thread / "children").write_text(" ".join(map(str, children)))
 
 
@@ -141,6 +148,22 @@ class ProcessTreeMemoryTests(unittest.TestCase):
             with self.assertRaisesRegex(SamplingError, "unavailable"):
                 final.report()
 
+    def test_missing_children_interface_fails_but_vanished_threads_are_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proc_record(root, 10, 1, 100)
+            (root / "10/task/10/children").unlink()
+            sampler = ProcessTreeRSS(10, 1, reader=TreeReader(10, proc=root))
+            with self.assertRaisesRegex(SamplingError, "children interface unavailable"):
+                with sampler:
+                    self.fail("missing kernel interface was accepted as an empty tree")
+            with self.assertRaisesRegex(SamplingError, "unavailable"):
+                sampler.report()
+            proc_record(root, 10, 1, 100)
+            (root / "10/task/99").mkdir()  # A task disappeared after scandir.
+            self.assertEqual(TreeReader(10, proc=root).sample(), (100 * sampler.reader.page_kib, 1))
+
+    @requires_children
     def test_sampling_failure_and_cancellation_stop_the_observer(self):
         with program("import time; print('ready', flush=True); time.sleep(60)") as process:
             self.assertEqual(line(process), "ready")
@@ -160,6 +183,7 @@ class ProcessTreeMemoryTests(unittest.TestCase):
             with self.assertRaisesRegex(SamplingError, "unavailable"):
                 cancelled.report()
 
+    @requires_children
     def test_server_exit_invalidates_the_observation(self):
         with program("import time; print('ready', flush=True); time.sleep(60)") as process:
             self.assertEqual(line(process), "ready")
@@ -171,6 +195,7 @@ class ProcessTreeMemoryTests(unittest.TestCase):
                     self.assertTrue(sampler.stop.wait(timeout=2))
             self.assertFalse(sampler.thread.is_alive())
 
+    @requires_children
     def test_live_thread_forked_child_and_grandchild_are_observed_together(self):
         leaf = "buffer=bytearray(16*1024*1024); buffer[::4096]=b'x'*4096; print('ready',flush=True); input()"
         child = ("import subprocess,sys\n"

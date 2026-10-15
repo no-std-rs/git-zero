@@ -424,7 +424,10 @@ produce a complete peak summary. Each sweep is bounded to 256 processes, 1024
 tasks, 1 MiB of reads (64 KiB per file), and 250 ms; the observer sleeps between
 sweeps. Read/permission errors, a replaced/exited frontend or exceeded bounds
 fail the workload and retain an explicit report error rather than silently
-publishing a smaller sum. Cancellation/timeouts stop the observer and clean up
+publishing a smaller sum. The kernel's
+[CONFIG_PROC_CHILDREN interface](https://github.com/torvalds/linux/blob/master/fs/proc/base.c)
+is required: a missing children file for a still-live task fails explicitly;
+a vanished task remains a tolerated exit race. Cancellation/timeouts stop the observer and clean up
 the owned command/server process groups, including descendants left after the
 frontend exits.
 
