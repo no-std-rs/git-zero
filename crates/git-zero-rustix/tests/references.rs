@@ -17,7 +17,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-const OBJECT_CAPACITY: usize = 128;
+const OBJECT_CAPACITY: usize = 256;
 
 struct Cleanup(PathBuf);
 impl Drop for Cleanup {
@@ -294,4 +294,10 @@ fn real_git_sha256_empty_repositories_match_git_servers() {
 fn real_git_sha1_empty_repositories_match_git_servers() {
     compare_format("empty", "sha1");
     compare_format("empty-custom", "sha1");
+}
+
+#[test]
+fn real_git_deep_binary_modes_and_packed_fixtures_match_git_servers_in_both_formats() {
+    compare_format("rich", "sha1");
+    compare_format("rich", "sha256");
 }
