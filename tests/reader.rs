@@ -354,6 +354,8 @@ fn generated_pack_and_http_bytes_match_borrowed_snapshots_for_every_budget() {
         }
         for (method, path, query, body) in requests {
             let request = Request {
+                content_type: None,
+                git_protocol: None,
                 method,
                 path: &path,
                 query,

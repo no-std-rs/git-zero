@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
+import { gzipSync } from "node:zlib";
 import { createWorker } from "../src/worker.mjs";
 
 const execute = promisify(execFile);
@@ -81,8 +82,31 @@ test("invalid snapshots, push and oversized metadata fail predictably", async ()
   assert.equal((await worker.fetch(new Request(`${url}/info/refs?service=git-receive-pack`))).status, 403);
 });
 
-for (const dumb of [false, true]) {
-  test(`real Git clones the Wasm Worker over ${dumb ? "dumb" : "smart"} HTTP`, { concurrency: true }, async () => {
+test("Worker validates upload metadata and decodes bounded gzip requests", async () => {
+  const url = await snapshot();
+  const packet = (line) => `${(Buffer.byteLength(line) + 4).toString(16).padStart(4, "0")}${line}`;
+  const body = packet("command=ls-refs\n") + "0001" + packet("symrefs\n") + "0000";
+  const headers = { "Git-Protocol": "version=2", "Content-Type": "application/x-git-upload-pack-request" };
+  const plain = await worker.fetch(new Request(`${url}/git-upload-pack`, { method: "POST", headers, body }));
+  assert.equal(plain.status, 200);
+  const compressed = await worker.fetch(new Request(`${url}/git-upload-pack`, { method: "POST", headers: { ...headers, "Content-Encoding": "gzip" }, body: gzipSync(body) }));
+  assert.equal(compressed.status, 200);
+  assert.equal(await compressed.text(), await plain.text());
+  const wrong = await worker.fetch(new Request(`${url}/git-upload-pack`, { method: "POST", headers: { ...headers, "Content-Type": "text/plain" }, body }));
+  assert.equal(wrong.status, 415);
+  const bomb = await worker.fetch(new Request(`${url}/git-upload-pack`, { method: "POST", headers: { ...headers, "Content-Encoding": "gzip" }, body: gzipSync("x".repeat(32769)) }));
+  assert.equal(bomb.status, 400);
+  // A large optional gzip name consumes wire budget even when output is tiny.
+  const named = gzipSync(body);
+  named[3] |= 8;
+  const oversized = Buffer.concat([named.subarray(0, 10), Buffer.alloc(32769, 97), Buffer.from([0]), named.subarray(10)]);
+  const wireLimit = await worker.fetch(new Request(`${url}/git-upload-pack`, { method: "POST", headers: { ...headers, "Content-Encoding": "gzip" }, body: oversized }));
+  assert.equal(wireLimit.status, 400);
+});
+
+for (const version of [0, 1, 2, "dumb"]) {
+  const dumb = version === "dumb";
+  test(`real Git clones the Wasm Worker over ${dumb ? "dumb" : `smart v${version}`} HTTP`, { concurrency: true }, async () => {
     await withServer(async (origin) => {
       const directory = await mkdtemp(join(tmpdir(), "git-zero-wasm-"));
       const gitEnv = {
@@ -90,7 +114,7 @@ for (const dumb of [false, true]) {
         GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0",
         ...(dumb ? { GIT_SMART_HTTP: "0" } : {}),
       };
-      const git = (...args) => execute("git", args, { env: gitEnv, timeout: 30000 });
+      const git = (...args) => execute("git", ["-c", `protocol.version=${dumb ? 0 : version}`, ...args], { env: gitEnv, timeout: 30000 });
       try {
         const cloneUrl = await snapshot(origin);
         // Independent real clients overlap against the same Worker handler and

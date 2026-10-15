@@ -65,9 +65,10 @@ pub(crate) struct UploadRequest<'a> {
     pub done: bool,
     capabilities: Capabilities,
     haves: &'a [u8],
+    v2: Option<crate::v2::Fetch<'a>>,
 }
 
-fn id(bytes: &[u8], format: ObjectFormat) -> Result<ObjectId> {
+pub(crate) fn id(bytes: &[u8], format: ObjectFormat) -> Result<ObjectId> {
     let id = ObjectId::from_hex(bytes)?;
     if id.format() != format || id.is_zero() {
         return Err(Error::InvalidRequest);
@@ -133,13 +134,28 @@ impl<'a> UploadRequest<'a> {
     pub fn parse(
         mut bytes: &'a [u8],
         format: ObjectFormat,
+        version: crate::route::Version,
         want: impl FnMut(ObjectId) -> Result<()>,
     ) -> Result<Self> {
+        if version == crate::route::Version::V2 {
+            let command = crate::v2::Command::parse(bytes, format)?.ok_or(Error::InvalidRequest)?;
+            if command.name != b"fetch" {
+                return Err(Error::InvalidRequest);
+            }
+            let fetch = crate::v2::Fetch::parse(command.args, format, want)?;
+            return Ok(Self {
+                done: fetch.done,
+                capabilities: Capabilities::default(),
+                haves: &[],
+                v2: Some(fetch),
+            });
+        }
         let capabilities = parse_wants(&mut bytes, format, want)?;
         Ok(Self {
             done: parse_haves(bytes, format)?,
             capabilities,
             haves: bytes,
+            v2: None,
         })
     }
 
@@ -150,12 +166,25 @@ impl<'a> UploadRequest<'a> {
         repository: &'r impl Repository,
     ) -> impl Iterator<Item = Result<ObjectId>> + 'r {
         let mut bytes = self.haves;
-        core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten())
+        let legacy = core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten())
             .filter_map(have_id)
-            .filter_map(move |id| common_commit(repository, id).transpose())
+            .filter_map(move |id| common_commit(repository, id).transpose());
+        legacy.chain(
+            self.v2
+                .iter()
+                .flat_map(move |fetch| fetch.common(repository)),
+        )
+    }
+
+    #[cfg(feature = "read")]
+    pub fn include_tags(&self) -> bool {
+        self.v2.as_ref().is_some_and(|fetch| fetch.include_tags)
     }
 
     pub fn acknowledge(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
+        if let Some(fetch) = &self.v2 {
+            return fetch.acknowledge(repository, output);
+        }
         let mut last = None;
         for id in self.common(repository) {
             let id = id?;
@@ -179,6 +208,9 @@ impl<'a> UploadRequest<'a> {
     }
 
     pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
+        if let Some(fetch) = &self.v2 {
+            return fetch.output(output);
+        }
         PackOutput {
             output,
             band: self.capabilities.band(),
@@ -198,7 +230,10 @@ fn have_id(packet: Packet<'_>) -> Option<ObjectId> {
     ObjectId::from_hex(hex.strip_suffix(b"\n").unwrap_or(hex)).ok()
 }
 
-fn common_commit(repository: &impl Repository, id: ObjectId) -> Result<Option<ObjectId>> {
+pub(crate) fn common_commit(
+    repository: &impl Repository,
+    id: ObjectId,
+) -> Result<Option<ObjectId>> {
     let Some(index) = repository.find_index(id) else {
         return Ok(None);
     };
@@ -231,6 +266,17 @@ impl<W: Write> PackOutput<'_, W> {
             self.output.write_all(b"0000")?;
         }
         Ok(())
+    }
+}
+
+impl<'a, W: Write> PackOutput<'a, W> {
+    pub(crate) fn sideband(output: &'a mut W) -> Self {
+        Self {
+            output,
+            band: 2,
+            buffer: [0; 1024],
+            length: 0,
+        }
     }
 }
 

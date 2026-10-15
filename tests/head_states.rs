@@ -44,6 +44,8 @@ fn response(repository: &impl Repository, path: &str, smart: bool) -> Vec<u8> {
         http::serve(
             repository,
             Request {
+                content_type: None,
+                git_protocol: None,
                 method: "GET",
                 path,
                 query: smart.then_some("service=git-upload-pack"),
@@ -96,6 +98,8 @@ fn empty_repository_rejects_all_wants_before_output() {
             http::serve_with_pack(
                 &repository,
                 Request {
+                    content_type: Some("application/x-git-upload-pack-request"),
+                    git_protocol: None,
                     method: "POST",
                     path: "git-upload-pack",
                     query: None,
@@ -127,6 +131,8 @@ fn empty_indexes_and_validation_need_no_scratch_or_allocation() {
         http::serve(
             &validated,
             Request {
+                content_type: None,
+                git_protocol: None,
                 method: "GET",
                 path: "info/refs",
                 query: Some("service=git-upload-pack"),
@@ -181,6 +187,8 @@ fn detached_heads_survive_indexes_and_validation() {
         http::serve(
             &validated,
             Request {
+                content_type: Some("application/x-git-upload-pack-request"),
+                git_protocol: None,
                 method: "POST",
                 path: "git-upload-pack",
                 query: None,

@@ -9,9 +9,12 @@ use git_zero_core::{
     reader::DEFAULT_READ_BUFFER_SIZE,
     repository::{resolve_reference, uses_only_head},
 };
+mod route;
 mod upload;
+mod v2;
 #[cfg(feature = "read")]
 use git_zero_core::{ValidatedRepository, ValidationMetadata};
+use route::Version;
 use upload::UploadRequest;
 pub use upload::{PackOutput, write_upload_error};
 
@@ -50,11 +53,18 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
     storage: &mut SelectionStorage<'_>,
     output: &mut impl Write,
 ) -> Result<Response> {
-    if request.method != "POST" || request.path.trim_start_matches('/') != "git-upload-pack" {
+    if let Some(response) = route::validate(request)? {
+        return Ok(response);
+    }
+    if request.method != "POST" || route::path(request.path)? != "git-upload-pack" {
         return serve_with_scratch(repository, request, storage.read, output);
     }
+    let version = route::version(request.git_protocol)?;
+    if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
+        return Ok(upload_response());
+    }
     let mut count = 0;
-    let upload = UploadRequest::parse(request.body, repository.object_format(), |id| {
+    let upload = UploadRequest::parse(request.body, repository.object_format(), version, |id| {
         if !advertised(repository, id) {
             return Err(Error::InvalidRequest);
         }
@@ -65,13 +75,13 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
         Ok(())
     })?;
     if upload.done {
-        let indices = repository.select_missing_objects(
+        let indices = repository.select_fetch_objects(
             &storage.wants[..count],
             upload.common(repository),
             storage.objects,
             storage.indices,
             (storage.read, storage.parse),
-            storage.graph_read_limit,
+            (storage.graph_read_limit, upload.include_tags()),
         )?;
         upload.acknowledge(repository, output)?;
         let mut packed = upload.output(output);
@@ -80,10 +90,15 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
     } else {
         upload.acknowledge(repository, output)?;
     }
-    Ok(Response {
+    Ok(upload_response())
+}
+
+#[cfg(feature = "read")]
+fn upload_response() -> Response {
+    Response {
         status: 200,
         content_type: "application/x-git-upload-pack-result",
-    })
+    }
 }
 
 #[cfg(feature = "read")]
@@ -141,7 +156,11 @@ pub fn serve_with_pack<W: Write>(
     output: &mut W,
     write_pack: impl FnOnce(&mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<Response> {
-    let path = request.path.trim_start_matches('/');
+    if let Some(response) = route::validate(request)? {
+        return Ok(response);
+    }
+    let path = route::path(request.path)?;
+    let version = route::version(request.git_protocol)?;
     let mut response = Response {
         status: 200,
         content_type: "text/plain; charset=utf-8",
@@ -156,11 +175,18 @@ pub fn serve_with_pack<W: Write>(
             }
             output.write_all(b"\n")?;
         }
-        ("GET", "info/refs") => match service(request.query) {
+        ("GET", "info/refs") => match route::service(request.query)? {
             Some("git-upload-pack") => {
                 response.content_type = "application/x-git-upload-pack-advertisement";
                 pktline::write(output, b"# service=git-upload-pack\n")?;
                 output.write_all(b"0000")?;
+                if version == Version::V2 {
+                    v2::advertise(repository.object_format(), output)?;
+                    return Ok(response);
+                }
+                if version == Version::V1 {
+                    pktline::write(output, b"version 1\n")?
+                }
                 let head = repository.head_state();
                 if head.id().is_some() || repository.reference_count() == 0 {
                     advertise_head(repository, output)?;
@@ -175,17 +201,21 @@ pub fn serve_with_pack<W: Write>(
         },
         ("POST", "git-upload-pack") => {
             response.content_type = "application/x-git-upload-pack-result";
+            if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
+                return Ok(response);
+            }
             if !uses_only_head(repository) {
                 return Err(Error::Unsupported);
             }
             let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
-            let upload = UploadRequest::parse(request.body, repository.object_format(), |id| {
-                if id == head {
-                    Ok(())
-                } else {
-                    Err(Error::InvalidRequest)
-                }
-            })?;
+            let upload =
+                UploadRequest::parse(request.body, repository.object_format(), version, |id| {
+                    if id == head {
+                        Ok(())
+                    } else {
+                        Err(Error::InvalidRequest)
+                    }
+                })?;
             upload.acknowledge(repository, output)?;
             if upload.done {
                 let mut packed = upload.output(output);
@@ -264,12 +294,6 @@ fn ref_path_matches(path: &str, name: &str) -> bool {
         }
     }
     bytes.next().is_none()
-}
-
-fn service(query: Option<&str>) -> Option<&str> {
-    query?
-        .split('&')
-        .find_map(|field| field.strip_prefix("service="))
 }
 
 fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {

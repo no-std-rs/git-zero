@@ -121,6 +121,10 @@ name = "upload"
 required-features = ["read", "server"]
 
 [[test]]
+name = "protocol"
+required-features = ["read", "server"]
+
+[[test]]
 name = "smart_client"
 required-features = ["client"]
 

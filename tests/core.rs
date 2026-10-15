@@ -316,6 +316,8 @@ fn server_rejects_unadvertised_wants_and_push() {
     let mut storage = [0; 4096];
     let mut output = SliceWriter::new(&mut storage);
     let request = Request {
+        content_type: None,
+        git_protocol: None,
         method: "GET",
         path: "info/refs",
         query: Some("service=git-receive-pack"),
@@ -326,6 +328,8 @@ fn server_rejects_unadvertised_wants_and_push() {
         403
     );
     let request = Request {
+        content_type: Some("application/x-git-upload-pack-request"),
+        git_protocol: None,
         method: "POST",
         path: "git-upload-pack",
         query: None,

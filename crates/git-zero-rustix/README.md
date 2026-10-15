@@ -12,3 +12,10 @@ All features are enabled by default. Disable defaults to select adapters.
 The library uses no `std` or `alloc`; the CLI uses `std` for process startup.
 
 See [git-zero](https://github.com/no-std-rs/git-zero) for usage and limitations.
+
+The server reads `Git-Protocol` and `Content-Type` into shared request metadata.
+Gzip uploads are decoded into the request storage after the wire bytes; headers,
+compressed body and expanded body must all fit. Inflation borrows a fixed 32 KiB
+stack history window and validates the gzip checksum and size before routing.
+Duplicate framing/selector headers, truncated bodies and unsupported transfer or
+content encodings are rejected. Chunked framing remains unsupported.

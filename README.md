@@ -24,8 +24,8 @@ for checks and repository connection requirements.
   `HEAD` defaults to `refs/heads/main`; callers can configure branch/tag aliases.
 - Incremental root-entry construction in caller-owned slots, with configurable
   author/committer identities, Unix times, timezones, and exact commit messages.
-- Read-only smart HTTP discovery and `git-upload-pack`, using protocol v0.
-  Git clients requesting v2 can fall back to the v0 advertisement.
+- Read-only smart HTTP discovery and `git-upload-pack` over protocol v0/v1/v2,
+  including stateless v2 `ls-refs` and `fetch` with bounded selected packs.
 - Ordinary Git HTTP, usually called **dumb HTTP**: `HEAD`, `info/refs`, branch
   refs, and zlib loose objects. No filesystem repository is needed.
 - SHA-1 and SHA-256 repositories with format-specific object IDs, refs and packs.
@@ -588,7 +588,22 @@ are common), then the pack. No `ready`/`no-done` shortcuts are advertised.
 Sideband sends channel-1 pack bytes through a fixed 1 KiB buffer and a terminal
 flush; no progress messages are emitted. Unsupported, conflicting or duplicated
 capabilities, misplaced wants/haves and incomplete requests fail before output.
-`include-tag`, shallow/filter and v1/v2 remain unadvertised.
+V0 `include-tag` and shallow/filter extensions remain unadvertised.
+
+`Request` carries `content_type` and `git_protocol` from the HTTP host. A missing
+protocol header selects v0; `version=1` adds its version announcement and
+`version=2` selects ls-refs/fetch. V2 supports symrefs, peels, prefix selection,
+unborn HEAD and include-tag. Done fetches send a sideband packfile section without
+ACKs; negotiation rounds return ACKs or NAK and wait for done. Thin-pack/ofs-delta
+hints permit full non-delta packs. Shallow/filter and other optional v2 extensions
+are rejected and unadvertised. The client primitives continue using v0.
+
+Upload requests require the Git upload request media type. Known routes enforce
+methods and service/version selection, reject duplicate selectors and unsafe or
+malformed paths, and accept at most one leading slash. Native and Worker hosts
+decode gzip uploads with bounded output; native compressed plus expanded bytes
+must fit the caller's request storage, with a fixed 32 KiB stack history window.
+Chunked requests and incremental HTTP I/O remain planned.
 
 On a failed buffered upload, discard the complete failed body. A host can call
 `http::write_upload_error(error, output)` on an empty sink to produce a terminal

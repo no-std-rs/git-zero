@@ -212,6 +212,8 @@ pub fn discover<'a>(
 ) -> Result<Discovery<'a>> {
     let (status, length) = transport.request(
         Request {
+            content_type: None,
+            git_protocol: None,
             method: "GET",
             path: "info/refs",
             query: Some("service=git-upload-pack"),
@@ -235,6 +237,8 @@ pub fn read_head(
     }
     let (status, length) = transport.request(
         Request {
+            content_type: None,
+            git_protocol: None,
             method: "GET",
             path: "HEAD",
             query: None,
@@ -293,6 +297,8 @@ pub fn fetch_pack_with_options<'a>(
     write_fetch_request(wants, options, &mut request)?;
     let (status, length) = transport.request(
         Request {
+            content_type: Some("application/x-git-upload-pack-request"),
+            git_protocol: None,
             method: "POST",
             path: "git-upload-pack",
             query: None,
@@ -325,6 +331,8 @@ pub fn fetch_loose<'a>(
     let path = core::str::from_utf8(path.as_bytes()).map_err(|_| Error::InvalidRequest)?;
     let (status, length) = transport.request(
         Request {
+            content_type: None,
+            git_protocol: None,
             method: "GET",
             path,
             query: None,

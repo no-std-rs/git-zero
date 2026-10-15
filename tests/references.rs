@@ -411,6 +411,8 @@ fn symbolic_head_can_resolve_through_a_lightweight_tag() {
             http::serve(
                 repository,
                 Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path: "info/refs",
                     query: Some("service=git-upload-pack"),
@@ -628,6 +630,8 @@ fn unborn_and_detached_heads_can_have_independent_ref_roots() {
             http::serve(
                 repo,
                 Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path: "info/refs",
                     query: Some("service=git-upload-pack"),
@@ -663,6 +667,8 @@ fn smart_and_dumb_ref_routes_preserve_symbolic_and_peeled_data() {
             http::serve(
                 repo,
                 Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path,
                     query: None,
@@ -679,6 +685,8 @@ fn smart_and_dumb_ref_routes_preserve_symbolic_and_peeled_data() {
             http::serve(
                 repo,
                 Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path: "info/refs",
                     query: smart.then_some("service=git-upload-pack"),
@@ -720,6 +728,8 @@ fn peeled_ref_packet_budgets_include_the_suffix() {
     http::serve(
         &repository,
         Request {
+            content_type: None,
+            git_protocol: None,
             method: "GET",
             path: "info/refs",
             query: Some("service=git-upload-pack"),
@@ -852,6 +862,8 @@ fn serve_selected<R: Repository>(
         http::serve_with_selection(
             repository,
             Request {
+                content_type: Some("application/x-git-upload-pack-request"),
+                git_protocol: None,
                 method: "POST",
                 path: "git-upload-pack",
                 query: None,
@@ -931,6 +943,8 @@ fn whole_repository_pack_hooks_and_head_keys_reject_independent_roots() {
         http::serve_with_pack(
             &repository,
             Request {
+                content_type: Some("application/x-git-upload-pack-request"),
+                git_protocol: None,
                 method: "POST",
                 path: "git-upload-pack",
                 query: None,
@@ -1015,6 +1029,8 @@ fn graph_read_limits_bound_actual_io_and_fail_before_pack_output() {
             http::serve_with_selection(
                 repo,
                 Request {
+                    content_type: Some("application/x-git-upload-pack-request"),
+                    git_protocol: None,
                     method: "POST",
                     path: "git-upload-pack",
                     query: None,
@@ -1032,6 +1048,8 @@ fn graph_read_limits_bound_actual_io_and_fail_before_pack_output() {
         http::serve_with_selection(
             repo,
             Request {
+                content_type: Some("application/x-git-upload-pack-request"),
+                git_protocol: None,
                 method: "POST",
                 path: "git-upload-pack",
                 query: None,

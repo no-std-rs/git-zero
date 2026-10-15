@@ -442,6 +442,8 @@ fn prepacked_serving_reads_only_the_pack_and_upload_hook_preserves_routing() {
     pktline::write_parts(&mut request, &[b"want ", &source.head().to_hex(), b"\n"]).unwrap();
     request.write_all(b"00000009done\n").unwrap();
     let request = Request {
+        content_type: Some("application/x-git-upload-pack-request"),
+        git_protocol: None,
         method: "POST",
         path: "git-upload-pack",
         query: None,
@@ -469,12 +471,16 @@ fn prepacked_serving_reads_only_the_pack_and_upload_hook_preserves_routing() {
     let mut calls = 0;
     for request in [
         Request {
+            content_type: None,
+            git_protocol: None,
             method: "GET",
             path: "HEAD",
             query: None,
             body: &[],
         },
         Request {
+            content_type: Some("application/x-git-upload-pack-request"),
+            git_protocol: None,
             method: "POST",
             path: "git-upload-pack",
             query: None,
@@ -485,6 +491,8 @@ fn prepacked_serving_reads_only_the_pack_and_upload_hook_preserves_routing() {
             path: "git-upload-pack",
             query: None,
             body: &request.body[..50],
+            content_type: Some("application/x-git-upload-pack-request"),
+            git_protocol: None,
         },
     ] {
         let _ = http::serve_with_pack(
@@ -573,6 +581,8 @@ fn provider_validation_pack_verification_and_serving_allocate_nothing() {
         repository
             .serve_with_scratch(
                 Request {
+                    content_type: None,
+                    git_protocol: None,
                     method: "GET",
                     path: "HEAD",
                     query: None,

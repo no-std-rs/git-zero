@@ -33,6 +33,8 @@ const INFLATE: InflateLimits = InflateLimits {
 
 fn request(body: &[u8]) -> Request<'_> {
     Request {
+        content_type: Some("application/x-git-upload-pack-request"),
+        git_protocol: None,
         method: "POST",
         path: "git-upload-pack",
         query: None,
@@ -449,6 +451,8 @@ fn format_specific_name_limits_exactly_fill_smart_packets() {
         let mut bytes = vec![0; 3 * pktline::MAX_LENGTH + 128];
         let mut output = SliceWriter::new(&mut bytes);
         let discovery = Request {
+            content_type: None,
+            git_protocol: None,
             method: "GET",
             path: "info/refs",
             query: Some("service=git-upload-pack"),

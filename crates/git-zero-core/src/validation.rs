@@ -159,6 +159,30 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         scratch: (&mut [u8], &mut [u8]),
         graph_read_limit: u64,
     ) -> Result<&'selected [usize]> {
+        self.select_fetch_objects(
+            roots,
+            common,
+            work,
+            selected,
+            scratch,
+            (graph_read_limit, false),
+        )
+    }
+
+    /// Select missing objects and optionally include advertised annotated tags
+    /// whose final peeled targets are being sent. Tag traversal shares the
+    /// graph-read budget with wanted and common history; retries reset all state.
+    /// `options` contains (graph-read byte limit, include tags).
+    pub fn select_fetch_objects<'selected>(
+        &self,
+        roots: &[ObjectId],
+        common: impl IntoIterator<Item = Result<ObjectId>>,
+        work: &mut [Option<ValidationMetadata>],
+        selected: &'selected mut [usize],
+        scratch: (&mut [u8], &mut [u8]),
+        options: (u64, bool),
+    ) -> Result<&'selected [usize]> {
+        let (graph_read_limit, include_tags) = options;
         let (read_scratch, parse_scratch) = scratch;
         if roots.is_empty() {
             return Err(Error::InvalidRequest);
@@ -206,6 +230,26 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             parse_scratch,
             Some(&mut remaining),
         )?;
+        if include_tags {
+            for reference in 0..self.reference_count() {
+                let Some(peeled) = self.reference_peeled(reference) else {
+                    continue;
+                };
+                let index = find(work, self.by_id, peeled).ok_or(Error::ObjectNotFound)?;
+                if metadata(work, index).reached {
+                    let id = self.reference_id(reference).ok_or(Error::InvalidObject)?;
+                    reach(work, self.by_id, id, ObjectKind::Tag)?;
+                }
+            }
+            walk(
+                self,
+                work,
+                self.by_id,
+                read_scratch,
+                parse_scratch,
+                Some(&mut remaining),
+            )?;
+        }
         let mut length = 0;
         for (index, slot) in work.iter().enumerate() {
             if slot.expect("initialized metadata").reached {

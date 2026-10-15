@@ -710,3 +710,71 @@ fn real_git_loose_object_inflates_with_small_caller_buffers() {
     .unwrap();
     assert_eq!(object.data, body);
 }
+
+#[test]
+fn bounded_gzip_http_bodies_match_python_and_validate_the_entire_envelope() {
+    for contents in [b"".as_slice(), b"hello\n", &[b'a'; 16_384]] {
+        let encoded = python(
+            "import gzip,sys;sys.stdout.buffer.write(gzip.compress(sys.stdin.buffer.read(),mtime=0))",
+            contents,
+            &[],
+        );
+        let mut window = [0; WINDOW_SIZE];
+        let mut output = vec![0; contents.len()];
+        let length = allocations::without_allocations(|| {
+            zlib::decode_gzip(&encoded, &mut output, &mut window, LIMITS)
+        })
+        .unwrap();
+        assert_eq!(&output[..length], contents);
+        for length in 0..encoded.len() {
+            assert!(
+                zlib::decode_gzip(&encoded[..length], &mut output, &mut window, LIMITS).is_err()
+            );
+        }
+        for offset in [0, 2, 3, encoded.len() - 8, encoded.len() - 4] {
+            let mut invalid = encoded.clone();
+            invalid[offset] ^= 0xff;
+            assert!(zlib::decode_gzip(&invalid, &mut output, &mut window, LIMITS).is_err());
+        }
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(zlib::decode_gzip(&trailing, &mut output, &mut window, LIMITS).is_err());
+        if !contents.is_empty() {
+            assert!(
+                zlib::decode_gzip(
+                    &encoded,
+                    &mut output[..contents.len() - 1],
+                    &mut window,
+                    LIMITS
+                )
+                .is_err()
+            );
+            assert_eq!(
+                zlib::decode_gzip(
+                    &encoded,
+                    &mut output,
+                    &mut window,
+                    InflateLimits {
+                        max_output: contents.len() as u64 - 1,
+                        ..LIMITS
+                    }
+                ),
+                Err(Error::LimitExceeded)
+            );
+        }
+        // Optional extra/name/comment fields and FHCRC, generated independently.
+        let with_fields = python(
+            "import sys,zlib,struct;data=sys.stdin.buffer.read();h=bytearray(data[:10]);h[3]=30;h+=b'\\x03\\x00abcname\\x00comment\\x00';h+=struct.pack('<H',zlib.crc32(h)&65535);sys.stdout.buffer.write(h+data[10:])",
+            &encoded,
+            &[],
+        );
+        assert_eq!(
+            zlib::decode_gzip(&with_fields, &mut output, &mut window, LIMITS).unwrap(),
+            contents.len()
+        );
+        assert_eq!(output, contents);
+        let mut bad_header_crc = with_fields.clone();
+        bad_header_crc[12] ^= 1;
+        assert!(zlib::decode_gzip(&bad_header_crc, &mut output, &mut window, LIMITS).is_err());
+    }
+}

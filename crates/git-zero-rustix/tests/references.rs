@@ -279,3 +279,9 @@ fn real_git_sha256_empty_repositories_match_git_servers() {
     compare_format("empty", "sha256");
     compare_format("empty-custom", "sha256");
 }
+
+#[test]
+fn real_git_sha1_empty_repositories_match_git_servers() {
+    compare_format("empty", "sha1");
+    compare_format("empty-custom", "sha1");
+}

@@ -47,6 +47,11 @@ mod inflate;
 #[cfg(feature = "read")]
 pub use inflate::{InflateLimits, InflateProgress, InflateStatus, Inflater, WINDOW_SIZE};
 
+#[cfg(feature = "read")]
+mod gzip;
+#[cfg(feature = "read")]
+pub use gzip::decode_gzip;
+
 #[cfg(feature = "write")]
 mod encode;
 #[cfg(feature = "write")]

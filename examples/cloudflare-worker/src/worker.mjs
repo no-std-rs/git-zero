@@ -43,13 +43,14 @@ function capture(request, env) {
   ];
 }
 
-function invoke(module, parts, target, body, method) {
+function invoke(module, parts, target, body, method, headers) {
   // Each synchronous call owns an instance, so overlapping fetches cannot share
   // Rust's fixed input/output arrays. The compiled module itself is reusable.
   const { exports } = new WebAssembly.Instance(module, {});
   const encoded = parts.map((part) => encoder.encode(part));
   const targetBytes = encoder.encode(target);
-  const length = 16 + encoded.reduce((total, part) => total + part.length, 0) + 4 + targetBytes.length + body.length;
+  const metadata = [headers.get("git-protocol") ?? "", headers.get("content-type") ?? ""].map((value) => encoder.encode(value));
+  const length = 16 + encoded.reduce((total, part) => total + part.length, 0) + 4 + targetBytes.length + 8 + metadata.reduce((total, value) => total + value.length, 0) + body.length;
   if (length > exports.input_capacity()) return new Response("Request exceeds Wasm capacity\n", { status: 413 });
   const input = new Uint8Array(exports.memory.buffer, exports.input_ptr(), length);
   const view = new DataView(input.buffer, input.byteOffset, input.byteLength);
@@ -63,8 +64,14 @@ function invoke(module, parts, target, body, method) {
   offset += 4;
   input.set(targetBytes, offset);
   offset += targetBytes.length;
+  metadata.forEach((value, index) => view.setUint32(offset + index * 4, value.length, true));
+  offset += 8;
+  for (const value of metadata) {
+    input.set(value, offset);
+    offset += value.length;
+  }
   input.set(body, offset);
-  const result = exports.serve(length, method === "POST" ? 1 : 0);
+  const result = exports.serve_http(length, method === "POST" ? 1 : 0, 0);
   if (result < 0) return new Response("Invalid or oversized Git request\n", { status: result === -1 ? 413 : 400 });
   const output = new Uint8Array(exports.memory.buffer, exports.output_ptr(), result);
   const status = new DataView(output.buffer, output.byteOffset, result).getUint16(0, true);
@@ -78,7 +85,18 @@ async function readBody(request, maximum) {
   const declared = request.headers.get("content-length");
   if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > maximum)) throw new Error("Request too large");
   if (!request.body) return new Uint8Array();
-  const reader = request.body.getReader();
+  const encoding = request.headers.get("content-encoding")?.toLowerCase();
+  if (encoding && !["gzip", "identity"].includes(encoding)) throw new Error("Unsupported content encoding");
+  let wireLength = 0;
+  const bounded = request.body.pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      wireLength += chunk.length;
+      if (wireLength > maximum) throw new Error("Request too large");
+      controller.enqueue(chunk);
+    },
+  }));
+  const stream = encoding === "gzip" ? bounded.pipeThrough(new DecompressionStream("gzip")) : bounded;
+  const reader = stream.getReader();
   const storage = new Uint8Array(maximum);
   let length = 0;
   try {
@@ -119,7 +137,7 @@ export function createWorker(module) {
       try {
         const parts = decodeToken(match[1]);
         const body = await readBody(request, 32768);
-        return invoke(module, parts, `${match[2]}${url.search}`, body, request.method);
+        return invoke(module, parts, `${match[2]}${url.search}`, body, request.method, request.headers);
       } catch {
         return new Response("Invalid snapshot or request\n", { status: 400 });
       }

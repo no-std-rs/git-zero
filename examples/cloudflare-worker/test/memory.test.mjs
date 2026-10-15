@@ -27,17 +27,56 @@ function frame(parts, target, body = Buffer.alloc(0)) {
   return Buffer.concat([lengths, ...files, targetLength, path, body]);
 }
 
-function call(exports, input, method = 0, format = null) {
+function call(exports, input, method = 0, format = null, http = false) {
   assert.ok(input.length <= INPUT_BYTES);
   const memory = exports.memory.buffer;
   new Uint8Array(memory, exports.input_ptr(), input.length).set(input);
-  const length = format === null ? exports.serve(input.length, method) : exports.serve_with_format(input.length, method, format);
+  const length = http ? exports.serve_http(input.length, method, format) : format === null ? exports.serve(input.length, method) : exports.serve_with_format(input.length, method, format);
   assert.equal(exports.memory.buffer, memory, "serve grew or replaced linear memory");
   if (length < 0) return length;
   assert.ok(length >= 3 && length <= OUTPUT_BYTES, "response exceeds the output budget");
   const output = Buffer.from(new Uint8Array(memory, exports.output_ptr(), length));
   return { status: output.readUInt16LE(0), type: output[2], body: output.subarray(3) };
 }
+
+function httpFrame(target, body, protocol, media = "application/x-git-upload-pack-request") {
+  const headers = [Buffer.from(protocol), Buffer.from(media)];
+  const lengths = Buffer.alloc(8);
+  headers.forEach((value, index) => lengths.writeUInt32LE(value.length, index * 4));
+  return Buffer.concat([frame(parts, target), lengths, ...headers, body]);
+}
+
+test("v1/v2 discovery, ls-refs and fetch preserve fixed Wasm memory in both formats", () => {
+  const exports = instance();
+  for (const format of [0, 1]) {
+    const hash = format === 0 ? "sha1" : "sha256";
+    const headV0 = call(exports, frame(parts, "info/refs?service=git-upload-pack"), 0, format).body.toString();
+    const head = new RegExp(`([0-9a-f]{${format === 0 ? 40 : 64}}) HEAD\\0`).exec(headV0)[1];
+    const command = (name, args) => Buffer.concat([
+      packet(`command=${name}\n`), packet(`object-format=${hash}\n`), Buffer.from("0001"),
+      ...args.map((arg) => packet(`${arg}\n`)), Buffer.from("0000"),
+    ]);
+    for (let round = 0; round < 32; round++) {
+      for (const version of [1, 2]) {
+        const discovery = call(exports, httpFrame("info/refs?service=git-upload-pack", Buffer.alloc(0), `version=${version}`), 0, format, true);
+        assert.ok(discovery.body.includes(packet(`version ${version}\n`)));
+      }
+      const refs = command("ls-refs", ["symrefs", "peel", "ref-prefix HEAD"]);
+      const result = call(exports, httpFrame("git-upload-pack", refs, "version=2"), 1, format, true);
+      assert.deepEqual(result.body, Buffer.concat([packet(`${head} HEAD symref-target:refs/heads/main\n`), Buffer.from("0000")]));
+      const fetch = command("fetch", [`want ${head}`, "done"]);
+      const response = call(exports, httpFrame("git-upload-pack", fetch, "version=2"), 1, format, true);
+      const { lines, pack } = decodeNegotiation(response.body, "side-band-64k");
+      assert.deepEqual(lines, ["packfile\n"]);
+      const width = format === 0 ? 20 : 32;
+      assert.deepEqual(createHash(hash).update(pack.subarray(0, -width)).digest(), pack.subarray(-width));
+      const invalid = call(exports, httpFrame("git-upload-pack", fetch, "version=2", "text/plain"), 1, format, true);
+      assert.equal(invalid.status, 415);
+      assert.equal(invalid.body.length, 0);
+      assert.equal(call(exports, httpFrame("git-upload-pack", fetch.subarray(0, -1), "version=2"), 1, format, true), -2);
+    }
+  }
+});
 
 function packet(line) {
   return Buffer.from(`${(Buffer.byteLength(line) + 4).toString(16).padStart(4, "0")}${line}`);

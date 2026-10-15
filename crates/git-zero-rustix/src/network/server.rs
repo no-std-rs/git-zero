@@ -40,6 +40,9 @@ pub fn accept(socket: &impl AsFd) -> Result<OwnedFd> {
     Ok(client)
 }
 
+/// Read one bounded request. Gzip bodies use the storage remaining after the
+/// compressed wire bytes and a fixed 32 KiB stack history window. Compressed
+/// plus expanded bytes and headers must fit `storage`; chunked input is rejected.
 pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Request<'a>> {
     let (end, mut length) = read_header(socket, storage)?;
     let header = core::str::from_utf8(&storage[..end]).map_err(|_| Error::InvalidRequest)?;
@@ -55,7 +58,28 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
         }
         length += count;
     }
-    parse_request(&storage[..total], end)
+    let (wire, expanded) = storage.split_at_mut(total);
+    let mut request = parse_request(wire, end)?;
+    let header = core::str::from_utf8(&wire[..end]).map_err(|_| Error::InvalidRequest)?;
+    match header_value(header, "content-encoding")? {
+        None | Some("identity") => {}
+        Some(value) if value.eq_ignore_ascii_case("gzip") => {
+            use git_zero::zlib::{InflateLimits, WINDOW_SIZE, decode_gzip};
+            let length = decode_gzip(
+                request.body,
+                expanded,
+                &mut [0; WINDOW_SIZE],
+                InflateLimits {
+                    max_output: expanded.len() as u64,
+                    max_ratio: 128,
+                    ratio_slack: expanded.len() as u64,
+                },
+            )?;
+            request.body = &expanded[..length];
+        }
+        _ => return Err(Error::Unsupported),
+    }
+    Ok(request)
 }
 
 // Keep any body bytes received with the header for the subsequent bounded read.
@@ -93,12 +117,28 @@ fn parse_request(storage: &[u8], end: usize) -> Result<Request<'_>> {
     let (path, query) = target
         .split_once('?')
         .map_or((target, None), |(path, query)| (path, Some(query)));
+    if !path.starts_with('/') || target.bytes().any(|b| b <= 32 || b == 127) {
+        return Err(Error::InvalidRequest);
+    }
     Ok(Request {
+        content_type: header_value(header, "content-type")?,
+        git_protocol: header_value(header, "git-protocol")?,
         method,
         path,
         query,
         body: &storage[end..],
     })
+}
+
+fn header_value<'a>(header: &'a str, key: &str) -> Result<Option<&'a str>> {
+    let mut result = None;
+    for line in header.split("\r\n").skip(1).filter(|line| !line.is_empty()) {
+        let (name, value) = line.split_once(':').ok_or(Error::InvalidRequest)?;
+        if name.eq_ignore_ascii_case(key) && result.replace(value.trim()).is_some() {
+            return Err(Error::InvalidRequest);
+        }
+    }
+    Ok(result)
 }
 
 pub fn respond(socket: &impl AsFd, response: Response, body: &[u8]) -> Result<()> {
