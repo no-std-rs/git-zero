@@ -70,6 +70,7 @@ fn depth_one_keeps_only_the_merge_tip_and_its_tree_closure() {
             &[merge],
             FetchOptions {
                 depth: Some(1),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -101,6 +102,7 @@ fn depth_two_cuts_both_merge_parents_and_removes_the_old_boundary() {
             &[merge],
             FetchOptions {
                 depth: Some(2),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -124,6 +126,81 @@ fn depth_two_cuts_both_merge_parents_and_removes_the_old_boundary() {
 }
 
 #[test]
+fn relative_depth_counts_from_client_boundaries_in_both_enumeration_orders() {
+    for reverse in [false, true] {
+        let mut graph = Graph::new();
+        let ids = graph.ids;
+        if reverse {
+            graph.objects.reverse();
+        }
+        let options = FetchOptions {
+            depth: Some(1),
+            deepen_relative: true,
+            filter: BlobFilter::All,
+        };
+        let (objects, boundaries, removed) = select(
+            &graph,
+            &[ids.merge.unwrap()],
+            &[],
+            &[ids.main.unwrap(), ids.side.unwrap()],
+            options,
+            false,
+        );
+        assert_eq!(objects, sorted(graph.merge_closure()));
+        assert_eq!(boundaries, vec![ids.base.unwrap()]);
+        assert_eq!(removed, expected(&[ids.main, ids.side]));
+        let (_, boundaries, removed) = select(
+            &graph,
+            &[ids.merge.unwrap()],
+            &[],
+            &[ids.merge.unwrap()],
+            options,
+            false,
+        );
+        assert_eq!(boundaries, expected(&[ids.main, ids.side]));
+        assert_eq!(removed, vec![ids.merge.unwrap()]);
+        let (_, boundaries, removed) = select(
+            &graph,
+            &[ids.main.unwrap()],
+            &[],
+            &[ids.side.unwrap()],
+            options,
+            false,
+        );
+        assert_eq!(boundaries, vec![ids.base.unwrap()]);
+        assert_eq!(removed, vec![ids.side.unwrap()]);
+        let (_, boundaries, removed) =
+            select(&graph, &[ids.merge.unwrap()], &[], &[], options, false);
+        assert!(boundaries.is_empty());
+        assert!(removed.is_empty());
+    }
+}
+
+#[test]
+fn relative_requests_validate_options_and_match_fragmented_streaming() {
+    let graph = Graph::new();
+    let source = graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repository = &validation.validate(&source);
+    for version in [0, 2] {
+        let shallow = format!("shallow {}", graph.ids.merge.unwrap());
+        let args = [shallow.as_str(), "deepen 1", "deepen-relative"];
+        let bytes = body(graph.ids.merge.unwrap(), version, &args, true);
+        let mut harness = Harness::default();
+        let (failed, output) = harness.serve(repository, request(&bytes, version), 0);
+        assert!(matches!(failed, Err(Error::LimitExceeded)));
+        assert!(output.is_empty());
+        let (result, expected) = harness.serve(repository, request(&bytes, version), 32768);
+        result.unwrap();
+        assert_same_response(
+            &harness.pull(repository, request(&bytes, version)),
+            &expected,
+            version,
+        );
+    }
+}
+
+#[test]
 fn root_commits_exactly_at_the_depth_limit_remain_shallow() {
     let graph = Graph::new();
     let ids = graph.ids;
@@ -136,6 +213,7 @@ fn root_commits_exactly_at_the_depth_limit_remain_shallow() {
             &[merge],
             FetchOptions {
                 depth: Some(3),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -160,6 +238,7 @@ fn unshallow_retransmits_missing_history_even_when_the_tip_is_common() {
             &[merge],
             FetchOptions {
                 depth: Some(i32::MAX as u32),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -243,6 +322,7 @@ fn shorter_merge_paths_reopen_previously_cut_commits_in_any_enumeration_order() 
             &[],
             FetchOptions {
                 depth: Some(4),
+                deepen_relative: false,
                 filter: BlobFilter::None,
             },
             false,
@@ -294,6 +374,7 @@ fn blob_filters_retain_explicit_wants_and_respect_the_exact_size_cutoff() {
             &[],
             FetchOptions {
                 depth: None,
+                deepen_relative: false,
                 filter: BlobFilter::None,
             },
             false
@@ -308,6 +389,7 @@ fn blob_filters_retain_explicit_wants_and_respect_the_exact_size_cutoff() {
             &[],
             FetchOptions {
                 depth: None,
+                deepen_relative: false,
                 filter: BlobFilter::Limit(5),
             },
             false
@@ -322,6 +404,7 @@ fn blob_filters_retain_explicit_wants_and_respect_the_exact_size_cutoff() {
             &[],
             FetchOptions {
                 depth: None,
+                deepen_relative: false,
                 filter: BlobFilter::Limit(6),
             },
             false
@@ -358,6 +441,7 @@ fn included_tags_preserve_the_selected_commit_depth_and_blob_filter() {
             &[],
             FetchOptions {
                 depth: Some(2),
+                deepen_relative: false,
                 filter: BlobFilter::None,
             },
             true
@@ -391,6 +475,7 @@ fn explicitly_wanted_nested_tags_peel_to_a_depth_one_commit() {
             &[],
             FetchOptions {
                 depth: Some(1),
+                deepen_relative: false,
                 filter: BlobFilter::All,
             },
             false
@@ -565,6 +650,7 @@ fn malformed_extensions_leave_output_empty_in_both_protocols() {
         &["filter blob:limit=+1"],
         &["deepen 2147483648"],
         &["deepen-relative"],
+        &["deepen 1", "deepen-relative", "deepen-relative"],
         &["deepen-since 1"],
         &["deepen-not main"],
         &["filter tree:0"],
@@ -817,6 +903,7 @@ fn fallible_history_iterators_preserve_errors_and_allow_a_fresh_bounded_selectio
         },
         FetchOptions {
             depth: Some(1),
+            deepen_relative: false,
             filter: BlobFilter::None,
         },
     );
@@ -930,6 +1017,7 @@ fn an_explicit_blob_want_needs_no_structural_reads_or_parse_scratch() {
                 },
                 FetchOptions {
                     depth: Some(1),
+                    deepen_relative: false,
                     filter: BlobFilter::None,
                 },
             ),

@@ -36,7 +36,7 @@ pub use storage::{SelectionBuffers, SelectionStorage};
 /// ACKs or pack. Present commit haves exclude their complete reachable history;
 /// unknown and non-commit haves are ignored. Requests are stateless: clients
 /// replay wants and acknowledged haves each round. No-done rounds only negotiate.
-/// Absolute-depth shallow requests and blob filters use the same graph budget.
+/// Absolute/relative-depth shallow requests and blob filters use the same graph budget.
 /// Shallow haves never imply complete history. Errors
 /// invalidate all output; selection failures produce no output at all.
 ///
@@ -51,7 +51,7 @@ pub use storage::{SelectionBuffers, SelectionStorage};
 ///
 /// Blob filters preserve explicitly wanted blobs but do not grant permission
 /// to request unadvertised promised objects. Partial clones currently need
-/// `--no-checkout`. Relative/time/exclusion deepening and other filter families
+/// `--no-checkout`. Time/exclusion deepening and other filter families
 /// return `Unsupported`; malformed options and invalid shallow IDs return
 /// `InvalidRequest`. Scratch/slot exhaustion returns `BufferTooSmall`, and graph
 /// read exhaustion returns `LimitExceeded`. A buffered host can replace a failed

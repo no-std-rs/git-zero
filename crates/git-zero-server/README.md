@@ -36,12 +36,14 @@ satisfy the hints. Done requests omit ACKs and send a sideband packfile section;
 other rounds return ACKs or NAK and wait for done. Selection includes annotated
 and nested tags only when their final target is being sent, sharing one graph
 budget. Whole-pack hooks retain their documented HEAD-only restriction.
-Selection APIs advertise `shallow filter` (v0/v1) or `fetch=shallow filter` (v2).
-They support absolute `deepen` depths, shallow/unshallow boundaries, blob:none
+Selection APIs advertise `shallow deepen-relative filter` (v0/v1) or `fetch=shallow filter` (v2).
+They support absolute and relative `deepen` depths, shallow/unshallow boundaries, blob:none
 and blob:limit filters, sharing the graph budget and object/index arrays.
-Depth requests retransmit their bounded closure; ordinary shallow haves stop
+Relative depth extends every client boundary reachable from the advertised
+repository, including other branches, matching Git 2.53. Depth requests retransmit
+their bounded closure; ordinary shallow haves stop
 common traversal at the client's boundary. Root commits at the depth limit stay
-shallow, matching Git. Relative/time/exclusion deepening and other filters are
+shallow, matching Git. Time/exclusion deepening and other filters are
 rejected. The advertised-ID want policy still requires partial clones to use
 `--no-checkout`; lazy promised-object retrieval is deferred. Legacy complete-pack
 APIs omit these capabilities and reject extended requests before output.

@@ -17,6 +17,9 @@ pub struct FetchOptions {
     /// None preserves client shallow boundaries. A depth request retransmits
     /// its bounded closure so shallow haves cannot hide newly requested history.
     pub depth: Option<u32>,
+    /// Count `depth` additional generations from each client shallow boundary.
+    /// Requires a depth. Without client boundaries, select the complete history.
+    pub deepen_relative: bool,
     /// Apply the blob policy after reachability and common-history exclusion.
     /// Filtering does not change commit parents or tree bodies. The receiving
     /// host must retain Git's shallow/promisor metadata when importing the pack.

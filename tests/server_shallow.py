@@ -1,4 +1,4 @@
-"""Real-Git shallow/partial clone and absolute-deepening oracle comparisons."""
+"""Real-Git shallow/partial clone and absolute/relative-deepening oracle comparisons."""
 from itertools import product
 from interop import run
 from upstream_http import git, object_manifest, verify_checkout
@@ -52,14 +52,31 @@ def compare_clone(root, bare, urls, env, version, branch, depth, filter_spec=Non
     assert object_manifest(left, "HEAD", env) == object_manifest(right, "HEAD", env)
     if depth != 1:
         return
-    # An unchanged shallow remote, absolute depth increase, then full history.
-    # --deepen is deliberately absent: it requests the unsupported relative form.
-    for options in ((), ("--depth=2",), ("--unshallow",)):
+    # An unchanged shallow remote, relative and absolute depth increases, then full history.
+    for options in ((), ("--deepen=1",), ("--depth=2",), ("--unshallow",)):
         for clone in clones:
             git(clone, "-c", f"protocol.version={version}", "fetch", "--no-tags", *options, "origin", env=env)
             git(clone, "fsck", "--strict", env=env)
         assert shallow_ids(left) == shallow_ids(right), (label, options)
         assert object_manifest(left, "HEAD", env) == object_manifest(right, "HEAD", env), (label, options)
+
+
+def compare_relative_boundaries(root, bare, urls, env, version):
+    # The client sends all its boundaries even when fetching only one branch.
+    # Git deepens the other advertised branch as part of the same global cut.
+    clones = []
+    for name, url in urls:
+        clone = root / f"{name}-relative-all-v{version}"
+        run("git", "-c", f"protocol.version={version}", "clone", "-q", "--depth=1",
+            "--no-single-branch", "--no-tags", url, str(clone), env=env)
+        clones.append(clone)
+    for options in (("--deepen=1",), ("--deepen=2",)):
+        for clone in clones:
+            git(clone, "-c", f"protocol.version={version}", "fetch", "--no-tags", *options,
+                "origin", "z-main", env=env)
+            git(clone, "fsck", "--strict", env=env)
+        assert shallow_ids(clones[0]) == shallow_ids(clones[1]), (version, options)
+        assert object_manifest(clones[0], "--all", env) == object_manifest(clones[1], "--all", env)
 
 
 def compare_bounded_fetch(root, bare, urls, env):
@@ -69,4 +86,5 @@ def compare_bounded_fetch(root, bare, urls, env):
     for version, filter_spec in product((0, 1, 2), ("blob:none", "blob:limit=5", "blob:limit=1k")):
         compare_clone(root, bare, urls, env, version, "light", None, filter_spec)
     for version in (0, 1, 2):
+        compare_relative_boundaries(root, bare, urls, env, version)
         compare_clone(root, bare, urls, env, version, "light", 1, "blob:none")

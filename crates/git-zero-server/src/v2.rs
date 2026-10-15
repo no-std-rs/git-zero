@@ -279,6 +279,7 @@ impl Fetch {
         if !wanted {
             return Err(Error::InvalidRequest);
         }
+        extensions.require_filter_capability(true)?;
         Ok(fetch)
     }
 }

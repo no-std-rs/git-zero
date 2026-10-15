@@ -37,6 +37,7 @@ impl ValidationMetadata {
 struct History {
     limit: Option<u32>,
     client: bool,
+    fixed: bool,
 }
 
 /// Traversal budget and annotated-tag policy for a selected fetch pack.
@@ -231,6 +232,8 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
     /// Select shallow/filtered history with caller-owned arrays. Client shallow
     /// IDs must name present commits. Common traversal stops at those commits;
     /// depth requests instead resend their closure without trusting common haves.
+    /// Relative depth finds a global cut from every client boundary, then selects
+    /// wants and those boundary roots through it. Both passes share the budget.
     /// Work metadata retains shallow/unshallow markers until the next selection.
     /// All structural reads, including revisits after a shorter merge path,
     /// consume one budget. Retries reset depths, exclusions and boundary markers.
@@ -272,7 +275,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
     ///     &wanted, (core::iter::empty(), core::iter::empty()),
     ///     &mut work, &mut indices, (&mut [0; 64], &mut [0; 128]),
     ///     (SelectionOptions { graph_read_limit: 4096, include_tags: false },
-    ///      FetchOptions { depth: Some(1), filter: BlobFilter::None }),
+    ///      FetchOptions { depth: Some(1), filter: BlobFilter::None, ..FetchOptions::default() }),
     /// )?;
     /// assert_eq!(selected.len(), 2); // Commit and tree, with no blob.
     /// let boundary = work.iter().flatten().find(|object| object.is_shallow()).unwrap();
@@ -295,9 +298,10 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         options: (SelectionOptions, FetchOptions),
     ) -> Result<&'selected [usize]> {
         let (options, fetch) = options;
-        if fetch
-            .depth
-            .is_some_and(|depth| depth == 0 || depth > i32::MAX as u32)
+        if (fetch.deepen_relative && fetch.depth.is_none())
+            || fetch
+                .depth
+                .is_some_and(|depth| depth == 0 || depth > i32::MAX as u32)
         {
             return Err(Error::InvalidRequest);
         }
@@ -349,6 +353,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             History {
                 limit: None,
                 client: true,
+                fixed: false,
             },
         )?;
         for slot in work.iter_mut() {
@@ -358,6 +363,40 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             object.checked = false;
             object.depth = u32::MAX;
             object.shallow = false;
+        }
+        if fetch.deepen_relative {
+            // Git deepens every client boundary reachable from the advertised
+            // repository, including boundaries outside the current wants. Find
+            // the new global cut first, then traverse wants through that cut.
+            for slot in work.iter_mut() {
+                let object = slot.as_mut().expect("validated metadata");
+                object.reached = object.client_shallow;
+                object.depth = if object.client_shallow { 1 } else { u32::MAX };
+            }
+            walk(
+                self,
+                work,
+                self.by_id,
+                (read_scratch, parse_scratch),
+                Some(&mut remaining),
+                History {
+                    limit: fetch.depth.map(|depth| depth + 1),
+                    client: false,
+                    fixed: false,
+                },
+            )?;
+            for slot in work.iter_mut() {
+                let object = slot.as_mut().expect("validated metadata");
+                object.reached = false;
+                object.checked = false;
+                object.depth = u32::MAX;
+            }
+            for index in 0..work.len() {
+                let object = *metadata(work, index);
+                if object.client_shallow {
+                    reach(work, self.by_id, object.id, ObjectKind::Commit)?;
+                }
+            }
         }
         for &id in roots {
             let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
@@ -370,8 +409,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             (read_scratch, parse_scratch),
             Some(&mut remaining),
             History {
-                limit: fetch.depth,
+                limit: fetch.depth.filter(|_| !fetch.deepen_relative),
                 client: fetch.depth.is_none(),
+                fixed: fetch.deepen_relative,
             },
         )?;
         filter_blobs(work, roots, fetch.filter);
@@ -384,8 +424,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
                 (read_scratch, parse_scratch),
                 Some(&mut remaining),
                 History {
-                    limit: fetch.depth,
+                    limit: fetch.depth.filter(|_| !fetch.deepen_relative),
                     client: fetch.depth.is_none(),
+                    fixed: fetch.deepen_relative,
                 },
             )?;
             filter_blobs(work, roots, fetch.filter);
@@ -555,7 +596,8 @@ fn walk(
         match object.info.kind {
             ObjectKind::Commit => {
                 let stop = history.limit.is_some_and(|limit| object.depth >= limit)
-                    || (history.client && object.client_shallow);
+                    || (history.client && object.client_shallow)
+                    || (history.fixed && object.shallow);
                 validate_commit(
                     &mut body,
                     parse_scratch,

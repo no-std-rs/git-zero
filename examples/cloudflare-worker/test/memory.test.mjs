@@ -116,6 +116,17 @@ function checkShallowFiltered(first, second, format, version) {
   for (let round = 0; round < 16; round++) {
     checkStreamingTarget(first, second, input, 1, format, version === 2, expected);
   }
+  const relative = fetchBody(head, format, version,
+    [`shallow ${head}`, "deepen 1", ...(version === 2 ? ["deepen-relative"] : [])],
+    ` deepen-relative object-format=${format === 0 ? "sha1" : "sha256"}`);
+  const relativeInput = httpFrame("git-upload-pack", relative, `version=${version}`);
+  const deepened = call(first, relativeInput, 1, format, true);
+  assert.equal(deepened.status, 200);
+  assert.ok(deepened.body.includes(packet(`unshallow ${head}\n`)));
+  assert.ok(!deepened.body.includes(packet(`shallow ${head}\n`)));
+  for (let round = 0; round < 16; round++) {
+    checkStreamingTarget(first, second, relativeInput, 1, format, version === 2, deepened);
+  }
 }
 
 test("shallow and filtered pulls retain fixed memory, format widths and exact packs", () => {
