@@ -77,6 +77,22 @@ class BenchmarkLimitsTests(unittest.TestCase):
         entry, = evaluate(policy("startup.cpu_s", 1), [{"workload": WORKLOAD}])
         self.assertEqual(entry["status"], "missing_or_invalid")
 
+    def test_sampled_tree_limit_rejects_partial_and_unavailable_observations(self):
+        measured = results()
+        for sample in measured[0]["samples"]["zero"]:
+            sample["server"]["process_tree_rss"] = {"status": "sampled", "peak_rss_kib": 96}
+        limit = self.load_policy(policy("server.process_tree_peak_rss_kib", 96))
+        self.assertEqual(evaluate(limit, measured)[0]["status"], "passed")
+        measured[0]["samples"]["zero"][0]["server"]["process_tree_rss"] = {
+            "status": "partial", "peak_rss_kib": None, "observed_peak_rss_kib": 32}
+        entry, = evaluate(limit, measured)
+        self.assertEqual(entry["status"], "missing_or_invalid")
+        self.assertIsNone(entry["observed_maximum"])
+        measured[0]["samples"]["zero"][0]["server"]["process_tree_rss"]["peak_rss_kib"] = 32
+        self.assertEqual(evaluate(limit, measured)[0]["status"], "missing_or_invalid")
+        del measured[0]["samples"]["zero"][0]["server"]["process_tree_rss"]
+        self.assertEqual(evaluate(limit, measured)[0]["status"], "missing_or_invalid")
+
     def test_invalid_observation_cannot_be_hidden_by_valid_samples(self):
         for value in (None, True, -1, "64", float("nan"), float("inf")):
             with self.subTest(value=value):
@@ -120,6 +136,8 @@ class BenchmarkLimitsTests(unittest.TestCase):
     def test_checked_in_ci_limits_are_valid(self):
         limits = load(Path(__file__).with_name("benchmark-limits.json"), (WORKLOAD,))
         self.assertEqual(len(evaluate(limits, results())), 3)
+        tree = load(Path(__file__).with_name("benchmark-tree-limits.json"), (WORKLOAD,))
+        self.assertEqual(evaluate(tree, results())[0]["status"], "missing_or_invalid")
 
 
 if __name__ == "__main__":
