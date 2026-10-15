@@ -199,9 +199,7 @@ fn assert_rejected(repository: &impl Repository, bytes: &[u8]) -> Error {
     });
     assert_eq!(calls, 0);
     assert!(output.is_empty());
-    result
-        .err()
-        .unwrap_or_else(|| panic!("accepted {:?}", String::from_utf8_lossy(bytes)))
+    result.expect_err("invalid upload request succeeded")
 }
 
 #[test]
@@ -210,7 +208,6 @@ fn parser_rejects_phase_errors_conflicting_caps_and_truncations_before_output() 
     let mut commit = [0; 512];
     let snapshot = Snapshot::new(&[], &mut tree, &mut commit).unwrap();
     let head = snapshot.head();
-    let mut invalid = Vec::new();
     for caps in [
         " multi_ack multi_ack_detailed",
         " side-band side-band-64k",
@@ -221,7 +218,7 @@ fn parser_rejects_phase_errors_conflicting_caps_and_truncations_before_output() 
         " include-tag",
         " object-format=sha256",
     ] {
-        invalid.push(body(head, caps, &[], true));
+        assert_rejected(&snapshot, &body(head, caps, &[], true));
     }
     for lines in [
         vec![format!("have {head}\n"), format!("want {head}\n")],
@@ -232,7 +229,7 @@ fn parser_rejects_phase_errors_conflicting_caps_and_truncations_before_output() 
         for line in lines {
             packet(&mut bytes, line.as_bytes());
         }
-        invalid.push(bytes);
+        assert_rejected(&snapshot, &bytes);
     }
     for extra in [
         format!("want {head}\n"),
@@ -242,7 +239,7 @@ fn parser_rejects_phase_errors_conflicting_caps_and_truncations_before_output() 
     ] {
         let mut bytes = body(head, "", &[], true);
         packet(&mut bytes, extra.as_bytes());
-        invalid.push(bytes);
+        assert_rejected(&snapshot, &bytes);
     }
     let valid = body(head, " multi_ack_detailed side-band-64k", &[head], true);
     for length in 0..valid.len() {
@@ -250,11 +247,36 @@ fn parser_rejects_phase_errors_conflicting_caps_and_truncations_before_output() 
         if valid[..length].ends_with(b"0000") {
             continue;
         }
-        invalid.push(valid[..length].to_vec());
+        assert_rejected(&snapshot, &valid[..length]);
     }
-    for bytes in invalid {
-        assert_rejected(&snapshot, &bytes);
-    }
+}
+
+fn assert_selection_retry(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    selection: &mut SelectionStorage<'_>,
+    body: &[u8],
+    object_count: u32,
+) {
+    let mut bytes = [0; 4096];
+    let mut output = SliceWriter::new(&mut bytes);
+    selection.graph_read_limit = 0;
+    assert!(matches!(
+        http::serve_with_selection(repository, request(body), selection, &mut output),
+        Err(Error::LimitExceeded)
+    ));
+    assert!(output.is_empty());
+    selection.graph_read_limit = 4096;
+    allocations::without_allocations(|| {
+        http::serve_with_selection(repository, request(body), selection, &mut output)
+    })
+    .unwrap();
+    let mut wire = output.as_bytes();
+    pktline::read(&mut wire).unwrap();
+    pack::validate(wire).unwrap();
+    assert_eq!(
+        u32::from_be_bytes(wire[8..12].try_into().unwrap()),
+        object_count
+    );
 }
 
 #[test]
@@ -285,29 +307,14 @@ fn selected_haves_can_omit_every_object_and_retries_reset_exclusions() {
         parse: &mut parse,
         graph_read_limit: 0,
     };
-    for haves in [&[snapshot.head()][..], &[][..]] {
-        let body = body(snapshot.head(), "", haves, true);
-        let mut bytes = [0; 4096];
-        let mut output = SliceWriter::new(&mut bytes);
-        selection.graph_read_limit = 0;
-        assert!(matches!(
-            http::serve_with_selection(&repository, request(&body), &mut selection, &mut output),
-            Err(Error::LimitExceeded)
-        ));
-        assert!(output.is_empty());
-        selection.graph_read_limit = 4096;
-        allocations::without_allocations(|| {
-            http::serve_with_selection(&repository, request(&body), &mut selection, &mut output)
-        })
-        .unwrap();
-        let mut wire = output.as_bytes();
-        pktline::read(&mut wire).unwrap();
-        pack::validate(wire).unwrap();
-        assert_eq!(
-            u32::from_be_bytes(wire[8..12].try_into().unwrap()),
-            if haves.is_empty() { 2 } else { 0 }
-        );
-    }
+    let head = snapshot.head();
+    assert_selection_retry(
+        &repository,
+        &mut selection,
+        &body(head, "", &[head], true),
+        0,
+    );
+    assert_selection_retry(&repository, &mut selection, &body(head, "", &[], true), 2);
 }
 
 #[test]

@@ -17,33 +17,32 @@ def post(url, body):
 
 
 def upload_body(wants, haves, capabilities, done):
-    body = b"".join(packet(b"want " + oid + (b" " + capabilities if index == 0 and capabilities else b"") + b"\n")
-                    for index, oid in enumerate(wants)) + b"0000"
+    lines = [b"want " + oid for oid in wants]
+    if capabilities:
+        lines[0] += b" " + capabilities
+    body = b"".join(packet(line + b"\n") for line in lines) + b"0000"
     body += b"".join(packet(b"have " + oid + b"\n") for oid in haves)
     return body + (packet(b"done\n") if done else b"0000")
 
 
 def decode(data, sideband):
-    acks, packed, flushed = [], bytearray(), False
+    acks, packed = [], bytearray()
     while data:
         if not sideband and data.startswith(b"PACK"):
-            packed.extend(data)
-            break
+            return acks, data
         length = int(data[:4], 16)
         if length == 0:
             assert sideband and not data[4:]
-            flushed = True
-            break
-        assert 4 <= length <= (1000 if sideband == b"side-band" else 65520)
+            return acks, bytes(packed)
+        assert 4 <= length <= min(len(data), 1000 if sideband == b"side-band" else 65520)
         line, data = data[4:length], data[length:]
         if line.startswith((b"ACK ", b"NAK")):
             acks.append(line.rstrip(b"\n"))
         else:
             assert sideband and line[0] == 1, line
             packed.extend(line[1:])
-    if packed and sideband:
-        assert flushed
-    return acks, bytes(packed)
+    assert not packed, "sideband terminator missing"
+    return acks, b""
 
 
 def imported_pack(root, bare, label, packed, wants, haves, env):

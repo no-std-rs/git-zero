@@ -429,6 +429,25 @@ fn symbolic_head_can_resolve_through_a_lightweight_tag() {
     });
 }
 
+fn assert_selected_objects(
+    repo: &ValidatedRepository<'_, '_, impl Repository>,
+    (roots, expected): (&[ObjectId], Vec<ObjectId>),
+    work: &mut [Option<git_zero::ValidationMetadata>],
+    indices: &mut [usize],
+) {
+    let selected = allocations::without_allocations(|| {
+        repo.select_objects(roots, work, indices, &mut [0; 1], &mut [0; 128], 4096)
+            .unwrap()
+    });
+    assert_eq!(selected_ids(repo, selected), sorted(expected));
+    assert!(work[repo.object_count()..].iter().all(Option::is_none));
+    assert!(
+        indices[repo.object_count()..]
+            .iter()
+            .all(|&index| index == usize::MAX)
+    );
+}
+
 #[test]
 fn selected_closures_deduplicate_roots_and_reset_state_without_allocating() {
     let graph = Graph::new();
@@ -455,24 +474,7 @@ fn selected_closures_deduplicate_roots_and_reset_state_without_allocating() {
             ),
             (vec![graph.head()], graph.main_closure()),
         ] {
-            let selected = allocations::without_allocations(|| {
-                repo.select_objects(
-                    &roots,
-                    &mut work,
-                    &mut indices,
-                    &mut [0; 1],
-                    &mut [0; 128],
-                    4096,
-                )
-                .unwrap()
-            });
-            assert_eq!(selected_ids(repo, selected), sorted(expected));
-            assert!(work[repo.object_count()..].iter().all(Option::is_none));
-            assert!(
-                indices[repo.object_count()..]
-                    .iter()
-                    .all(|&index| index == usize::MAX)
-            );
+            assert_selected_objects(repo, (&roots, expected), &mut work, &mut indices);
         }
         let mut other_work = [None; CAPACITY];
         let mut other_indices = [0; CAPACITY];

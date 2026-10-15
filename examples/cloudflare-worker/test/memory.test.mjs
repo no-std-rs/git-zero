@@ -60,24 +60,29 @@ function decodeNegotiation(wire, band) {
   return { lines, pack: Buffer.concat(packed) };
 }
 
+function assertNegotiatedResponse(response, head, mode, band, hash) {
+  assert.equal(response.status, 200);
+  const { lines, pack } = decodeNegotiation(response.body, band);
+  assert.deepEqual(lines, [`ACK ${head} ${mode === "multi_ack" ? "continue" : "common"}\n`, `ACK ${head}\n`]);
+  const checksumBytes = head.length / 2;
+  assert.equal(pack.subarray(0, 4).toString(), "PACK");
+  assert.deepEqual(createHash(hash).update(pack.subarray(0, -checksumBytes)).digest(), pack.subarray(-checksumBytes));
+}
+
 function checkRepeatedNegotiation(exports, format, head, mode, band) {
   const memory = exports.memory.buffer;
   const want = packet(`want ${head} ${mode} ${band} no-progress\n`);
   const upload = Buffer.concat([want, Buffer.from("0000"), packet(`have ${head}\n`), packet("done\n")]);
-  const checksumBytes = head.length / 2;
+  const input = frame(parts, "git-upload-pack", upload);
   const hash = format === 0 ? "sha1" : "sha256";
-  let expected;
-  for (let round = 0; round < 32; round++) {
-    const response = call(exports, frame(parts, "git-upload-pack", upload), 1, format);
-    assert.equal(response.status, 200);
-    const { lines, pack } = decodeNegotiation(response.body, band);
-    assert.deepEqual(lines, [`ACK ${head} ${mode === "multi_ack" ? "continue" : "common"}\n`, `ACK ${head}\n`]);
-    assert.equal(pack.subarray(0, 4).toString(), "PACK");
-    assert.deepEqual(createHash(hash).update(pack.subarray(0, -checksumBytes)).digest(), pack.subarray(-checksumBytes));
-    if (expected) assert.deepEqual(response, expected);
-    expected = response;
-    assert.equal(exports.memory.buffer, memory);
+  const expected = call(exports, input, 1, format);
+  assertNegotiatedResponse(expected, head, mode, band, hash);
+  for (let round = 1; round < 32; round++) {
+    const response = call(exports, input, 1, format);
+    assertNegotiatedResponse(response, head, mode, band, hash);
+    assert.deepEqual(response, expected);
   }
+  assert.equal(exports.memory.buffer, memory);
 }
 
 test("negotiated ACK and sideband responses keep fixed Wasm memory in both formats", () => {
