@@ -1,5 +1,6 @@
 import { decodeSnapshot, loadSnapshot, MAX_SNAPSHOT_BYTES, persistSnapshot, SnapshotError } from "./snapshots.mjs";
 import { readBytes } from "./bytes.mjs";
+import { captureMetadata } from "./metadata.mjs";
 
 const encoder = new TextEncoder();
 const MAX_TOKEN_LENGTH = Math.ceil(MAX_SNAPSHOT_BYTES / 3) * 4;
@@ -19,24 +20,6 @@ function decodeToken(token) {
   const base64 = token.replaceAll("-", "+").replaceAll("_", "/");
   const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
   return decodeSnapshot(bytes);
-}
-
-function capture(request, env) {
-  // Cloudflare does not expose the distinction between a string var and a secret
-  // at runtime. Only explicitly named public bindings are included in this demo.
-  const vars = {};
-  for (const name of String(env.EXPOSED_VARS ?? "").split(",").map((name) => name.trim()).filter(Boolean)) {
-    const value = env[name];
-    if (value !== undefined && (value === null || typeof value !== "object" || Object.getPrototypeOf(value) === Object.prototype || Array.isArray(value))) {
-      vars[name] = value;
-    }
-  }
-  const headers = Object.fromEntries([...request.headers].filter(([name]) => name.startsWith("cf-")));
-  const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
-  return [
-    json(request.cf ?? {}), json(headers), json(vars),
-    json({ platform: "Cloudflare Workers", format: 1, history: "one root commit; no parents" }),
-  ];
 }
 
 function invoke(module, parts, target, body, method, headers) {
@@ -117,10 +100,10 @@ export function createWorker(module) {
     async fetch(request, env = {}) {
       const url = new URL(request.url);
       if (url.pathname === "/" && request.method === "GET") {
-        const parts = capture(request, env);
-        const bytes = encoder.encode(JSON.stringify(parts));
-        if (bytes.length > MAX_SNAPSHOT_BYTES) return new Response("Metadata snapshot exceeds 8 KiB\n", { status: 413 });
         try {
+          const parts = captureMetadata(request, env);
+          const bytes = encoder.encode(JSON.stringify(parts));
+          if (bytes.length > MAX_SNAPSHOT_BYTES) throw new SnapshotError("Metadata snapshot exceeds 8 KiB", 413);
           // Storage writes finish before publishing a URL. Reads always verify
           // the immutable record; no isolate-local mutable snapshot is reused.
           const stored = env.SNAPSHOT_STORAGE && env.SNAPSHOT_STORAGE !== "inline"

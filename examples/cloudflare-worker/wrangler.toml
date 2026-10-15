@@ -13,3 +13,4 @@ fallthrough = true
 [vars]
 DEMO_NAME = "git-zero on Cloudflare Workers"
 EXPOSED_VARS = "DEMO_NAME"
+EXPOSED_CF_HEADERS = "cf-ray"
