@@ -44,6 +44,8 @@ pub use storage::{SelectionBuffers, SelectionStorage};
 /// Absolute `deepen` requests may have an initial v0 shallow-list probe without
 /// `done`; that probe consumes the same graph budget as the eventual pack.
 /// A client must replay its shallow IDs and negotiation state on each request.
+/// ACK-only rounds validate client boundaries through the repository index and
+/// need no graph work slots, read/parse scratch or structural-read budget.
 /// Boundary output must fit the host's response/control budget. The streaming
 /// encoder prepares these packets before exposing HTTP success metadata.
 ///
@@ -101,7 +103,8 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
 ) -> Result<SelectedFetch<'storage, 'body>> {
     let (upload, count) =
         UploadRequest::parse_selected(repository, request.body, version, storage.wants)?;
-    let indices = if upload.done || upload.extensions.active() {
+    let boundary_probe = version != Version::V2 && upload.extensions.options.depth.is_some();
+    let indices = if upload.done || boundary_probe {
         Some(repository.select_bounded_fetch(
             &storage.wants[..count],
             (upload.common(repository), upload.shallow()),
@@ -117,9 +120,10 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
             ),
         )?)
     } else {
+        upload.validate_shallow(repository)?;
         None
     };
-    if upload.extensions.options.depth.is_some() {
+    if indices.is_some() {
         upload.shallow_info(&storage.objects[..repository.object_count()], output)?;
     }
     upload.acknowledge(repository, output)?;

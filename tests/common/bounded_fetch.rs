@@ -622,6 +622,9 @@ fn shallow_probe_ends_at_its_flush_without_an_ack() {
     let mut validation = ValidationBuffers::new();
     let repository = &validation.validate(validation_source);
     let bytes = body(graph.head(), 0, &["deepen 1"], false);
+    let (failed, empty) = Harness::default().serve(repository, request(&bytes, 0), 0);
+    assert!(matches!(failed, Err(Error::LimitExceeded)));
+    assert!(empty.is_empty());
     let (result, output) = Harness::default().serve(repository, request(&bytes, 0), 32768);
     result.unwrap();
     let mut expected = Vec::new();
@@ -949,4 +952,71 @@ fn an_explicit_blob_want_needs_no_structural_reads_or_parse_scratch() {
         pack::write_selected_with_scratch(&repository, &selected[..1], &mut [0; 1], &mut writer,),
         Err(Error::Backend)
     );
+}
+
+#[test]
+fn extension_only_negotiation_uses_no_graph_slots_scratch_or_read_budget() {
+    let graph = Graph::new();
+    let provider = Streaming {
+        source: &graph,
+        fail: Cell::new(false),
+        bytes: Cell::new(0),
+    };
+    let source = RefRepository::new(&provider, graph.state(), &graph.refs).unwrap();
+    let mut validation = ValidationBuffers::new();
+    let repository = validation.validate(&source);
+    let shallow = format!("shallow {}", graph.head());
+    let cases: &[(u8, &[&str])] = &[
+        (0, &["filter blob:none"]),
+        (0, &[&shallow]),
+        (0, &[&shallow, "filter blob:limit=5"]),
+        (2, &["filter blob:none"]),
+        (2, &[&shallow]),
+        (2, &[&shallow, "deepen 2", "filter blob:none"]),
+    ];
+    let mut buffers = http::SelectionBuffers::<1, 0, 0, 0>::new();
+    provider.bytes.set(0);
+    for &(version, args) in cases {
+        let bytes = body(graph.head(), version, args, false);
+        let mut control = [0; 128];
+        let mut encoder = prepare(
+            &repository,
+            request(&bytes, version),
+            buffers.storage(0),
+            &mut control,
+        )
+        .unwrap();
+        let actual = pull::collect(|out| encoder.read(&repository, out), 1);
+        let expected: &[u8] = if version == 2 {
+            b"0014acknowledgments\n0008NAK\n0000"
+        } else {
+            b"0008NAK\n"
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(provider.bytes.get(), 0);
+    }
+}
+
+#[test]
+fn negotiation_rejects_absent_or_non_commit_client_boundaries_before_output() {
+    let graph = Graph::new();
+    let source = graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repository = validation.validate(&source);
+    let mut buffers = http::SelectionBuffers::<1, 0, 0, 0>::new();
+    for version in [0, 2] {
+        for invalid in [ObjectId::Sha1([9; 20]), graph.ids.shared.unwrap()] {
+            let shallow = format!("shallow {invalid}");
+            let bytes = body(graph.head(), version, &[&shallow], false);
+            let mut control = [0xa5; 128];
+            let result = prepare(
+                &repository,
+                request(&bytes, version),
+                buffers.storage(0),
+                &mut control,
+            );
+            assert!(matches!(result, Err(Error::InvalidRequest)));
+            assert_eq!(control, [0xa5; 128]);
+        }
+    }
 }

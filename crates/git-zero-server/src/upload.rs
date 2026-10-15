@@ -288,6 +288,16 @@ impl<'a> UploadRequest<'a> {
     }
 
     #[cfg(feature = "read")]
+    pub fn validate_shallow(&self, repository: &impl Repository) -> Result<()> {
+        for id in self.shallow() {
+            if common_commit(repository, id?)?.is_none() {
+                return Err(Error::InvalidRequest);
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "read")]
     pub fn include_tags(&self) -> bool {
         self.include_tags
     }
