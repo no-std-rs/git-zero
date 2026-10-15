@@ -6,7 +6,7 @@ Cloudflare Worker. It serves a synthetic repository containing:
 | File | Contents |
 | --- | --- |
 | `cf.json` | All serializable metadata available on the capture request's `request.cf` |
-| `headers.json` | The capture request's `cf-*` headers |
+| `headers.json` | Public Cloudflare headers selected by `EXPOSED_CF_HEADERS` (default: `cf-ray`) |
 | `vars.json` | Public string/JSON bindings named in `EXPOSED_VARS` |
 | `runtime.json` | Demo platform and snapshot format information |
 
@@ -107,8 +107,9 @@ record never falls back to a fresh snapshot or to the request environment.
 
 Snapshots remain public metadata. Apply deployment authentication (for example
 Cloudflare Access) to both `/` and repository paths when access must be limited.
-Storage keys and shorter URLs do not provide authentication. No credentials or
-storage binding methods are exported as repository files.
+Storage keys and shorter URLs do not provide authentication. Public selection
+controls apply to new captures; existing immutable URLs retain their original
+files and object IDs.
 
 The adapters use the documented [KV streaming read](https://developers.cloudflare.com/kv/api/read-key-value-pairs/),
 [KV write/TTL](https://developers.cloudflare.com/kv/api/write-key-value-pairs/), and
@@ -122,13 +123,53 @@ responses own separate fixed buffers. There are no Wasm imports, Rust allocator,
 `std`, `wasm-bindgen`, or Rust Worker SDK dependencies. The JavaScript host uses
 normal runtime allocation.
 
-## Public variables
+## Public metadata selection
 
 Edit `[vars]` and the comma-separated `EXPOSED_VARS` list in `wrangler.toml`.
 Wrangler string variables and secrets are indistinguishable through `env` at
 runtime, so only deliberately selected public bindings are exported. Do not put
-credentials in that list. Request authorization/cookie headers are excluded;
-the demo intentionally exposes Cloudflare request metadata.
+credentials in that list. The Worker accesses only named own bindings; missing
+or undefined names are omitted. It copies plain JSON values rather than invoking
+binding methods, getters or `toJSON`. Strings, booleans, null, finite numbers,
+plain objects and dense arrays are supported. Unsupported selected bindings
+(including KV/R2/service objects), cycles and accessor properties reject capture
+with 503 before storage publication. Invalid request metadata returns 400.
+
+Set `EXPOSED_CF_HEADERS` to a comma-separated public header list. Its default is
+`cf-ray`; use an empty string to capture no headers. Names are case-insensitive
+and must begin with `cf-`. All `cf-access-*` names and `cf-authorization` are
+refused even when explicitly listed, because Access uses headers in that family
+for credentials and authenticated identity. Authorization and Cookie cannot be
+selected. Arbitrary custom credential headers must stay outside the public list.
+Cloudflare documents the standard assertion header as an
+[application token](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).
+
+Each selection is limited to 64 names and 4096 characters. Request metadata and
+selected variable values share a 1024-value, 16-level JSON projection budget;
+exceeding it returns 413. The existing 8 KiB serialized snapshot ceiling also
+applies. Capture errors use `Cache-Control: no-store`, return no clone URL and
+write no storage record. Reads never reapply the current selection to a stored
+or embedded snapshot, preserving earlier Git objects exactly.
+
+## Deployment authentication
+
+The demo does not authenticate requests itself. To restrict a deployment,
+configure [Cloudflare Access for the entire Worker](https://developers.cloudflare.com/workers/configuration/cloudflare-access/):
+open Workers & Pages, select the Worker, choose Access, select Protect this Worker
+behind Access, choose All traffic, configure the permitted policy and apply it.
+Worker-level protection covers its associated domains, routes, `workers.dev`
+hostname and previews. A hostname/path application protects only the URLs it
+matches; capture `/` and both `/r/` and `/s/` repository routes need the same
+access policy.
+
+For unattended Git clients, configure a Service Auth policy and supply the
+service-token client ID and secret on every HTTP request, including initial
+capture and discovery/downloads. Cloudflare's
+[service token guide](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
+describes those headers. They are deliberately excluded from new snapshots.
+Cloudflare enforces the deployment policy before invoking the Worker; merely
+receiving an Access-looking header is not authentication. Local tests exercise
+projection and Git interoperability without provisioning or emulating Access.
 
 ## Checks
 
