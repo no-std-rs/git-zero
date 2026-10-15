@@ -22,12 +22,20 @@ pub(crate) fn serve_refs(
     }
 }
 
-pub(crate) fn advertise(format: ObjectFormat, output: &mut impl Write) -> Result<()> {
+pub(crate) fn advertise(
+    format: ObjectFormat,
+    output: &mut impl Write,
+    selection: bool,
+) -> Result<()> {
     for line in [
         b"version 2\n".as_slice(),
         b"agent=git-zero/0.1\n",
         b"ls-refs=unborn\n",
-        b"fetch\n",
+        if selection {
+            b"fetch=shallow filter\n"
+        } else {
+            b"fetch\n"
+        },
     ] {
         pktline::write(output, line)?;
     }
@@ -245,6 +253,7 @@ impl Fetch {
         args: &[u8],
         format: ObjectFormat,
         mut want: impl FnMut(ObjectId) -> Result<()>,
+        extensions: &mut crate::fetch::Extensions<'_>,
     ) -> Result<Self> {
         let mut fetch = Self {
             done: false,
@@ -263,7 +272,7 @@ impl Fetch {
                     b"include-tag" => fetch.include_tags = true,
                     // Full, non-delta packs also satisfy thin-pack/ofs-delta requests.
                     b"thin-pack" | b"ofs-delta" | b"no-progress" => {}
-                    _ => return Err(Error::Unsupported),
+                    _ => extensions.argument(arg, format)?,
                 }
             }
         }

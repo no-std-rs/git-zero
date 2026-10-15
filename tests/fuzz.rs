@@ -86,6 +86,8 @@ const TARGETS: [Target; 7] = [
             include_bytes!("../fuzz/corpus/routing/v2-refs"),
             include_bytes!("../fuzz/corpus/routing/v2-fetch"),
             include_bytes!("../fuzz/corpus/routing/v2-filter"),
+            include_bytes!("../fuzz/corpus/routing/v0-shallow"),
+            include_bytes!("../fuzz/corpus/routing/v2-shallow"),
             include_bytes!("../fuzz/corpus/routing/conflicting-capabilities"),
             include_bytes!("../fuzz/corpus/routing/push"),
             include_bytes!("../fuzz/corpus/routing/smart"),

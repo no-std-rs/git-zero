@@ -84,10 +84,47 @@ function packet(line) {
 
 const parts = ["{\"colo\":\"CDG\"}\n", "{}\n", "{\"public\":true}\n", "{\"format\":1}\n"];
 
+test("shallow and filtered pulls retain fixed memory, format widths and exact packs", () => {
+  const first = instance();
+  const second = instance();
+  for (const format of [0, 1]) {
+    const hash = format === 0 ? "sha1" : "sha256";
+    const head = new RegExp(`([0-9a-f]{${format === 0 ? 40 : 64}}) HEAD\\0`).exec(call(first, frame(parts, "info/refs?service=git-upload-pack"), 0, format).body.toString())[1];
+    for (const version of [0, 1, 2]) {
+      for (let round = 0; round < 16; round++) {
+        const args = ["deepen 1", "filter blob:none"];
+        const body = version === 2 ? Buffer.concat([
+          packet("command=fetch\n"), packet(`object-format=${hash}\n`), Buffer.from("0001"),
+          packet(`want ${head}\n`), ...args.map((a) => packet(`${a}\n`)), packet("done\n"), Buffer.from("0000"),
+        ]) : Buffer.concat([
+          packet(`want ${head} filter ${format === 0 ? "object-format=sha1" : "object-format=sha256"}\n`),
+          ...args.map((a) => packet(`${a}\n`)), Buffer.from("0000"), packet("done\n"),
+        ]);
+        const input = httpFrame("git-upload-pack", body, `version=${version}`);
+        const response = call(first, input, 1, format, true);
+        const prefix = Buffer.concat([
+          ...(version === 2 ? [packet("shallow-info\n")] : []), packet(`shallow ${head}\n`),
+          Buffer.from(version === 2 ? "0001" : "0000"),
+        ]);
+        assert.deepEqual(response.body.subarray(0, prefix.length), prefix);
+        const { pack } = decodeNegotiation(response.body.subarray(prefix.length), version === 2 ? "side-band-64k" : "");
+        assert.equal(pack.readUInt32BE(8), 2, "only commit and tree are sent");
+        const width = format === 0 ? 20 : 32;
+        assert.deepEqual(createHash(hash).update(pack.subarray(0, -width)).digest(), pack.subarray(-width));
+        checkStreamingTarget(first, second, input, 1, format, version === 2);
+      }
+    }
+  }
+});
+
 function decodeNegotiation(wire, band) {
   const lines = [];
   const packed = [];
   while (wire.length) {
+    if (!band && wire.subarray(0, 4).toString() === "PACK") {
+      packed.push(wire);
+      break;
+    }
     const length = Number.parseInt(wire.subarray(0, 4).toString(), 16);
     if (length === 0) { assert.equal(wire.length, 4); break; }
     assert.ok(length <= (band === "side-band" ? 1000 : 65520));
@@ -293,7 +330,12 @@ function assertStreamMatches(actual, expected, sideband) {
   assert.equal(actual.status, expected.status);
   assert.equal(actual.type, expected.type);
   if (sideband) {
-    assert.deepEqual(decodeNegotiation(actual.body, "side-band-64k"), decodeNegotiation(expected.body, "side-band-64k"));
+    const marker = packet("packfile\n");
+    const start = expected.body.indexOf(marker);
+    if (start >= 0) {
+      assert.deepEqual(actual.body.subarray(0, start), expected.body.subarray(0, start));
+      assert.deepEqual(decodeNegotiation(actual.body.subarray(start), "side-band-64k"), decodeNegotiation(expected.body.subarray(start), "side-band-64k"));
+    } else assert.deepEqual(decodeNegotiation(actual.body, "side-band-64k"), decodeNegotiation(expected.body, "side-band-64k"));
   } else assert.deepEqual(actual, expected);
 }
 

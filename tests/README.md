@@ -86,6 +86,20 @@ allocation. Gzip tests use Python's independent encoder and validate truncation,
 CRC/size/header fields and expansion limits. Worker v1/v2 ABI tests enforce the
 same fixed memory ceiling in both formats, alongside real-Git SHA-1 clones.
 
+`server_shallow.py` adds independent Git comparisons for v0/v1/v2 shallow clones
+at depths 1, 2 and beyond the history, including merge tips, unchanged shallow
+fetches, absolute depth increases and unshallowing in SHA-1/SHA-256. It compares
+shallow files, delivered commit/tree/blob IDs and bodies, checkouts and strict
+integrity. Git v0 may additionally send include-tag annotations. Partial clones
+use --no-checkout and test blob:none, blob:limit=5, scaled limits and combined
+shallow/filter requests; lazy retrieval of unadvertised promised blobs remains
+unsupported. Core `references::bounded_fetch` covers shorter merge paths in
+both enumeration orders, explicit blob wants, nested tags, budgets, malformed
+options, retries, allocation counts and guarded one-byte pulls. Worker real-Git
+clones test depth/unshallow and partial fetches; ABI tests repeat them in both
+formats across fragmented pulls, cancellation and independent instances within
+the unchanged 24-page memory ceiling.
+
 `tests/inflate.rs` compares the core zlib decoder with Python's standard zlib
 and a real Git-created loose object. Stored, fixed, dynamic and mixed blocks run
 with one-byte input/output, overlapping copies, a 32768-byte back-reference,
@@ -252,6 +266,9 @@ configuration through `GIT_ZERO_TEST_JOBS`, `GIT_ZERO_TEST_GIT` and
 `GIT_ZERO_TEST_ARTIFACTS`.
 
 ## Performance comparison
+
+The [shallow/filter regression comparison](shallow-filter-benchmarks.md) records
+before/after results for both existing profiles and a repeated smart-clone CPU check.
 
 Use optimized native binaries and opt into the Linux benchmark (Python's
 standard library plus GNU `time`). Python creates the fixture and runs clients;

@@ -15,6 +15,9 @@ use std::{cell::Cell, io::Write as _};
 const ZERO: ObjectId = ObjectId::Sha1([0; 20]);
 const CAPACITY: usize = 32;
 
+#[path = "common/bounded_fetch.rs"]
+mod bounded_fetch;
+
 #[derive(Clone)]
 struct Owned {
     kind: ObjectKind,

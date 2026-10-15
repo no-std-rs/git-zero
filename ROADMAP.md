@@ -97,7 +97,8 @@ annotated tags, deep trees, merge histories, binary blobs, and both object forma
   peels, unborn HEAD, prefix filters, ACK rounds, include-tag and sideband packs.
   Native real-Git comparisons cover SHA-1/SHA-256, all HEAD states, exact pack
   membership and incremental fetch; Worker Git clones cover v0/v1/v2 and its
-  fixed-memory ABI checks both formats. Shallow/filter extensions stay absent.
+  fixed-memory ABI checks both formats. Bounded shallow/blob-filter support is
+  recorded below; other optional extensions stay absent.
 - [x] Incremental requests and responses, backpressure, cancellation, and resume points.
   Caller-owned bounded request intake waits for complete framing before command
   parsing. Pull cursors retain pack/hash/sideband state without response-sized
@@ -107,6 +108,14 @@ annotated tags, deep trees, merge histories, binary blobs, and both object forma
   responses. HTTP chunked request decoding and nonblocking socket polling remain
   adapter work in section 4.
 - [ ] Shallow/filter requests with bounded traversal and documented rejection paths.
+  Absolute depth, shallow clients, absolute deepening/unshallow, blob:none and
+  blob:limit now share caller-owned traversal arrays and one graph-read budget.
+  Native Git-oracle clones compare boundaries and delivered objects for v0/v1/v2
+  in SHA-1/SHA-256, including merges and combined depth/filter requests. Worker
+  clones and repeated fragmented/cancelled ABI pulls retain the 24-page ceiling.
+  Relative/time/exclusion deepening and additional filters remain rejected.
+  Partial clones use --no-checkout: lazy promised-object wants still need an
+  explicit extension of the advertised-ID policy before general checkout works.
 - [x] Proper method/content-type checks, service selection, protocol-version
   handling, route normalization, and a wider malformed-request corpus.
   Shared routing rejects wrong methods/media types, duplicate services/versions,
@@ -208,7 +217,9 @@ remain regression coverage; server completion is measured with real Git clients.
   state. Retain regressions and check bounded work, state reset, and output guards.
   V0 capability conflicts, ACK/have phases and sideband responses and v2 command
   framing, ls-refs/fetch, unsupported extensions and HTTP gzip envelopes have
-  seeded mutations; shallow/filter and asynchronous state remain planned.
+  seeded mutations. Shallow/filter mutations now exercise selected synchronous
+  and pull responses, boundary framing, budgets and cancellation; concurrent
+  host state remains planned.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.
@@ -271,8 +282,9 @@ kernel-scale benchmarks separate from mandatory, reproducible correctness checks
   configured limits, and remaining optional work; no advertised feature lacks tests.
 
 Start further client development after this gate passes. The next implementation
-step is bounded shallow/filter traversal, followed by packed dumb HTTP publication
-and the remaining native/Worker hosting work.
+step is completing shallow/partial-fetch follow-ups (relative/time/exclusion
+deepening and promised-object retrieval), then packed dumb HTTP publication and
+the remaining native/Worker hosting work.
 
 ## 7. Read/write server support
 

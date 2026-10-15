@@ -5,7 +5,13 @@ use git_zero_core::{
     pktline::{self, Packet},
 };
 
-pub(crate) use git_zero_core::repository::UPLOAD_CAPABILITIES as CAPABILITIES;
+pub(crate) fn capabilities(selection: bool) -> &'static [u8] {
+    if selection {
+        git_zero_core::repository::UPLOAD_CAPABILITIES
+    } else {
+        b" multi_ack multi_ack_detailed side-band side-band-64k no-progress"
+    }
+}
 
 #[derive(Clone, Copy, Default)]
 struct Capabilities(u8);
@@ -17,6 +23,8 @@ fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u8> {
         b"side-band" => Ok(4),
         b"side-band-64k" => Ok(8),
         b"no-progress" => Ok(16),
+        b"shallow" => Ok(64),
+        b"filter" => Ok(128),
         b"object-format=sha1" | b"object-format=sha256" if capability == format.capability() => {
             Ok(32)
         }
@@ -66,6 +74,7 @@ pub(crate) struct UploadRequest<'a> {
     capabilities: Capabilities,
     haves: &'a [u8],
     v2: bool,
+    pub extensions: crate::fetch::Extensions<'a>,
     #[cfg(feature = "read")]
     include_tags: bool,
 }
@@ -94,19 +103,34 @@ fn parse_wants(
     bytes: &mut &[u8],
     format: ObjectFormat,
     mut want: impl FnMut(ObjectId) -> Result<()>,
+    extensions: &mut crate::fetch::Extensions<'_>,
 ) -> Result<Capabilities> {
     let mut wanted = false;
+    let mut extended = false;
     let mut capabilities = Capabilities::default();
     while let Some(packet) = pktline::read(bytes)? {
         let Packet::Data(line) = packet else {
+            if packet != Packet::Flush {
+                return Err(Error::InvalidRequest);
+            }
+            // Shallow commands use the server's advertisement; Git does not
+            // echo `shallow` in its want capabilities. Filter is negotiated.
+            extensions.validate(true, capabilities.0 & 128 != 0)?;
             return wanted.then_some(capabilities).ok_or(Error::InvalidRequest);
         };
         let line = request_line(line);
-        let value = line
-            .strip_prefix(b"want ")
-            .ok_or_else(|| unexpected_command(line))?;
-        want(capabilities.want(value, !wanted, format)?)?;
-        wanted = true;
+        if let Some(value) = line.strip_prefix(b"want ") {
+            if extended {
+                return Err(Error::InvalidRequest);
+            }
+            want(capabilities.want(value, !wanted, format)?)?;
+            wanted = true;
+        } else if wanted {
+            extensions.argument(line, format)?;
+            extended = true;
+        } else {
+            return Err(unexpected_command(line));
+        }
     }
     Err(Error::InvalidRequest)
 }
@@ -139,30 +163,73 @@ impl<'a> UploadRequest<'a> {
         version: crate::route::Version,
         want: impl FnMut(ObjectId) -> Result<()>,
     ) -> Result<Self> {
+        let mut extensions = crate::fetch::Extensions::new(bytes);
         if version == crate::route::Version::V2 {
             let command = crate::v2::Command::parse(bytes, format)?.ok_or(Error::InvalidRequest)?;
             if command.name != b"fetch" {
                 return Err(Error::InvalidRequest);
             }
-            let fetch = crate::v2::Fetch::parse(command.args, format, want)?;
+            extensions = crate::fetch::Extensions::new(command.args);
+            let fetch = crate::v2::Fetch::parse(command.args, format, want, &mut extensions)?;
             return Ok(Self {
                 done: fetch.done,
                 capabilities: Capabilities::default(),
                 haves: command.args,
                 v2: true,
+                extensions,
                 #[cfg(feature = "read")]
                 include_tags: fetch.include_tags,
             });
         }
-        let capabilities = parse_wants(&mut bytes, format, want)?;
+        let capabilities = parse_wants(&mut bytes, format, want, &mut extensions)?;
         Ok(Self {
             done: parse_haves(bytes, format)?,
             capabilities,
             haves: bytes,
             v2: false,
+            extensions,
             #[cfg(feature = "read")]
             include_tags: false,
         })
+    }
+
+    pub fn require_complete(&self) -> Result<()> {
+        if self.extensions.active() || self.capabilities.0 & 192 != 0 {
+            return Err(Error::Unsupported);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "read")]
+    pub fn shallow_info(
+        &self,
+        objects: &[Option<git_zero_core::ValidationMetadata>],
+        output: &mut impl Write,
+    ) -> Result<()> {
+        if self.extensions.options.depth.is_none() || (self.v2 && !self.done) {
+            return Ok(());
+        }
+        let changed = objects
+            .iter()
+            .flatten()
+            .any(|object| object.is_shallow() || object.is_unshallow());
+        if self.v2 && !changed {
+            return Ok(());
+        }
+        if self.v2 {
+            pktline::write(output, b"shallow-info\n")?;
+        }
+        for object in objects.iter().flatten() {
+            let marker: &[u8] = if object.is_shallow() {
+                b"shallow "
+            } else if object.is_unshallow() {
+                b"unshallow "
+            } else {
+                continue;
+            };
+            pktline::write_parts(output, &[marker, &object.id.to_hex(), b"\n"])?;
+        }
+        output.write_all(if self.v2 { b"0001" } else { b"0000" })
     }
 
     #[cfg(feature = "read")]
@@ -206,6 +273,11 @@ impl<'a> UploadRequest<'a> {
     pub fn acknowledge(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
         if self.v2 {
             return crate::v2::acknowledge(self.done, self.common(repository), output);
+        }
+        if self.extensions.options.depth.is_some() && self.haves.is_empty() {
+            // The v0 shallow-list probe precedes any have/done round. A NAK
+            // here would be consumed as the next replay's shallow-list header.
+            return Ok(());
         }
         let mut last = None;
         for id in self.common(repository) {

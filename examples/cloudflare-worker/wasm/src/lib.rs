@@ -5,8 +5,9 @@
 mod abi {
     use core::cell::UnsafeCell;
     use git_zero::{
-        Entry, EntryKind, Error, ObjectFormat, Snapshot, SnapshotBuilder, ValidatedRepository,
-        http::{self, Request, stream::ResponseEncoder},
+        Entry, EntryKind, Error, ObjectFormat, ObjectId, Snapshot, SnapshotBuilder,
+        ValidatedRepository, ValidationMetadata,
+        http::{self, Request, SelectionStorage, stream::ResponseEncoder},
         io::SliceWriter,
     };
 
@@ -26,6 +27,11 @@ mod abi {
         tree: [u8; 1024],
         commit: [u8; 1024],
         control: [u8; 8192],
+        wants: [ObjectId; 6],
+        objects: [Option<ValidationMetadata>; 6],
+        indices: [usize; 6],
+        read: [u8; 128],
+        parse: [u8; 128],
     }
     struct Exclusive<T>(UnsafeCell<T>);
     // SAFETY: Same synchronous, single-threaded, non-reentrant ABI as Buffer.
@@ -36,6 +42,11 @@ mod abi {
             tree: [0; 1024],
             commit: [0; 1024],
             control: [0; 8192],
+            wants: [ObjectId::Sha1([0; 20]); 6],
+            objects: [None; 6],
+            indices: [0; 6],
+            read: [0; 128],
+            parse: [0; 128],
         }));
     struct Session {
         repository: Snapshot<'static>,
@@ -226,7 +237,19 @@ mod abi {
             &mut [0; 128],
         )?;
         let mut body = SliceWriter::new(&mut output[3..]);
-        let response = http::serve(&repository, request, &mut body)?;
+        let response = http::serve_with_selection(
+            &repository,
+            request,
+            &mut SelectionStorage {
+                wants: &mut [ObjectId::Sha1([0; 20]); 6],
+                objects: &mut [None; 6],
+                indices: &mut [0; 6],
+                read: &mut [0; 128],
+                parse: &mut [0; 128],
+                graph_read_limit: 1_048_576,
+            },
+            &mut body,
+        )?;
         let total = body.len() + 3;
         response_header(response, output);
         Ok(total)
@@ -297,7 +320,19 @@ mod abi {
             &mut [0; 128],
             &mut [0; 128],
         )?;
-        let encoder = ResponseEncoder::new(&validated, request, &mut storage.control)?;
+        let encoder = ResponseEncoder::with_selection_storage(
+            &validated,
+            request,
+            SelectionStorage {
+                wants: &mut storage.wants,
+                objects: &mut storage.objects,
+                indices: &mut storage.indices,
+                read: &mut storage.read,
+                parse: &mut storage.parse,
+                graph_read_limit: 1_048_576,
+            },
+            &mut storage.control,
+        )?;
         response_header(encoder.response(), unsafe { &mut *OUTPUT.0.get() });
         Ok::<_, Error>(Session {
             repository,

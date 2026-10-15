@@ -574,13 +574,13 @@ distinct requested ID. Scratch follows validation's header/tree-name limits;
 `graph_read_limit` caps actual structural read bytes, including buffered reads and
 rereads. Selection uses no body-sized buffer or allocation. Only advertised HEAD,
 ref and peeled IDs are accepted; unknown or merely reachable IDs are rejected.
-Duplicate and overlapping wants produce each object once. Requests without `done`
+Duplicate and overlapping wants produce each object once. Ordinary requests without `done`
 negotiate ACK/NAK without graph traversal. Selection failures occur before output,
 and the same storage can be reused on retry. Known commit haves omit their complete
 closure, sharing `graph_read_limit` across common and wanted traversals. Unknown
 and non-commit haves are ignored. Requests replay wants and common haves each
-round; no connection state or have-ID array is retained. Shallow clients are
-rejected before history exclusion.
+round; no connection state or have-ID array is retained. A client's shallow
+boundaries stop common-history traversal, so missing parents are never excluded.
 
 V0 advertisements include `multi_ack`, `multi_ack_detailed`, `side-band`,
 `side-band-64k` and `no-progress`. A client chooses at most one ACK mode and one
@@ -591,15 +591,35 @@ are common), then the pack. No `ready`/`no-done` shortcuts are advertised.
 Sideband sends channel-1 pack bytes through a fixed 1 KiB buffer and a terminal
 flush; no progress messages are emitted. Unsupported, conflicting or duplicated
 capabilities, misplaced wants/haves and incomplete requests fail before output.
-V0 `include-tag` and shallow/filter extensions remain unadvertised.
+V0 `include-tag` remains unadvertised.
 
 `Request` carries `content_type` and `git_protocol` from the HTTP host. A missing
 protocol header selects v0; `version=1` adds its version announcement and
 `version=2` selects ls-refs/fetch. V2 supports symrefs, peels, prefix selection,
 unborn HEAD and include-tag. Done fetches send a sideband packfile section without
 ACKs; negotiation rounds return ACKs or NAK and wait for done. Thin-pack/ofs-delta
-hints permit full non-delta packs. Shallow/filter and other optional v2 extensions
-are rejected and unadvertised. The client primitives continue using v0.
+hints permit full non-delta packs. Selection-enabled discovery adds v0/v1
+`shallow filter` or v2 `fetch=shallow filter`. Legacy complete-pack APIs advertise
+their smaller capability set and reject extensions. The client primitives continue using v0.
+
+Selected fetches support absolute `deepen N` (1..=2147483647), client `shallow`
+IDs, and `filter blob:none` / `filter blob:limit=N` (optional lowercase k/m/g
+binary suffixes). Depth counts commits from every wanted tip, following the
+shortest merge path; annotated tags preserve their target's depth. Depth requests
+resend the bounded closure rather than trusting shallow haves. Responses update
+shallow/unshallow boundaries, including root commits exactly at the depth limit;
+`git fetch --depth=N` and `--unshallow` work with the same arrays and graph budget.
+V0's initial shallow-list probe has no ACK/NAK; v2 uses a shallow-info section.
+
+Blob filters omit bodies of the selected size or larger and retain explicitly
+wanted blobs. Partial clones currently require `--no-checkout`: the advertised-ID
+want policy still rejects requests for unadvertised promised blobs, so lazy
+checkout retrieval remains deferred. Relative/time/exclusion deepening
+(`--deepen`, deepen-since/not), tree/sparse/combine filters, unknown/non-commit
+shallow IDs, malformed/duplicate options and exhausted budgets fail before
+output. Shallow probes also traverse within the graph budget; hosts must size
+control storage for their boundary packets. No history or filter state persists
+between requests.
 
 Upload requests require the Git upload request media type. Known routes enforce
 methods and service/version selection, reject duplicate selectors and unsafe or
@@ -615,7 +635,8 @@ append it to a partial raw pack. Streaming hosts must close failed transfers.
 
 `ValidatedRepository::select_objects` also accepts any present root for host use;
 `select_missing_objects` subtracts explicit complete common closures with the
-same array and read budgets. Neither primitive implements shallow history.
+same array and read budgets. `select_bounded_fetch` adds `FetchOptions`, client
+shallow IDs, and per-object shallow/unshallow markers in the existing work array.
 `pack::write_selected_with_scratch` emits the resulting unique object indices.
 The legacy `http::serve`, `serve_with_scratch`, `serve_with_pack` and HEAD-key
 `cache::write` support complete HEAD closures whose refs all alias HEAD.

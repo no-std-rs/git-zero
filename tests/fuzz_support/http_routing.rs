@@ -56,6 +56,65 @@ pub fn routing(data: &[u8]) {
         capacity,
         1 + usize::from(data[1]) % 31,
     );
+    selected(
+        &repository,
+        request,
+        capacity,
+        1 + usize::from(data[1]) % 31,
+    );
+}
+
+fn selected(
+    repository: &impl git_zero::Repository,
+    request: Request<'_>,
+    capacity: usize,
+    fragment_size: usize,
+) {
+    let mut metadata = [None; 2];
+    let mut by_id = [0; 2];
+    let repository = git_zero::ValidatedRepository::new(
+        repository,
+        &mut metadata,
+        &mut by_id,
+        &mut [0; 1],
+        &mut [0; 128],
+    )
+    .unwrap();
+    let mut wants = [git_zero::ObjectId::Sha1([0; 20]); 2];
+    let mut objects = [None; 2];
+    let mut indices = [0; 2];
+    let mut selection = http::SelectionStorage {
+        wants: &mut wants,
+        objects: &mut objects,
+        indices: &mut indices,
+        read: &mut [0; 1],
+        parse: &mut [0; 128],
+        graph_read_limit: MAX_INPUT as u64,
+    };
+    let mut bytes = [0; MAX_INPUT];
+    let mut output = SliceWriter::new(&mut bytes[..capacity]);
+    if let Ok(response) =
+        http::serve_with_selection(&repository, request, &mut selection, &mut output)
+    {
+        check_response(response, request.git_protocol, output.as_bytes());
+    }
+    let mut control = [0; MAX_INPUT];
+    if let Ok(mut encoder) = http::stream::ResponseEncoder::with_selection(
+        &repository,
+        request,
+        &mut selection,
+        &mut control[..capacity],
+    ) {
+        let mut bytes = [0; MAX_INPUT];
+        let mut output = SliceWriter::new(&mut bytes);
+        drain_response(&repository, &mut encoder, fragment_size, &mut output);
+        check_response(encoder.response(), request.git_protocol, output.as_bytes());
+        encoder.cancel();
+        assert_eq!(
+            encoder.read(&repository, &mut [0; 1]),
+            Err(git_zero::Error::InvalidRequest)
+        );
+    }
 }
 
 fn streaming(
@@ -125,7 +184,12 @@ fn check_v2(mut wire: &[u8]) {
     let mut storage = [0; MAX_INPUT];
     let mut packed = SliceWriter::new(&mut storage);
     let mut packfile = false;
-    while let Some(packet) = pktline::read(&mut wire).unwrap() {
+    while !wire.is_empty() {
+        if wire.starts_with(b"0001") {
+            wire = &wire[4..];
+            continue;
+        }
+        let packet = pktline::read(&mut wire).unwrap().unwrap();
         match packet {
             Packet::Data(b"packfile\n") => packfile = true,
             Packet::Data(line) if packfile => {
@@ -159,12 +223,21 @@ fn check_upload(mut wire: &[u8]) {
             Packet::Data(line) if line.starts_with(b"ACK ") || line == b"NAK\n" => {
                 acknowledged = true;
             }
+            Packet::Data(line)
+                if !acknowledged
+                    && (line.starts_with(b"shallow ") || line.starts_with(b"unshallow ")) => {}
             Packet::Data(line) => {
                 assert!(acknowledged);
                 assert_eq!(line[0], 1);
                 git_zero::io::Write::write_all(&mut packed, &line[1..]).unwrap();
             }
             Packet::Flush => {
+                if !acknowledged {
+                    if wire.is_empty() {
+                        return;
+                    }
+                    continue;
+                }
                 assert!(wire.is_empty());
                 pack::validate(packed.as_bytes()).unwrap();
                 return;

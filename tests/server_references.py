@@ -264,6 +264,8 @@ def compare(root, zero, state):
                     if state == "symbolic":
                         from server_negotiation import compare_negotiation
                         compare_negotiation(root, bare, urls, env)
+                        from server_shallow import compare_bounded_fetch
+                        compare_bounded_fetch(root, bare, urls, env)
 
 
 if __name__ == "__main__":
