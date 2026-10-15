@@ -90,6 +90,23 @@ fn expected_upload(body: &[u8]) -> Parsed {
 }
 
 #[test]
+fn identity_coding_is_case_insensitive_and_preserves_git_metadata() {
+    for encoding in ["identity", "Identity", "IDENTITY", "iDeNtItY"] {
+        let wire = format!(
+            "POST /repo.git/git-upload-pack HTTP/1.1\r\nContent-Length: 4\r\nContent-Encoding: {encoding}\r\nContent-Type: application/x-git-upload-pack-request\r\nGit-Protocol: version=2\r\n\r\n0000"
+        );
+        let mut storage = [0; 1024];
+        let request = receive(wire.as_bytes(), wire.len(), &mut storage).unwrap();
+        assert_eq!(request.body, b"0000");
+        assert_eq!(
+            request.content_type.as_deref(),
+            Some("application/x-git-upload-pack-request")
+        );
+        assert_eq!(request.git_protocol.as_deref(), Some("version=2"));
+    }
+}
+
+#[test]
 fn fragmented_uploads_preserve_metadata_and_binary_body_bytes() {
     let body = b"0000\0\xff\r\n\r\npayload";
     let wire = upload(body);

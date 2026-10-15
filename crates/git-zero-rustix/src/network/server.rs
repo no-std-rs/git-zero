@@ -220,37 +220,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn identity_coding_is_case_insensitive_and_preserves_git_metadata() {
-        for encoding in ["identity", "Identity", "IDENTITY", "iDeNtItY"] {
-            check_identity_coding(encoding);
-        }
-    }
-
-    fn check_identity_coding(encoding: &str) {
-        let (reader, writer) = net::socketpair(
-            net::AddressFamily::UNIX,
-            net::SocketType::STREAM,
-            SOCKET_FLAGS,
-            None,
-        )
-        .unwrap();
-        let wire = std::format!(
-            "POST /repo.git/git-upload-pack HTTP/1.1\r\nContent-Length: 4\r\nContent-Encoding: {encoding}\r\nContent-Type: application/x-git-upload-pack-request\r\nGit-Protocol: version=2\r\n\r\n0000"
-        );
-        SocketWriter(writer.as_fd())
-            .write_all(wire.as_bytes())
-            .unwrap();
-        let mut storage = [0; 1024];
-        let request = read_request(&reader, &mut storage).unwrap();
-        assert_eq!(request.body, b"0000");
-        assert_eq!(
-            request.content_type,
-            Some("application/x-git-upload-pack-request")
-        );
-        assert_eq!(request.git_protocol, Some("version=2"));
-    }
-
-    #[test]
     fn disconnected_stream_cancels_before_any_more_output() {
         let (socket, peer) = net::socketpair(
             net::AddressFamily::UNIX,
