@@ -219,6 +219,8 @@ def case(name, binary, git="git", artifacts=None):
                 if server == "zero":
                     assert run("git", "-C", str(clone), "rev-list", "--count", "HEAD", env=env).strip() == b"1"
                     assert run("git", "-C", str(clone), "symbolic-ref", "--short", "HEAD", env=env).strip() == b"main"
+                    if smart:
+                        check_zero_extensions(root, url, client_env)
             else:
                 # For zero-to-zero dumb mode use an HTTP proxy serving only loose
                 # responses; the native server also supports smart discovery.
@@ -235,6 +237,23 @@ def case(name, binary, git="git", artifacts=None):
                     loose = zlib.decompress(data)
                     assert hashlib.sha1(loose).hexdigest() == head
                     assert loose.startswith(b"commit ")
+
+
+def check_zero_extensions(root, url, env):
+    for version in (0, 1, 2):
+        shallow = root / f"shallow-v{version}"
+        run("git", "-c", f"protocol.version={version}", "clone", "-q", "--depth=1", "--no-tags",
+            url, str(shallow), env=env)
+        assert run("git", "-C", str(shallow), "rev-parse", "--is-shallow-repository", env=env).strip() == b"true"
+        run("git", "-C", str(shallow), "-c", f"protocol.version={version}", "fetch", "--unshallow", "origin", env=env)
+        assert run("git", "-C", str(shallow), "rev-parse", "--is-shallow-repository", env=env).strip() == b"false"
+        run("git", "-C", str(shallow), "fsck", "--strict", env=env)
+        partial = root / f"partial-v{version}"
+        run("git", "-c", f"protocol.version={version}", "clone", "-q", "--filter=blob:none", "--no-checkout", "--no-tags",
+            url, str(partial), env=env)
+        kinds = run("git", "-C", str(partial), "cat-file", "--batch-all-objects", "--batch-check=%(objecttype)", env=env)
+        assert sorted(kinds.splitlines()) == [b"commit", b"tree"]
+        run("git", "-C", str(partial), "fsck", "--strict", env=env)
 
 
 def zero_dumb_client(root, env, binary, upstream):

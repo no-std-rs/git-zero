@@ -22,12 +22,20 @@ pub(crate) fn serve_refs(
     }
 }
 
-pub(crate) fn advertise(format: ObjectFormat, output: &mut impl Write) -> Result<()> {
+pub(crate) fn advertise(
+    format: ObjectFormat,
+    output: &mut impl Write,
+    selection: bool,
+) -> Result<()> {
     for line in [
         b"version 2\n".as_slice(),
         b"agent=git-zero/0.1\n",
         b"ls-refs=unborn\n",
-        b"fetch\n",
+        if selection {
+            b"fetch=shallow filter\n"
+        } else {
+            b"fetch\n"
+        },
     ] {
         pktline::write(output, line)?;
     }
@@ -245,6 +253,7 @@ impl Fetch {
         args: &[u8],
         format: ObjectFormat,
         mut want: impl FnMut(ObjectId) -> Result<()>,
+        extensions: &mut crate::fetch::Extensions,
     ) -> Result<Self> {
         let mut fetch = Self {
             done: false,
@@ -252,19 +261,19 @@ impl Fetch {
         };
         let mut wanted = false;
         for arg in arguments(args) {
-            if let Some(hex) = arg.strip_prefix(b"want ") {
-                want(upload::id(hex, format)?)?;
-                wanted = true;
-            } else if let Some(hex) = arg.strip_prefix(b"have ") {
-                upload::id(hex, format)?;
-            } else {
-                match arg {
-                    b"done" if !fetch.done => fetch.done = true,
-                    b"include-tag" => fetch.include_tags = true,
-                    // Full, non-delta packs also satisfy thin-pack/ofs-delta requests.
-                    b"thin-pack" | b"ofs-delta" | b"no-progress" => {}
-                    _ => return Err(Error::Unsupported),
+            match crate::fetch::argument_parts(arg) {
+                (b"want", Some(hex)) => {
+                    want(upload::id(hex, format)?)?;
+                    wanted = true;
                 }
+                (b"have", Some(hex)) => {
+                    upload::id(hex, format)?;
+                }
+                (b"done", None) if !fetch.done => fetch.done = true,
+                (b"include-tag", None) => fetch.include_tags = true,
+                // Full, non-delta packs also satisfy thin-pack/ofs-delta requests.
+                (b"thin-pack" | b"ofs-delta" | b"no-progress", None) => {}
+                _ => extensions.argument(arg, format)?,
             }
         }
         if !wanted {

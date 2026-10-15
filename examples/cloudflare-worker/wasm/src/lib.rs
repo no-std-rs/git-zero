@@ -6,7 +6,7 @@ mod abi {
     use core::cell::UnsafeCell;
     use git_zero::{
         Entry, EntryKind, Error, ObjectFormat, Snapshot, SnapshotBuilder, ValidatedRepository,
-        http::{self, Request, stream::ResponseEncoder},
+        http::{self, Request, SelectionBuffers, stream::ResponseEncoder},
         io::SliceWriter,
     };
 
@@ -26,6 +26,7 @@ mod abi {
         tree: [u8; 1024],
         commit: [u8; 1024],
         control: [u8; 8192],
+        selection: SelectionBuffers<6, 6, 128, 128>,
     }
     struct Exclusive<T>(UnsafeCell<T>);
     // SAFETY: Same synchronous, single-threaded, non-reentrant ABI as Buffer.
@@ -36,6 +37,7 @@ mod abi {
             tree: [0; 1024],
             commit: [0; 1024],
             control: [0; 8192],
+            selection: SelectionBuffers::new(),
         }));
     struct Session {
         repository: Snapshot<'static>,
@@ -226,7 +228,12 @@ mod abi {
             &mut [0; 128],
         )?;
         let mut body = SliceWriter::new(&mut output[3..]);
-        let response = http::serve(&repository, request, &mut body)?;
+        let response = http::serve_with_selection(
+            &repository,
+            request,
+            &mut SelectionBuffers::<6, 6, 128, 128>::new().storage(1_048_576),
+            &mut body,
+        )?;
         let total = body.len() + 3;
         response_header(response, output);
         Ok(total)
@@ -297,7 +304,12 @@ mod abi {
             &mut [0; 128],
             &mut [0; 128],
         )?;
-        let encoder = ResponseEncoder::new(&validated, request, &mut storage.control)?;
+        let encoder = ResponseEncoder::with_selection_storage(
+            &validated,
+            request,
+            storage.selection.storage(1_048_576),
+            &mut storage.control,
+        )?;
         response_header(encoder.response(), unsafe { &mut *OUTPUT.0.get() });
         Ok::<_, Error>(Session {
             repository,

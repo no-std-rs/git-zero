@@ -110,7 +110,7 @@ def workload_command(operation, implementation, binary, url, target):
 
 
 def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, samples, warmup,
-              time_binary, response_limit, file_transfer, zero_loose_cache):
+              time_binary, response_limit, file_transfer, zero_loose_cache, zero_selection):
     operation, protocol = name.rsplit("-", 1)
     smart = protocol == "smart"
     with tempfile.TemporaryDirectory(prefix=f"git-zero-benchmark-{name}-") as directory:
@@ -123,10 +123,10 @@ def benchmark(name, binary, harness, git, backend, fixture, expected, metadata, 
         results = {implementation: [] for implementation in ("git", "zero")}
         with contextlib.ExitStack() as stack:
             original = stack.enter_context(Server(harness, fixture, backend, "git", protocol, env, root,
-                                                 response_limit, file_transfer, zero_loose_cache))
+                                                 response_limit, file_transfer, zero_loose_cache, zero_selection))
             zero = (original if operation == "client-discovery" else
                     stack.enter_context(Server(harness, fixture, backend, "zero", protocol, env, root,
-                                               response_limit, file_transfer, zero_loose_cache)))
+                                               response_limit, file_transfer, zero_loose_cache, zero_selection)))
             servers = {"git": original, "zero": zero}
             urls = {implementation: server.url for implementation, server in servers.items()}
             fetch_targets = {}
@@ -168,6 +168,7 @@ def main():
     parser.add_argument("--decoder", type=Path, default=Path(__file__).resolve().parents[1] / "target/release/examples/decoder-read")
     parser.add_argument("--git", default=os.environ.get("GIT_ZERO_TEST_GIT", "git"))
     parser.add_argument("--time", default="/usr/bin/time", help="GNU time executable for command RSS")
+    parser.add_argument("--zero-selection", action="store_true", help="Exercise bounded requested-closure serving instead of the complete-pack path")
     parser.add_argument("--samples", type=int, default=25)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--jobs", type=int, default=1, help="Independent workload workers; 1 avoids benchmark contention")
@@ -255,6 +256,7 @@ def main():
         "rss_observer": run(args.time, "--version", env=env).decode().splitlines()[0],
         "samples_per_implementation": args.samples, "warmup_rounds": args.warmup, "jobs": args.jobs,
         "file_transfer": args.file_transfer, "zero_loose_cache": args.zero_loose_cache,
+        "zero_http_pack_policy": "requested-closure" if args.zero_selection else "complete-repository",
         "budgets": {"request_bytes": 65536, "object_read_bytes": 65536, "response_bytes": args.response_limit},
         "resource_limits": limits,
         "measurement_scope": "Fresh client command tree; CPU/RSS exclude server processes. "
@@ -308,7 +310,7 @@ def main():
                 else:
                     future = executor.submit(benchmark, name, binary, harness, git, backend, fixture, expected, metadata,
                                              args.samples, args.warmup, args.time, args.response_limit,
-                                             args.file_transfer, args.zero_loose_cache)
+                                             args.file_transfer, args.zero_loose_cache, args.zero_selection)
                 futures[future] = name
             for future in concurrent.futures.as_completed(futures):
                 try:

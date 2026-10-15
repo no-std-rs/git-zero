@@ -9,12 +9,13 @@ use git_zero_core::{
     reader::DEFAULT_READ_BUFFER_SIZE,
     repository::{resolve_reference, uses_only_head},
 };
+mod fetch;
 mod route;
 pub mod stream;
 mod upload;
 mod v2;
 #[cfg(feature = "read")]
-use git_zero_core::{SelectionOptions, ValidatedRepository, ValidationMetadata};
+use git_zero_core::{SelectionOptions, ValidatedRepository};
 use route::Version;
 use upload::UploadRequest;
 pub use upload::{PackOutput, write_upload_error};
@@ -24,20 +25,10 @@ pub const HEAD: &[u8] = b"ref: refs/heads/main\n";
 
 pub use git_zero_core::http::{Request, Response};
 
-/// Independent per-request storage for bounded reachable-object selection.
-/// `wants` bounds distinct wanted IDs. `objects` and `indices` each need the
-/// repository's complete object count; their extra slots remain untouched.
-/// Read/parse scratch budgets match `ValidatedRepository::select_objects`.
 #[cfg(feature = "read")]
-pub struct SelectionStorage<'a> {
-    pub wants: &'a mut [ObjectId],
-    pub objects: &'a mut [Option<ValidationMetadata>],
-    pub indices: &'a mut [usize],
-    pub read: &'a mut [u8],
-    pub parse: &'a mut [u8],
-    /// Maximum structural bytes read while traversing a request's graph.
-    pub graph_read_limit: u64,
-}
+mod storage;
+#[cfg(feature = "read")]
+pub use storage::{SelectionBuffers, SelectionStorage};
 
 /// Serve independent refs, tags and multiple wanted IDs with caller-owned
 /// selection storage. Accept only advertised ref/peeled/HEAD IDs, rejecting
@@ -45,8 +36,26 @@ pub struct SelectionStorage<'a> {
 /// ACKs or pack. Present commit haves exclude their complete reachable history;
 /// unknown and non-commit haves are ignored. Requests are stateless: clients
 /// replay wants and acknowledged haves each round. No-done rounds only negotiate.
-/// Shallow/filter requests are rejected before excluding any history. Errors
+/// Absolute-depth shallow requests and blob filters use the same graph budget.
+/// Shallow haves never imply complete history. Errors
 /// invalidate all output; selection failures produce no output at all.
+///
+/// Requests must contain a complete, bounded body and the upload-pack media type.
+/// Absolute `deepen` requests may have an initial v0 shallow-list probe without
+/// `done`; that probe consumes the same graph budget as the eventual pack.
+/// A client must replay its shallow IDs and negotiation state on each request.
+/// ACK-only rounds validate client boundaries through the repository index and
+/// need no graph work slots, read/parse scratch or structural-read budget.
+/// Boundary output must fit the host's response/control budget. The streaming
+/// encoder prepares these packets before exposing HTTP success metadata.
+///
+/// Blob filters preserve explicitly wanted blobs but do not grant permission
+/// to request unadvertised promised objects. Partial clones currently need
+/// `--no-checkout`. Relative/time/exclusion deepening and other filter families
+/// return `Unsupported`; malformed options and invalid shallow IDs return
+/// `InvalidRequest`. Scratch/slot exhaustion returns `BufferTooSmall`, and graph
+/// read exhaustion returns `LimitExceeded`. A buffered host can replace a failed
+/// response with `write_upload_error`; a failed stream must be cancelled/closed.
 #[cfg(feature = "read")]
 pub fn serve_with_selection<R: Repository + ?Sized>(
     repository: &ValidatedRepository<'_, '_, R>,
@@ -59,13 +68,16 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
         return Ok(response);
     }
     if request.method != "POST" || route.path != "git-upload-pack" {
+        if request.method == "GET" && route.path == "info/refs" {
+            return serve_info_refs(repository, &route, output, true);
+        }
         return serve_with_scratch(repository, request, storage.read, output);
     }
     let version = route.version;
     if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
         return Ok(upload_response());
     }
-    let selected = prepare_fetch(repository, request, version, storage, output)?;
+    let selected = prepare_fetch(repository, request, version, storage.reborrow(), output)?;
     if let Some(indices) = selected.indices {
         let mut packed = selected.upload.output(output);
         pack::write_selected_with_scratch(repository, indices, selected.read, &mut packed)?;
@@ -86,30 +98,38 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
     repository: &ValidatedRepository<'_, '_, R>,
     request: Request<'body>,
     version: Version,
-    storage: &'storage mut SelectionStorage<'_>,
+    storage: SelectionStorage<'storage>,
     output: &mut impl Write,
 ) -> Result<SelectedFetch<'storage, 'body>> {
     let (upload, count) =
         UploadRequest::parse_selected(repository, request.body, version, storage.wants)?;
-    let indices = if upload.done {
-        Some(repository.select_fetch_objects(
+    let boundary_probe = version != Version::V2 && upload.extensions.options.depth.is_some();
+    let indices = if upload.done || boundary_probe {
+        Some(repository.select_bounded_fetch(
             &storage.wants[..count],
-            upload.common(repository),
+            (upload.common(repository), upload.shallow()),
             storage.objects,
             storage.indices,
             (storage.read, storage.parse),
-            SelectionOptions {
-                graph_read_limit: storage.graph_read_limit,
-                include_tags: upload.include_tags(),
-            },
+            (
+                SelectionOptions {
+                    graph_read_limit: storage.graph_read_limit,
+                    include_tags: upload.include_tags(),
+                },
+                upload.extensions.options,
+            ),
         )?)
     } else {
+        upload.validate_shallow(repository)?;
         None
     };
+    if indices.is_some() {
+        upload.shallow_info(&storage.objects[..repository.object_count()], output)?;
+    }
     upload.acknowledge(repository, output)?;
     Ok(SelectedFetch {
+        indices: indices.filter(|_| upload.done),
         upload,
-        indices,
         read: storage.read,
     })
 }
@@ -216,7 +236,7 @@ fn serve_get(
     };
     match route.path {
         "HEAD" => write_head(repository, output)?,
-        "info/refs" => return serve_info_refs(repository, route, output),
+        "info/refs" => return serve_info_refs(repository, route, output, false),
         "objects/info/packs" => {}
         path if path.starts_with("refs/") => {
             response.status = serve_reference(repository, path, output)?
@@ -243,6 +263,7 @@ fn serve_info_refs(
     repository: &impl Repository,
     route: &route::Route<'_>,
     output: &mut impl Write,
+    selection: bool,
 ) -> Result<Response> {
     let mut response = Response {
         status: 200,
@@ -251,9 +272,9 @@ fn serve_info_refs(
     match route.service {
         Some("git-upload-pack") => {
             response.content_type = "application/x-git-upload-pack-advertisement";
-            advertise_smart(repository, route.version, output)?;
+            advertise_smart(repository, route.version, output, selection)?;
         }
-        None => advertise_references(repository, false, output)?,
+        None => advertise_references(repository, false, output, upload::capabilities(selection))?,
         _ => response.status = 403,
     }
     Ok(response)
@@ -263,19 +284,20 @@ fn advertise_smart(
     repository: &impl Repository,
     version: Version,
     output: &mut impl Write,
+    selection: bool,
 ) -> Result<()> {
     pktline::write(output, b"# service=git-upload-pack\n")?;
     output.write_all(b"0000")?;
     if version == Version::V2 {
-        return v2::advertise(repository.object_format(), output);
+        return v2::advertise(repository.object_format(), output, selection);
     }
     if version == Version::V1 {
         pktline::write(output, b"version 1\n")?;
     }
     if repository.head_state().id().is_some() || repository.reference_count() == 0 {
-        advertise_head(repository, output)?;
+        advertise_head(repository, output, upload::capabilities(selection))?;
     }
-    advertise_references(repository, true, output)?;
+    advertise_references(repository, true, output, upload::capabilities(selection))?;
     output.write_all(b"0000")
 }
 
@@ -301,6 +323,7 @@ fn write_upload<W: Write>(
             Err(Error::InvalidRequest)
         }
     })?;
+    upload.require_complete()?;
     upload.acknowledge(repository, output)?;
     if upload.done {
         let mut packed = upload.output(output);
@@ -370,7 +393,11 @@ fn loose_index(repository: &impl Repository, path: &[u8]) -> Option<usize> {
         .and_then(|id| repository.find_index(id))
 }
 
-fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {
+fn advertise_head(
+    repository: &impl Repository,
+    output: &mut impl Write,
+    capabilities: &[u8],
+) -> Result<()> {
     let head = repository.head_state();
     let format = repository.object_format();
     let id = head.id().unwrap_or(format.zero_id()).to_hex();
@@ -397,7 +424,7 @@ fn advertise_head(repository: &impl Repository, output: &mut impl Write) -> Resu
             target.unwrap_or("").as_bytes(),
             separator,
             format.capability(),
-            upload::CAPABILITIES,
+            capabilities,
             b"\n",
         ],
     )
@@ -407,6 +434,7 @@ fn advertise_references(
     repository: &impl Repository,
     smart: bool,
     output: &mut impl Write,
+    capabilities_bytes: &[u8],
 ) -> Result<()> {
     for index in 0..repository.reference_count() {
         let name = repository
@@ -414,9 +442,20 @@ fn advertise_references(
             .ok_or(Error::InvalidReference)?;
         let id = repository.reference_id(index).ok_or(Error::InvalidObject)?;
         let capabilities = smart && index == 0 && repository.head_state().id().is_none();
-        reference_line(id, name, b"", smart, capabilities, output)?;
+        reference_line(
+            id,
+            name,
+            b"",
+            smart,
+            if capabilities {
+                capabilities_bytes
+            } else {
+                b""
+            },
+            output,
+        )?;
         if let Some(peeled) = repository.reference_peeled(index) {
-            reference_line(peeled, name, b"^{}", smart, false, output)?;
+            reference_line(peeled, name, b"^{}", smart, b"", output)?;
         }
     }
     Ok(())
@@ -427,14 +466,14 @@ fn reference_line(
     name: &str,
     suffix: &[u8],
     smart: bool,
-    capabilities: bool,
+    capabilities: &[u8],
     output: &mut impl Write,
 ) -> Result<()> {
     let format = id.format();
     let id = id.to_hex();
     if smart {
-        let parts: [&[u8]; 3] = if capabilities {
-            [b"\0", format.capability(), upload::CAPABILITIES]
+        let parts: [&[u8]; 3] = if !capabilities.is_empty() {
+            [b"\0", format.capability(), capabilities]
         } else {
             [b"", b"", b""]
         };

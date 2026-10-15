@@ -16,6 +16,7 @@ use std::{
 };
 
 mod file_transfer;
+mod selection;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -345,6 +346,13 @@ pub fn run() -> Result<()> {
     let raw = FileRepository::new(head, &object_files);
     let mut metadata = vec![None; object_files.len()];
     let mut indexes = vec![0; object_files.len()];
+    let validation_metadata_bytes =
+        metadata.capacity() * std::mem::size_of::<Option<git_zero::ValidationMetadata>>();
+    let validation_index_bytes = indexes.capacity() * std::mem::size_of::<usize>();
+    let selection_enabled = enabled != "git"
+        && std::env::var_os("GIT_ZERO_BENCH_SELECTION").as_deref()
+            == Some(std::ffi::OsStr::new("1"));
+    let mut selection = selection_enabled.then(|| selection::Selection::new(object_files.len()));
     let repository = if enabled == "git" {
         None
     } else {
@@ -384,9 +392,13 @@ pub fn run() -> Result<()> {
     };
     let socket = listen(0).map_err(|e| format!("{e:?}"))?;
     let (rss, peak) = resident_memory()?;
+    let selection_budget = selection
+        .as_ref()
+        .map(selection::Selection::budget)
+        .unwrap_or_default();
     writeln!(
         metrics,
-        "{{\"event\":\"ready\",\"pid\":{},\"startup_wall_s\":{},\"startup_cpu_s\":{},\"frontend_rss_kib\":{rss},\"frontend_peak_rss_kib\":{peak}}}",
+        "{{\"event\":\"ready\",\"pid\":{},\"startup_wall_s\":{},\"startup_cpu_s\":{},\"frontend_rss_kib\":{rss},\"frontend_peak_rss_kib\":{peak},\"selection_enabled\":{selection_enabled},\"selection_buffers\":{selection_budget},\"validation_metadata_bytes\":{validation_metadata_bytes},\"validation_index_bytes\":{validation_index_bytes}}}",
         std::process::id(),
         started.elapsed().as_secs_f64(),
         Usage::read(libc::RUSAGE_SELF)?.cpu() - initial.cpu()
@@ -461,8 +473,13 @@ pub fn run() -> Result<()> {
                     content_type: "application/x-git-loose-object",
                 }
             } else {
-                http::serve_with_scratch(repository, request, &mut scratch, &mut body)
-                    .map_err(|e| format!("{e:?}"))?
+                let result = match selection.as_mut() {
+                    Some(selection) => {
+                        selection.serve(repository, request, &mut scratch, &mut body)
+                    }
+                    None => http::serve_with_scratch(repository, request, &mut scratch, &mut body),
+                };
+                result.map_err(|e| format!("{e:?}"))?
             }
         };
         let (response_bytes, counts) = if let Some(file) = file {

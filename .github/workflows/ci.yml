@@ -29,6 +29,23 @@ jobs:
             --jobs 8 --samples 2 --warmup 1 --fixture-dir /tmp/git-zero-benchmark-fixture \
             --limits tests/benchmark-limits.json \
             --output /tmp/git-zero-benchmark-smoke.json
+          python3 tests/benchmark.py --harness target/debug/examples/benchmark-server \
+            --binary target/debug/git-zero --decoder target/debug/examples/decoder-read --allow-unpinned-git --files 4 --blob-bytes 256 --commits 3 \
+            --zero-selection --jobs 8 --samples 2 --warmup 1 \
+            --limits tests/benchmark-limits.json \
+            --output /tmp/git-zero-benchmark-selected.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('/tmp/git-zero-benchmark-selected.json').read_text())
+          assert report['status'] == 'complete'
+          assert report['zero_http_pack_policy'] == 'requested-closure'
+          for result in report['results']:
+              if result['workload'].startswith('server-'):
+                  startup = result['server_startup']['zero']
+                  assert startup['selection_enabled']
+                  assert all(value > 0 for value in startup['selection_buffers'].values())
+          PY
           target/debug/examples/encoder-profile /tmp/git-zero-benchmark-fixture 1
           PYTHONPATH=tests python3 - <<'PY'
           from pathlib import Path

@@ -442,6 +442,33 @@ fn format_negotiation_rejects_mismatch_and_malformed_requests_before_output() {
     }
 }
 
+fn bounded_discovery(repository: &impl Repository, request: Request<'_>, output: &mut impl Write) {
+    let mut metadata = [None; 2];
+    let mut by_id = [0; 2];
+    let repository = ValidatedRepository::new(
+        repository,
+        &mut metadata,
+        &mut by_id,
+        &mut [0; 128],
+        &mut [0; 128],
+    )
+    .unwrap();
+    http::serve_with_selection(
+        &repository,
+        request,
+        &mut http::SelectionStorage {
+            wants: &mut [],
+            objects: &mut [],
+            indices: &mut [],
+            read: &mut [],
+            parse: &mut [],
+            graph_read_limit: 0,
+        },
+        output,
+    )
+    .unwrap();
+}
+
 #[test]
 fn format_specific_name_limits_exactly_fill_smart_packets() {
     for format in [ObjectFormat::Sha1, FORMAT] {
@@ -458,7 +485,7 @@ fn format_specific_name_limits_exactly_fill_smart_packets() {
             query: Some("service=git-upload-pack"),
             body: &[],
         };
-        http::serve(&empty, discovery, &mut output).unwrap();
+        bounded_discovery(&empty, discovery, &mut output);
         let mut wire = output.as_bytes();
         pktline::read(&mut wire).unwrap();
         pktline::read(&mut wire).unwrap();
@@ -479,7 +506,7 @@ fn format_specific_name_limits_exactly_fill_smart_packets() {
             .with_refs(&head, &refs)
             .unwrap();
         output = SliceWriter::new(&mut bytes);
-        http::serve(&snapshot, discovery, &mut output).unwrap();
+        bounded_discovery(&snapshot, discovery, &mut output);
         wire = output.as_bytes();
         pktline::read(&mut wire).unwrap();
         pktline::read(&mut wire).unwrap();

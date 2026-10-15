@@ -15,6 +15,9 @@ use std::{cell::Cell, io::Write as _};
 const ZERO: ObjectId = ObjectId::Sha1([0; 20]);
 const CAPACITY: usize = 32;
 
+#[path = "common/pull.rs"]
+mod pull;
+
 #[derive(Clone)]
 struct Owned {
     kind: ObjectKind,
@@ -249,24 +252,36 @@ impl Graph {
     }
 }
 
-fn validated<R: Repository, T>(
-    repository: &R,
-    operation: impl FnOnce(&ValidatedRepository<'_, '_, R>) -> T,
-) -> T {
-    let mut metadata = [None; CAPACITY];
-    let mut by_id = [usize::MAX; CAPACITY];
-    let validated = allocations::without_allocations(|| {
-        ValidatedRepository::new(
-            repository,
-            &mut metadata,
-            &mut by_id,
-            &mut [0; 1],
-            &mut [0; 128],
-        )
-        .unwrap()
-    });
-    operation(&validated)
+struct ValidationBuffers {
+    objects: [Option<git_zero::ValidationMetadata>; CAPACITY],
+    indices: [usize; CAPACITY],
 }
+
+impl ValidationBuffers {
+    fn new() -> Self {
+        Self {
+            objects: [None; CAPACITY],
+            indices: [usize::MAX; CAPACITY],
+        }
+    }
+
+    fn validate<'storage, 'repo, R: Repository>(
+        &'storage mut self,
+        repository: &'repo R,
+    ) -> ValidatedRepository<'storage, 'repo, R> {
+        allocations::without_allocations(|| {
+            ValidatedRepository::new(
+                repository,
+                &mut self.objects,
+                &mut self.indices,
+                &mut [0; 1],
+                &mut [0; 128],
+            )
+        })
+        .unwrap()
+    }
+}
+
 fn validation_result(repository: &impl Repository) -> Result<()> {
     ValidatedRepository::new(
         repository,
@@ -330,29 +345,30 @@ fn check_missing_closure(
 #[test]
 fn common_commit_closures_exclude_shared_merge_history_and_reset_between_requests() {
     let graph = Graph::new();
-    validated(&graph.repository(), |repository| {
-        let mut work = [None; CAPACITY];
-        let mut indices = [0; CAPACITY];
-        assert_eq!(
-            repository.select_missing_objects(
-                &[graph.ids.merge.unwrap()],
-                [Err(Error::Backend)],
-                &mut work,
-                &mut indices,
-                (&mut [0; 1], &mut [0; 128]),
-                8192,
-            ),
-            Err(Error::Backend)
-        );
-        for common in [
-            vec![graph.ids.base.unwrap()],
-            vec![graph.ids.main.unwrap(), graph.ids.side.unwrap()],
-            vec![graph.ids.side.unwrap(), graph.ids.side.unwrap()],
-            vec![],
-        ] {
-            check_missing_closure(&graph, repository, &common, &mut work, &mut indices);
-        }
-    });
+    let validation_source = &graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repository = &validation.validate(validation_source);
+    let mut work = [None; CAPACITY];
+    let mut indices = [0; CAPACITY];
+    assert_eq!(
+        repository.select_missing_objects(
+            &[graph.ids.merge.unwrap()],
+            [Err(Error::Backend)],
+            &mut work,
+            &mut indices,
+            (&mut [0; 1], &mut [0; 128]),
+            8192,
+        ),
+        Err(Error::Backend)
+    );
+    for common in [
+        vec![graph.ids.base.unwrap()],
+        vec![graph.ids.main.unwrap(), graph.ids.side.unwrap()],
+        vec![graph.ids.side.unwrap(), graph.ids.side.unwrap()],
+        vec![],
+    ] {
+        check_missing_closure(&graph, repository, &common, &mut work, &mut indices);
+    }
 }
 
 fn request(roots: &[ObjectId], done: bool) -> Vec<u8> {
@@ -378,18 +394,19 @@ fn distinct_tips_symbolic_chains_and_peeled_refs_survive_indexes() {
     let mut objects = [None; CAPACITY];
     let mut by_id = [0; CAPACITY];
     let indexed = IndexedRepository::new(&repository, &mut objects, &mut by_id).unwrap();
-    validated(&indexed, |repo| {
-        for (index, reference) in graph.refs.iter().enumerate() {
-            assert_eq!(repo.reference_name(index), Some(reference.name));
-            assert_eq!(repo.reference_id(index), Some(reference.id));
-            assert_eq!(
-                repo.reference_symbolic_target(index),
-                reference.symbolic_target
-            );
-            assert_eq!(repo.reference_peeled(index), reference.peeled);
-        }
-        assert_eq!(repo.object_count(), graph.objects.len());
-    });
+    let validation_source = &indexed;
+    let mut validation = ValidationBuffers::new();
+    let repo = &validation.validate(validation_source);
+    for (index, reference) in graph.refs.iter().enumerate() {
+        assert_eq!(repo.reference_name(index), Some(reference.name));
+        assert_eq!(repo.reference_id(index), Some(reference.id));
+        assert_eq!(
+            repo.reference_symbolic_target(index),
+            reference.symbolic_target
+        );
+        assert_eq!(repo.reference_peeled(index), reference.peeled);
+    }
+    assert_eq!(repo.object_count(), graph.objects.len());
 }
 
 #[test]
@@ -400,35 +417,36 @@ fn symbolic_head_can_resolve_through_a_lightweight_tag() {
     let repository = allocations::without_allocations(|| {
         RefRepository::new(&source, source.state(), &source.refs).unwrap()
     });
-    validated(&repository, |repository| {
-        assert_eq!(
-            resolve_reference(repository, "refs/heads/alias"),
-            Ok(("refs/tags/light", source.head()))
-        );
-        let mut storage = [0; 4096];
-        let mut output = SliceWriter::new(&mut storage);
-        allocations::without_allocations(|| {
-            http::serve(
-                repository,
-                Request {
-                    content_type: None,
-                    git_protocol: None,
-                    method: "GET",
-                    path: "info/refs",
-                    query: Some("service=git-upload-pack"),
-                    body: &[],
-                },
-                &mut output,
-            )
-            .unwrap()
-        });
-        assert!(
-            output
-                .as_bytes()
-                .windows(b"symref=HEAD:refs/tags/light".len())
-                .any(|part| part == b"symref=HEAD:refs/tags/light")
-        );
+    let validation_source = &repository;
+    let mut validation = ValidationBuffers::new();
+    let repository = &validation.validate(validation_source);
+    assert_eq!(
+        resolve_reference(repository, "refs/heads/alias"),
+        Ok(("refs/tags/light", source.head()))
+    );
+    let mut storage = [0; 4096];
+    let mut output = SliceWriter::new(&mut storage);
+    allocations::without_allocations(|| {
+        http::serve(
+            repository,
+            Request {
+                content_type: None,
+                git_protocol: None,
+                method: "GET",
+                path: "info/refs",
+                query: Some("service=git-upload-pack"),
+                body: &[],
+            },
+            &mut output,
+        )
+        .unwrap()
     });
+    assert!(
+        output
+            .as_bytes()
+            .windows(b"symref=HEAD:refs/tags/light".len())
+            .any(|part| part == b"symref=HEAD:refs/tags/light")
+    );
 }
 
 fn assert_selected_objects(
@@ -453,56 +471,57 @@ fn assert_selected_objects(
 #[test]
 fn selected_closures_deduplicate_roots_and_reset_state_without_allocating() {
     let graph = Graph::new();
-    validated(&graph.repository(), |repo| {
-        let mut work = [None; CAPACITY];
-        let mut indices = [usize::MAX; CAPACITY];
-        for (roots, expected) in [
-            (vec![graph.head()], graph.main_closure()),
-            (vec![graph.ids.side.unwrap()], graph.side_closure()),
-            (vec![graph.ids.merge.unwrap()], graph.merge_closure()),
-            (vec![graph.ids.nested.unwrap()], {
-                let mut ids = graph.side_closure();
-                ids.extend([graph.ids.tag.unwrap(), graph.ids.nested.unwrap()]);
-                ids
-            }),
-            (
-                vec![graph.ids.merge.unwrap(), graph.ids.nested.unwrap()],
-                graph.objects.iter().map(|object| object.id).collect(),
-            ),
-            (vec![graph.head(), graph.head()], graph.main_closure()),
-            (
-                vec![graph.ids.shared.unwrap()],
-                vec![graph.ids.shared.unwrap()],
-            ),
-            (vec![graph.head()], graph.main_closure()),
-        ] {
-            assert_selected_objects(repo, (&roots, expected), &mut work, &mut indices);
-        }
-        let mut other_work = [None; CAPACITY];
-        let mut other_indices = [0; CAPACITY];
-        let main = repo
-            .select_objects(
-                &[graph.head()],
-                &mut work,
-                &mut indices,
-                &mut [0; 1],
-                &mut [0; 128],
-                4096,
-            )
-            .unwrap();
-        let side = repo
-            .select_objects(
-                &[graph.ids.side.unwrap()],
-                &mut other_work,
-                &mut other_indices,
-                &mut [0; 1],
-                &mut [0; 128],
-                4096,
-            )
-            .unwrap();
-        assert_eq!(selected_ids(repo, main), sorted(graph.main_closure()));
-        assert_eq!(selected_ids(repo, side), sorted(graph.side_closure()));
-    });
+    let validation_source = &graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repo = &validation.validate(validation_source);
+    let mut work = [None; CAPACITY];
+    let mut indices = [usize::MAX; CAPACITY];
+    for (roots, expected) in [
+        (vec![graph.head()], graph.main_closure()),
+        (vec![graph.ids.side.unwrap()], graph.side_closure()),
+        (vec![graph.ids.merge.unwrap()], graph.merge_closure()),
+        (vec![graph.ids.nested.unwrap()], {
+            let mut ids = graph.side_closure();
+            ids.extend([graph.ids.tag.unwrap(), graph.ids.nested.unwrap()]);
+            ids
+        }),
+        (
+            vec![graph.ids.merge.unwrap(), graph.ids.nested.unwrap()],
+            graph.objects.iter().map(|object| object.id).collect(),
+        ),
+        (vec![graph.head(), graph.head()], graph.main_closure()),
+        (
+            vec![graph.ids.shared.unwrap()],
+            vec![graph.ids.shared.unwrap()],
+        ),
+        (vec![graph.head()], graph.main_closure()),
+    ] {
+        assert_selected_objects(repo, (&roots, expected), &mut work, &mut indices);
+    }
+    let mut other_work = [None; CAPACITY];
+    let mut other_indices = [0; CAPACITY];
+    let main = repo
+        .select_objects(
+            &[graph.head()],
+            &mut work,
+            &mut indices,
+            &mut [0; 1],
+            &mut [0; 128],
+            4096,
+        )
+        .unwrap();
+    let side = repo
+        .select_objects(
+            &[graph.ids.side.unwrap()],
+            &mut other_work,
+            &mut other_indices,
+            &mut [0; 1],
+            &mut [0; 128],
+            4096,
+        )
+        .unwrap();
+    assert_eq!(selected_ids(repo, main), sorted(graph.main_closure()));
+    assert_eq!(selected_ids(repo, side), sorted(graph.side_closure()));
 }
 
 #[test]
@@ -623,96 +642,98 @@ fn unborn_and_detached_heads_can_have_independent_ref_roots() {
         Head::Detached(graph.ids.base.unwrap()),
     ] {
         let repository = RefRepository::new(&graph, head, &graph.refs).unwrap();
-        validated(&repository, |repo| {
-            assert_eq!(repo.head_state(), head);
-            let mut bytes = [0; 4096];
-            let mut output = SliceWriter::new(&mut bytes);
-            http::serve(
-                repo,
-                Request {
-                    content_type: None,
-                    git_protocol: None,
-                    method: "GET",
-                    path: "info/refs",
-                    query: Some("service=git-upload-pack"),
-                    body: &[],
-                },
-                &mut output,
-            )
-            .unwrap();
-            let wire = output.as_bytes();
-            assert!(!wire.windows(7).any(|part| part == b"symref="));
-            if head.id().is_none() {
-                assert!(!wire.windows(15).any(|part| part == b"capabilities^{}"));
-                assert!(!wire.windows(5).any(|part| part == b" HEAD"));
-            }
-        });
+        let validation_source = &repository;
+        let mut validation = ValidationBuffers::new();
+        let repo = &validation.validate(validation_source);
+        assert_eq!(repo.head_state(), head);
+        let mut bytes = [0; 4096];
+        let mut output = SliceWriter::new(&mut bytes);
+        http::serve(
+            repo,
+            Request {
+                content_type: None,
+                git_protocol: None,
+                method: "GET",
+                path: "info/refs",
+                query: Some("service=git-upload-pack"),
+                body: &[],
+            },
+            &mut output,
+        )
+        .unwrap();
+        let wire = output.as_bytes();
+        assert!(!wire.windows(7).any(|part| part == b"symref="));
+        if head.id().is_none() {
+            assert!(!wire.windows(15).any(|part| part == b"capabilities^{}"));
+            assert!(!wire.windows(5).any(|part| part == b" HEAD"));
+        }
     }
 }
 
 #[test]
 fn smart_and_dumb_ref_routes_preserve_symbolic_and_peeled_data() {
     let graph = Graph::new();
-    validated(&graph.repository(), |repo| {
-        for (path, expected) in [
-            ("HEAD", b"ref: refs/heads/alias\n".to_vec()),
-            ("refs/heads/alias", b"ref: refs/heads/alias-next\n".to_vec()),
-            (
-                "refs/heads/a-side",
-                format!("{}\n", graph.ids.side.unwrap()).into_bytes(),
-            ),
-        ] {
-            let mut bytes = [0; 4096];
-            let mut output = SliceWriter::new(&mut bytes);
-            http::serve(
-                repo,
-                Request {
-                    content_type: None,
-                    git_protocol: None,
-                    method: "GET",
-                    path,
-                    query: None,
-                    body: &[],
-                },
-                &mut output,
-            )
-            .unwrap();
-            assert_eq!(output.as_bytes(), expected);
-        }
-        for smart in [false, true] {
-            let mut bytes = [0; 4096];
-            let mut output = SliceWriter::new(&mut bytes);
-            http::serve(
-                repo,
-                Request {
-                    content_type: None,
-                    git_protocol: None,
-                    method: "GET",
-                    path: "info/refs",
-                    query: smart.then_some("service=git-upload-pack"),
-                    body: &[],
-                },
-                &mut output,
-            )
-            .unwrap();
-            let wire = output.as_bytes();
-            let expected = format!(
-                "{}{}refs/tags/nested^{{}}",
-                graph.ids.side.unwrap(),
-                if smart { " " } else { "\t" }
-            );
+    let validation_source = &graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repo = &validation.validate(validation_source);
+    for (path, expected) in [
+        ("HEAD", b"ref: refs/heads/alias\n".to_vec()),
+        ("refs/heads/alias", b"ref: refs/heads/alias-next\n".to_vec()),
+        (
+            "refs/heads/a-side",
+            format!("{}\n", graph.ids.side.unwrap()).into_bytes(),
+        ),
+    ] {
+        let mut bytes = [0; 4096];
+        let mut output = SliceWriter::new(&mut bytes);
+        http::serve(
+            repo,
+            Request {
+                content_type: None,
+                git_protocol: None,
+                method: "GET",
+                path,
+                query: None,
+                body: &[],
+            },
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(output.as_bytes(), expected);
+    }
+    for smart in [false, true] {
+        let mut bytes = [0; 4096];
+        let mut output = SliceWriter::new(&mut bytes);
+        http::serve(
+            repo,
+            Request {
+                content_type: None,
+                git_protocol: None,
+                method: "GET",
+                path: "info/refs",
+                query: smart.then_some("service=git-upload-pack"),
+                body: &[],
+            },
+            &mut output,
+        )
+        .unwrap();
+        let wire = output.as_bytes();
+        let expected = format!(
+            "{}{}refs/tags/nested^{{}}",
+            graph.ids.side.unwrap(),
+            if smart { " " } else { "\t" }
+        );
+        assert!(
+            wire.windows(expected.len())
+                .any(|part| part == expected.as_bytes())
+        );
+        if smart {
             assert!(
-                wire.windows(expected.len())
-                    .any(|part| part == expected.as_bytes())
+                wire.windows(b"symref=HEAD:refs/heads/z-main".len())
+                    .any(|part| part == b"symref=HEAD:refs/heads/z-main")
             );
-            if smart {
-                assert!(
-                    wire.windows(b"symref=HEAD:refs/heads/z-main".len())
-                        .any(|part| part == b"symref=HEAD:refs/heads/z-main")
-                );
-            }
         }
-    });
+    }
 }
 
 #[test]
@@ -762,36 +783,36 @@ fn ls_refs_command<'a>(storage: &'a mut [u8], attributes: &[&[u8]]) -> &'a [u8] 
 }
 
 fn assert_v2_ref_budget(source: &impl Repository, attribute: &[u8]) {
-    validated(source, |repository| {
-        let mut bytes = vec![0; 300_000];
-        let mut body = [0; 128];
-        let request = Request {
-            method: "POST",
-            path: "git-upload-pack",
-            query: None,
-            body: ls_refs_command(&mut body, &[attribute]),
-            content_type: Some("application/x-git-upload-pack-request"),
-            git_protocol: Some("version=2"),
-        };
-        let mut output = SliceWriter::new(&mut bytes);
-        let result =
-            allocations::without_allocations(|| http::serve(repository, request, &mut output));
-        assert!(matches!(result, Err(Error::LimitExceeded)));
-        assert!(output.is_empty());
-        // Attribute-free lines still fit for this same validated repository.
-        let mut plain = [0; 128];
-        http::serve(
-            repository,
-            Request {
-                body: ls_refs_command(&mut plain, &[]),
-                ..request
-            },
-            &mut output,
-        )
-        .unwrap();
-        let mut wire = output.as_bytes();
-        while pktline::read(&mut wire).unwrap().is_some() {}
-    });
+    let validation_source = source;
+    let mut validation = ValidationBuffers::new();
+    let repository = &validation.validate(validation_source);
+    let mut bytes = vec![0; 300_000];
+    let mut body = [0; 128];
+    let request = Request {
+        method: "POST",
+        path: "git-upload-pack",
+        query: None,
+        body: ls_refs_command(&mut body, &[attribute]),
+        content_type: Some("application/x-git-upload-pack-request"),
+        git_protocol: Some("version=2"),
+    };
+    let mut output = SliceWriter::new(&mut bytes);
+    let result = allocations::without_allocations(|| http::serve(repository, request, &mut output));
+    assert!(matches!(result, Err(Error::LimitExceeded)));
+    assert!(output.is_empty());
+    // Attribute-free lines still fit for this same validated repository.
+    let mut plain = [0; 128];
+    http::serve(
+        repository,
+        Request {
+            body: ls_refs_command(&mut plain, &[]),
+            ..request
+        },
+        &mut output,
+    )
+    .unwrap();
+    let mut wire = output.as_bytes();
+    while pktline::read(&mut wire).unwrap().is_some() {}
 }
 
 #[test]
@@ -829,88 +850,89 @@ fn v2_symbolic_ref_attributes_preflight_the_complete_packet_budget() {
 #[test]
 fn selection_budgets_and_missing_roots_preserve_retryability() {
     let graph = Graph::new();
-    validated(&graph.repository(), |repo| {
-        let mut work = [None; CAPACITY];
-        let mut indices = [0; CAPACITY];
-        let count = repo.object_count();
-        assert_eq!(
-            repo.select_objects(
-                &[],
-                &mut work,
-                &mut indices,
-                &mut [0; 1],
-                &mut [0; 128],
-                4096
-            ),
-            Err(Error::InvalidRequest)
-        );
-        assert_eq!(
-            repo.select_objects(
-                &[ZERO],
-                &mut work,
-                &mut indices,
-                &mut [0; 1],
-                &mut [0; 128],
-                4096
-            ),
-            Err(Error::ObjectNotFound)
-        );
-        assert_eq!(
-            repo.select_objects(
-                &[graph.head()],
-                &mut work[..count - 1],
-                &mut indices,
-                &mut [0; 1],
-                &mut [0; 128],
-                4096
-            ),
-            Err(Error::BufferTooSmall)
-        );
-        assert_eq!(
-            repo.select_objects(
-                &[graph.head()],
-                &mut work,
-                &mut indices[..count - 1],
-                &mut [0; 1],
-                &mut [0; 128],
-                4096
-            ),
-            Err(Error::BufferTooSmall)
-        );
-        assert_eq!(
-            repo.select_objects(
-                &[graph.head()],
-                &mut work,
-                &mut indices,
-                &mut [],
-                &mut [0; 128],
-                4096
-            ),
-            Err(Error::BufferTooSmall)
-        );
-        assert_eq!(
-            repo.select_objects(
-                &[graph.head()],
-                &mut work,
-                &mut indices,
-                &mut [0; 1],
-                &mut [],
-                4096
-            ),
-            Err(Error::BufferTooSmall)
-        );
-        let selected = repo
-            .select_objects(
-                &[graph.ids.side.unwrap()],
-                &mut work,
-                &mut indices,
-                &mut [0; 1],
-                &mut [0; 128],
-                4096,
-            )
-            .unwrap();
-        assert_eq!(selected_ids(repo, selected), sorted(graph.side_closure()));
-    });
+    let validation_source = &graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repo = &validation.validate(validation_source);
+    let mut work = [None; CAPACITY];
+    let mut indices = [0; CAPACITY];
+    let count = repo.object_count();
+    assert_eq!(
+        repo.select_objects(
+            &[],
+            &mut work,
+            &mut indices,
+            &mut [0; 1],
+            &mut [0; 128],
+            4096
+        ),
+        Err(Error::InvalidRequest)
+    );
+    assert_eq!(
+        repo.select_objects(
+            &[ZERO],
+            &mut work,
+            &mut indices,
+            &mut [0; 1],
+            &mut [0; 128],
+            4096
+        ),
+        Err(Error::ObjectNotFound)
+    );
+    assert_eq!(
+        repo.select_objects(
+            &[graph.head()],
+            &mut work[..count - 1],
+            &mut indices,
+            &mut [0; 1],
+            &mut [0; 128],
+            4096
+        ),
+        Err(Error::BufferTooSmall)
+    );
+    assert_eq!(
+        repo.select_objects(
+            &[graph.head()],
+            &mut work,
+            &mut indices[..count - 1],
+            &mut [0; 1],
+            &mut [0; 128],
+            4096
+        ),
+        Err(Error::BufferTooSmall)
+    );
+    assert_eq!(
+        repo.select_objects(
+            &[graph.head()],
+            &mut work,
+            &mut indices,
+            &mut [],
+            &mut [0; 128],
+            4096
+        ),
+        Err(Error::BufferTooSmall)
+    );
+    assert_eq!(
+        repo.select_objects(
+            &[graph.head()],
+            &mut work,
+            &mut indices,
+            &mut [0; 1],
+            &mut [],
+            4096
+        ),
+        Err(Error::BufferTooSmall)
+    );
+    let selected = repo
+        .select_objects(
+            &[graph.ids.side.unwrap()],
+            &mut work,
+            &mut indices,
+            &mut [0; 1],
+            &mut [0; 128],
+            4096,
+        )
+        .unwrap();
+    assert_eq!(selected_ids(repo, selected), sorted(graph.side_closure()));
 }
 
 fn serve_selected<R: Repository>(
@@ -955,46 +977,46 @@ fn serve_selected<R: Repository>(
 #[test]
 fn upload_pack_enforces_advertised_wants_and_preflights_all_selection_budgets() {
     let graph = Graph::new();
-    validated(&graph.repository(), |repo| {
-        for id in [ZERO, ObjectId::Sha1([9; 20]), graph.ids.main_blob.unwrap()] {
-            let (result, bytes) = serve_selected(repo, &[id], 4, CAPACITY, true);
-            assert!(matches!(result, Err(Error::InvalidRequest)));
-            assert!(bytes.is_empty());
-        }
-        for (roots, want_budget, object_budget) in [
-            (vec![graph.head()], 0, CAPACITY),
-            (vec![graph.head(), graph.ids.side.unwrap()], 1, CAPACITY),
-            (vec![graph.head()], 1, repo.object_count() - 1),
-        ] {
-            let (result, bytes) = serve_selected(repo, &roots, want_budget, object_budget, true);
-            assert!(matches!(result, Err(Error::BufferTooSmall)));
-            assert!(bytes.is_empty());
-        }
-        let (result, bytes) =
-            serve_selected(repo, &[graph.head(), graph.head()], 1, CAPACITY, true);
-        assert_eq!(result.unwrap().status, 200);
-        pack::validate(&bytes[8..]).unwrap();
-        assert_eq!(
-            u32::from_be_bytes(bytes[16..20].try_into().unwrap()) as usize,
-            graph.main_closure().len()
-        );
-        let (result, bytes) = serve_selected(repo, &[graph.head()], 1, 0, false);
-        assert_eq!(result.unwrap().status, 200);
-        assert_eq!(bytes, b"0008NAK\n");
-        let (result, bytes) = serve_selected(
-            repo,
-            &[graph.ids.nested.unwrap(), graph.ids.merge.unwrap()],
-            2,
-            CAPACITY,
-            true,
-        );
-        assert_eq!(result.unwrap().status, 200);
-        pack::validate(&bytes[8..]).unwrap();
-        assert_eq!(
-            u32::from_be_bytes(bytes[16..20].try_into().unwrap()) as usize,
-            graph.objects.len()
-        );
-    });
+    let validation_source = &graph.repository();
+    let mut validation = ValidationBuffers::new();
+    let repo = &validation.validate(validation_source);
+    for id in [ZERO, ObjectId::Sha1([9; 20]), graph.ids.main_blob.unwrap()] {
+        let (result, bytes) = serve_selected(repo, &[id], 4, CAPACITY, true);
+        assert!(matches!(result, Err(Error::InvalidRequest)));
+        assert!(bytes.is_empty());
+    }
+    for (roots, want_budget, object_budget) in [
+        (vec![graph.head()], 0, CAPACITY),
+        (vec![graph.head(), graph.ids.side.unwrap()], 1, CAPACITY),
+        (vec![graph.head()], 1, repo.object_count() - 1),
+    ] {
+        let (result, bytes) = serve_selected(repo, &roots, want_budget, object_budget, true);
+        assert!(matches!(result, Err(Error::BufferTooSmall)));
+        assert!(bytes.is_empty());
+    }
+    let (result, bytes) = serve_selected(repo, &[graph.head(), graph.head()], 1, CAPACITY, true);
+    assert_eq!(result.unwrap().status, 200);
+    pack::validate(&bytes[8..]).unwrap();
+    assert_eq!(
+        u32::from_be_bytes(bytes[16..20].try_into().unwrap()) as usize,
+        graph.main_closure().len()
+    );
+    let (result, bytes) = serve_selected(repo, &[graph.head()], 1, 0, false);
+    assert_eq!(result.unwrap().status, 200);
+    assert_eq!(bytes, b"0008NAK\n");
+    let (result, bytes) = serve_selected(
+        repo,
+        &[graph.ids.nested.unwrap(), graph.ids.merge.unwrap()],
+        2,
+        CAPACITY,
+        true,
+    );
+    assert_eq!(result.unwrap().status, 200);
+    pack::validate(&bytes[8..]).unwrap();
+    assert_eq!(
+        u32::from_be_bytes(bytes[16..20].try_into().unwrap()) as usize,
+        graph.objects.len()
+    );
 }
 
 struct UnusedCache;
@@ -1068,59 +1090,42 @@ fn graph_read_limits_bound_actual_io_and_fail_before_pack_output() {
         bytes: Cell::new(0),
     };
     let repository = RefRepository::new(&source, graph.state(), &graph.refs).unwrap();
-    validated(&repository, |repo| {
-        let mut work = [None; CAPACITY];
-        let mut indices = [0; CAPACITY];
-        let mut read = [0; 128];
-        for capacity in [1, 17, 128] {
-            source.bytes.set(0);
-            assert_eq!(
-                repo.select_objects(
-                    &[graph.head()],
-                    &mut work,
-                    &mut indices,
-                    &mut read[..capacity],
-                    &mut [0; 128],
-                    16
-                ),
-                Err(Error::LimitExceeded)
-            );
-            assert_eq!(source.bytes.get(), 16);
-        }
+    let validation_source = &repository;
+    let mut validation = ValidationBuffers::new();
+    let repo = &validation.validate(validation_source);
+    let mut work = [None; CAPACITY];
+    let mut indices = [0; CAPACITY];
+    let mut read = [0; 128];
+    for capacity in [1, 17, 128] {
         source.bytes.set(0);
-        let body = request(&[graph.head()], true);
-        let mut wants = [ZERO; 1];
-        let mut parse = [0; 128];
-        let mut storage = SelectionStorage {
-            wants: &mut wants,
-            objects: &mut work,
-            indices: &mut indices,
-            read: &mut read,
-            parse: &mut parse,
-            graph_read_limit: 0,
-        };
-        let mut bytes = [0; 8192];
-        let mut output = SliceWriter::new(&mut bytes);
-        assert!(matches!(
-            http::serve_with_selection(
-                repo,
-                Request {
-                    content_type: Some("application/x-git-upload-pack-request"),
-                    git_protocol: None,
-                    method: "POST",
-                    path: "git-upload-pack",
-                    query: None,
-                    body: &body
-                },
-                &mut storage,
-                &mut output
+        assert_eq!(
+            repo.select_objects(
+                &[graph.head()],
+                &mut work,
+                &mut indices,
+                &mut read[..capacity],
+                &mut [0; 128],
+                16
             ),
             Err(Error::LimitExceeded)
-        ));
-        assert!(output.as_bytes().is_empty());
-        assert_eq!(source.bytes.get(), 0);
-        storage.graph_read_limit = 4096;
-        let body = request(&[graph.ids.side.unwrap()], true);
+        );
+        assert_eq!(source.bytes.get(), 16);
+    }
+    source.bytes.set(0);
+    let body = request(&[graph.head()], true);
+    let mut wants = [ZERO; 1];
+    let mut parse = [0; 128];
+    let mut storage = SelectionStorage {
+        wants: &mut wants,
+        objects: &mut work,
+        indices: &mut indices,
+        read: &mut read,
+        parse: &mut parse,
+        graph_read_limit: 0,
+    };
+    let mut bytes = [0; 8192];
+    let mut output = SliceWriter::new(&mut bytes);
+    assert!(matches!(
         http::serve_with_selection(
             repo,
             Request {
@@ -1129,14 +1134,32 @@ fn graph_read_limits_bound_actual_io_and_fail_before_pack_output() {
                 method: "POST",
                 path: "git-upload-pack",
                 query: None,
-                body: &body,
+                body: &body
             },
             &mut storage,
-            &mut output,
-        )
-        .unwrap();
-        pack::validate(&output.as_bytes()[8..]).unwrap();
-    });
+            &mut output
+        ),
+        Err(Error::LimitExceeded)
+    ));
+    assert!(output.as_bytes().is_empty());
+    assert_eq!(source.bytes.get(), 0);
+    storage.graph_read_limit = 4096;
+    let body = request(&[graph.ids.side.unwrap()], true);
+    http::serve_with_selection(
+        repo,
+        Request {
+            content_type: Some("application/x-git-upload-pack-request"),
+            git_protocol: None,
+            method: "POST",
+            path: "git-upload-pack",
+            query: None,
+            body: &body,
+        },
+        &mut storage,
+        &mut output,
+    )
+    .unwrap();
+    pack::validate(&output.as_bytes()[8..]).unwrap();
 }
 impl Repository for Streaming<'_> {
     fn head(&self) -> ObjectId {
@@ -1170,14 +1193,18 @@ fn backend_failures_emit_nothing_and_a_fresh_selection_can_retry() {
         bytes: Cell::new(0),
     };
     let repository = RefRepository::new(&source, graph.state(), &graph.refs).unwrap();
-    validated(&repository, |repo| {
-        source.fail.set(true);
-        let (result, bytes) = serve_selected(repo, &[graph.head()], 1, CAPACITY, true);
-        assert!(matches!(result, Err(Error::Backend)));
-        assert!(bytes.is_empty());
-        source.fail.set(false);
-        let (result, bytes) = serve_selected(repo, &[graph.ids.side.unwrap()], 1, CAPACITY, true);
-        assert_eq!(result.unwrap().status, 200);
-        pack::validate(&bytes[8..]).unwrap();
-    });
+    let validation_source = &repository;
+    let mut validation = ValidationBuffers::new();
+    let repo = &validation.validate(validation_source);
+    source.fail.set(true);
+    let (result, bytes) = serve_selected(repo, &[graph.head()], 1, CAPACITY, true);
+    assert!(matches!(result, Err(Error::Backend)));
+    assert!(bytes.is_empty());
+    source.fail.set(false);
+    let (result, bytes) = serve_selected(repo, &[graph.ids.side.unwrap()], 1, CAPACITY, true);
+    assert_eq!(result.unwrap().status, 200);
+    pack::validate(&bytes[8..]).unwrap();
 }
+
+#[path = "common/bounded_fetch.rs"]
+mod bounded_fetch;

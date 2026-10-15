@@ -21,6 +21,9 @@ duplicate entries and truncated object IDs.
 | `loose` | Inflated loose bytes | Actual SHA-1 reaches header/length checks; successful bodies must reserialize to the input and reject a wrong ID. |
 | `entries` | Pack/delta bytes | Repaired pack SHA-1 reaches entry parsing; one 32 KiB window, guarded 1 KiB entry/result buffers, a fixed 256-byte base, 128 delta instructions and depth 2. Cursor rollback, count/closure, offsets, IDs, CRCs and range limits are exercised. |
 
+Routing also runs validated selection and pull responses with shallow/filter
+seeds, checking boundary packets, graph budgets and cancellation.
+
 Each target ignores inputs over 4096 bytes. The packet oracle formats a four-byte
 header independently and accepts either hex case. Host-side graph construction uses
 one bounded `String` plus fixed arrays and borrowed input; the validated core

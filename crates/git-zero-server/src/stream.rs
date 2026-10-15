@@ -104,7 +104,7 @@ impl<'a> ResponseEncoder<'a> {
         control: &'a mut [u8],
     ) -> Result<Self> {
         let mut output = SliceWriter::new(control);
-        let plan = Self::ordinary(repository, request, &mut output)?;
+        let plan = Self::ordinary(repository, request, &mut output, false)?;
         let Plan::Upload(version) = plan else {
             return Self::ordinary_response(repository, plan, output.finish());
         };
@@ -116,6 +116,7 @@ impl<'a> ResponseEncoder<'a> {
             UploadRequest::parse(request.body, repository.object_format(), version, |id| {
                 (id == head).then_some(()).ok_or(Error::InvalidRequest)
             })?;
+        upload.require_complete()?;
         upload.acknowledge(repository, &mut output)?;
         let mut encoder = Self::buffered(upload_response(), output.finish());
         if upload.done {
@@ -135,8 +136,20 @@ impl<'a> ResponseEncoder<'a> {
         storage: &'a mut crate::SelectionStorage<'_>,
         control: &'a mut [u8],
     ) -> Result<Self> {
+        Self::with_selection_storage(repository, request, storage.reborrow(), control)
+    }
+
+    /// Move a request's storage descriptor into preparation. Only its selected
+    /// index array and control bytes remain borrowed by the resulting cursor.
+    #[cfg(feature = "read")]
+    pub fn with_selection_storage<R: Repository + ?Sized>(
+        repository: &git_zero_core::ValidatedRepository<'_, '_, R>,
+        request: Request<'_>,
+        storage: crate::SelectionStorage<'a>,
+        control: &'a mut [u8],
+    ) -> Result<Self> {
         let mut output = SliceWriter::new(control);
-        let plan = Self::ordinary(repository, request, &mut output)?;
+        let plan = Self::ordinary(repository, request, &mut output, true)?;
         let Plan::Upload(version) = plan else {
             return Self::ordinary_response(repository, plan, output.finish());
         };
@@ -153,10 +166,14 @@ impl<'a> ResponseEncoder<'a> {
         repository: &impl Repository,
         request: Request<'_>,
         output: &mut SliceWriter<'_>,
+        selection: bool,
     ) -> Result<Plan> {
         let route = route::validate(request)?;
         if let Some(response) = route.rejection {
             return Ok(Plan::Buffered(response));
+        }
+        if selection && request.method == "GET" && route.path == "info/refs" {
+            return crate::serve_info_refs(repository, &route, output, true).map(Plan::Buffered);
         }
         if request.method == "POST" && route.path == "git-upload-pack" {
             if route.version == route::Version::V2

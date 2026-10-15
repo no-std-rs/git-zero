@@ -60,8 +60,11 @@ oracle case permits those extra objects; matched no-capability requests and
 git-zero's single-branch clones require the exact object set. V0 ACK/sideband
 comparisons also check common-history exclusion. `server_protocol.py` compares
 v1/v2 discovery, ls-refs, clone, incremental fetch, ACK rounds and exact selected
-packs in SHA-1/SHA-256, including v2 nested include-tag behavior. Shallow/filter
-and v0 include-tag remain planned. The [server acceptance matrix](server-acceptance.md)
+packs in SHA-1/SHA-256, including v2 nested include-tag behavior. `server_shallow.py`
+adds depth-limited clones, absolute deepening/unshallow and blob-filtered
+no-checkout clones, comparing shallow files and delivered objects in both formats
+and all three smart protocols. Relative/time/exclusion deepening, promised-object
+retrieval and v0 include-tag remain planned. The [server acceptance matrix](server-acceptance.md)
 separates this server evidence from the client and Git-only baselines.
 
 `upstream-snapshot-{smart,dumb}` constructs blob/tree/commit bytes using Git's

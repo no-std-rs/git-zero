@@ -131,6 +131,19 @@ for (const version of [0, 1, 2, "dumb"]) {
           assert.deepEqual(JSON.parse(await readFile(join(clone, "vars.json"), "utf8")), { DEMO_NAME: "test", PUBLIC_JSON: { public: true } });
           await git("-C", clone, "fetch", "origin");
         }));
+        if (!dumb) {
+          const shallow = join(directory, "shallow");
+          await git("clone", "-q", "--depth=1", "--no-tags", cloneUrl, shallow);
+          assert.equal((await git("-C", shallow, "rev-parse", "--is-shallow-repository")).stdout.trim(), "true");
+          await git("-C", shallow, "fetch", "--unshallow", "origin");
+          assert.equal((await git("-C", shallow, "rev-parse", "--is-shallow-repository")).stdout.trim(), "false");
+          await git("-C", shallow, "fsck", "--strict");
+          const partial = join(directory, "partial");
+          await git("clone", "-q", "--filter=blob:none", "--no-checkout", "--no-tags", cloneUrl, partial);
+          const objects = (await git("-C", partial, "cat-file", "--batch-all-objects", "--batch-check=%(objecttype)")).stdout.trim().split("\n").sort();
+          assert.deepEqual(objects, ["commit", "tree"]);
+          await git("-C", partial, "fsck", "--strict");
+        }
       } finally {
         await rm(directory, { recursive: true, force: true });
       }

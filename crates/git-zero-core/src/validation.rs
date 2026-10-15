@@ -2,8 +2,8 @@
 use core::cmp::Ordering;
 
 use crate::{
-    Error, Head, Object, ObjectFormat, ObjectHasher, ObjectId, ObjectInfo, ObjectKind,
-    ObjectReader, Repository, Result,
+    BlobFilter, Error, FetchOptions, Head, Object, ObjectFormat, ObjectHasher, ObjectId,
+    ObjectInfo, ObjectKind, ObjectReader, Repository, Result,
     names::{cmp_tree_names, validate_name},
     repository::validate_refs,
 };
@@ -16,6 +16,27 @@ pub struct ValidationMetadata {
     reached: bool,
     checked: bool,
     excluded: bool,
+    depth: u32,
+    client_shallow: bool,
+    shallow: bool,
+}
+
+impl ValidationMetadata {
+    /// A reached commit at a requested history boundary (including root commits).
+    pub fn is_shallow(&self) -> bool {
+        self.reached && self.shallow
+    }
+
+    /// A client's former boundary reached inside the requested history.
+    pub fn is_unshallow(&self) -> bool {
+        self.reached && self.client_shallow && !self.shallow
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct History {
+    limit: Option<u32>,
+    client: bool,
 }
 
 /// Traversal budget and annotated-tag policy for a selected fetch pack.
@@ -104,9 +125,9 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             repository,
             objects,
             by_id,
-            read_scratch,
-            parse_scratch,
+            (read_scratch, parse_scratch),
             None,
+            History::default(),
         )?;
         if objects
             .iter()
@@ -197,11 +218,95 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         scratch: (&mut [u8], &mut [u8]),
         options: SelectionOptions,
     ) -> Result<&'selected [usize]> {
+        self.select_bounded_fetch(
+            roots,
+            (common, core::iter::empty()),
+            work,
+            selected,
+            scratch,
+            (options, FetchOptions::default()),
+        )
+    }
+
+    /// Select shallow/filtered history with caller-owned arrays. Client shallow
+    /// IDs must name present commits. Common traversal stops at those commits;
+    /// depth requests instead resend their closure without trusting common haves.
+    /// Work metadata retains shallow/unshallow markers until the next selection.
+    /// All structural reads, including revisits after a shorter merge path,
+    /// consume one budget. Retries reset depths, exclusions and boundary markers.
+    ///
+    /// `history` contains common roots followed by the client's shallow IDs.
+    /// Each work/index slice needs one slot per repository object. Extra slots
+    /// remain untouched. The returned indices use provider enumeration order;
+    /// inspect only the first `object_count()` work slots for boundary updates.
+    /// A depth request may resend common objects, while an ordinary request
+    /// subtracts common history only as far as the client's declared boundaries.
+    ///
+    /// Empty wants, zero/oversized depth and absent or non-commit shallow IDs
+    /// return `InvalidRequest`. Missing wanted/common objects return
+    /// `ObjectNotFound`; short arrays or scratch return `BufferTooSmall`, and
+    /// exhausted structural-read budgets return `LimitExceeded`. No result is
+    /// published on failure; reuse the same arrays for a fresh attempt.
+    ///
+    /// This example selects a depth-one snapshot without its blob. The root
+    /// commit is a shallow boundary even though it has no parents, matching Git.
+    /// The source, validation index and per-request work arrays are independent.
+    ///
+    /// ```
+    /// # #[cfg(feature = "write")]
+    /// # fn main() -> git_zero_core::Result<()> {
+    /// use git_zero_core::{
+    ///     BlobFilter, FetchOptions, File, Repository, SelectionOptions, Snapshot,
+    ///     ValidatedRepository,
+    /// };
+    /// let files = [File { name: "hello.txt", contents: b"hello\n" }];
+    /// let (mut tree, mut commit) = ([0; 128], [0; 512]);
+    /// let snapshot = Snapshot::new(&files, &mut tree, &mut commit)?;
+    /// let (mut metadata, mut by_id) = ([None; 3], [0; 3]);
+    /// let repository = ValidatedRepository::new(
+    ///     &snapshot, &mut metadata, &mut by_id, &mut [0; 64], &mut [0; 128],
+    /// )?;
+    /// let (mut work, mut indices) = ([None; 3], [0; 3]);
+    /// let wanted = [repository.head()];
+    /// let selected = repository.select_bounded_fetch(
+    ///     &wanted, (core::iter::empty(), core::iter::empty()),
+    ///     &mut work, &mut indices, (&mut [0; 64], &mut [0; 128]),
+    ///     (SelectionOptions { graph_read_limit: 4096, include_tags: false },
+    ///      FetchOptions { depth: Some(1), filter: BlobFilter::None }),
+    /// )?;
+    /// assert_eq!(selected.len(), 2); // Commit and tree, with no blob.
+    /// let boundary = work.iter().flatten().find(|object| object.is_shallow()).unwrap();
+    /// assert_eq!(boundary.id, repository.head());
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "write"))]
+    /// # fn main() {}
+    /// ```
+    pub fn select_bounded_fetch<'selected>(
+        &self,
+        roots: &[ObjectId],
+        history: (
+            impl IntoIterator<Item = Result<ObjectId>>,
+            impl IntoIterator<Item = Result<ObjectId>>,
+        ),
+        work: &mut [Option<ValidationMetadata>],
+        selected: &'selected mut [usize],
+        scratch: (&mut [u8], &mut [u8]),
+        options: (SelectionOptions, FetchOptions),
+    ) -> Result<&'selected [usize]> {
+        let (options, fetch) = options;
+        if fetch
+            .depth
+            .is_some_and(|depth| depth == 0 || depth > i32::MAX as u32)
+        {
+            return Err(Error::InvalidRequest);
+        }
         let SelectionOptions {
             graph_read_limit,
             include_tags,
         } = options;
         let (read_scratch, parse_scratch) = scratch;
+        let (common, shallow) = history;
         if roots.is_empty() {
             return Err(Error::InvalidRequest);
         }
@@ -215,26 +320,44 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             let object = slot.as_mut().expect("validated metadata");
             object.reached = false;
             object.checked = false;
+            object.depth = u32::MAX;
+            object.client_shallow = false;
+            object.shallow = false;
+        }
+        for id in shallow {
+            let index = find(work, self.by_id, id?).ok_or(Error::InvalidRequest)?;
+            let object = work[index].as_mut().expect("validated metadata");
+            if object.info.kind != ObjectKind::Commit {
+                return Err(Error::InvalidRequest);
+            }
+            object.client_shallow = true;
         }
         for id in common {
             let id = id?;
             let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-            reach(work, self.by_id, id, metadata(work, index).info.kind)?;
+            if fetch.depth.is_none() {
+                reach(work, self.by_id, id, metadata(work, index).info.kind)?;
+            }
         }
         let mut remaining = graph_read_limit;
         walk(
             self,
             work,
             self.by_id,
-            read_scratch,
-            parse_scratch,
+            (read_scratch, parse_scratch),
             Some(&mut remaining),
+            History {
+                limit: None,
+                client: true,
+            },
         )?;
         for slot in work.iter_mut() {
             let object = slot.as_mut().expect("validated metadata");
             object.excluded = object.reached;
             object.reached = false;
             object.checked = false;
+            object.depth = u32::MAX;
+            object.shallow = false;
         }
         for &id in roots {
             let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
@@ -244,20 +367,28 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             self,
             work,
             self.by_id,
-            read_scratch,
-            parse_scratch,
+            (read_scratch, parse_scratch),
             Some(&mut remaining),
+            History {
+                limit: fetch.depth,
+                client: fetch.depth.is_none(),
+            },
         )?;
+        filter_blobs(work, roots, fetch.filter);
         if include_tags {
             self.include_matching_tags(work)?;
             walk(
                 self,
                 work,
                 self.by_id,
-                read_scratch,
-                parse_scratch,
+                (read_scratch, parse_scratch),
                 Some(&mut remaining),
+                History {
+                    limit: fetch.depth,
+                    client: fetch.depth.is_none(),
+                },
             )?;
+            filter_blobs(work, roots, fetch.filter);
         }
         let mut length = 0;
         for (index, slot) in work.iter().enumerate() {
@@ -277,10 +408,37 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             let index = find(work, self.by_id, peeled).ok_or(Error::ObjectNotFound)?;
             if metadata(work, index).reached {
                 let id = self.reference_id(reference).ok_or(Error::InvalidObject)?;
-                reach(work, self.by_id, id, ObjectKind::Tag)?;
+                reach_at(
+                    work,
+                    self.by_id,
+                    id,
+                    ObjectKind::Tag,
+                    metadata(work, index).depth,
+                )?;
             }
         }
         Ok(())
+    }
+}
+
+fn filter_blobs(
+    objects: &mut [Option<ValidationMetadata>],
+    roots: &[ObjectId],
+    filter: BlobFilter,
+) {
+    let limit = match filter {
+        BlobFilter::All => return,
+        BlobFilter::None => 0,
+        BlobFilter::Limit(limit) => limit,
+    };
+    for slot in objects {
+        let object = slot.as_mut().expect("validated metadata");
+        if object.info.kind == ObjectKind::Blob
+            && !roots.contains(&object.id)
+            && object.info.size >= limit
+        {
+            object.reached = false;
+        }
     }
 }
 
@@ -359,6 +517,9 @@ fn initialize_index(
             reached: false,
             checked: false,
             excluded: false,
+            depth: u32::MAX,
+            client_shallow: false,
+            shallow: false,
         });
         by_id[index] = index;
     }
@@ -376,10 +537,11 @@ fn walk(
     repository: &(impl Repository + ?Sized),
     objects: &mut [Option<ValidationMetadata>],
     by_id: &[usize],
-    read_scratch: &mut [u8],
-    parse_scratch: &mut [u8],
+    scratch: (&mut [u8], &mut [u8]),
     mut budget: Option<&mut u64>,
+    history: History,
 ) -> Result<()> {
+    let (read_scratch, parse_scratch) = scratch;
     while let Some(index) = objects.iter().position(|slot| {
         let object = slot.expect("initialized metadata");
         object.reached && !object.checked
@@ -389,11 +551,32 @@ fn walk(
             .expect("initialized metadata")
             .checked = true;
         let mut body = Body::budgeted(repository, index, read_scratch, budget.as_deref_mut())?;
-        match metadata(objects, index).info.kind {
-            ObjectKind::Commit => validate_commit(&mut body, parse_scratch, objects, by_id)?,
+        let object = *metadata(objects, index);
+        match object.info.kind {
+            ObjectKind::Commit => {
+                let stop = history.limit.is_some_and(|limit| object.depth >= limit)
+                    || (history.client && object.client_shallow);
+                validate_commit(
+                    &mut body,
+                    parse_scratch,
+                    objects,
+                    by_id,
+                    (!stop).then_some(if history.limit.is_some() {
+                        object.depth.saturating_add(1)
+                    } else {
+                        1
+                    }),
+                )?;
+                objects[index]
+                    .as_mut()
+                    .expect("initialized metadata")
+                    .shallow = stop;
+            }
             ObjectKind::Tree => validate_tree(&mut body, parse_scratch, objects, by_id)?,
             ObjectKind::Blob => {}
-            ObjectKind::Tag => validate_tag(&mut body, parse_scratch, objects, by_id)?,
+            ObjectKind::Tag => {
+                validate_tag(&mut body, parse_scratch, objects, by_id, object.depth)?
+            }
         }
     }
     Ok(())
@@ -461,8 +644,8 @@ fn peel(
     Err(Error::InvalidObject)
 }
 
-fn metadata(objects: &[Option<ValidationMetadata>], index: usize) -> ValidationMetadata {
-    objects[index].expect("initialized metadata")
+fn metadata(objects: &[Option<ValidationMetadata>], index: usize) -> &ValidationMetadata {
+    objects[index].as_ref().expect("initialized metadata")
 }
 
 fn find(objects: &[Option<ValidationMetadata>], by_id: &[usize], id: ObjectId) -> Option<usize> {
@@ -478,6 +661,16 @@ fn reach(
     id: ObjectId,
     kind: ObjectKind,
 ) -> Result<()> {
+    reach_at(objects, by_id, id, kind, 1)
+}
+
+fn reach_at(
+    objects: &mut [Option<ValidationMetadata>],
+    by_id: &[usize],
+    id: ObjectId,
+    kind: ObjectKind,
+    depth: u32,
+) -> Result<()> {
     if id.is_zero() {
         return Err(Error::InvalidObject);
     }
@@ -488,6 +681,10 @@ fn reach(
     }
     if !object.excluded {
         object.reached = true;
+        if depth < object.depth {
+            object.depth = depth;
+            object.checked = false;
+        }
     }
     Ok(())
 }
@@ -601,6 +798,7 @@ fn validate_commit(
     scratch: &mut [u8],
     objects: &mut [Option<ValidationMetadata>],
     by_id: &[usize],
+    parent_depth: Option<u32>,
 ) -> Result<()> {
     let format = body.reader.object_format();
     reach(
@@ -611,12 +809,10 @@ fn validate_commit(
     )?;
     let mut line = body.line(scratch)?;
     while line.starts_with(b"parent ") {
-        reach(
-            objects,
-            by_id,
-            link(line, b"parent ", format)?,
-            ObjectKind::Commit,
-        )?;
+        let id = link(line, b"parent ", format)?;
+        if let Some(depth) = parent_depth {
+            reach_at(objects, by_id, id, ObjectKind::Commit, depth)?;
+        }
         line = body.line(scratch)?;
     }
     if !line.starts_with(b"author ") || line.len() == b"author ".len() {
@@ -657,9 +853,10 @@ fn validate_tag(
     scratch: &mut [u8],
     objects: &mut [Option<ValidationMetadata>],
     by_id: &[usize],
+    depth: u32,
 ) -> Result<()> {
     let (id, kind) = tag_target(body, scratch)?;
-    reach(objects, by_id, id, kind)?;
+    reach_at(objects, by_id, id, kind, depth)?;
     let line = body.line(scratch)?;
     if !line.starts_with(b"tag ") || line.len() == b"tag ".len() {
         return Err(Error::InvalidObject);

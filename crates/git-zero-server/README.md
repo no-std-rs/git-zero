@@ -11,6 +11,11 @@ Part of [git-zero](https://github.com/no-std-rs/git-zero).
 Enable `read` for `SelectionStorage` and `serve_with_selection`, which select
 bounded reachable packs from a validated repository with independent refs.
 
+`SelectionBuffers<WANTS, OBJECTS, READ, PARSE>` optionally owns those fixed arrays.
+Construction needs no allocator, and `storage(graph_read_limit)` lends a request
+view. Capacity and storage-byte queries expose its host memory budget. Hosts can
+still supply their own arrays through `SelectionStorage`.
+
 V0 supports single ACK, `multi_ack`, `multi_ack_detailed`, `side-band`,
 `side-band-64k` and `no-progress` in SHA-1/SHA-256. Requests replay wants and
 common commit haves each round. Selection excludes their complete reachable
@@ -31,7 +36,16 @@ satisfy the hints. Done requests omit ACKs and send a sideband packfile section;
 other rounds return ACKs or NAK and wait for done. Selection includes annotated
 and nested tags only when their final target is being sent, sharing one graph
 budget. Whole-pack hooks retain their documented HEAD-only restriction.
-Shallow/filter, ready shortcuts and other optional v2 features stay unadvertised.
+Selection APIs advertise `shallow filter` (v0/v1) or `fetch=shallow filter` (v2).
+They support absolute `deepen` depths, shallow/unshallow boundaries, blob:none
+and blob:limit filters, sharing the graph budget and object/index arrays.
+Depth requests retransmit their bounded closure; ordinary shallow haves stop
+common traversal at the client's boundary. Root commits at the depth limit stay
+shallow, matching Git. Relative/time/exclusion deepening and other filters are
+rejected. The advertised-ID want policy still requires partial clones to use
+`--no-checkout`; lazy promised-object retrieval is deferred. Legacy complete-pack
+APIs omit these capabilities and reject extended requests before output.
+Ready shortcuts and other optional v2 features stay unadvertised.
 V2 preflights every selected ls-refs line, including its attributes, against the
 65,520-byte packet limit. Oversized attribute combinations return `LimitExceeded`
 before output; hosts can report a resource error. A narrower ref-prefix or a

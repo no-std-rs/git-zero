@@ -11,13 +11,17 @@ import urllib.request
 
 class Server:
     def __init__(self, harness, fixture, backend, implementation, protocol, env, root, response_limit,
-                 file_transfer="auto", zero_loose_cache=False):
+                 file_transfer="auto", zero_loose_cache=False, zero_selection=False):
         self.arguments = [harness, str(fixture), backend, implementation, protocol,
                           str(root / f"{implementation}-metrics.jsonl"), str(response_limit),
                           file_transfer, "cached" if zero_loose_cache else "generated"]
         self.path = Path(self.arguments[5])
         self.implementation = implementation
-        self.env = env
+        self.env = dict(env)
+        self.env.pop("GIT_ZERO_BENCH_SELECTION", None)
+        self.selection = zero_selection and implementation == "zero"
+        if self.selection:
+            self.env["GIT_ZERO_BENCH_SELECTION"] = "1"
 
     def __enter__(self):
         self.errors = tempfile.TemporaryFile()
@@ -34,6 +38,7 @@ class Server:
             self.url = f"{self.origin}/{self.implementation}/repo.git"
             self.startup = self.records()[0]
             assert self.startup["event"] == "ready"
+            assert self.startup.get("selection_enabled", False) == self.selection
             return self
         except BaseException:
             self.__exit__(None, None, None)
