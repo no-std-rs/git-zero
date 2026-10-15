@@ -3,10 +3,11 @@
 
 use git_zero::{
     Error, ObjectId, client,
-    object::{Commit, Tag, Tree},
+    object::{Commit, Tree},
     zlib::InflateLimits,
 };
 
+mod checkout;
 mod smart;
 mod tls;
 
@@ -105,24 +106,6 @@ pub unsafe extern "C" fn gitfs_decode_loose(
     }
 }
 
-/// Extract the root tree from a commit (tag peeling is deliberately unsupported).
-///
-/// # Safety
-/// `data` must be valid for `length` bytes; `id` is a disjoint 20-byte output.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn gitfs_commit_tree(data: *const u8, length: usize, id: *mut u8) -> i32 {
-    // SAFETY: The module supplies a verified commit and a valid output array.
-    let data = unsafe { core::slice::from_raw_parts(data, length) };
-    match Commit::root_tree(data).and_then(sha1_bytes) {
-        Ok(tree) => {
-            // SAFETY: `id` points to 20 writable bytes and is disjoint from data.
-            unsafe { core::ptr::copy_nonoverlapping(tree.as_ptr(), id, 20) };
-            0
-        }
-        Err(_) => EBADMSG,
-    }
-}
-
 /// Locate the exact commit message, preserving arbitrary bytes and newlines.
 /// # Safety
 /// Data is live for length bytes and result is a disjoint, aligned output.
@@ -202,32 +185,6 @@ pub unsafe extern "C" fn gitfs_tree_next(
         Ok(None) => 0,
         Err(_) => EINVAL,
     }
-}
-
-/// Read an annotated tag target using the shared object parser.
-/// # Safety
-/// Data is valid for length bytes; id and kind are disjoint writable outputs.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn gitfs_tag_target(
-    data: *const u8,
-    length: usize,
-    id: *mut u8,
-    kind: *mut u32,
-) -> i32 {
-    // SAFETY: C owns a live object and both exclusive output ranges.
-    let data = unsafe { core::slice::from_raw_parts(data, length) };
-    let Ok(tag) = Tag::parse(data) else {
-        return EBADMSG;
-    };
-    let Ok(target) = sha1_bytes(tag.target) else {
-        return -95;
-    };
-    // SAFETY: Outputs have the documented size and alignment.
-    unsafe {
-        core::ptr::copy_nonoverlapping(target.as_ptr(), id, 20);
-        *kind = tag.target_kind as u32;
-    }
-    0
 }
 
 #[cfg(feature = "kernel")]

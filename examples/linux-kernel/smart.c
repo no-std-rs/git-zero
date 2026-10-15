@@ -32,7 +32,12 @@ int gitfs_fetch_snapshot(struct gitfs_mount *mount)
 		error = capabilities;
 		goto out;
 	}
-	if (!mount->explicit_commit) {
+	if (mount->reference[0]) {
+		error = gitfs_smart_resolve_ref(wire, length, mount->reference,
+					strlen(mount->reference), mount->commit);
+		if (error)
+			goto out;
+	} else if (!mount->explicit_commit) {
 		if (capabilities & 8)
 			memcpy(mount->commit, head, 20);
 		else if (!mount->ref_view) {

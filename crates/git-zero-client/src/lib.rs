@@ -14,7 +14,9 @@ use git_zero_core::{
     zlib::{InflateLimits, InflateStatus, Inflater, WINDOW_SIZE},
 };
 
+mod reference;
 mod smart;
+pub use reference::{reference_name, resolve_reference};
 pub use smart::{
     FetchOptions, SmartAdvertisement, read_pack_response, read_pack_response_with_format,
     read_smart_reference, write_fetch_request, write_fetch_request_iter,

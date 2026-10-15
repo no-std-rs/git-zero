@@ -35,6 +35,65 @@ fn advertisement_with_id(names: &[&str], capabilities: &str, id: ObjectId) -> Ve
 }
 
 #[test]
+fn named_checkouts_use_exact_advertised_refs_in_both_formats() {
+    for id in [ObjectId::Sha1([7; 20]), ObjectId::Sha256([8; 32])] {
+        let caps = if id.format() == ObjectFormat::Sha256 {
+            "object-format=sha256"
+        } else {
+            ""
+        };
+        let bytes = advertisement_with_id(
+            &[
+                "HEAD",
+                "refs/heads/main",
+                "refs/heads/topic/demo",
+                "refs/tags/v1",
+                "refs/tags/v1^{}",
+            ],
+            caps,
+            id,
+        );
+        allocations::without_allocations(|| {
+            let advertisement = SmartAdvertisement::parse(&bytes).unwrap();
+            for name in [
+                "HEAD",
+                "refs/heads/main",
+                "refs/heads/topic/demo",
+                "refs/tags/v1",
+            ] {
+                assert_eq!(advertisement.resolve_reference(name), Ok(id));
+            }
+            assert_eq!(
+                advertisement.resolve_reference("refs/heads/missing"),
+                Err(Error::ObjectNotFound)
+            );
+            assert_eq!(
+                advertisement.resolve_reference("main"),
+                Err(Error::InvalidReference)
+            );
+            assert_eq!(
+                advertisement.resolve_reference("refs/tags/v1^{}"),
+                Err(Error::InvalidReference)
+            );
+        });
+        let bytes = advertisement_with_id(&["refs/heads/main"], caps, id);
+        assert_eq!(
+            SmartAdvertisement::parse(&bytes)
+                .unwrap()
+                .resolve_reference("HEAD"),
+            Err(Error::ObjectNotFound)
+        );
+        let bytes = advertisement_with_id(&["refs/heads/main", "refs/heads/main"], caps, id);
+        assert_eq!(
+            SmartAdvertisement::parse(&bytes)
+                .unwrap()
+                .resolve_reference("refs/heads/main"),
+            Err(Error::InvalidReference)
+        );
+    }
+}
+
+#[test]
 fn sha256_smart_fetch_preserves_ids_and_rejects_mixed_formats_before_output() {
     let first = ObjectId::Sha256([7; 32]);
     let second = ObjectId::Sha256([8; 32]);
