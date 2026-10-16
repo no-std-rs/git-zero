@@ -10,6 +10,8 @@ use git_zero_core::{
     repository::{resolve_reference, uses_only_head},
 };
 mod fetch;
+mod policy;
+pub use policy::{WantOptions, WantPolicy};
 mod route;
 pub mod stream;
 mod upload;
@@ -65,13 +67,27 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
     storage: &mut SelectionStorage<'_>,
     output: &mut impl Write,
 ) -> Result<Response> {
+    serve_with_selection_policy(repository, request, storage, WantOptions::STRICT, output)
+}
+
+/// Serve selected wants under an explicit host grant and occurrence cap.
+/// The validated repository must be the host-authorized immutable projection.
+/// All wants are checked before ACKs, pack output or host cache integration.
+#[cfg(feature = "read")]
+pub fn serve_with_selection_policy<R: Repository + ?Sized>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    request: Request<'_>,
+    storage: &mut SelectionStorage<'_>,
+    options: WantOptions,
+    output: &mut impl Write,
+) -> Result<Response> {
     let route = route::validate(request)?;
     if let Some(response) = route.rejection {
         return Ok(response);
     }
     if request.method != "POST" || route.path != "git-upload-pack" {
         if request.method == "GET" && route.path == "info/refs" {
-            return serve_info_refs(repository, &route, output, true);
+            return policy::info_refs(repository, &route, output, options);
         }
         return serve_with_scratch(repository, request, storage.read, output);
     }
@@ -79,7 +95,14 @@ pub fn serve_with_selection<R: Repository + ?Sized>(
     if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
         return Ok(upload_response());
     }
-    let selected = prepare_fetch(repository, request, version, storage.reborrow(), output)?;
+    let selected = prepare_fetch(
+        repository,
+        request,
+        version,
+        storage.reborrow(),
+        options,
+        output,
+    )?;
     if let Some(indices) = selected.indices {
         let mut packed = selected.upload.output(output);
         pack::write_selected_with_scratch(repository, indices, selected.read, &mut packed)?;
@@ -101,10 +124,11 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
     request: Request<'body>,
     version: Version,
     storage: SelectionStorage<'storage>,
+    options: WantOptions,
     output: &mut impl Write,
 ) -> Result<SelectedFetch<'storage, 'body>> {
     let (upload, count) =
-        UploadRequest::parse_selected(repository, request.body, version, storage.wants)?;
+        UploadRequest::parse_selected(repository, request.body, version, storage.wants, options)?;
     let boundary_probe =
         version != Version::V2 && !upload.done && upload.extensions.options.depth.is_some();
     let select_boundaries = boundary_probe
@@ -293,6 +317,22 @@ fn advertise_smart(
     output: &mut impl Write,
     selection: bool,
 ) -> Result<()> {
+    advertise_smart_with_capabilities(
+        repository,
+        version,
+        output,
+        selection,
+        upload::capabilities(selection),
+    )
+}
+
+fn advertise_smart_with_capabilities(
+    repository: &impl Repository,
+    version: Version,
+    output: &mut impl Write,
+    selection: bool,
+    capabilities: &[u8],
+) -> Result<()> {
     pktline::write(output, b"# service=git-upload-pack\n")?;
     output.write_all(b"0000")?;
     if version == Version::V2 {
@@ -302,9 +342,9 @@ fn advertise_smart(
         pktline::write(output, b"version 1\n")?;
     }
     if repository.head_state().id().is_some() || repository.reference_count() == 0 {
-        advertise_head(repository, output, upload::capabilities(selection))?;
+        advertise_head(repository, output, capabilities)?;
     }
-    advertise_references(repository, true, output, upload::capabilities(selection))?;
+    advertise_references(repository, true, output, capabilities)?;
     output.write_all(b"0000")
 }
 

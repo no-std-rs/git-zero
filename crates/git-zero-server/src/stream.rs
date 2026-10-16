@@ -148,12 +148,56 @@ impl<'a> ResponseEncoder<'a> {
         storage: crate::SelectionStorage<'a>,
         control: &'a mut [u8],
     ) -> Result<Self> {
+        Self::with_selection_storage_policy(
+            repository,
+            request,
+            storage,
+            crate::WantOptions::STRICT,
+            control,
+        )
+    }
+
+    /// Additive host-granted selection. Only selected indices/control are pinned;
+    /// the policy cannot be inherited by another cursor or strict constructor.
+    #[cfg(feature = "read")]
+    pub fn with_selection_policy<R: Repository + ?Sized>(
+        repository: &git_zero_core::ValidatedRepository<'_, '_, R>,
+        request: Request<'_>,
+        storage: &'a mut crate::SelectionStorage<'_>,
+        options: crate::WantOptions,
+        control: &'a mut [u8],
+    ) -> Result<Self> {
+        Self::with_selection_storage_policy(
+            repository,
+            request,
+            storage.reborrow(),
+            options,
+            control,
+        )
+    }
+
+    #[cfg(feature = "read")]
+    pub fn with_selection_storage_policy<R: Repository + ?Sized>(
+        repository: &git_zero_core::ValidatedRepository<'_, '_, R>,
+        request: Request<'_>,
+        storage: crate::SelectionStorage<'a>,
+        options: crate::WantOptions,
+        control: &'a mut [u8],
+    ) -> Result<Self> {
         let mut output = SliceWriter::new(control);
+        if options.policy == crate::WantPolicy::AllVisibleReachable && request.method == "GET" {
+            let route = route::validate(request)?;
+            if route.rejection.is_none() && route.path == "info/refs" {
+                let response = crate::policy::info_refs(repository, &route, &mut output, options)?;
+                return Ok(Self::buffered(response, output.finish()));
+            }
+        }
         let plan = Self::ordinary(repository, request, &mut output, true)?;
         let Plan::Upload(version) = plan else {
             return Self::ordinary_response(repository, plan, output.finish());
         };
-        let selected = crate::prepare_fetch(repository, request, version, storage, &mut output)?;
+        let selected =
+            crate::prepare_fetch(repository, request, version, storage, options, &mut output)?;
         let mut encoder = Self::buffered(upload_response(), output.finish());
         if let Some(indices) = selected.indices {
             encoder.body = Body::Pack(pack::Encoder::new(repository, Some(indices))?);

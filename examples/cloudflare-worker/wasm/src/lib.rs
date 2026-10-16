@@ -12,7 +12,7 @@ mod abi {
     use core::cell::UnsafeCell;
     use git_zero::{
         Entry, EntryKind, Error, ObjectFormat, Snapshot, SnapshotBuilder, ValidatedRepository,
-        http::{self, Request, SelectionBuffers, stream::ResponseEncoder},
+        http::{self, Request, SelectionBuffers, WantOptions, WantPolicy, stream::ResponseEncoder},
         io::SliceWriter,
     };
 
@@ -282,7 +282,51 @@ mod abi {
     /// stream; starting another request replaces it. Errors: -1 capacity, -2 input.
     #[unsafe(no_mangle)]
     pub extern "C" fn stream_start(input_length: usize, method: u32, format: u32) -> i32 {
+        start_frame(input_length, method, format, 0, usize::MAX)
+    }
+
+    /// Host-granted want policy, never parsed from INPUT. Unknown policy cancels
+    /// before rejection. Old starts always remain strict, regardless of history.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn stream_start_policy(
+        input_length: usize,
+        method: u32,
+        format: u32,
+        policy: u32,
+        max_want_lines: u32,
+    ) -> i32 {
+        start_frame(
+            input_length,
+            method,
+            format,
+            policy,
+            max_want_lines as usize,
+        )
+    }
+
+    fn want_options(policy: u32, max_want_lines: usize) -> git_zero::Result<WantOptions> {
+        Ok(WantOptions {
+            policy: match policy {
+                0 => WantPolicy::AdvertisedOnly,
+                1 => WantPolicy::AllVisibleReachable,
+                _ => return Err(Error::InvalidRequest),
+            },
+            max_want_lines,
+        })
+    }
+
+    fn start_frame(
+        input_length: usize,
+        method: u32,
+        format: u32,
+        policy: u32,
+        max_want_lines: usize,
+    ) -> i32 {
         stream_cancel();
+        let options = match want_options(policy, max_want_lines) {
+            Ok(options) => options,
+            Err(_) => return -2,
+        };
         if input_length > INPUT_CAPACITY {
             return -1;
         }
@@ -295,7 +339,7 @@ mod abi {
         // disjoint static fields are exclusively borrowed until cancel/restart.
         let input = unsafe { &(&*INPUT.0.get())[..input_length] };
         let storage = unsafe { &mut *SESSION_STORAGE.0.get() };
-        let session = start_session(input, storage, method, format);
+        let session = start_session(input, storage, method, format, options);
         match session {
             Ok(session) => {
                 unsafe {
@@ -304,6 +348,7 @@ mod abi {
                 3
             }
             Err(Error::BufferTooSmall) => -1,
+            Err(Error::LimitExceeded) if options != WantOptions::STRICT => -1,
             Err(_) => -2,
         }
     }
@@ -313,6 +358,7 @@ mod abi {
         storage: &'static mut SessionStorage,
         method: u32,
         format: ObjectFormat,
+        options: WantOptions,
     ) -> git_zero::Result<Session> {
         let (repository, request) = repository_request(
             input,
@@ -333,10 +379,11 @@ mod abi {
             &mut [0; 128],
             &mut [0; 128],
         )?;
-        let encoder = ResponseEncoder::with_selection_storage(
+        let encoder = ResponseEncoder::with_selection_storage_policy(
             &validated,
             request,
             storage.selection.storage(1_048_576),
+            options,
             &mut storage.control,
         )?;
         response_header(encoder.response(), unsafe { &mut *OUTPUT.0.get() });
@@ -410,7 +457,30 @@ mod abi {
     /// Git-Protocol/Content-Type bytes, then body. Format is fixed by the import.
     #[unsafe(no_mangle)]
     pub extern "C" fn stream_start_repository(input_length: usize, method: u32) -> i32 {
+        start_repository_frame(input_length, method, 0, usize::MAX)
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn stream_start_repository_policy(
+        input_length: usize,
+        method: u32,
+        policy: u32,
+        max_want_lines: u32,
+    ) -> i32 {
+        start_repository_frame(input_length, method, policy, max_want_lines as usize)
+    }
+
+    fn start_repository_frame(
+        input_length: usize,
+        method: u32,
+        policy: u32,
+        max_want_lines: usize,
+    ) -> i32 {
         stream_cancel();
+        let options = match want_options(policy, max_want_lines) {
+            Ok(options) => options,
+            Err(_) => return -2,
+        };
         if input_length > INPUT_CAPACITY {
             return -1;
         }
@@ -422,12 +492,13 @@ mod abi {
         }
         let input = unsafe { &(&*INPUT.0.get())[..input_length] };
         let storage = unsafe { &mut *SESSION_STORAGE.0.get() };
-        match start_imported_session(imported, input, storage, method) {
+        match start_imported_session(imported, input, storage, method, options) {
             Ok(session) => {
                 unsafe { *SESSION.0.get() = Some(session) };
                 3
             }
             Err(Error::BufferTooSmall) => -1,
+            Err(Error::LimitExceeded) if options != WantOptions::STRICT => -1,
             Err(_) => -2,
         }
     }
@@ -437,6 +508,7 @@ mod abi {
         input: &'static [u8],
         storage: &'static mut SessionStorage,
         method: u32,
+        options: WantOptions,
     ) -> git_zero::Result<Session> {
         let mut objects = [None; raw::OBJECTS];
         let mut by_id = [0; raw::OBJECTS];
@@ -448,10 +520,11 @@ mod abi {
             &mut [0; 512],
             &mut [0; 512],
         )?;
-        let encoder = ResponseEncoder::with_selection_storage(
+        let encoder = ResponseEncoder::with_selection_storage_policy(
             &validated,
             request(input, method, true)?,
             storage.selection.storage(1_048_576),
+            options,
             &mut storage.control,
         )?;
         response_header(encoder.response(), unsafe { &mut *OUTPUT.0.get() });

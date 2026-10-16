@@ -2,7 +2,7 @@
 //! Apache owns HTTP framing. This is not a production repository importer.
 use git_zero::{
     RefRepository, Repository, ValidatedRepository,
-    http::{Request, SelectionStorage, stream::ResponseEncoder},
+    http::{Request, SelectionStorage, WantOptions, stream::ResponseEncoder},
 };
 use git_zero_rustix::FileRepository;
 use std::{io::Write, path::Path};
@@ -94,8 +94,19 @@ fn serve(args: &[String]) -> Result<()> {
         graph_read_limit: OBJECT_BYTES,
     };
     let mut control = [0; 65_536];
+    let options = if args.len() == 7 {
+        WantOptions::all_visible_reachable(1024)
+    } else {
+        WantOptions::STRICT
+    };
     let mut encoder = core_result(
-        ResponseEncoder::with_selection(&repository, request, &mut selection, &mut control),
+        ResponseEncoder::with_selection_policy(
+            &repository,
+            request,
+            &mut selection,
+            options,
+            &mut control,
+        ),
         "HTTP preparation",
     )?;
     transmit(&repository, &mut encoder, request)
@@ -103,10 +114,10 @@ fn serve(args: &[String]) -> Result<()> {
 
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let result = if args.len() == 6 {
+    let result = if args.len() == 6 || (args.len() == 7 && args[6] == "--allow-reachable-wants") {
         serve(&args)
     } else {
-        Err("usage: upstream-cgi FIXTURE METHOD PATH QUERY PROTOCOL CONTENT_TYPE".into())
+        Err("usage: upstream-cgi FIXTURE METHOD PATH QUERY PROTOCOL CONTENT_TYPE [--allow-reachable-wants]".into())
     };
     if let Err(error) = result {
         eprintln!("upstream-cgi: {error}");

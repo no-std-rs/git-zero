@@ -21,16 +21,35 @@ fn main() {
 fn run() -> git_zero::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
-        Some("serve") => serve(listen_address(args.get(2).map_or("8080", String::as_str))?),
+        Some("serve") => {
+            let (address, options) = serve_options(&args[2..])?;
+            serve(address, options)
+        }
         Some("fetch") => fetch(args.get(2).ok_or(Error::InvalidRequest)?, false),
         Some("ls-remote") => fetch(args.get(2).ok_or(Error::InvalidRequest)?, true),
         _ => {
             eprintln!(
-                "Usage: git-zero serve [port|IP:port] | ls-remote URL | fetch URL\nIPv6 listen addresses use [IP]:port. fetch writes a smart pack or a dumb loose HEAD object to stdout."
+                "Usage: git-zero serve [port|IP:port] [--allow-reachable-wants] | ls-remote URL | fetch URL\nIPv6 listen addresses use [IP]:port. The optional serve grant exposes the entire visible snapshot closure. fetch writes a smart pack or a dumb loose HEAD object to stdout."
             );
             Err(Error::InvalidRequest)
         }
     }
+}
+
+fn serve_options(args: &[String]) -> git_zero::Result<(SocketAddr, http::WantOptions)> {
+    let (address, granted) = match args {
+        [] => ("8080", false),
+        [flag] if flag == "--allow-reachable-wants" => ("8080", true),
+        [address] => (address.as_str(), false),
+        [address, flag] if flag == "--allow-reachable-wants" => (address.as_str(), true),
+        _ => return Err(Error::InvalidRequest),
+    };
+    let options = if granted {
+        http::WantOptions::all_visible_reachable(1024)
+    } else {
+        http::WantOptions::STRICT
+    };
+    Ok((listen_address(address)?, options))
 }
 
 fn listen_address(value: &str) -> git_zero::Result<SocketAddr> {
@@ -40,7 +59,7 @@ fn listen_address(value: &str) -> git_zero::Result<SocketAddr> {
     value.parse().map_err(|_| Error::InvalidRequest)
 }
 
-fn serve(address: SocketAddr) -> git_zero::Result<()> {
+fn serve(address: SocketAddr, options: http::WantOptions) -> git_zero::Result<()> {
     let files = [File {
         name: "README.md",
         contents: b"Hello from an allocation-free in-memory Git repository.\n",
@@ -74,6 +93,7 @@ fn serve(address: SocketAddr) -> git_zero::Result<()> {
             &mut control,
             &mut staging,
             &mut selection,
+            options,
         ) {
             eprintln!("response: {error:?}");
         }
@@ -87,6 +107,7 @@ fn serve_connection(
     control: &mut [u8],
     staging: &mut [u8],
     selection: &mut http::SelectionBuffers<4, 3, 128, 128>,
+    options: http::WantOptions,
 ) -> git_zero::Result<()> {
     let mut request = match read_request(socket, request_storage) {
         Ok(request) => request,
@@ -103,10 +124,11 @@ fn serve_connection(
         );
     };
     request.path = path;
-    let mut encoder = match http::stream::ResponseEncoder::with_selection_storage(
+    let mut encoder = match http::stream::ResponseEncoder::with_selection_storage_policy(
         repository,
         request,
         selection.storage(1_048_576),
+        options,
         control,
     ) {
         Ok(encoder) => encoder,
@@ -173,4 +195,40 @@ fn fetch(url: &str, list_only: bool) -> git_zero::Result<()> {
         Protocol::Dumb => client::fetch_loose(&mut transport, head, &mut response_storage)?,
     };
     io::stdout().write_all(bytes).map_err(|_| Error::Backend)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serve_arguments_keep_the_grant_explicit_with_optional_default_address() {
+        for (args, address, granted) in [
+            (vec![], "127.0.0.1:8080", false),
+            (vec!["--allow-reachable-wants"], "127.0.0.1:8080", true),
+            (vec!["0"], "127.0.0.1:0", false),
+            (vec!["[::1]:0", "--allow-reachable-wants"], "[::1]:0", true),
+        ] {
+            let args: Vec<_> = args.into_iter().map(str::to_owned).collect();
+            let (actual, options) = serve_options(&args).unwrap();
+            assert_eq!(actual, address.parse::<SocketAddr>().unwrap());
+            assert_eq!(
+                options,
+                if granted {
+                    http::WantOptions::all_visible_reachable(1024)
+                } else {
+                    http::WantOptions::STRICT
+                }
+            );
+        }
+        for args in [
+            vec!["--unknown"],
+            vec!["0", "--unknown"],
+            vec!["--allow-reachable-wants", "0"],
+            vec!["0", "--allow-reachable-wants", "extra"],
+        ] {
+            let args: Vec<_> = args.into_iter().map(str::to_owned).collect();
+            assert_eq!(serve_options(&args), Err(Error::InvalidRequest));
+        }
+    }
 }

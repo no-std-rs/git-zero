@@ -367,3 +367,50 @@ and imported sessions with cancellation and independent instances. The release
 module currently starts at 22 Wasm pages (1.375 MiB), below the 24-page test
 ceiling, and these tests assert no growth or allocator imports. This is a linear
 memory result, not a measurement of JavaScript memory or deployed Worker CPU.
+
+
+## Explicit promised-object authorization
+
+Existing Worker starts and host defaults accept advertised IDs only. To allow
+ordinary filtered clone checkout, a trusted `createRepositoryWorker` loader may
+return `{ repository, target, wantPolicy: "all-visible-reachable", maxWantLines: 64 }`.
+The policy covers every object kind reachable from that exact validated visible
+HEAD/ref union, not arbitrary physical storage. The loader must authenticate and
+project the repository first. Unknown policy values or missing optional Wasm
+exports fail closed with 503. `maxWantLines` is an opt-in occurrence cap (default
+64, unsigned 32-bit integer); advertised-only configuration retains its previous
+behavior and ignores that option. Duplicate wants count too.
+
+The metadata demonstration has the equivalent trusted deployment binding
+`GIT_WANT_POLICY=all-visible-reachable` and optional `GIT_MAX_WANT_LINES` (default
+64). Both flat and tree handlers use it consistently. Neither inline/captured
+metadata nor a request header, query, capability or repository file grants it.
+This setting exposes the complete already-public snapshot closure; it does not
+replace deployment/route authentication or the public metadata allowlists.
+
+Optional exports `stream_start_policy(length, method, format, policy, max_want_lines)`
+and `stream_start_repository_policy(length, method, policy, max_want_lines)` accept
+policy 0 (advertised IDs) or 1 (all visible reachable IDs). Existing exports remain
+strict and work with old modules. Enabled metadata hosting requires both new
+exports; imported hosting requires the imported export. Unknown/failed starts
+cancel the previous cursor before returning an error. Policy lives only in the
+prepared request, never in INPUT, the manifest, snapshots, URLs or later starts.
+Strict restart, cancellation and independent instances do not inherit the grant.
+
+V0/v1 enabled discovery truthfully adds `allow-reachable-sha1-in-want`; v2 uses
+its ordinary fetch command. The same host option applies to discovery and POSTs.
+A prior discovery is no access token. Hosts must retain immutable generations
+if older promised blobs should remain available: tests distinguish a moving URL
+that revokes old objects from a separately retained immutable URL. No retention
+or GC guarantee is added by the policy itself.
+
+The raw/input/output/object/ref/scratch/graph limits above stay unchanged, with
+no growth within the 24-page Wasm ceiling. Large lazy batches can fail those
+bounds. The occurrence limit is not a whole-request logical-work budget;
+JavaScript/provider memory remains outside the Rust budget. Real Git acceptance
+compares SHA-1/SHA-256 and v0/v1/v2 with Git's filtered HTTP backend: physical
+blob omission, ordinary lazy checkout of the 96 KiB binary and other files,
+history/side checkouts, exact blob:limit boundaries and canonical all-kind
+selected pack inventories. Plain/gzip negative tests retain private/mixed-want,
+projection validation, restart and old/incomplete-interface guards. These are
+local bounded fixtures, not a deployment or throughput claim.

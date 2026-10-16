@@ -107,3 +107,13 @@ them only when all users of that namespace are quiescent; replacing a live lock
 file would split its identity. Advisory lock scope depends on the filesystem
 and mount configuration. Hosts account for lock files in directory quotas and
 provide a distributed coordinator when that is required.
+
+
+The demonstration command `git-zero serve ADDRESS --allow-reachable-wants`
+explicitly grants access to the whole validated visible snapshot closure.
+The flag is absent by default; unknown flags fail. The example uses a 1,024
+want-occurrence cap in addition to its fixed selection arrays, request storage
+and graph-read limit. It is a host configuration option, never an HTTP option.
+The bounded `upstream-cgi` fixture host accepts the same final flag. Production
+hosts must authenticate/select their own immutable projection before constructing
+a policy-aware selected encoder; neither socket parsing nor a cache grants access.
