@@ -118,3 +118,19 @@ single structural graph-read budget remain separate finite limits. This is not
 a whole-request logical-work budget: parsing, bounded metadata scans and ordinary
 selection retain their existing accounting. A fresh request resets the counter.
 Explicit blob roots survive `blob:none`, enabling ordinary partial-clone checkout.
+For synchronous selected-pack caching, `serve_with_selected_pack` uses the same
+route, want authorization and bounded selection as `serve_with_selection`.
+Its trusted callback receives the exact selected indices, read scratch and a
+`PackOutput` sink for this request. Call `cache::selected::write` using
+`Selection::Indices(indices)` and that sink. The cache retains only verified raw
+PACK bytes; ACKs, shallow updates, v2 sections and sideband framing are fresh.
+ACK-only rounds, boundary probes and non-pack routes never call the hook;
+an empty selected set still requires a valid empty pack. The old complete-pack
+hook and its HEAD-only cache key are separate APIs.
+
+Every cache hit still follows authorization and graph traversal. A cache or
+backend error may follow provisional control output, so discard the whole output
+on failure. Buffer the complete response before sending HTTP success metadata,
+or abort an already started transport. A failed sink can leave a verified cache
+entry for a later request. This synchronous hook retains no cache borrow or
+response cursor; it adds no async storage or streaming-memory guarantee.

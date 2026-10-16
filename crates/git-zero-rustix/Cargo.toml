@@ -82,6 +82,14 @@ required-features = ["cli"]
 name = "upstream-cgi"
 required-features = ["cli"]
 
+[[example]]
+name = "selected-cache"
+required-features = ["cli"]
+
+[[test]]
+name = "selected_http_cache"
+required-features = ["cli"]
+
 [package.metadata.docs.rs]
 all-features = true
 
