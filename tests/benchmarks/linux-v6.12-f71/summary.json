@@ -1,0 +1,194 @@
+{
+  "status": "complete",
+  "source_revision": "f71e2669f3dbf381af785ac35d49ebbff708a001",
+  "profiles": {
+    "matched": {
+      "git": {
+        "clone_wall_median_s": 15.669252736028284,
+        "clone_wall_range_s": [
+          15.55248745600693,
+          16.216054048971273
+        ],
+        "server_cpu_median_s": 6.687792999999999,
+        "client_cpu_median_s": 11.747071,
+        "http_body_bytes_median": 1478740131,
+        "client_largest_waited_process_rss_median_kib": 1478608,
+        "sampled_server_process_tree_peak_rss_kib": 1503220,
+        "separate_phases": {
+          "download": {
+            "median_wall_s": 6.645986854506191,
+            "range_wall_s": [
+              6.396106606000103,
+              6.895867103012279
+            ]
+          },
+          "index_pack": {
+            "median_wall_s": 5.623042880470166,
+            "range_wall_s": [
+              5.5638070029672235,
+              5.682278757973108
+            ]
+          },
+          "checkout": {
+            "median_wall_s": 4.31603298697155,
+            "range_wall_s": [
+              4.039347615966108,
+              4.592718357976992
+            ]
+          },
+          "pack_bytes": 1477841667.0
+        }
+      },
+      "zero": {
+        "clone_wall_median_s": 12.815414333017543,
+        "clone_wall_range_s": [
+          12.45100844296394,
+          15.249790447007399
+        ],
+        "server_cpu_median_s": 2.122076999999999,
+        "client_cpu_median_s": 13.81408,
+        "http_body_bytes_median": 1485519530,
+        "client_largest_waited_process_rss_median_kib": 1478484,
+        "sampled_server_process_tree_peak_rss_kib": 1467632,
+        "separate_phases": {
+          "download": {
+            "median_wall_s": 3.662300853000488,
+            "range_wall_s": [
+              3.6122962399967946,
+              3.7123054660041817
+            ]
+          },
+          "index_pack": {
+            "median_wall_s": 5.648050296527799,
+            "range_wall_s": [
+              5.636307091044728,
+              5.659793502010871
+            ]
+          },
+          "checkout": {
+            "median_wall_s": 3.7219707850308623,
+            "range_wall_s": [
+              3.6664725050213747,
+              3.77746906504035
+            ]
+          },
+          "pack_bytes": 1478300987.0
+        }
+      }
+    },
+    "upstream-defaults": {
+      "git": {
+        "clone_wall_median_s": 27.568378622003365,
+        "clone_wall_range_s": [
+          27.158715739962645,
+          27.82028015400283
+        ],
+        "server_cpu_median_s": 41.44366799999999,
+        "client_cpu_median_s": 9.1996,
+        "http_body_bytes_median": 270160200,
+        "client_largest_waited_process_rss_median_kib": 440992,
+        "sampled_server_process_tree_peak_rss_kib": 626428,
+        "separate_phases": {
+          "download": {
+            "median_wall_s": 20.726858103007544,
+            "range_wall_s": [
+              20.08199427399086,
+              21.37172193202423
+            ]
+          },
+          "index_pack": {
+            "median_wall_s": 4.658992602489889,
+            "range_wall_s": [
+              4.394835956976749,
+              4.923149248003028
+            ]
+          },
+          "checkout": {
+            "median_wall_s": 4.6316721145412885,
+            "range_wall_s": [
+              4.562046957027633,
+              4.701297272054944
+            ]
+          },
+          "pack_bytes": 270134180.5
+        }
+      },
+      "zero": {
+        "clone_wall_median_s": 11.670903925027233,
+        "clone_wall_range_s": [
+          11.637968795956112,
+          11.989435668976512
+        ],
+        "server_cpu_median_s": 1.7891109999999992,
+        "client_cpu_median_s": 13.303484000000001,
+        "http_body_bytes_median": 1485519530,
+        "client_largest_waited_process_rss_median_kib": 1479064,
+        "sampled_server_process_tree_peak_rss_kib": 1468684,
+        "separate_phases": {
+          "download": {
+            "median_wall_s": 3.1795395575172734,
+            "range_wall_s": [
+              2.7331350250169635,
+              3.625944090017583
+            ]
+          },
+          "index_pack": {
+            "median_wall_s": 5.648634445504285,
+            "range_wall_s": [
+              5.6372666690149345,
+              5.660002221993636
+            ]
+          },
+          "checkout": {
+            "median_wall_s": 3.8758255309949163,
+            "range_wall_s": [
+              3.872183853003662,
+              3.8794672089861706
+            ]
+          },
+          "pack_bytes": 1478300987.0
+        }
+      }
+    }
+  },
+  "evidence": {
+    "decoder": {
+      "path": "/tmp/git-zero-linux-benchmark/decoder.json",
+      "sha256": "2d1b81663b83f355c1409e8137651b9ee9bfacb0b9ca6aa66bc91e8a08812e1f"
+    },
+    "matched": {
+      "path": "/tmp/git-zero-linux-benchmark/kernel-matched.json",
+      "sha256": "97e587b56adb23747fc793ca5308f8ddc84e49cc621dd5504a86eac91ac27886"
+    },
+    "upstream-defaults": {
+      "path": "/tmp/git-zero-linux-benchmark/kernel-upstream-defaults.json",
+      "sha256": "03f9f6cc717be4e3fc8fefd3aa2dadf7b9240ff901cb48849dcaa8b7d6e39c12"
+    }
+  },
+  "decoder": {
+    "git-default-compressed": {
+      "wall_median_s": 8.68649584101513,
+      "wall_range_s": [
+        8.666997796972282,
+        8.738552069000434
+      ],
+      "cpu_median_s": 8.655842,
+      "max_rss_median_kib": 1807464,
+      "delta_count": 8018,
+      "max_delta_depth": 7,
+      "pack_bytes": 270138389
+    },
+    "zero-stored": {
+      "wall_median_s": 3.4257590130437165,
+      "wall_range_s": [
+        3.4019133200054057,
+        3.4297678690054454
+      ],
+      "cpu_median_s": 3.411595,
+      "max_rss_median_kib": 2926540,
+      "delta_count": 0,
+      "max_delta_depth": 0,
+      "pack_bytes": 1478300987
+    }
+  }
+}

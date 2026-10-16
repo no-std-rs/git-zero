@@ -334,8 +334,12 @@ remain regression coverage; server completion is measured with real Git clients.
   and caller-owned buffer budgets for cold/warm runs.
   Pinned caller-repository fixtures now feed eight paired HTTP and two local
   object-read workloads, with bounded object/body loading and source-preservation
-  tests. Kernel-scale preparation and controlled
-  cold-cache runs remain future work.
+  tests. A [historical Linux v6.12 snapshot experiment](tests/benchmarks/linux-v6.12-f71/README.md)
+  at revision `f71e266` records 91,865 objects, warm loopback clones, separate
+  download/index/checkout and direct decoder observations. It excludes Linux
+  history, uses an external driver/probe and a buffered benchmark frontend, and
+  does not measure later revisions. Full-history/incremental-fetch preparation,
+  controlled cold-cache and concurrent/deployed measurements remain future work.
 - [x] Protocol traces and retained artifacts on failure; CI matrix over Git versions
   and Linux/macOS, with jobs isolated by temporary paths and ephemeral ports.
 

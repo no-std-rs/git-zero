@@ -1,0 +1,341 @@
+{
+  "status": "complete",
+  "errors": [],
+  "source_revision": "f71e2669f3dbf381af785ac35d49ebbff708a001",
+  "probe_source_sha256": "4d571f4ae3f555ef87af1b956b71322976bf3e56cffd9b2bf4365d54686b255f",
+  "probe_cargo_sha256": "fe9a6a74b55aba194732e30c4d9d9e530cad88c16ba7a481fb2f5e140f905c19",
+  "probe_lock_sha256": "022cd9fbdd46e8582baf3cb08ccb061913a5c49c4526d961d8adcb9389a94986",
+  "probe_binary_sha256": "0538e8f68c24906f9c532273d9f9b20039039a21e7abb87b440e003b1e96d2dc",
+  "driver_sha256": "d5e7869bd8d67715978cde5627c968e565305abd44cde048e72f21a4d326d660",
+  "manifest": {
+    "path": "/tmp/git-zero-linux-v612-zr591twy/upstream-defaults/objects.tsv",
+    "sha256": "cd10b5a09d2888259b478220e1d9a2876ba207e28a8e783f7a938799172cf433"
+  },
+  "inputs": {
+    "git-default-compressed": {
+      "path": "/tmp/git-zero-linux-benchmark/kernel-upstream-defaults-phases/git-0/download.pack",
+      "sha256": "fa7a4d4a90d9facb35c2f935396555a5b555287ba8402543bafe952d050bda59",
+      "bytes": 270138389
+    },
+    "zero-stored": {
+      "path": "/tmp/git-zero-linux-benchmark/kernel-upstream-defaults-phases/zero-0/download.pack",
+      "sha256": "a7d36ce7da8ce0707bd488d04cb295c4c20444bc434e428c8a68c4ed80ed0047",
+      "bytes": 1478300987
+    }
+  },
+  "samples": [
+    {
+      "input": "git-default-compressed",
+      "status": "verified",
+      "measurements": {
+        "wall_s": 8.738552069000434,
+        "cpu_s": 8.708208,
+        "user_cpu_s": 8.146985,
+        "system_cpu_s": 0.561223,
+        "voluntary_context_switches": 6,
+        "involuntary_context_switches": 105,
+        "minor_page_faults": 453031,
+        "major_page_faults": 0,
+        "max_rss_kib": 1807468,
+        "host_load_1_5_15": [
+          0.6611328125,
+          1.61181640625,
+          4.05615234375
+        ]
+      },
+      "decoder": {
+        "status": "verified",
+        "source_revision": "f71e2669f3dbf381af785ac35d49ebbff708a001",
+        "object_format": "sha1",
+        "pack_checksum": "ac7bbbee66d7478fedee55006fa456c543ba932e",
+        "objects": 91865,
+        "raw_bytes": 1476536879,
+        "largest_object_bytes": 23949786,
+        "delta_count": 8018,
+        "max_delta_depth": 7,
+        "resolution_passes": 1,
+        "pack_bytes": 270138389,
+        "pack_capacity_bytes": 270138389,
+        "staging_bytes": 1244505088,
+        "staging_capacity_bytes": 1244505088,
+        "reconstructed_bytes": 295996353,
+        "reconstructed_capacity_bytes": 295996353,
+        "entry_limit_bytes": 47899636,
+        "staging_limit_bytes": 2958953118,
+        "reconstructed_limit_bytes": 1476536879,
+        "window_bytes": 32768,
+        "elapsed_seconds": 8.636482777,
+        "canonical_ids_kinds_sizes_count_and_raw_verified": true,
+        "host_model": "complete compressed pack plus retained exact-sized entry/instruction and delta-result buffers; metadata/maps and host allocations included in process RSS; no filesystem checkout or incremental compressed-input streaming"
+      }
+    },
+    {
+      "input": "zero-stored",
+      "status": "verified",
+      "measurements": {
+        "wall_s": 3.4257590130437165,
+        "cpu_s": 3.411595,
+        "user_cpu_s": 2.389597,
+        "system_cpu_s": 1.021998,
+        "voluntary_context_switches": 3,
+        "involuntary_context_switches": 74,
+        "minor_page_faults": 732721,
+        "major_page_faults": 0,
+        "max_rss_kib": 2926124,
+        "host_load_1_5_15": [
+          0.787109375,
+          1.60791015625,
+          4.0283203125
+        ]
+      },
+      "decoder": {
+        "status": "verified",
+        "source_revision": "f71e2669f3dbf381af785ac35d49ebbff708a001",
+        "object_format": "sha1",
+        "pack_checksum": "ae439138aa3a6b0e05707373b980efcccdd131dd",
+        "objects": 91865,
+        "raw_bytes": 1476536879,
+        "largest_object_bytes": 23949786,
+        "delta_count": 0,
+        "max_delta_depth": 0,
+        "resolution_passes": 0,
+        "pack_bytes": 1478300987,
+        "pack_capacity_bytes": 1478300987,
+        "staging_bytes": 1476536879,
+        "staging_capacity_bytes": 1476536879,
+        "reconstructed_bytes": 0,
+        "reconstructed_capacity_bytes": 0,
+        "entry_limit_bytes": 47899636,
+        "staging_limit_bytes": 2958953118,
+        "reconstructed_limit_bytes": 1476536879,
+        "window_bytes": 32768,
+        "elapsed_seconds": 3.269139493,
+        "canonical_ids_kinds_sizes_count_and_raw_verified": true,
+        "host_model": "complete compressed pack plus retained exact-sized entry/instruction and delta-result buffers; metadata/maps and host allocations included in process RSS; no filesystem checkout or incremental compressed-input streaming"
+      }
+    },
+    {
+      "input": "zero-stored",
+      "status": "verified",
+      "measurements": {
+        "wall_s": 3.4019133200054057,
+        "cpu_s": 3.388339,
+        "user_cpu_s": 2.340446,
+        "system_cpu_s": 1.047893,
+        "voluntary_context_switches": 3,
+        "involuntary_context_switches": 36,
+        "minor_page_faults": 732714,
+        "major_page_faults": 0,
+        "max_rss_kib": 2926608,
+        "host_load_1_5_15": [
+          0.80419921875,
+          1.59765625,
+          4.01171875
+        ]
+      },
+      "decoder": {
+        "status": "verified",
+        "source_revision": "f71e2669f3dbf381af785ac35d49ebbff708a001",
+        "object_format": "sha1",
+        "pack_checksum": "ae439138aa3a6b0e05707373b980efcccdd131dd",
+        "objects": 91865,
+        "raw_bytes": 1476536879,
+        "largest_object_bytes": 23949786,
+        "delta_count": 0,
+        "max_delta_depth": 0,
+        "resolution_passes": 0,
+        "pack_bytes": 1478300987,
+        "pack_capacity_bytes": 1478300987,
+        "staging_bytes": 1476536879,
+        "staging_capacity_bytes": 1476536879,
+        "reconstructed_bytes": 0,
+        "reconstructed_capacity_bytes": 0,
+        "entry_limit_bytes": 47899636,
+        "staging_limit_bytes": 2958953118,
+        "reconstructed_limit_bytes": 1476536879,
+        "window_bytes": 32768,
+        "elapsed_seconds": 3.24785771,
+        "canonical_ids_kinds_sizes_count_and_raw_verified": true,
+        "host_model": "complete compressed pack plus retained exact-sized entry/instruction and delta-result buffers; metadata/maps and host allocations included in process RSS; no filesystem checkout or incremental compressed-input streaming"
+      }
+    },
+    {
+      "input": "git-default-compressed",
+      "status": "verified",
+      "measurements": {
+        "wall_s": 8.68649584101513,
+        "cpu_s": 8.655842,
+        "user_cpu_s": 8.050212,
+        "system_cpu_s": 0.60563,
+        "voluntary_context_switches": 3,
+        "involuntary_context_switches": 131,
+        "minor_page_faults": 453026,
+        "major_page_faults": 0,
+        "max_rss_kib": 1806724,
+        "host_load_1_5_15": [
+          0.80419921875,
+          1.59765625,
+          4.01171875
+        ]
+      },
+      "decoder": {
+        "status": "verified",
+        "source_revision": "f71e2669f3dbf381af785ac35d49ebbff708a001",
+        "object_format": "sha1",
+        "pack_checksum": "ac7bbbee66d7478fedee55006fa456c543ba932e",
+        "objects": 91865,
+        "raw_bytes": 1476536879,
+        "largest_object_bytes": 23949786,
+        "delta_count": 8018,
+        "max_delta_depth": 7,
+        "resolution_passes": 1,
+        "pack_bytes": 270138389,
+        "pack_capacity_bytes": 270138389,
+        "staging_bytes": 1244505088,
+        "staging_capacity_bytes": 1244505088,
+        "reconstructed_bytes": 295996353,
+        "reconstructed_capacity_bytes": 295996353,
+        "entry_limit_bytes": 47899636,
+        "staging_limit_bytes": 2958953118,
+        "reconstructed_limit_bytes": 1476536879,
+        "window_bytes": 32768,
+        "elapsed_seconds": 8.571326883,
+        "canonical_ids_kinds_sizes_count_and_raw_verified": true,
+        "host_model": "complete compressed pack plus retained exact-sized entry/instruction and delta-result buffers; metadata/maps and host allocations included in process RSS; no filesystem checkout or incremental compressed-input streaming"
+      }
+    },
+    {
+      "input": "git-default-compressed",
+      "status": "verified",
+      "measurements": {
+        "wall_s": 8.666997796972282,
+        "cpu_s": 8.637007,
+        "user_cpu_s": 8.075106,
+        "system_cpu_s": 0.561901,
+        "voluntary_context_switches": 3,
+        "involuntary_context_switches": 138,
+        "minor_page_faults": 453026,
+        "major_page_faults": 0,
+        "max_rss_kib": 1807464,
+        "host_load_1_5_15": [
+          0.8349609375,
+          1.57763671875,
+          3.97900390625
+        ]
+      },
+      "decoder": {
+        "status": "verified",
+        "source_revision": "f71e2669f3dbf381af785ac35d49ebbff708a001",
+        "object_format": "sha1",
+        "pack_checksum": "ac7bbbee66d7478fedee55006fa456c543ba932e",
+        "objects": 91865,
+        "raw_bytes": 1476536879,
+        "largest_object_bytes": 23949786,
+        "delta_count": 8018,
+        "max_delta_depth": 7,
+        "resolution_passes": 1,
+        "pack_bytes": 270138389,
+        "pack_capacity_bytes": 270138389,
+        "staging_bytes": 1244505088,
+        "staging_capacity_bytes": 1244505088,
+        "reconstructed_bytes": 295996353,
+        "reconstructed_capacity_bytes": 295996353,
+        "entry_limit_bytes": 47899636,
+        "staging_limit_bytes": 2958953118,
+        "reconstructed_limit_bytes": 1476536879,
+        "window_bytes": 32768,
+        "elapsed_seconds": 8.564764827,
+        "canonical_ids_kinds_sizes_count_and_raw_verified": true,
+        "host_model": "complete compressed pack plus retained exact-sized entry/instruction and delta-result buffers; metadata/maps and host allocations included in process RSS; no filesystem checkout or incremental compressed-input streaming"
+      }
+    },
+    {
+      "input": "zero-stored",
+      "status": "verified",
+      "measurements": {
+        "wall_s": 3.4297678690054454,
+        "cpu_s": 3.415724,
+        "user_cpu_s": 2.370885,
+        "system_cpu_s": 1.044839,
+        "voluntary_context_switches": 3,
+        "involuntary_context_switches": 49,
+        "minor_page_faults": 732717,
+        "major_page_faults": 0,
+        "max_rss_kib": 2926540,
+        "host_load_1_5_15": [
+          0.86083984375,
+          1.55810546875,
+          3.94677734375
+        ]
+      },
+      "decoder": {
+        "status": "verified",
+        "source_revision": "f71e2669f3dbf381af785ac35d49ebbff708a001",
+        "object_format": "sha1",
+        "pack_checksum": "ae439138aa3a6b0e05707373b980efcccdd131dd",
+        "objects": 91865,
+        "raw_bytes": 1476536879,
+        "largest_object_bytes": 23949786,
+        "delta_count": 0,
+        "max_delta_depth": 0,
+        "resolution_passes": 0,
+        "pack_bytes": 1478300987,
+        "pack_capacity_bytes": 1478300987,
+        "staging_bytes": 1476536879,
+        "staging_capacity_bytes": 1476536879,
+        "reconstructed_bytes": 0,
+        "reconstructed_capacity_bytes": 0,
+        "entry_limit_bytes": 47899636,
+        "staging_limit_bytes": 2958953118,
+        "reconstructed_limit_bytes": 1476536879,
+        "window_bytes": 32768,
+        "elapsed_seconds": 3.270354176,
+        "canonical_ids_kinds_sizes_count_and_raw_verified": true,
+        "host_model": "complete compressed pack plus retained exact-sized entry/instruction and delta-result buffers; metadata/maps and host allocations included in process RSS; no filesystem checkout or incremental compressed-input streaming"
+      }
+    }
+  ],
+  "method": {
+    "samples_per_input": 3,
+    "separate_warmups": 0,
+    "order": [
+      "git-default-compressed",
+      "zero-stored",
+      "zero-stored",
+      "git-default-compressed",
+      "git-default-compressed",
+      "zero-stored"
+    ],
+    "timeout_seconds": 300,
+    "cache": "Warm; input SHA256 read before timing, existing verified download packs",
+    "work": "Complete process including manifest/pack reads, allocations, pack hash, inflate/CRC, delta resolution, canonical object hashes and exact manifest validation; no index or checkout/filesystem object writes",
+    "memory": "Complete pack and all exact-sized entry/delta host buffers retained; metadata and allocations included; not production streaming",
+    "comparison": "Absolute decoding measurements only; Git index-pack performs additional different work"
+  },
+  "summary": {
+    "git-default-compressed": {
+      "wall_median_s": 8.68649584101513,
+      "wall_range_s": [
+        8.666997796972282,
+        8.738552069000434
+      ],
+      "cpu_median_s": 8.655842,
+      "max_rss_median_kib": 1807464,
+      "delta_count": 8018,
+      "max_delta_depth": 7,
+      "pack_bytes": 270138389
+    },
+    "zero-stored": {
+      "wall_median_s": 3.4257590130437165,
+      "wall_range_s": [
+        3.4019133200054057,
+        3.4297678690054454
+      ],
+      "cpu_median_s": 3.411595,
+      "max_rss_median_kib": 2926540,
+      "delta_count": 0,
+      "max_delta_depth": 0,
+      "pack_bytes": 1478300987
+    }
+  }
+}

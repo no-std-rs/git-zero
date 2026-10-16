@@ -1,0 +1,113 @@
+{
+  "kind": "Historical measurement preservation manifest, not a new benchmark run",
+  "measured_source_revision": "f71e2669f3dbf381af785ac35d49ebbff708a001",
+  "documentation_base_revision": "73589c046c1f91d07b94a5893c080f1f328464ec",
+  "hash_algorithm": "SHA-256",
+  "derivation": "Eight JSON artifacts copied byte for byte; only this manifest and README are newly authored. No raw fields omitted, normalized, rewritten or fabricated.",
+  "files": [
+    {
+      "file": "kernel-matched.json",
+      "bytes": 68388,
+      "sha256": "97e587b56adb23747fc793ca5308f8ddc84e49cc621dd5504a86eac91ac27886",
+      "original_local_path": "/tmp/git-zero-linux-benchmark/kernel-matched.json",
+      "transformation": "none; exact original bytes",
+      "omitted_fields": []
+    },
+    {
+      "file": "kernel-upstream-defaults.json",
+      "bytes": 68050,
+      "sha256": "03f9f6cc717be4e3fc8fefd3aa2dadf7b9240ff901cb48849dcaa8b7d6e39c12",
+      "original_local_path": "/tmp/git-zero-linux-benchmark/kernel-upstream-defaults.json",
+      "transformation": "none; exact original bytes",
+      "omitted_fields": []
+    },
+    {
+      "file": "decoder.json",
+      "bytes": 13041,
+      "sha256": "2d1b81663b83f355c1409e8137651b9ee9bfacb0b9ca6aa66bc91e8a08812e1f",
+      "original_local_path": "/tmp/git-zero-linux-benchmark/decoder.json",
+      "transformation": "none; exact original bytes",
+      "omitted_fields": []
+    },
+    {
+      "file": "summary.json",
+      "bytes": 5788,
+      "sha256": "db9ba956eee3c07710891280afceadb2e6c2e38d11b5052ec1b2fffccc218497",
+      "original_local_path": "/tmp/git-zero-linux-benchmark/summary.json",
+      "transformation": "none; exact original bytes",
+      "omitted_fields": []
+    },
+    {
+      "file": "environment.json",
+      "bytes": 774,
+      "sha256": "273bd7923a603d058023d49b7c318aaf41bb9a5394c74298bdcac721d1c8325c",
+      "original_local_path": "/tmp/git-zero-linux-benchmark/environment.json",
+      "transformation": "none; exact original bytes",
+      "omitted_fields": []
+    },
+    {
+      "file": "independent-validation-audit.json",
+      "bytes": 734,
+      "sha256": "bbe60828d557f17be13e1ed5ff42442b51d48fd2031048b09137076239dc88a4",
+      "original_local_path": "/tmp/git-zero-linux-benchmark/independent-validation-audit.json",
+      "transformation": "none; exact original bytes",
+      "omitted_fields": []
+    },
+    {
+      "file": "snapshot-provenance.json",
+      "bytes": 1547,
+      "sha256": "1ba517efcbe172e2fa1908d02fd0a995ab4e98cafd6cf37ff33dbdd23366c062",
+      "original_local_path": "/tmp/git-zero-linux-v612-zr591twy/snapshot-provenance.json",
+      "transformation": "none; exact original bytes",
+      "omitted_fields": []
+    },
+    {
+      "file": "paired-fixture-proof.json",
+      "bytes": 3635,
+      "sha256": "9fb393305c0c9a94fd1aa8fb402e7eda22fc9a66013a93189f9e409b06feb015",
+      "original_local_path": "/tmp/git-zero-linux-v612-zr591twy/paired-fixture-proof.json",
+      "transformation": "none; exact original bytes",
+      "omitted_fields": []
+    }
+  ],
+  "original_raw_bytes": 161957,
+  "metadata_review": {
+    "reviewed": "Host/platform/toolchain, fixture/ref/provenance, method/configuration, commands, local paths, samples, summaries and strings; credential-shaped keys/token/private-key/URL-userinfo scan.",
+    "credentials_found": false,
+    "redactions": [],
+    "retained_metadata": "Historical /tmp paths, loopback URLs, process IDs, host load, versions and source hashes remain original evidence, not portable links."
+  },
+  "external_assets": [
+    {
+      "role": "hosting experiment driver",
+      "historical_path": "/tmp/git-zero-linux-benchmark/run_kernel_benchmark.py",
+      "historical_sha256": "fd0dec58ebda1bab9fdff67546dbfad6f8d538658f8ae46cf4f7a481be1858ca",
+      "committed": false
+    },
+    {
+      "role": "decoder probe source",
+      "historical_path": "/tmp/git-zero-linux-decoder-probe/src/main.rs",
+      "historical_sha256": "4d571f4ae3f555ef87af1b956b71322976bf3e56cffd9b2bf4365d54686b255f",
+      "committed": false
+    },
+    {
+      "role": "decoder probe Cargo manifest",
+      "historical_path": "/tmp/git-zero-linux-decoder-probe/Cargo.toml",
+      "historical_sha256": "fe9a6a74b55aba194732e30c4d9d9e530cad88c16ba7a481fb2f5e140f905c19",
+      "committed": false
+    },
+    {
+      "role": "decoder probe lockfile",
+      "historical_path": "/tmp/git-zero-linux-decoder-probe/Cargo.lock",
+      "historical_sha256": "022cd9fbdd46e8582baf3cb08ccb061913a5c49c4526d961d8adcb9389a94986",
+      "committed": false
+    }
+  ],
+  "external_dataset": {
+    "repository_and_raw_object_bodies_committed": false,
+    "prepared_packs_and_checkouts_committed": false,
+    "original_full_manifests_committed": false,
+    "identity_in": "snapshot-provenance.json and paired-fixture-proof.json"
+  },
+  "reproduction": "Drivers/probe, built tools and multi-gigabyte dataset are not included; this evidence bundle is not a turnkey reproducer or committed automated test."
+}
