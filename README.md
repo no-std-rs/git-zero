@@ -9,9 +9,13 @@ The Rust core is `#![no_std]`, uses no `alloc`, and requires no allocator. Calle
 provide object data, scratch buffers, and I/O. Native networking uses `rustix`;
 the Cloudflare demo runs the same core as an allocator-free Wasm module.
 
-This is an initial working skeleton. It serves real Git clones and fetches, with
-a deliberately small protocol surface. See [ROADMAP.md](ROADMAP.md) for the
-remaining client, protocol, storage, and performance work.
+The read-only server supports real Git discovery, clone and incremental fetch
+over smart HTTP v0/v1/v2 and loose-object dumb HTTP, in SHA-1 and SHA-256.
+Selected fetches support shallow history and blob filters within caller-owned
+budgets. Completing native/Worker server parity is the current priority; the
+client provides a smaller set of fetch and decoding primitives.
+See the [server acceptance matrix](tests/server-acceptance.md) for tested
+combinations and gaps, and [ROADMAP.md](ROADMAP.md) for the remaining work.
 
 Development uses protected pull requests, parallel Git interoperability tests,
 and a basic Runnerless PR policy program. See [CONTRIBUTING.md](CONTRIBUTING.md)
@@ -44,7 +48,9 @@ for checks and repository connection requirements.
   tree order and links, commit parents, tag targets, and exact reachability from
   HEAD and independent refs. Symbolic ref chains and final peeled tags are supported.
 - Bounded multiple-want selection and packing of just the requested closures,
-  using caller-owned traversal arrays, scratch and a graph-read byte limit.
+  common-history exclusion, absolute/relative deepening and unshallowing, plus
+  `blob:none` and `blob:limit` filters, using caller-owned traversal arrays,
+  scratch and a graph-read byte limit.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
   and checksum-validates smart packs, fetches several tips with optional shallow
   negotiation, and fetches dumb loose objects.
@@ -54,19 +60,36 @@ for checks and repository connection requirements.
   reader with wire CRCs, canonical object IDs and bounded offset/reference deltas.
 - Complete pack materialization into caller-owned bodies and a sorted ID index,
   plus borrowed commit messages, tree entries and annotated-tag targets.
-- An optional `PackCache` interface with caller-owned storage and versioned keys.
+- Streaming pack and Git v2 index generation with caller-owned metadata, in both
+  object formats. Publishing packed dumb HTTP repositories remains planned.
+- Optional complete-HEAD and selected-pack caches, with versioned closure/format/
+  encoder keys, integrity checks, a caller-buffer cache, and a native disk backend
+  with atomic publication and cooperative per-key producer leases.
 - IPv4/IPv6 server listeners, an IPv4 client adapter and a Cloudflare Workers Wasm demo.
 - Native file-backed raw objects and verified prepacked responses, with positional
   reads and caller-owned scratch, using `rustix` without `std` or `alloc`.
+- Worker immutable inline/KV/R2 metadata snapshots, explicit public binding/header
+  selection, optional tree layout, and bounded canonical repository import.
 - Parallel interoperability tests mixing real Git and git-zero clients/servers.
 
-The client downloads wire objects: raw packs for smart HTTP and zlib objects for
-dumb HTTP. Hosts can decode them and materialize complete packs with shared core
-APIs; the kernel example uses these to expose cached snapshots and refs. A dumb
-repository walker and a native checkout writer remain work. Push, filter
-requests, protocol v2, and standalone `git://` transport
-remain future work. Shallow fetch is supported by the client; this library's
-server still serves complete selected packs.
+The client discovers and selects refs, downloads checksum-validated v0 smart
+packs or dumb loose objects, and supports shallow/multiple-tip requests. Shared
+core APIs decode objects, materialize complete non-thin packs and traverse
+checkout trees; the kernel example uses them to expose cached snapshots and refs.
+Complete pack materialization currently supports SHA-1; the entry reader also
+supports SHA-256 packs.
+A complete native clone/checkout writer, dumb repository walker, client filters,
+client protocol v1/v2, push and standalone `git://` transport remain planned.
+
+Server partial clones currently require `--no-checkout`: lazy retrieval of
+unadvertised promised objects is rejected by the advertised-ID want policy.
+Time/exclusion deepening and tree/sparse/combine filters remain unsupported.
+The native server uses blocking sockets and HTTP/1.0 close-delimited responses;
+TLS, chunked intake, keep-alive, configurable admission limits/timeouts and
+poll-based concurrency remain host work. The Worker has streamed responses and
+async snapshot persistence, but no complete-pack KV/R2 cache integration or
+deployed performance measurements. Server parity is still incomplete; further
+client and receive-pack work follows its completion gate.
 
 ## Object formats
 
@@ -260,8 +283,11 @@ on the facade or core. `git-zero-rustix` separately exposes `client`, `server`,
 `storage` and `cli`; all are enabled by default. The CLI requires all adapters
 and repository validation. The Worker example selects only `read` and `server`.
 
-All five public crates share a release version. See [RELEASING.md](RELEASING.md)
-for Runnerless release-please and crates.io publishing.
+All five public crates share a release version. Runnerless publishes verified
+GitHub Release assets to crates.io in dependency order. GitHub Actions prepares
+the packages and checksums without registry credentials; the publishing token
+and Production environment belong to Runnerless. Release versions come from
+`version.txt`, with tags named `vX.Y.Z`.
 
 ## Native demo
 
@@ -274,6 +300,8 @@ contents at `main/msg` and `main/tree/src/lib.rs`. Select `checkout` for HEAD's
 files at the mount root, or `ref=main` for a named branch. Both layouts support
 Git symlinks; ref selection and checkout traversal live in the shared crates.
 No userspace mount helper is needed.
+The example's HTTPS transport does not validate certificates, hostnames or server
+signatures; its README documents the current transport and kernel limits.
 
 Use Rust 1.85 or newer, Git with HTTP support, and Python 3 for tests.
 
@@ -368,6 +396,8 @@ let response = http::serve(&repository, Request {
     method: "GET",
     path: "info/refs", // Relative to the repository URL.
     query: Some("service=git-upload-pack"),
+    content_type: None,
+    git_protocol: None,
     body: &[],
 }, &mut output)?;
 // Host sends response.status, response.content_type, and output.as_bytes().
@@ -613,14 +643,16 @@ binary suffixes). Depth counts commits from every wanted tip, following the
 shortest merge path; annotated tags preserve their target's depth. Depth requests
 resend the bounded closure rather than trusting shallow haves. Responses update
 shallow/unshallow boundaries, including root commits exactly at the depth limit;
-`git fetch --depth=N` and `--unshallow` work with the same arrays and graph budget.
+`git fetch --depth=N`, `--deepen=N` and `--unshallow` work with the same arrays
+and graph budget. Relative deepening follows wanted-history semantics matching
+Git 2.55; versioned oracle tests retain Git 2.53's unrelated-branch difference.
 V0's initial shallow-list probe has no ACK/NAK; v2 uses a shallow-info section.
 
 Blob filters omit bodies of the selected size or larger and retain explicitly
 wanted blobs. Partial clones currently require `--no-checkout`: the advertised-ID
 want policy still rejects requests for unadvertised promised blobs, so lazy
-checkout retrieval remains deferred. Relative/time/exclusion deepening
-(`--deepen`, deepen-since/not), tree/sparse/combine filters, unknown/non-commit
+checkout retrieval remains deferred. Time/exclusion deepening
+(`deepen-since`/`deepen-not`), tree/sparse/combine filters, unknown/non-commit
 shallow IDs, malformed/duplicate options and exhausted budgets fail before
 output. Shallow probes also traverse within the graph budget; hosts must size
 control storage for their boundary packets. No history or filter state persists
@@ -631,7 +663,9 @@ methods and service/version selection, reject duplicate selectors and unsafe or
 malformed paths, and accept at most one leading slash. Native and Worker hosts
 decode gzip uploads with bounded output; native compressed plus expanded bytes
 must fit the caller's request storage, with a fixed 32 KiB stack history window.
-Chunked requests and incremental HTTP I/O remain planned.
+Requests accumulate within bounded storage before parsing. Pull-based response
+streaming is implemented; chunked request decoding, keep-alive and nonblocking
+native I/O remain planned.
 
 On a failed buffered upload, discard the complete failed body. A host can call
 `http::write_upload_error(error, output)` on an empty sink to produce a terminal
@@ -648,8 +682,12 @@ The legacy `http::serve`, `serve_with_scratch`, `serve_with_pack` and HEAD-key
 Complete-pack hooks still negotiate and frame sideband, but may resend common
 objects. Use `serve_with_selection` to omit them.
 Independent roots require selection; legacy upload-pack/cache paths return
-`Unsupported` before invoking pack/cache backends. Requested-closure cache keys
-and prepacked reuse remain roadmap work.
+`Unsupported` before invoking pack/cache backends. The separate
+`cache::selected` API already provides exact-closure keys, integrity checks and
+bounded stored-pack caching. Hosts must authorize and select before every cache
+lookup, including hits, and frame ACK/shallow/sideband output separately.
+Integrating these caches into HTTP hosts and reusing arbitrary matching
+prepacked closures remain roadmap work.
 
 For bodies that cannot fit in a borrowed slice, implement `Repository::object_info`,
 `read_object`, and `object_id`. `object_info` reports the kind and exact 64-bit body
@@ -689,9 +727,15 @@ scratch for streamed bodies; borrowed bodies still write directly.
 
 Use `pack::write` to stream directly to any `io::Write` implementation. Use
 `cache::write` with a `PackCache` and pack-sized scratch buffer to reuse generated
-packs. Cache hits do not need scratch space. Cache failures propagate. Async
-platform caches such as Workers KV/R2 can wrap the host boundary; none is required
-or configured in the demo yet.
+packs. Cache hits do not need scratch space. Cache failures propagate.
+For selected closures, `cache::selected::write` supports a caller-buffer
+`FixedCache` and the native `git_zero_rustix::cache::DiskCache`. The disk backend
+uses fixed resident buffers and atomic complete-file publication; optional
+`DiskCache::try_lease` guards coordinate cooperative producers, which recheck
+after acquisition. Hosts own private namespaces, disk quotas, retries/deadlines
+and crash cleanup. See the [native cache contract](crates/git-zero-rustix/README.md).
+Worker KV/R2 bindings persist immutable metadata snapshots; asynchronous
+complete-pack caching remains planned.
 
 Buffers are explicit limits. On capacity or protocol errors, discard partial
 output before sending a response. Hosts own authentication, HTTP framing,
@@ -701,11 +745,13 @@ upload-pack, as both supplied adapters do.
 ## Cloudflare Workers demo
 
 See [the demo README](examples/cloudflare-worker/README.md) for setup and its
-snapshot URL format. It exports all available `request.cf` properties, `cf-*`
-request headers, selected public environment variables, and a runtime descriptor
-as four JSON files in one root commit. Internal platform state unavailable to
-Workers cannot be exported. Environment bindings use an explicit allowlist
-because the runtime does not distinguish string variables from secrets.
+snapshot URL formats and resource limits. By default it exports serializable
+`request.cf` metadata, explicitly selected public headers (default: `cf-ray`),
+selected public string/JSON bindings, and a runtime descriptor as four JSON files
+in one parentless commit. Access credentials are excluded from captures.
+Bindings use an explicit allowlist because the runtime does not distinguish
+public variables from secrets. Optional tree captures put bounded encoded-key
+JSON files in category directories while retaining earlier flat snapshot IDs.
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -715,8 +761,35 @@ npm run dev
 ```
 
 Open the local Worker URL to obtain `clone_url`, then pass that URL to `git clone`.
-The URL contains the captured public metadata, so every request and isolate can
-reconstruct the same snapshot without a persistence service.
+By default the URL contains the captured public metadata. Optional KV/R2 storage
+awaits publication before returning a shorter immutable URL; expiry, missing
+records and integrity failures never recapture current metadata. Each streamed
+response owns its Wasm instance and snapshot across pulls and cancellation.
+Local tests enforce a 24-page linear-memory ceiling and no growth, including the
+raw repository ABI's 64 objects, eight refs and 128 KiB body arena. JavaScript,
+backend and whole-isolate memory are outside that Rust linear-memory bound.
+
+## Performance evidence
+
+The [benchmark guide](tests/README.md#performance-comparison) describes paired
+Git/git-zero HTTP and object-reading workloads, matched/default encoder policies,
+caller-repository inputs, resource caps and the limits of sampled process-tree
+RSS. The [historical Linux v6.12 report](tests/benchmarks/linux-v6.12-f71/README.md)
+preserves raw observations for a parentless snapshot with 91,865 objects and
+1.48 GB of raw object bodies, measured at revision `f71e266`.
+
+| Warm loopback clone profile | Git median | git-zero median |
+| --- | ---: | ---: |
+| Matched stored DEFLATE, no deltas | 15.67 s | 12.82 s |
+| Git defaults versus git-zero stored output | 27.57 s | 11.67 s |
+
+Each profile has three measured clones per server after a warmup. In the default
+comparison, git-zero transfers 5.50 times the HTTP body bytes. The report also
+separates download, indexing, checkout and verified decoder observations.
+These measurements use a historical buffered frontend and exclude Linux history;
+they do not measure current main, cold-cache, WAN or concurrent/deployed service
+performance. The report records tool identities, correctness checks, memory
+accounting and the external tools needed to reproduce the experiments.
 
 ## Validation
 
