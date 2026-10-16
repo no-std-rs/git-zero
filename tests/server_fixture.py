@@ -11,6 +11,12 @@ from interop import command, environment
 from upstream_http import git, object_manifest
 
 
+def symbolic_target(repo, name, env):
+    """Keep the immediate target for HEAD and refs, including symbolic chains."""
+    result = command("git", "-C", str(repo), "symbolic-ref", "-q", "--no-recurse", name, env=env)
+    return result.stdout.strip().decode() if result.returncode == 0 else ""
+
+
 def export_fixture(root, bare, env):
     """Freeze reachable objects, refs and HEAD without changing the Git source."""
     if root.resolve().is_relative_to(bare.resolve()):
@@ -30,14 +36,12 @@ def export_fixture(root, bare, env):
     refs = []
     for line in git(bare, "for-each-ref", "--format=%(refname)\t%(objectname)", env=env).splitlines():
         name, oid = line.decode().split("\t")
-        symbolic = command("git", "-C", str(bare), "symbolic-ref", "-q", "--no-recurse", name, env=env)
-        target = symbolic.stdout.strip().decode() if symbolic.returncode == 0 else "-"
+        target = symbolic_target(bare, name, env) or "-"
         kind, _ = manifest[oid.encode()]
         peeled = git(bare, "rev-parse", name + "^{}", env=env).strip().decode() if kind == b"tag" else "-"
         refs.append("\t".join((name, oid, target, peeled)))
     (root / "refs.txt").write_text("".join(row + "\n" for row in refs))
-    symbolic = command("git", "-C", str(bare), "symbolic-ref", "-q", "--no-recurse", "HEAD", env=env)
-    target = symbolic.stdout.strip().decode() if symbolic.returncode == 0 else ""
+    target = symbolic_target(bare, "HEAD", env)
     (root / "head.txt").write_text((head or "0" * (64 if object_format == "sha256" else 40)) + "\n" + target + "\n")
     (root / "format.txt").write_text(object_format)
     return manifest

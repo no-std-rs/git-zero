@@ -1,7 +1,7 @@
 # Cloudflare metadata as a Git repository
 
 This demo wraps git-zero's allocator-free Rust Wasm server in a JavaScript
-Cloudflare Worker. It serves a synthetic repository containing:
+Cloudflare Worker. By default it serves a synthetic repository containing:
 
 | File | Contents |
 | --- | --- |
@@ -39,7 +39,8 @@ and tests do not deploy anything.
 
 ## Immutable snapshot URLs
 
-`GET /` captures metadata once and returns `/r/<base64url-snapshot>/repo.git`.
+With the default flat layout, `GET /` captures metadata once and returns
+`/r/<base64url-snapshot>/repo.git`.
 The token contains the four UTF-8 JSON file contents. Every Git request rebuilds
 that exact snapshot, even in another isolate or after a retry. Neither discovery
 nor an object request captures new metadata. Visit `/` again for a fresh snapshot.
@@ -86,7 +87,8 @@ must remain available for existing links even after switching capture modes.
 
 Retention defaults to one day; `SNAPSHOT_TTL_SECONDS` accepts integer seconds
 from 60 through 31536000. KV writes set a TTL. R2 records enforce their expiry on
-read; configure a bucket lifecycle rule for the `snapshots/v1/` prefix to reclaim
+read; configure bucket lifecycle rules for `snapshots/v1/` and, when tree capture
+is enabled, `snapshots/v2/`, to reclaim
 expired data physically. Retention changes apply to newly captured snapshots.
 Keep retention long enough for discovery, clone/fetch, and retries to finish.
 An already prepared response remains valid if storage expires or is evicted
@@ -150,6 +152,62 @@ exceeding it returns 413. The existing 8 KiB serialized snapshot ceiling also
 applies. Capture errors use `Cache-Control: no-store`, return no clone URL and
 write no storage record. Reads never reapply the current selection to a stored
 or embedded snapshot, preserving earlier Git objects exactly.
+
+## Optional tree layout
+
+Set `SNAPSHOT_LAYOUT = "tree"` in the existing `[vars]` table to opt into tree
+captures. The default is `flat`. Both layouts use the same explicit public-header
+and binding selections above; Access credentials remain excluded. The JSON
+response lists the captured file paths and identifies the tree layout.
+
+Each nonempty category becomes a directory. For example, `request.cf.colo`
+appears as `cf/colo.json`, the selected `cf-ray` header as
+`headers/cf-ray.json`, and a selected `PUBLIC_JSON` binding as
+`vars/%50%55%42%4C%49%43_%4A%53%4F%4E.json`. A nested value remains one JSON file.
+Empty categories are omitted and represent empty objects; the runtime category is nonempty.
+This layout introduces no referenced empty-tree object, and its smart and dumb
+clones pass complete object checks without an assisted import.
+
+Keys use reversible UTF-8 percent encoding outside lowercase ASCII letters,
+digits, underscore and hyphen, followed by `.json`. Uppercase letters are escaped
+so case-distinct keys stay distinct on case-insensitive checkouts. Percent, dots
+and path separators are escaped, so names cannot collide with their encoded
+spellings or introduce path components. Reserved Windows device basenames escape
+their first byte too: `con` becomes `%63on.json`, distinct from a literal `%63on`
+key. Names must contain valid Unicode and
+encode to at most 255 bytes including the suffix. Tree capture supports at most 56 files, the existing
+8 KiB serialized metadata bound, and the raw ABI's 64 unique objects/128 KiB body
+arena. Capture validates the repository before writing storage or returning a
+URL; unsupported names or exhausted budgets return an error without truncation
+or fallback to another layout.
+
+All tree inputs, including externally supplied inline tokens and authenticated
+storage records, admit at most 1024 JSON values with 16 levels per file value
+before any pretty formatting. The 56-file and 8 KiB source limits are also
+checked first, bounding formatting work and preventing compact nested JSON
+from expanding beyond the host's admission budget before validation.
+
+Tree snapshots explicitly bind version 2, layout and SHA-1 format. Inline URLs
+are `/r/v2/<base64url-snapshot>/repo.git`; persisted URLs are
+`/s/v2/{kv|r2}/<sha256>/repo.git`, using `snapshots/v2/` storage keys. Their records
+retain the same awaited writes, expiry, digest checks and bounded reads as v1.
+Every response imports its own immutable repository through the raw ABI.
+
+Existing v1 inline/stored paths always retain the flat interpretation, their
+original record bytes and Git IDs, independently of the current layout setting.
+Changing capture layout also leaves existing tree URLs unchanged. Cross-version
+payloads and malformed stored records fail explicitly. Storage bindings for old
+URLs must remain configured; changing layout never recaptures metadata for a
+download. Tree construction and validation add preparation work; Rust's memory
+bound does not include JavaScript descriptors or backend allocations.
+
+`tree.test.mjs` compares deterministic IDs, bodies and encoded names with Git's
+independent `hash-object`, `mktree` and `commit-tree` constructors. Real Git
+v0/v1/v2/dumb clones and fetches in `tree-worker.test.mjs` compare all objects,
+refs, file bytes and strict fsck for inline, KV and R2 fixtures. Tests also cover
+schema confusion, old IDs, Access exclusion, pre-write limits, corruption,
+expiry, failed storage, delayed publication and concurrent captures. These are
+local Node/adapter tests, without a Cloudflare deployment claim.
 
 ## Deployment authentication
 

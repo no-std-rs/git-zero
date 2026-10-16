@@ -206,13 +206,17 @@ baseline without blocking server parity.
   Versioned SHA-256 URLs cover file contents and expiry; missing/expired/corrupt
   records fail explicitly and never recapture current metadata. Configurable
   retention, KV propagation limitations and R2 physical cleanup are documented.
-- [ ] Tree-shaped Cloudflare metadata and public binding projection, with deployment
+- [x] Tree-shaped Cloudflare metadata and public binding projection, with deployment
   authentication and explicit public variable selection.
   New flat captures now select public Cloudflare headers explicitly, exclude
   Access credentials, and copy only bounded plain-JSON values from explicitly
   named bindings. Real Git checks public objects over smart/dumb HTTP; existing
   snapshot URLs retain their IDs. Whole-Worker Access deployment policy and
-  service authentication are documented. The tree-shaped layout remains planned.
+  service authentication are documented. Explicit optional tree captures use
+  category directories and bounded encoded-key JSON files, versioned inline/KV/R2
+  records and the fixed raw import ABI. Default flat captures and all v1 IDs stay
+  compatible; independent Git constructors and smart/dumb clients verify the
+  tree layout. Deployment authentication remains host-owned and undeployed here.
 - [ ] Configurable retention, diagnostics, and CPU/memory measurements for Workers.
 
 Acceptance: native and Worker hosts share protocol behavior; overlapping requests
@@ -282,8 +286,11 @@ remain regression coverage; server completion is measured with real Git clients.
   V0 capability conflicts, ACK/have phases and sideband responses and v2 command
   framing, ls-refs/fetch, unsupported extensions and HTTP gzip envelopes have
   seeded mutations. Shallow/filter mutations now exercise selected synchronous
-  and pull responses, boundary framing, budgets and cancellation; concurrent
-  host state remains planned.
+  and pull responses, boundary framing, budgets and cancellation. Native header
+  intake now retains scan progress and validates metadata in one field pass,
+  with a 64 KiB one-byte-fragment work bound
+  and socket cases for malformed/truncated input, storage limits and reuse.
+  Continuous native framing and concurrent host-state campaigns remain planned.
 - [x] Allocation tracking for native file providers, repository validation, prepacked
   verification, and pack generation/serving.
 - [ ] Fixed-budget benchmarks and Wasm memory growth checks.

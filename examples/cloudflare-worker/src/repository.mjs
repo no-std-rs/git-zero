@@ -137,6 +137,18 @@ function failure(status, message) {
   return new Response(`${message}\n`, { status, headers: { "Cache-Control": "no-store" } });
 }
 
+export function repositoryResponse(module, repository, target, body, method, headers) {
+  const { exports } = new WebAssembly.Instance(module, {});
+  importRepository(exports, repository);
+  let length;
+  try { length = repositoryRequest(exports, target, body, headers); }
+  catch (error) {
+    if (error instanceof RepositoryError && error.status === 413) return failure(413, "Request exceeds Wasm capacity");
+    throw error;
+  }
+  return streamResponse(exports, exports.stream_start_repository(length, method === "POST" ? 1 : 0));
+}
+
 // The trusted async loader returns { repository, target }, or null for no route.
 // Authentication and the immutable repository URL policy belong to its host.
 export function createRepositoryWorker(module, loadRepository) {
@@ -152,10 +164,7 @@ export function createRepositoryWorker(module, loadRepository) {
       try { body = await readRequestBody(request, 32768); }
       catch { return failure(400, "Invalid or oversized request"); }
       try {
-        const { exports } = new WebAssembly.Instance(module, {});
-        importRepository(exports, selected.repository);
-        const length = repositoryRequest(exports, selected.target, body, request.headers);
-        return streamResponse(exports, exports.stream_start_repository(length, request.method === "POST" ? 1 : 0));
+        return repositoryResponse(module, selected.repository, selected.target, body, request.method, request.headers);
       } catch (error) {
         return failure(error instanceof RepositoryError ? error.status : 502, "Invalid or oversized repository");
       }

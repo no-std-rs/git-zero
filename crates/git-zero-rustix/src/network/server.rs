@@ -1,8 +1,5 @@
 //! Blocking HTTP server socket and request/response framing.
-use super::{
-    SOCKET_FLAGS, SocketWriter, close_on_exec, content_length, header_end, receive, socket,
-    timeouts,
-};
+use super::{SOCKET_FLAGS, SocketWriter, close_on_exec, receive, socket, timeouts};
 use core::{
     fmt::Write as _,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
@@ -16,6 +13,9 @@ use rustix::{
     fd::{AsFd, OwnedFd},
     net::{self, sockopt},
 };
+
+mod header;
+use header::{Headers, parse_request, read_header, request_line};
 
 pub fn listen(port: u16) -> Result<OwnedFd> {
     listen_on(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
@@ -63,13 +63,21 @@ pub fn accept(socket: &impl AsFd) -> Result<OwnedFd> {
 /// compressed wire bytes and a fixed 32 KiB stack history window. Compressed
 /// plus expanded bytes and headers must fit `storage`; chunked input is rejected.
 pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Request<'a>> {
-    let (end, mut length) = read_header(socket, storage)?;
-    let header = core::str::from_utf8(&storage[..end]).map_err(|_| Error::InvalidRequest)?;
-    let body_length = content_length(header)?.unwrap_or(0);
-    let total = end
-        .checked_add(body_length)
-        .filter(|&total| total <= storage.len())
-        .ok_or(Error::BufferTooSmall)?;
+    let (end, length) = read_header(socket, storage)?;
+    let (header, storage) = storage.split_at_mut(end);
+    let mut length = length - end;
+    let header = core::str::from_utf8(header).map_err(|_| Error::InvalidRequest)?;
+    let line = request_line(header)?;
+    let headers = Headers::parse(header)?;
+    let mut request = parse_request(line, &headers)?;
+    let total = headers
+        .content_length
+        .map(super::parse_length)
+        .transpose()?
+        .unwrap_or(0);
+    if total > storage.len() {
+        return Err(Error::BufferTooSmall);
+    }
     while length < total {
         let count = receive(socket, &mut storage[length..total])?;
         if count == 0 {
@@ -78,9 +86,8 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
         length += count;
     }
     let (wire, expanded) = storage.split_at_mut(total);
-    let mut request = parse_request(wire, end)?;
-    let header = core::str::from_utf8(&wire[..end]).map_err(|_| Error::InvalidRequest)?;
-    match header_value(header, "content-encoding")? {
+    request.body = wire;
+    match headers.content_encoding {
         None => {}
         Some(value) if value.eq_ignore_ascii_case("identity") => {}
         Some(value) if value.eq_ignore_ascii_case("gzip") => {
@@ -100,65 +107,6 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
         _ => return Err(Error::Unsupported),
     }
     Ok(request)
-}
-
-// Keep any body bytes received with the header for the subsequent bounded read.
-fn read_header(socket: &impl AsFd, storage: &mut [u8]) -> Result<(usize, usize)> {
-    let mut length = 0;
-    let end = loop {
-        if let Some(end) = header_end(&storage[..length]) {
-            break end;
-        }
-        if length == storage.len() {
-            return Err(Error::BufferTooSmall);
-        }
-        let count = receive(socket, &mut storage[length..])?;
-        if count == 0 {
-            return Err(Error::InvalidRequest);
-        }
-        length += count;
-    };
-    Ok((end, length))
-}
-
-// Parsing borrows only the complete request, after all socket reads have finished.
-fn parse_request(storage: &[u8], end: usize) -> Result<Request<'_>> {
-    let header = core::str::from_utf8(&storage[..end]).map_err(|_| Error::InvalidRequest)?;
-    let mut line = header
-        .lines()
-        .next()
-        .ok_or(Error::InvalidRequest)?
-        .split_ascii_whitespace();
-    let method = line.next().ok_or(Error::InvalidRequest)?;
-    let target = line.next().ok_or(Error::InvalidRequest)?;
-    if !matches!(line.next(), Some("HTTP/1.0" | "HTTP/1.1")) || line.next().is_some() {
-        return Err(Error::InvalidRequest);
-    }
-    let (path, query) = target
-        .split_once('?')
-        .map_or((target, None), |(path, query)| (path, Some(query)));
-    if !path.starts_with('/') || target.bytes().any(|b| b <= 32 || b == 127) {
-        return Err(Error::InvalidRequest);
-    }
-    Ok(Request {
-        content_type: header_value(header, "content-type")?,
-        git_protocol: header_value(header, "git-protocol")?,
-        method,
-        path,
-        query,
-        body: &storage[end..],
-    })
-}
-
-fn header_value<'a>(header: &'a str, key: &str) -> Result<Option<&'a str>> {
-    let mut result = None;
-    for line in header.split("\r\n").skip(1).filter(|line| !line.is_empty()) {
-        let (name, value) = line.split_once(':').ok_or(Error::InvalidRequest)?;
-        if name.eq_ignore_ascii_case(key) && result.replace(value.trim()).is_some() {
-            return Err(Error::InvalidRequest);
-        }
-    }
-    Ok(result)
 }
 
 pub fn respond(socket: &impl AsFd, response: Response, body: &[u8]) -> Result<()> {
@@ -249,37 +197,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn identity_coding_is_case_insensitive_and_preserves_git_metadata() {
-        for encoding in ["identity", "Identity", "IDENTITY", "iDeNtItY"] {
-            check_identity_coding(encoding);
-        }
-    }
-
-    fn check_identity_coding(encoding: &str) {
-        let (reader, writer) = net::socketpair(
-            net::AddressFamily::UNIX,
-            net::SocketType::STREAM,
-            SOCKET_FLAGS,
-            None,
-        )
-        .unwrap();
-        let wire = std::format!(
-            "POST /repo.git/git-upload-pack HTTP/1.1\r\nContent-Length: 4\r\nContent-Encoding: {encoding}\r\nContent-Type: application/x-git-upload-pack-request\r\nGit-Protocol: version=2\r\n\r\n0000"
-        );
-        SocketWriter(writer.as_fd())
-            .write_all(wire.as_bytes())
-            .unwrap();
-        let mut storage = [0; 1024];
-        let request = read_request(&reader, &mut storage).unwrap();
-        assert_eq!(request.body, b"0000");
-        assert_eq!(
-            request.content_type,
-            Some("application/x-git-upload-pack-request")
-        );
-        assert_eq!(request.git_protocol, Some("version=2"));
     }
 
     #[test]

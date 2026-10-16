@@ -4,7 +4,6 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 export const MAX_SNAPSHOT_BYTES = 8192;
 const MAX_RECORD_BYTES = MAX_SNAPSHOT_BYTES + 128;
-const PREFIX = "snapshots/v1/";
 
 export class SnapshotError extends Error {
   constructor(message, status) {
@@ -13,9 +12,13 @@ export class SnapshotError extends Error {
   }
 }
 
-export function decodeSnapshot(bytes) {
+export function decodeSnapshot(bytes, version = 1) {
   if (bytes.length > MAX_SNAPSHOT_BYTES) throw new Error("Snapshot exceeds 8 KiB");
-  const parts = JSON.parse(decoder.decode(bytes));
+  const payload = JSON.parse(decoder.decode(bytes));
+  let parts;
+  if (version === 1) parts = payload;
+  else if (version === 2 && payload?.version === 2 && payload.layout === "tree" && payload.format === "sha1") parts = payload.parts;
+  else throw new Error("Invalid snapshot version or layout");
   if (!Array.isArray(parts) || parts.length !== 4 || parts.some((part) => typeof part !== "string")) {
     throw new Error("Invalid snapshot data");
   }
@@ -35,7 +38,7 @@ async function digest(bytes) {
     .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function persistSnapshot(bytes, env) {
+export async function persistSnapshot(bytes, env, version = 1) {
   const backend = env.SNAPSHOT_STORAGE;
   const store = binding(env, backend);
   const ttl = Number(env.SNAPSHOT_TTL_SECONDS ?? 86400);
@@ -45,22 +48,24 @@ export async function persistSnapshot(bytes, env) {
   // The expiry is part of the immutable, authenticated record. Recreating the
   // same files later cannot revive an expired URL or replace its contents.
   const expiresAt = Math.floor(Date.now() / 1000) + ttl;
-  const record = encoder.encode(JSON.stringify({ version: 1, expiresAt, parts: decodeSnapshot(bytes) }));
+  const parts = decodeSnapshot(bytes, version);
+  const record = encoder.encode(JSON.stringify(version === 1 ? { version, expiresAt, parts }
+    : { version, expiresAt, layout: "tree", format: "sha1", parts }));
   const id = await digest(record);
   try {
-    if (backend === "kv") await store.put(`${PREFIX}${id}`, record.buffer, { expirationTtl: ttl });
-    else await store.put(`${PREFIX}${id}`, record, { sha256: id, httpMetadata: { contentType: "application/json" } });
+    if (backend === "kv") await store.put(`snapshots/v${version}/${id}`, record.buffer, { expirationTtl: ttl });
+    else await store.put(`snapshots/v${version}/${id}`, record, { sha256: id, httpMetadata: { contentType: "application/json" } });
   } catch {
     throw new SnapshotError("Snapshot storage is unavailable", 503);
   }
-  return { path: `/s/${backend}/${id}/repo.git`, expiresAt };
+  return { path: `/s/${version === 1 ? "" : "v2/"}${backend}/${id}/repo.git`, expiresAt };
 }
 
-export async function loadSnapshot(env, backend, id) {
+export async function loadSnapshot(env, backend, id, version = 1) {
   const store = binding(env, backend);
   let stored;
   try {
-    stored = await store.get(`${PREFIX}${id}`, ...(backend === "kv" ? ["stream"] : []));
+    stored = await store.get(`snapshots/v${version}/${id}`, ...(backend === "kv" ? ["stream"] : []));
   } catch {
     throw new SnapshotError("Snapshot storage is unavailable", 503);
   }
@@ -70,9 +75,11 @@ export async function loadSnapshot(env, backend, id) {
     const bytes = await readBytes(backend === "kv" ? stored : stored.body, MAX_RECORD_BYTES);
     if (await digest(bytes) !== id) throw new Error("Stored snapshot digest mismatch");
     record = JSON.parse(decoder.decode(bytes));
-    if (record.version !== 1 || !Number.isSafeInteger(record.expiresAt)) throw new Error("Invalid stored snapshot");
+    if (record.version !== version || !Number.isSafeInteger(record.expiresAt)) throw new Error("Invalid stored snapshot");
     // Reuse the inline format's schema and size limit after unwrapping storage.
-    record.parts = decodeSnapshot(encoder.encode(JSON.stringify(record.parts)));
+    record.parts = decodeSnapshot(encoder.encode(JSON.stringify(version === 1 ? record.parts : {
+      version: record.version, layout: record.layout, format: record.format, parts: record.parts,
+    })), version);
   } catch {
     throw new SnapshotError("Stored snapshot failed integrity validation", 502);
   }
