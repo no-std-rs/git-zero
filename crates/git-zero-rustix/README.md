@@ -22,7 +22,9 @@ content encodings are rejected. Chunked framing remains unsupported.
 Header delimiter scanning retains three overlap bytes between reads, so each
 possible four-byte delimiter position is examined at most once. Header and body
 bytes still share the caller's fixed request storage; fragmentation does not
-raise that limit. The `http_framing` socket tests cover binary bodies, malformed
+raise that limit. Metadata uses one UTF-8 check and one field pass, with HTTP
+token names, control-free values and space/tab padding. Request lines reject
+embedded CR/LF. The `http_framing` socket tests cover binary bodies, malformed
 requests, exact capacity and recovery with reused storage. Scan unit tests prove
 the work bound for one-byte fragments through a 64 KiB header.
 

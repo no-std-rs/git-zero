@@ -262,7 +262,8 @@ remain regression coverage; server completion is measured with real Git clients.
   framing, ls-refs/fetch, unsupported extensions and HTTP gzip envelopes have
   seeded mutations. Shallow/filter mutations now exercise selected synchronous
   and pull responses, boundary framing, budgets and cancellation. Native header
-  intake now retains scan progress, with a 64 KiB one-byte-fragment work bound
+  intake now retains scan progress and validates metadata in one field pass,
+  with a 64 KiB one-byte-fragment work bound
   and socket cases for malformed/truncated input, storage limits and reuse.
   Continuous native framing and concurrent host-state campaigns remain planned.
 - [x] Allocation tracking for native file providers, repository validation, prepacked

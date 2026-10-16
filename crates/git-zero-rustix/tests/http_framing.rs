@@ -56,6 +56,22 @@ fn fragmented_uploads_preserve_metadata_and_binary_body_bytes() {
 }
 
 #[test]
+fn field_tokens_and_space_tab_padding_preserve_metadata() {
+    let wire = b"POST /repo.git/git-upload-pack HTTP/1.1\r\nX!#$%&'*+-.^_`|~:\tvalue\t \r\nContent-Length:\t4 \t\r\nContent-Type: \tapplication/x-git-upload-pack-request \t\r\nGit-Protocol:\tversion=2\t \r\n\r\n0000";
+    let expected = Parsed {
+        method: "POST".into(),
+        path: "/repo.git/git-upload-pack".into(),
+        query: None,
+        content_type: Some("application/x-git-upload-pack-request".into()),
+        git_protocol: Some("version=2".into()),
+        body: b"0000".into(),
+    };
+    for width in [1, 7, wire.len()] {
+        assert_eq!(receive(wire, width, &mut [0xa5; 1024]).unwrap(), expected);
+    }
+}
+
+#[test]
 fn malformed_corpus_rejects_and_recovers_with_reused_caller_storage() {
     let cases: &[(&str, &[u8], Error)] = &[
         ("empty", b"", Error::InvalidRequest),
@@ -133,6 +149,61 @@ fn malformed_corpus_rejects_and_recovers_with_reused_caller_storage() {
             "invalid gzip",
             b"POST / HTTP/1.0\r\nContent-Length: 4\r\nContent-Encoding: gzip\r\n\r\nnope",
             Error::InvalidZlib,
+        ),
+        (
+            "LF in request line hides length",
+            b"POST /repo.git/git-upload-pack HTTP/1.1\nContent-Length: 999\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "CR in request line hides length",
+            b"POST /repo.git/git-upload-pack HTTP/1.1\rContent-Length: 999\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "space before colon",
+            b"POST / HTTP/1.0\r\nContent-Length : 0\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "empty field name",
+            b"GET / HTTP/1.0\r\n: value\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "control in field name",
+            b"GET / HTTP/1.0\r\nX\tName: value\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "NUL in field value",
+            b"GET / HTTP/1.0\r\nX: value\0\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "DEL in field value",
+            b"GET / HTTP/1.0\r\nX: value\x7f\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "Unicode leading length whitespace",
+            b"POST / HTTP/1.0\r\nContent-Length: \xc2\xa00\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "Unicode trailing length whitespace",
+            b"POST / HTTP/1.0\r\nContent-Length: 0\xe2\x80\x83\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "duplicate content type",
+            b"POST / HTTP/1.0\r\nContent-Type: text/plain\r\nContent-Type: text/plain\r\n\r\n",
+            Error::InvalidRequest,
+        ),
+        (
+            "duplicate content coding",
+            b"POST / HTTP/1.0\r\nContent-Encoding: identity\r\nContent-Encoding: identity\r\n\r\n",
+            Error::InvalidRequest,
         ),
     ];
     let body = b"0000\0\xff\r\n\r\nafter rejection";
