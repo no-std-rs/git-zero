@@ -5,7 +5,8 @@ object manifests and file descriptors.
 
 - `client`: blocking IPv4 HTTP/1.0 transport.
 - `server`: IPv4/IPv6 listeners, request parsing and response framing.
-- `storage`: immutable raw file objects and verified prepacked responses.
+- `storage`: immutable raw file objects, verified prepacked responses and a
+  selected-pack disk cache.
 - `cli`: the `git-zero` demonstration binary; enables all adapters and validation.
 
 All features are enabled by default. Disable defaults to select adapters.
@@ -33,6 +34,27 @@ close-delimited framing and caller-owned output staging. It writes all staged
 bytes before pulling again, cancels on errors, and requires the host to close the
 socket on return. It remains a blocking adapter; readiness polling, keep-alive,
 chunked input, TLS and HTTP/1.1 framing remain future work.
+
+With `storage`, `cache::DiskCache` implements the core selected-pack cache backend.
+The host retains a trusted directory descriptor, a fixed resident byte buffer
+and a producer nonce unique within that directory. Use it through
+`git_zero::cache::selected::write` after authorization, visible-ref/reachability
+checks and graph selection. Each lookup copies one regular file into resident
+storage; core validates its exact canonical object set and checksums before
+output. The resident capacity bounds disk reads and accepted pack size. Match
+it to the request's pack-byte limit. Cache files use the 48-byte selected key
+encoded as 96 hexadecimal characters plus `.pack`; HTTP pack/index publication
+uses the actual returned pack checksum separately.
+
+Insertions use exclusively created private staging files, complete writes,
+file synchronization and a final atomic same-directory rename. Failed insertion
+preserves published entries. Concurrent producers may repeat work; readers see
+one complete publication and retain independent resident bytes across replacement
+or eviction. A sink failure can leave a complete entry for a later retry.
+Disabled mode bypasses reads/inserts; explicit key eviction and saturating
+hit/miss/insertion/eviction counters expose backend activity. Hosts supply
+authorization namespace directories, total disk quotas, cold-miss coordination,
+stale staging-file cleanup after crashes and directory durability policy.
 
 `listen(port)` retains IPv4 loopback binding. `listen_on(SocketAddr)` binds an
 explicit numeric IPv4 or IPv6 address, and `local_address` reports the assigned

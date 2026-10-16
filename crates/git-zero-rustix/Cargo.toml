@@ -39,6 +39,10 @@ name = "storage"
 required-features = ["cli"]
 
 [[test]]
+name = "disk_cache"
+required-features = ["storage"]
+
+[[test]]
 name = "snapshot"
 required-features = ["cli"]
 
