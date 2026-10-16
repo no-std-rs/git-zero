@@ -249,7 +249,7 @@ impl Repository for FileRepository<'_> {
     }
 }
 
-fn file_size(fd: &impl AsFd) -> Result<u64> {
+pub(crate) fn file_size(fd: &impl AsFd) -> Result<u64> {
     let stat = fs::fstat(fd).map_err(|_| Error::Backend)?;
     if !FileType::from_raw_mode(stat.st_mode).is_file() {
         return Err(Error::InvalidObject);

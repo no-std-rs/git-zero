@@ -153,12 +153,16 @@ wrong methods/media types, truncated bodies, and exhausted request/output budget
   graph selection and shallow/ACK framing remain request-local before every hit.
 - [ ] Fixed-memory example cache, native disk cache, and async KV/R2 host adapters.
   A one-entry caller-buffer `FixedCache` supports disabled mode, capacity-safe
-  replacement, eviction and counters. Persistent and async adapters remain open.
+  replacement, eviction and counters. Native `git_zero_rustix::cache::DiskCache` adds
+  fixed-buffer regular-file reads and exclusively staged, atomically replaced
+  entries. Async complete-pack KV/R2 adapters remain open.
 - [ ] Cache integrity validation, eviction, cold-miss coordination, and observability.
   Selected stored packs are checked before hit output and miss insertion: pack
   framing/trailer, zlib/Adler32, canonical IDs and exact unique closure. Caller
-  byte/ID limits bound work and memory. Host cold-miss coordination, concurrent
-  publication, persistence and additional codecs still need integration tests.
+  byte/ID limits bound work and memory. Native persistent entries, concurrent
+  cold producers, reader isolation through eviction/replacement and failed
+  publication are allocation-tested. Host cold-miss coordination, async
+  publication and additional codecs still need integration tests.
 
 Acceptance: cache miss/hit/reuse paths produce equivalent objects; cache failures,
 corrupt entries, and concurrent writers have tested behavior.
