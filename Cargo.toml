@@ -49,6 +49,10 @@ name = "cache"
 required-features = ["read", "write"]
 
 [[test]]
+name = "selected_cache"
+required-features = ["write"]
+
+[[test]]
 name = "checkout"
 required-features = ["read"]
 

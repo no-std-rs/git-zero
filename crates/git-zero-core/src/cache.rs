@@ -4,6 +4,8 @@ use crate::{
     pack,
 };
 
+pub mod selected;
+
 /// Immutable complete packs, keyed by snapshot HEAD and encoder format.
 /// Backends own storage, eviction, concurrency and persistence. There is no
 /// allocation requirement. Async platform caches can use these keys outside Rust.
