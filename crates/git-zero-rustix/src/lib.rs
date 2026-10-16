@@ -1,4 +1,4 @@
-//! Allocation-free rustix file storage and blocking IPv4 HTTP/1.0 adapters.
+//! Allocation-free rustix file storage and blocking HTTP/1.0 adapters.
 #![no_std]
 #![forbid(unsafe_code)]
 
