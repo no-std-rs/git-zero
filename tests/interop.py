@@ -145,17 +145,19 @@ def reference_server(root, env, smart, requests=None):
 
 
 @contextlib.contextmanager
-def zero_server(binary, env):
+def zero_server(binary, env, address="0"):
     errors_path = Path(env["GIT_ZERO_TEST_LOG"]).with_name("server.log") if env.get("GIT_ZERO_TEST_LOG") else None
     with (open(errors_path, "w+b") if errors_path else tempfile.TemporaryFile()) as errors:
-        process = subprocess.Popen([binary, "serve", "0"], stdout=subprocess.PIPE, stderr=errors, env=env)
+        process = subprocess.Popen([binary, "serve", address], stdout=subprocess.PIPE, stderr=errors, env=env)
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 if not selector.select(timeout=15):
                     raise AssertionError("git-zero server did not report a bound port")
             url = process.stdout.readline().decode().strip()
-            if not url.startswith("http://127.0.0.1:"):
+            expected_host = "127.0.0.1" if address.isdigit() else urllib.parse.urlsplit(f"http://{address}").hostname
+            authority = f"[{expected_host}]" if ":" in expected_host else expected_host
+            if not url.startswith(f"http://{authority}:"):
                 errors.seek(0)
                 raise AssertionError(errors.read().decode())
             yield url
@@ -197,12 +199,16 @@ def case(name, binary, git="git", artifacts=None):
             from upstream_http import upstream_case
             return upstream_case(name, root, env, binary)
         client, server, protocol = name.split("-")
+        ipv6 = server == "zero6"
+        if ipv6:
+            server = "zero"
+            env = dict(env, NO_PROXY="::1", no_proxy="::1")
         smart = protocol == "smart"
         if server == "git":
             _, head = fixture(root, env)
             context = reference_server(root, env, smart)
         else:
-            context = zero_server(binary, env)
+            context = zero_server(binary, env, "[::1]:0" if ipv6 else "0")
             head = None
         with context as url:
             client_env = dict(env)
@@ -296,7 +302,7 @@ def main():
 
     matrix_cases = [f"{client}-{server}-{protocol}" for client in ("git", "zero")
                     for server in ("git", "zero") for protocol in ("smart", "dumb")]
-    all_cases = matrix_cases + upstream_cases
+    all_cases = matrix_cases + ["git-zero6-smart", "git-zero6-dumb"] + upstream_cases
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", default=str(Path(__file__).resolve().parents[1] / "target/debug/git-zero"))
     parser.add_argument("--git", default=os.environ.get("GIT_ZERO_TEST_GIT", "git"), help="Reference Git executable")

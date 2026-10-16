@@ -4,11 +4,11 @@ use git_zero::{
     http::{self, Response},
 };
 use git_zero_rustix::{
-    HttpTransport, accept, listen, local_port, read_request, respond, respond_stream,
+    HttpTransport, accept, listen_on, local_address, read_request, respond, respond_stream,
 };
 use std::{
     io::{self, Write as _},
-    net::SocketAddrV4,
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
 };
 
 fn main() {
@@ -21,24 +21,26 @@ fn main() {
 fn run() -> git_zero::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
-        Some("serve") => {
-            let port = args.get(2).map_or(Ok(8080), |port| {
-                port.parse().map_err(|_| Error::InvalidRequest)
-            })?;
-            serve(port)
-        }
+        Some("serve") => serve(listen_address(args.get(2).map_or("8080", String::as_str))?),
         Some("fetch") => fetch(args.get(2).ok_or(Error::InvalidRequest)?, false),
         Some("ls-remote") => fetch(args.get(2).ok_or(Error::InvalidRequest)?, true),
         _ => {
             eprintln!(
-                "Usage: git-zero serve [port] | ls-remote URL | fetch URL\nfetch writes a smart pack or a dumb loose HEAD object to stdout."
+                "Usage: git-zero serve [port|IP:port] | ls-remote URL | fetch URL\nIPv6 listen addresses use [IP]:port. fetch writes a smart pack or a dumb loose HEAD object to stdout."
             );
             Err(Error::InvalidRequest)
         }
     }
 }
 
-fn serve(port: u16) -> git_zero::Result<()> {
+fn listen_address(value: &str) -> git_zero::Result<SocketAddr> {
+    if let Ok(port) = value.parse() {
+        return Ok(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)));
+    }
+    value.parse().map_err(|_| Error::InvalidRequest)
+}
+
+fn serve(address: SocketAddr) -> git_zero::Result<()> {
     let files = [File {
         name: "README.md",
         contents: b"Hello from an allocation-free in-memory Git repository.\n",
@@ -55,9 +57,9 @@ fn serve(port: u16) -> git_zero::Result<()> {
         &mut [0; 128],
         &mut [0; 128],
     )?;
-    let listener = listen(port)?;
+    let listener = listen_on(address)?;
     // Port 0 is assigned by the OS and reported only after the socket is bound.
-    println!("http://127.0.0.1:{}/repo.git", local_port(&listener)?);
+    println!("http://{}/repo.git", local_address(&listener)?);
     io::stdout().flush().map_err(|_| Error::Backend)?;
     let mut request_storage = [0; 65536];
     let mut control = [0; 8192];
