@@ -29,7 +29,7 @@ Authentication, authorization and deployment policy belong to hosts.
    time/exclusion deepening, with real-Git checkout and history comparisons.
 2. Publish packed dumb HTTP repositories and integrate requested-closure caches
    into HTTP hosts, retaining immutable refs/pack/index consistency.
-3. Finish native admission limits, timeouts, HTTP framing and independent
+3. Finish native header policy, request deadlines, HTTP framing and independent
    connections; add the Worker preparation/storage boundary and host diagnostics.
 4. Close cross-host oracle, concurrency, fuzzing and resource-budget gaps, then
    evaluate the read-only completion gate. Compression and delta generation are
@@ -142,10 +142,13 @@ cooperative leases; live lock files retain identity until namespace quiescence.
 - [x] Fragmentation-safe bounded request storage, linear delimiter scanning,
   one-pass header metadata validation and gzip expansion into caller storage.
 - [x] Blocking HTTP/1.0 close-delimited pull responses and accepted-socket
-  send/receive timeouts, currently fixed at ten seconds.
-- [ ] Configurable wire/header/body and expanded-body admission limits independent
-  of physical buffer capacity; document inclusive boundaries and error precedence.
-- [ ] Configurable accepted-socket timeouts with unchanged defaults, plus explicit
+  send/receive timeouts, defaulting to ten seconds.
+- [x] Inclusive complete-wire and decoded-body admission quotas independent of
+  physical buffer capacity, with explicit error precedence and gzip integrity
+  checks. Unset quotas preserve the original bounded-storage API.
+- [x] Independent configurable accepted-socket read/write timeouts, including
+  disabled settings, unchanged defaults and accepted-descriptor failure cleanup.
+- [ ] Header-specific admission policy and CLI configuration, plus explicit
   request/idle deadlines where needed. Per-I/O timeouts are not total deadlines.
 - [ ] HTTP/1.1 framing, chunked intake, keep-alive and pipelined/leftover-byte
   handling with strict framing ambiguity rejection and cancellation tests.

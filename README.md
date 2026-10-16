@@ -85,8 +85,12 @@ Server partial clones currently require `--no-checkout`: lazy retrieval of
 unadvertised promised objects is rejected by the advertised-ID want policy.
 Time/exclusion deepening and tree/sparse/combine filters remain unsupported.
 The native server uses blocking sockets and HTTP/1.0 close-delimited responses;
-TLS, chunked intake, keep-alive, configurable admission limits/timeouts and
-poll-based concurrency remain host work. The Worker has streamed responses and
+Hosts can set inclusive complete-wire/decoded-body quotas and independent
+accepted-socket read/write timeouts; default quotas remain unset and timeouts
+remain ten seconds. TLS, chunked intake, keep-alive, request deadlines and
+poll-based concurrency remain host work. See the
+[native admission contract](crates/git-zero-rustix/README.md).
+The Worker has streamed responses and
 async snapshot persistence, but no complete-pack KV/R2 cache integration or
 deployed performance measurements. Server parity is still incomplete; further
 client and receive-pack work follows its completion gate.
