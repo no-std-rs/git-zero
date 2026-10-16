@@ -27,17 +27,26 @@ impl HeaderScan {
 }
 
 // Keep any body bytes received with the header for the subsequent bounded read.
-pub(super) fn read_header(socket: &impl AsFd, storage: &mut [u8]) -> Result<(usize, usize)> {
+pub(super) fn read_header(
+    socket: &impl AsFd,
+    storage: &mut [u8],
+    max_wire_bytes: Option<usize>,
+) -> Result<(usize, usize)> {
+    let capacity = max_wire_bytes.map_or(storage.len(), |limit| limit.min(storage.len()));
     let mut length = 0;
     let mut scan = HeaderScan::default();
     let end = loop {
         if let Some(end) = scan.end(&storage[..length]) {
             break end;
         }
-        if length == storage.len() {
-            return Err(Error::BufferTooSmall);
+        if length == capacity {
+            return Err(if max_wire_bytes == Some(length) {
+                Error::LimitExceeded
+            } else {
+                Error::BufferTooSmall
+            });
         }
-        let count = receive(socket, &mut storage[length..])?;
+        let count = receive(socket, &mut storage[length..capacity])?;
         if count == 0 {
             return Err(Error::InvalidRequest);
         }

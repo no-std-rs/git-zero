@@ -8,12 +8,16 @@ use git_zero::{
     http::{self, Response, SelectionStorage},
     io::SliceWriter,
 };
-use git_zero_rustix::{FileRepository, accept, listen, local_port, read_request, respond};
+use git_zero_rustix::{
+    AcceptedSocketTimeouts, FileRepository, RequestLimits, accept_with_timeouts, listen,
+    local_port, read_request_with_limits, respond,
+};
 use std::{
     net::TcpStream,
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    time::Duration,
 };
 
 use fixture::{Fixture, OBJECTS as OBJECT_CAPACITY};
@@ -70,6 +74,7 @@ fn serve<R: Repository + ?Sized>(
     repository: &ValidatedRepository<'_, '_, R>,
     listener: &impl rustix::fd::AsFd,
     stopped: &AtomicBool,
+    prepared: &AtomicUsize,
 ) {
     let mut request_storage = [0; 4096];
     let mut response_storage = [0; 8192];
@@ -88,11 +93,37 @@ fn serve<R: Repository + ?Sized>(
         graph_read_limit: 1_048_576,
     };
     loop {
-        let socket = accept(listener).unwrap();
+        let socket = allocations::without_allocations(|| {
+            accept_with_timeouts(
+                listener,
+                AcceptedSocketTimeouts {
+                    read: Some(Duration::from_secs(2)),
+                    write: Some(Duration::from_secs(2)),
+                },
+            )
+        })
+        .unwrap();
         if stopped.load(Ordering::SeqCst) {
             break;
         }
-        let mut request = read_request(&socket, &mut request_storage).unwrap();
+        let result = allocations::without_allocations(|| {
+            read_request_with_limits(
+                &socket,
+                &mut request_storage,
+                RequestLimits {
+                    max_wire_bytes: Some(4096),
+                    max_body_bytes: Some(2048),
+                },
+            )
+        });
+        let mut request = match result {
+            Ok(request) => request,
+            Err(error) => {
+                respond_failure(&socket, error, &mut response_storage);
+                continue;
+            }
+        };
+        prepared.fetch_add(1, Ordering::SeqCst);
         request.path = request.path.strip_prefix("/repo.git/").unwrap();
         let result = allocations::without_allocations(|| {
             http::stream::ResponseEncoder::with_selection(
@@ -165,12 +196,17 @@ fn compare_format(state: &str, object_format: &str) {
     let listener = listen(0).unwrap();
     let port = local_port(&listener).unwrap();
     let stopped = AtomicBool::new(false);
+    let prepared = AtomicUsize::new(0);
     std::thread::scope(|scope| {
-        scope.spawn(|| serve(&repository, &listener, &stopped));
+        scope.spawn(|| serve(&repository, &listener, &stopped, &prepared));
         let _stop = Stop {
             stopped: &stopped,
             port,
         };
+        // Declared over-quota bodies are rejected before protocol/repository
+        // preparation; the unchanged Git oracle then proves host recovery.
+        reject_admission(port);
+        assert_eq!(prepared.load(Ordering::SeqCst), 0);
         python(
             &root,
             "compare",
@@ -179,6 +215,23 @@ fn compare_format(state: &str, object_format: &str) {
             Some(&format!("http://127.0.0.1:{port}/repo.git")),
         );
     });
+}
+
+fn reject_admission(port: u16) {
+    use std::io::{Read, Write};
+    for length in [2049, 4096] {
+        let mut peer = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        write!(
+            peer,
+            "POST /repo.git/git-upload-pack HTTP/1.1\r\nContent-Length: {length}\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        peer.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.0 413 "), "{response}");
+        assert!(!response.contains("PACK"));
+    }
 }
 
 const EMPTY_BLOB_ID: &str = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";

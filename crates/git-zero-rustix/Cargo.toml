@@ -58,6 +58,10 @@ required-features = ["cli"]
 name = "http_framing"
 required-features = ["server"]
 
+[[test]]
+name = "admission"
+required-features = ["server"]
+
 [[example]]
 name = "benchmark-server"
 required-features = ["cli"]
