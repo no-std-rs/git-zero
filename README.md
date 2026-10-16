@@ -55,7 +55,7 @@ for checks and repository connection requirements.
 - Complete pack materialization into caller-owned bodies and a sorted ID index,
   plus borrowed commit messages, tree entries and annotated-tag targets.
 - An optional `PackCache` interface with caller-owned storage and versioned keys.
-- A loopback IPv4 server/client adapter and a Cloudflare Workers Wasm demo.
+- IPv4/IPv6 server listeners, an IPv4 client adapter and a Cloudflare Workers Wasm demo.
 - Native file-backed raw objects and verified prepacked responses, with positional
   reads and caller-owned scratch, using `rustix` without `std` or `alloc`.
 - Parallel interoperability tests mixing real Git and git-zero clients/servers.

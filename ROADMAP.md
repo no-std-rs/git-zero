@@ -173,6 +173,10 @@ baseline without blocking server parity.
 
 - [ ] Native IPv6/listener and TLS integration, HTTP/1.1 request/response framing,
   chunked transfer, keep-alive, timeouts, and configurable connection/body limits.
+  Explicit IPv4/IPv6 listeners and numeric CLI listen addresses now retain
+  close-on-exec and fixed ten-second accepted-socket timeouts. IPv6 sockets are
+  IPv6-only; real Git smart/dumb clone/fetch and extension checks run on `::1`.
+  TLS, HTTP/1.1 framing, chunking, keep-alive and configurable limits remain open.
 - [ ] Poll-based `rustix` server with independent per-connection caller-owned state.
 - [x] Streaming Wasm server ABI and host I/O callbacks without Rust allocation.
   The start/read/cancel ABI pins one immutable snapshot per instance and streams

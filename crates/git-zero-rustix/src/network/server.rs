@@ -5,7 +5,7 @@ use super::{
 };
 use core::{
     fmt::Write as _,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
 };
 use git_zero::{
     Error, Result,
@@ -18,19 +18,38 @@ use rustix::{
 };
 
 pub fn listen(port: u16) -> Result<OwnedFd> {
-    let socket = socket()?;
+    listen_on(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+}
+
+/// Bind an explicit numeric IPv4 or IPv6 address. IPv6 listeners accept only
+/// IPv6 connections; bind a separate IPv4 listener when both are required.
+/// Port zero is assigned by the OS and can be read with `local_address`.
+pub fn listen_on(address: SocketAddr) -> Result<OwnedFd> {
+    let family = if address.is_ipv4() {
+        net::AddressFamily::INET
+    } else {
+        net::AddressFamily::INET6
+    };
+    let socket = socket(family)?;
+    // OpenBSD IPv6 sockets are always IPv6-only and this option is read-only.
+    #[cfg(not(target_os = "openbsd"))]
+    if address.is_ipv6() {
+        sockopt::set_ipv6_v6only(&socket, true).map_err(|_| Error::Backend)?;
+    }
     sockopt::set_socket_reuseaddr(&socket, true).map_err(|_| Error::Backend)?;
-    net::bind(&socket, &SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
-        .map_err(|_| Error::Backend)?;
+    net::bind(&socket, &address).map_err(|_| Error::Backend)?;
     net::listen(&socket, 128).map_err(|_| Error::Backend)?;
     Ok(socket)
 }
 
 pub fn local_port(socket: &impl AsFd) -> Result<u16> {
+    Ok(local_address(socket)?.port())
+}
+
+/// Read the actual bound IP address, including an OS-assigned port.
+pub fn local_address(socket: &impl AsFd) -> Result<SocketAddr> {
     let address = net::getsockname(socket).map_err(|_| Error::Backend)?;
-    Ok(SocketAddrV4::try_from(address)
-        .map_err(|_| Error::Backend)?
-        .port())
+    SocketAddr::try_from(address).map_err(|_| Error::Backend)
 }
 
 pub fn accept(socket: &impl AsFd) -> Result<OwnedFd> {
@@ -194,6 +213,43 @@ pub fn respond_headers(socket: &impl AsFd, response: Response, body_length: u64)
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn explicit_ip_listeners_report_bound_addresses_and_isolate_ipv6() {
+        for value in ["127.0.0.1:0", "[::1]:0"] {
+            let address: SocketAddr = value.parse().unwrap();
+            let listener = listen_on(address).unwrap();
+            let bound = local_address(&listener).unwrap();
+            assert_eq!(bound.ip(), address.ip());
+            assert_ne!(bound.port(), 0);
+            assert_eq!(local_port(&listener).unwrap(), bound.port());
+            assert!(
+                rustix::io::fcntl_getfd(&listener)
+                    .unwrap()
+                    .contains(rustix::io::FdFlags::CLOEXEC)
+            );
+            let family = if address.is_ipv4() {
+                net::AddressFamily::INET
+            } else {
+                assert!(sockopt::ipv6_v6only(&listener).unwrap());
+                net::AddressFamily::INET6
+            };
+            let client = socket(family).unwrap();
+            net::connect(&client, &bound).unwrap();
+            let accepted = accept(&listener).unwrap();
+            assert!(
+                rustix::io::fcntl_getfd(&accepted)
+                    .unwrap()
+                    .contains(rustix::io::FdFlags::CLOEXEC)
+            );
+            for timeout in [sockopt::Timeout::Recv, sockopt::Timeout::Send] {
+                assert_eq!(
+                    sockopt::socket_timeout(&accepted, timeout).unwrap(),
+                    Some(core::time::Duration::from_secs(10))
+                );
+            }
+        }
+    }
 
     #[test]
     fn identity_coding_is_case_insensitive_and_preserves_git_metadata() {
