@@ -20,7 +20,7 @@ function filename(name) {
     byte >= 97 && byte <= 122 || byte >= 48 && byte <= 57 || byte === 45 || byte === 95
       ? String.fromCharCode(byte) : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`
   ).join("");
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(encoded)) {
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[0-9])$/.test(encoded)) {
     encoded = `%${bytes[0].toString(16).toUpperCase()}${encoded.slice(1)}`;
   }
   encoded += ".json";

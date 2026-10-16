@@ -45,12 +45,13 @@ test("case-distinct public names remain distinct under checkout case folding", a
 });
 
 test("reserved device names remain distinct from literal escape spellings", async () => {
-  const names = ["con", "prn", "aux", "nul", ...Array.from({ length: 9 }, (_, i) => `com${i + 1}`), ...Array.from({ length: 9 }, (_, i) => `lpt${i + 1}`)];
+  const names = ["con", "prn", "aux", "nul", ...Array.from({ length: 9 }, (_, i) => `com${i + 1}`), ...Array.from({ length: 10 }, (_, i) => `lpt${i}`)];
   const built = await treeRepository(parts({}, Object.fromEntries([...names, "%63on", "con.", "com¹"].map((name, i) => [name, i]))));
-  assert.ok(built.files.every((path) => !/\/(con|prn|aux|nul|com[1-9]|lpt[1-9])\.json$/i.test(path)));
+  assert.ok(built.files.every((path) => !/\/(con|prn|aux|nul|com[1-9]|lpt[0-9])\.json$/i.test(path)));
   assert.equal(new Set(built.files.map((path) => path.toLowerCase())).size, built.files.length);
   assert.ok(built.files.includes("vars/%63on.json"));
   assert.ok(built.files.includes("vars/%2563on.json"));
+  assert.ok(built.files.includes("vars/%6Cpt0.json"));
   importRepository(new WebAssembly.Instance(module, {}).exports, built.repository);
 });
 
