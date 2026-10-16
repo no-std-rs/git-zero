@@ -63,3 +63,21 @@ both families create separate listeners. Accepted sockets retain close-on-exec
 and the existing ten-second send/receive timeouts. The CLI accepts a port or a
 numeric address, for example `git-zero serve '[::1]:8080'`, and prints the bound
 URL. Its existing client transport still accepts IPv4 addresses only.
+
+On platforms with rustix `flock` support, `DiskCache::try_lease(key)` offers
+cooperative cold-miss coordination. Contended locks return `None` without waiting;
+disabled caches also return `None`. File operations remain synchronous. All
+producers in one namespace use the same lease
+protocol: authorize/select, try the lease, recheck the cache after acquisition,
+then generate only on a remaining miss. The host controls retries and deadlines;
+dropping the guard explicitly unlocks and closes its descriptor on cancellation
+or failure. Unrelated keys remain independent. Disabled caches create no lock
+files. Producers that skip this optional protocol retain atomic complete
+publication but may duplicate work.
+
+Lease files are empty regular files named with the same selected key plus
+`.lock`. They persist across pack eviction and producer exits. Hosts reclaim
+them only when all users of that namespace are quiescent; replacing a live lock
+file would split its identity. Advisory lock scope depends on the filesystem
+and mount configuration. Hosts account for lock files in directory quotas and
+provide a distributed coordinator when that is required.

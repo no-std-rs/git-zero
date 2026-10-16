@@ -161,8 +161,11 @@ wrong methods/media types, truncated bodies, and exhausted request/output budget
   framing/trailer, zlib/Adler32, canonical IDs and exact unique closure. Caller
   byte/ID limits bound work and memory. Native persistent entries, concurrent
   cold producers, reader isolation through eviction/replacement and failed
-  publication are allocation-tested. Host cold-miss coordination, async
-  publication and additional codecs still need integration tests.
+  publication are allocation-tested. Cooperative native cold producers can use
+  nonblocking per-key leases, recheck after acquisition and release on failure or
+  cancellation. Hosts retain retry/deadline policy, filesystem scope and lock-file
+  retention. Distributed coordination, async publication and additional codecs
+  still need integration tests.
 
 Acceptance: cache miss/hit/reuse paths produce equivalent objects; cache failures,
 corrupt entries, and concurrent writers have tested behavior.

@@ -16,6 +16,15 @@ use rustix::{
     io::{self, Errno},
 };
 
+#[cfg(not(any(
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "solaris",
+    target_os = "vita",
+    target_os = "wasi"
+)))]
+pub mod coordination;
+
 /// One bounded resident buffer backed by immutable cache files. Each `get`
 /// reloads its file so eviction and corrupt entries remain visible. The core
 /// selected writer validates every returned pack before output. Oversized files
