@@ -4,7 +4,7 @@ Allocation-free `no_std` rustix adapters for git-zero. The host owns buffers,
 object manifests and file descriptors.
 
 - `client`: blocking IPv4 HTTP/1.0 transport.
-- `server`: loopback listener, request parsing and response framing.
+- `server`: IPv4/IPv6 listeners, request parsing and response framing.
 - `storage`: immutable raw file objects and verified prepacked responses.
 - `cli`: the `git-zero` demonstration binary; enables all adapters and validation.
 
@@ -33,3 +33,11 @@ close-delimited framing and caller-owned output staging. It writes all staged
 bytes before pulling again, cancels on errors, and requires the host to close the
 socket on return. It remains a blocking adapter; readiness polling, keep-alive,
 chunked input, TLS and HTTP/1.1 framing remain future work.
+
+`listen(port)` retains IPv4 loopback binding. `listen_on(SocketAddr)` binds an
+explicit numeric IPv4 or IPv6 address, and `local_address` reports the assigned
+address when port zero is used. IPv6 sockets set `IPV6_V6ONLY`: hosts that need
+both families create separate listeners. Accepted sockets retain close-on-exec
+and the existing ten-second send/receive timeouts. The CLI accepts a port or a
+numeric address, for example `git-zero serve '[::1]:8080'`, and prints the bound
+URL. Its existing client transport still accepts IPv4 addresses only.

@@ -1,4 +1,4 @@
-//! Shared blocking IPv4 sockets and HTTP/1.0 framing primitives.
+//! Shared blocking IP sockets and HTTP/1.0 framing primitives.
 use core::time::Duration;
 use git_zero::{Error, Result, io::Write};
 use rustix::{
@@ -17,7 +17,8 @@ pub use client::HttpTransport;
 mod server;
 #[cfg(feature = "server")]
 pub use server::{
-    accept, listen, local_port, read_request, respond, respond_headers, respond_stream,
+    accept, listen, listen_on, local_address, local_port, read_request, respond, respond_headers,
+    respond_stream,
 };
 
 #[cfg(not(target_vendor = "apple"))]
@@ -33,9 +34,9 @@ fn close_on_exec(socket: OwnedFd) -> Result<OwnedFd> {
     Ok(socket)
 }
 
-fn socket() -> Result<OwnedFd> {
+fn socket(family: AddressFamily) -> Result<OwnedFd> {
     close_on_exec(
-        net::socket_with(AddressFamily::INET, SocketType::STREAM, SOCKET_FLAGS, None)
+        net::socket_with(family, SocketType::STREAM, SOCKET_FLAGS, None)
             .map_err(|_| Error::Backend)?,
     )
 }
