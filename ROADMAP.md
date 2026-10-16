@@ -203,13 +203,17 @@ baseline without blocking server parity.
   Versioned SHA-256 URLs cover file contents and expiry; missing/expired/corrupt
   records fail explicitly and never recapture current metadata. Configurable
   retention, KV propagation limitations and R2 physical cleanup are documented.
-- [ ] Tree-shaped Cloudflare metadata and public binding projection, with deployment
+- [x] Tree-shaped Cloudflare metadata and public binding projection, with deployment
   authentication and explicit public variable selection.
   New flat captures now select public Cloudflare headers explicitly, exclude
   Access credentials, and copy only bounded plain-JSON values from explicitly
   named bindings. Real Git checks public objects over smart/dumb HTTP; existing
   snapshot URLs retain their IDs. Whole-Worker Access deployment policy and
-  service authentication are documented. The tree-shaped layout remains planned.
+  service authentication are documented. Explicit optional tree captures use
+  category directories and bounded encoded-key JSON files, versioned inline/KV/R2
+  records and the fixed raw import ABI. Default flat captures and all v1 IDs stay
+  compatible; independent Git constructors and smart/dumb clients verify the
+  tree layout. Deployment authentication remains host-owned and undeployed here.
 - [ ] Configurable retention, diagnostics, and CPU/memory measurements for Workers.
 
 Acceptance: native and Worker hosts share protocol behavior; overlapping requests

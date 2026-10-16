@@ -24,7 +24,7 @@ function headers(request, env) {
 
 // Copy data properties into fresh JSON containers. Never invoke a binding's
 // toJSON method/getters or traverse host objects such as KV/R2/service bindings.
-class JsonProjection {
+export class JsonProjection {
   remaining = 1024;
   parents = new Set();
 
