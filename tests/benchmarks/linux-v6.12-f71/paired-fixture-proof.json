@@ -1,0 +1,83 @@
+{
+  "status": "PASS",
+  "same_canonical_snapshot_across_profiles": true,
+  "canonical_tree": "ac4266ccaf1cf79e8fb22ad3e0d86deac358ffb9",
+  "derived_parentless_head": "1ff1cd331ae747f4a992c1ead3760e8ac5697726",
+  "profiles": {
+    "matched": {
+      "path": "/tmp/git-zero-linux-v612-zr591twy/matched",
+      "objects": 91865,
+      "head": "1ff1cd331ae747f4a992c1ead3760e8ac5697726",
+      "raw_bytes": 1476536879,
+      "raw_sha256_read_back": "c0e87e3c21231e7684f499777c58e7ee1ea4e32ecae501a0ce531eca2979adb0",
+      "manifest_sha256": "cd10b5a09d2888259b478220e1d9a2876ba207e28a8e783f7a938799172cf433",
+      "canonical_body_manifest_sha256": "540223c1b53371a00db4665c9a4a8a1bc39f2f7582b3b931895d0895f8a1a695",
+      "loose_bytes": 1478565237,
+      "loose_sha256": "c100441ba160a912d0c84031233b8412b569dc70a13c1e3640721fd350cdf824",
+      "preparation": {
+        "driver_sha256": "a6f1c46b0bbd989b8e60cee0d0e2bee563d0e02c5593edcadfe7283bdd1329f5",
+        "git": "/tmp/git-zero-upstream-install-2.53.0/bin/git",
+        "source": "/tmp/git-zero-linux-v612-zr591twy/snapshot.git",
+        "head": "1ff1cd331ae747f4a992c1ead3760e8ac5697726",
+        "object_limit": 100000,
+        "raw_limit": 2147483648,
+        "batch_object_limit": 128,
+        "batch_byte_limit": 33554432,
+        "batches": 718,
+        "git_hash_processes": 1437,
+        "largest_batch_bytes": 25074339,
+        "largest_batch_objects": 128,
+        "source_body_hashes_verified": 91865,
+        "git_output_ids_and_order_verified": 91865,
+        "fsck_strict_pass": true,
+        "canonical_tree_equal": true,
+        "exact_object_inventory": true,
+        "standalone_nonshallow": true,
+        "no_benchmark_run": true
+      }
+    },
+    "upstream-defaults": {
+      "path": "/tmp/git-zero-linux-v612-zr591twy/upstream-defaults",
+      "objects": 91865,
+      "head": "1ff1cd331ae747f4a992c1ead3760e8ac5697726",
+      "raw_bytes": 1476536879,
+      "raw_sha256_read_back": "c0e87e3c21231e7684f499777c58e7ee1ea4e32ecae501a0ce531eca2979adb0",
+      "manifest_sha256": "cd10b5a09d2888259b478220e1d9a2876ba207e28a8e783f7a938799172cf433",
+      "canonical_body_manifest_sha256": "540223c1b53371a00db4665c9a4a8a1bc39f2f7582b3b931895d0895f8a1a695",
+      "loose_bytes": 324221657,
+      "loose_sha256": "048161a164dd46ee4e7928ca8017e43ca8cf20a3d712bcec4b8bacb8b35a5144",
+      "preparation": {
+        "driver_sha256": "a6f1c46b0bbd989b8e60cee0d0e2bee563d0e02c5593edcadfe7283bdd1329f5",
+        "git": "/tmp/git-zero-upstream-install-2.53.0/bin/git",
+        "source": "/tmp/git-zero-linux-v612-zr591twy/snapshot.git",
+        "head": "1ff1cd331ae747f4a992c1ead3760e8ac5697726",
+        "object_limit": 100000,
+        "raw_limit": 2147483648,
+        "batch_object_limit": 128,
+        "batch_byte_limit": 33554432,
+        "batches": 718,
+        "git_hash_processes": 1437,
+        "largest_batch_bytes": 25074339,
+        "largest_batch_objects": 128,
+        "source_body_hashes_verified": 91865,
+        "git_output_ids_and_order_verified": 91865,
+        "fsck_strict_pass": true,
+        "canonical_tree_equal": true,
+        "exact_object_inventory": true,
+        "standalone_nonshallow": true,
+        "no_benchmark_run": true
+      }
+    }
+  },
+  "tracked_entries": 86680,
+  "checkout_modes": {
+    "100644": 85601,
+    "120000": 62,
+    "100755": 1017
+  },
+  "max_path_bytes": 102,
+  "no_benchmark_run": true,
+  "driver_sha256": "a6f1c46b0bbd989b8e60cee0d0e2bee563d0e02c5593edcadfe7283bdd1329f5",
+  "import_proof": "/tmp/git-zero-kernel-batch-import-proof.json",
+  "small_oracle_proof": "/tmp/git-zero-kernel-batch-proof-1roh5bkg/proof.json"
+}

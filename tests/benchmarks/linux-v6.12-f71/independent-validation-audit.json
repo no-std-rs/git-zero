@@ -1,0 +1,25 @@
+{
+  "kind": "Read-only independent completeness audit; no timed jobs run",
+  "profiles": {
+    "matched": {
+      "clone_attempts_including_two_warmups": 8,
+      "phase_attempts": 4,
+      "complete_sampler_observations": 12,
+      "observer_cpu_s_max": 0.07515525199999606,
+      "max_gap_s": 0.051867043948732316
+    },
+    "upstream-defaults": {
+      "clone_attempts_including_two_warmups": 8,
+      "phase_attempts": 4,
+      "complete_sampler_observations": 12,
+      "observer_cpu_s_max": 0.16025934300000277,
+      "max_gap_s": 0.05195500701665878
+    }
+  },
+  "decoder": {
+    "samples_verified": 6,
+    "objects_each": 91865,
+    "canonical_raw_bytes_each": 1476536879,
+    "host_staging_and_result_caps_exact": true
+  }
+}

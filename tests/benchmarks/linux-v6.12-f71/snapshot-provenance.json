@@ -1,0 +1,42 @@
+{
+  "git_binary": "/tmp/git-zero-upstream-install-2.53.0/bin/git",
+  "git_version": "git version 2.53.0",
+  "tag_oid": "06090c9b622a7e1f797e775db4c035e0d779b76e",
+  "commit_oid": "adc218676eef25575469234709c2d87185ca223a",
+  "tree_oid": "ac4266ccaf1cf79e8fb22ad3e0d86deac358ffb9",
+  "is_shallow": "true",
+  "source": "official https://github.com/torvalds/linux.git tag refs/tags/v6.12",
+  "signature_policy": "Annotated tag content retained; signing key not fetched and signature authenticity not independently verified",
+  "snapshot_repository": "/tmp/git-zero-linux-v612-zr591twy/snapshot.git",
+  "derived_parentless_commit": "1ff1cd331ae747f4a992c1ead3760e8ac5697726",
+  "snapshot_tree": "ac4266ccaf1cf79e8fb22ad3e0d86deac358ffb9",
+  "snapshot_objects": 91865,
+  "snapshot_raw_bytes": 1476536879,
+  "standalone_nonshallow": true,
+  "no_alternates": true,
+  "only_reachable_objects": true,
+  "canonical_tree_equal": true,
+  "fsck_strict_pass": true,
+  "history_policy": "One explicitly derived parentless benchmark commit; full Linux history excluded",
+  "producer_command": [
+    "/tmp/git-zero-upstream-install-2.53.0/bin/git",
+    "-c",
+    "pack.threads=1",
+    "-C",
+    "/tmp/git-zero-linux-v612-zr591twy/upstream.git",
+    "pack-objects",
+    "--stdout",
+    "--revs",
+    "--threads=1",
+    "--compression=6"
+  ],
+  "consumer_command": [
+    "/tmp/git-zero-upstream-install-2.53.0/bin/git",
+    "-C",
+    "/tmp/git-zero-linux-v612-zr591twy/snapshot.git",
+    "index-pack",
+    "--stdin",
+    "--strict"
+  ],
+  "no_benchmark_run": true
+}

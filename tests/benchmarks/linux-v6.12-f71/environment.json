@@ -1,0 +1,47 @@
+{
+  "platform": "Linux-6.17.7-ba29.fc43.x86_64-x86_64-with-glibc2.42",
+  "cpu_models": [
+    "AMD Ryzen 9 7900 12-Core Processor"
+  ],
+  "meminfo": {
+    "MemTotal": "131020852 kB",
+    "MemAvailable": "92467620 kB",
+    "SwapTotal": "16777212 kB",
+    "SwapFree": "200 kB"
+  },
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23
+  ],
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "release_profile": {
+    "opt-level": "s",
+    "lto": true,
+    "codegen-units": 1,
+    "panic": "abort"
+  },
+  "decoder_shared_dependency_versions_and_checksums_match_main_lockfile": true
+}

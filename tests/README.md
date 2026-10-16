@@ -597,14 +597,27 @@ worktree metadata before enumeration or writes. CI runs all
 eight paired HTTP workloads plus both local-read workloads against a small
 packed caller fixture, checking
 its nested binary files, symlink, executable and external gitlink. These remain
-warm-server/cache measurements; kernel-scale preparation and controlled
-cold-cache runs remain roadmap work.
+warm-server/cache measurements. A separate historical kernel snapshot experiment
+is recorded below; full-history preparation and controlled cold-cache runs remain
+roadmap work.
 
 These are warm loopback measurements, with no cold-cache claim. Git-zero's raw
 fetch is still not compared with Git's full materialization. The caller-provided
-Linux kernel benchmark's remaining preparation work, additional server encoders
+Linux kernel benchmark's full-history follow-ups, additional server encoders
 and simultaneous process tree memory remain roadmap work. Wasm linear-memory
 budgets are checked separately by the Worker tests described below.
+
+### Historical Linux v6.12 snapshot experiment
+
+The [preserved benchmark note and raw observations](benchmarks/linux-v6.12-f71/README.md)
+record revision `f71e2669f3dbf381af785ac35d49ebbff708a001` serving the exact Linux
+v6.12 tree in a parentless snapshot: 91,865 objects and 1,476,536,879 raw bytes.
+Warm loopback clone, separate download/index/checkout and direct decoder
+experiments passed their recorded correctness checks. These are historical
+measurements, with an external uncommitted driver/probe and dataset, rather than
+a turnkey reproducer or current-revision performance gate. Full history,
+incremental fetch and cold-cache coverage remain open; the note explains the
+buffered frontend, memory observations and separate-phase limitations.
 
 ### Decoder and Git-default comparison
 
