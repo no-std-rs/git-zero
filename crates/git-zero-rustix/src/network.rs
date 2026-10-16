@@ -90,6 +90,7 @@ fn header_end(bytes: &[u8]) -> Option<usize> {
         .map(|index| index + 4)
 }
 
+#[cfg(feature = "client")]
 fn content_length(header: &str) -> Result<Option<usize>> {
     let mut result = None;
     for line in header.split("\r\n").skip(1) {
@@ -104,12 +105,15 @@ fn content_length(header: &str) -> Result<Option<usize>> {
             if result.is_some() {
                 return Err(Error::InvalidRequest);
             }
-            let value = value.trim();
-            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-                return Err(Error::InvalidRequest);
-            }
-            result = Some(value.parse().map_err(|_| Error::InvalidRequest)?);
+            result = Some(parse_length(value.trim())?);
         }
     }
     Ok(result)
+}
+
+fn parse_length(value: &str) -> Result<usize> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(Error::InvalidRequest);
+    }
+    value.parse().map_err(|_| Error::InvalidRequest)
 }
