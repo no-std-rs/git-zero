@@ -1,4 +1,5 @@
 import { MAX_SNAPSHOT_BYTES, SnapshotError } from "./snapshots.mjs";
+import { JsonProjection } from "./metadata.mjs";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -15,10 +16,14 @@ function concatenate(values) {
 function filename(name) {
   const bytes = encoder.encode(name);
   if (decoder.decode(bytes) !== name) throw new SnapshotError("Metadata names must be valid Unicode", 400);
-  const encoded = [...bytes].map((byte) =>
+  let encoded = [...bytes].map((byte) =>
     byte >= 97 && byte <= 122 || byte >= 48 && byte <= 57 || byte === 45 || byte === 95
       ? String.fromCharCode(byte) : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`
-  ).join("") + ".json";
+  ).join("");
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(encoded)) {
+    encoded = `%${bytes[0].toString(16).toUpperCase()}${encoded.slice(1)}`;
+  }
+  encoded += ".json";
   if (encoded.length > 255) throw new SnapshotError("Tree metadata filename exceeds 255 bytes", 413);
   return encoded;
 }
@@ -53,20 +58,26 @@ export async function treeRepository(parts) {
   if (!Array.isArray(parts) || parts.length !== 4 || parts.some((part) => typeof part !== "string")) {
     throw new SnapshotError("Invalid tree metadata", 400);
   }
-  if (encoder.encode(JSON.stringify(parts)).length > MAX_SNAPSHOT_BYTES) throw new SnapshotError("Metadata snapshot exceeds 8 KiB", 413);
+  if (parts.reduce((sum, part) => sum + part.length, 0) > MAX_SNAPSHOT_BYTES || encoder.encode(JSON.stringify(parts)).length > MAX_SNAPSHOT_BYTES) {
+    throw new SnapshotError("Metadata snapshot exceeds 8 KiB", 413);
+  }
+  const projection = new JsonProjection();
+  let count = 0;
   const categories = parts.map((part) => {
     let value;
     try { value = JSON.parse(part); }
     catch { throw new SnapshotError("Invalid tree metadata JSON", 400); }
     if (!value || Array.isArray(value) || typeof value !== "object") throw new SnapshotError("Tree metadata categories must be objects", 400);
-    return value;
+    const entries = Object.entries(value);
+    count += entries.length;
+    if (count > MAX_FILES) throw new SnapshotError("Tree metadata exceeds 56 files", 413);
+    return entries.map(([key, value]) => [key, projection.project(value, 400)]);
   });
   const objects = new Objects();
   const root = [], files = [];
   for (const [index, category] of categories.entries()) {
     const entries = [];
-    for (const [key, value] of Object.entries(category)) {
-      if (files.length === MAX_FILES) throw new SnapshotError("Tree metadata exceeds 56 files", 413);
+    for (const [key, value] of category) {
       const name = filename(key);
       const blob = await objects.add("blob", encoder.encode(JSON.stringify(value, null, 2) + "\n"));
       entries.push({ name, mode: "100644", digest: blob.digest });

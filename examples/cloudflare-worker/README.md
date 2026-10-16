@@ -172,12 +172,20 @@ Keys use reversible UTF-8 percent encoding outside lowercase ASCII letters,
 digits, underscore and hyphen, followed by `.json`. Uppercase letters are escaped
 so case-distinct keys stay distinct on case-insensitive checkouts. Percent, dots
 and path separators are escaped, so names cannot collide with their encoded
-spellings or introduce path components. Names must contain valid Unicode and
+spellings or introduce path components. Reserved Windows device basenames escape
+their first byte too: `con` becomes `%63on.json`, distinct from a literal `%63on`
+key. Names must contain valid Unicode and
 encode to at most 255 bytes including the suffix. Tree capture supports at most 56 files, the existing
 8 KiB serialized metadata bound, and the raw ABI's 64 unique objects/128 KiB body
 arena. Capture validates the repository before writing storage or returning a
 URL; unsupported names or exhausted budgets return an error without truncation
 or fallback to another layout.
+
+All tree inputs, including externally supplied inline tokens and authenticated
+storage records, admit at most 1024 JSON values with 16 levels per file value
+before any pretty formatting. The 56-file and 8 KiB source limits are also
+checked first, bounding formatting work and preventing compact nested JSON
+from expanding beyond the host's admission budget before validation.
 
 Tree snapshots explicitly bind version 2, layout and SHA-1 format. Inline URLs
 are `/r/v2/<base64url-snapshot>/repo.git`; persisted URLs are

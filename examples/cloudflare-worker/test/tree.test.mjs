@@ -44,6 +44,28 @@ test("case-distinct public names remain distinct under checkout case folding", a
   importRepository(new WebAssembly.Instance(module, {}).exports, built.repository);
 });
 
+test("reserved device names remain distinct from literal escape spellings", async () => {
+  const names = ["con", "prn", "aux", "nul", ...Array.from({ length: 9 }, (_, i) => `com${i + 1}`), ...Array.from({ length: 9 }, (_, i) => `lpt${i + 1}`)];
+  const built = await treeRepository(parts({}, Object.fromEntries([...names, "%63on", "con.", "com¹"].map((name, i) => [name, i]))));
+  assert.ok(built.files.every((path) => !/\/(con|prn|aux|nul|com[1-9]|lpt[1-9])\.json$/i.test(path)));
+  assert.equal(new Set(built.files.map((path) => path.toLowerCase())).size, built.files.length);
+  assert.ok(built.files.includes("vars/%63on.json"));
+  assert.ok(built.files.includes("vars/%2563on.json"));
+  importRepository(new WebAssembly.Instance(module, {}).exports, built.repository);
+});
+
+test("tree JSON projection bounds depth and values before formatting", async () => {
+  const input = (value) => ["{}", "{}", JSON.stringify({ nested: value }), "{}"];
+  const nested = (depth) => JSON.parse("[".repeat(depth) + "0" + "]".repeat(depth));
+  for (const value of [nested(16), Array(1023).fill(0)]) {
+    const built = await treeRepository(input(value));
+    importRepository(new WebAssembly.Instance(module, {}).exports, built.repository);
+  }
+  for (const value of [nested(17), Array(1024).fill(0)]) {
+    await assert.rejects(() => treeRepository(input(value)), (error) => error.status === 413);
+  }
+});
+
 test("tree metadata omits empty categories and deduplicates equal bodies", async () => {
   const built = await treeRepository(parts({}, { A: 2, B: 2 }));
   assert.ok(built.files.every((file) => !file.startsWith("cf/") && !file.startsWith("headers/")));

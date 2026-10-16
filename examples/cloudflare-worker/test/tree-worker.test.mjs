@@ -44,7 +44,7 @@ function fixture(backend = "inline") {
   };
   const env = { SNAPSHOT_LAYOUT: "tree", SNAPSHOT_STORAGE: backend,
     [backend === "kv" ? "SNAPSHOTS_KV" : "SNAPSHOTS_R2"]: store,
-    EXPOSED_VARS: "PUBLIC,PUBLIC_JSON,A,a", PUBLIC: "visible", PUBLIC_JSON: { enabled: true }, A: "uppercase", a: "lowercase", PRIVATE: credential };
+    EXPOSED_VARS: "PUBLIC,PUBLIC_JSON,A,a,con", PUBLIC: "visible", PUBLIC_JSON: { enabled: true }, A: "uppercase", a: "lowercase", con: "device name", PRIVATE: credential };
   const request = (origin) => {
     const result = new Request(origin + "/", { headers: { "cf-ray": "public-CDG", "cf-access-jwt-assertion": credential } });
     Object.defineProperty(result, "cf", { value: { colo: "CDG", nested: { rtt: 7 } } });
@@ -54,6 +54,7 @@ function fixture(backend = "inline") {
     ["cf/colo.json", json("CDG")], ["cf/nested.json", json({ rtt: 7 })], ["headers/cf-ray.json", json("public-CDG")],
     ["vars/%50%55%42%4C%49%43.json", json("visible")], ["vars/%50%55%42%4C%49%43_%4A%53%4F%4E.json", json({ enabled: true })],
     ["vars/%41.json", json("uppercase")], ["vars/a.json", json("lowercase")],
+    ["vars/%63on.json", json("device name")],
     ["runtime/platform.json", json("Cloudflare Workers")], ["runtime/format.json", json(2)],
     ["runtime/history.json", json("one root commit; no parents")], ["runtime/layout.json", json("tree")],
   ]);
@@ -126,6 +127,21 @@ test("oversized request frames retain 413 for inline, KV and R2 tree URLs", asyn
   }
 });
 
+test("compact inline tree JSON is rejected before amplified pretty formatting", async () => {
+  const parts = ['{"nested":' + "[".repeat(512) + "0" + "]".repeat(512) + "}", "{}", "{}", "{}"];
+  const payload = JSON.stringify({ version: 2, layout: "tree", format: "sha1", parts });
+  assert.ok(Buffer.byteLength(payload) < 8192);
+  const token = Buffer.from(payload).toString("base64url");
+  const stringify = JSON.stringify;
+  let formatted = 0;
+  JSON.stringify = (value, replacer, space) => { if (space === 2) formatted++; return stringify(value, replacer, space); };
+  try {
+    const response = await createWorker(module).fetch(new Request(`https://demo.example/r/v2/${token}/repo.git/HEAD`));
+    assert.equal(response.status, 413);
+    assert.equal(formatted, 0);
+  } finally { JSON.stringify = stringify; }
+});
+
 test("tree capture validates names, file count and public selections before storage writes", async () => {
   for (const change of [
     (env) => { env.EXPOSED_CF_HEADERS = "cf-access-jwt-assertion"; },
@@ -174,6 +190,7 @@ for (const backend of ["kv", "r2"]) {
       { ...record, version: 1 }, { ...record, layout: "flat" }, { ...record, format: "sha256" },
       { ...record, expiresAt: "later" }, { ...record, parts: ["a", "b", "c", "d"] },
       { ...record, parts: [json({ ["a".repeat(251)]: true }), ...record.parts.slice(1)] },
+      { ...record, parts: ['{"nested":' + "[".repeat(512) + "0" + "]".repeat(512) + "}", ...record.parts.slice(1)] },
     ]) {
       const invalidBytes = new TextEncoder().encode(JSON.stringify(invalid)), id = hash(invalidBytes);
       source.records.set(`snapshots/v2/${id}`, invalidBytes);
