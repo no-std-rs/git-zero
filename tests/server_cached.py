@@ -40,6 +40,8 @@ def verify(bare, clone, env):
     git(clone, "fsck", "--strict", env=env)
     expected = object_manifest(bare, "--all", env)
     assert object_manifest(clone, "--all", env) == expected
+    physical = {row.split()[0] for row in git(clone, "cat-file", "--batch-all-objects", "--batch-check", env=env).splitlines()}
+    assert physical == set(expected), "HTTP cache returned an unrelated object"
     head = git(bare, "rev-parse", "HEAD", env=env).strip().decode()
     assert git(clone, "rev-parse", "HEAD", env=env).strip().decode() == head
     verify_checkout(bare, clone, head, env)
