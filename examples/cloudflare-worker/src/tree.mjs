@@ -16,7 +16,7 @@ function filename(name) {
   const bytes = encoder.encode(name);
   if (decoder.decode(bytes) !== name) throw new SnapshotError("Metadata names must be valid Unicode", 400);
   const encoded = [...bytes].map((byte) =>
-    byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122 || byte >= 48 && byte <= 57 || byte === 45 || byte === 95
+    byte >= 97 && byte <= 122 || byte >= 48 && byte <= 57 || byte === 45 || byte === 95
       ? String.fromCharCode(byte) : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`
   ).join("") + ".json";
   if (encoded.length > 255) throw new SnapshotError("Tree metadata filename exceeds 255 bytes", 413);

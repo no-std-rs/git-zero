@@ -16,8 +16,8 @@ test("tree metadata IDs and encoded paths match Git's independent object constru
     json({ PUBLIC: [true, null], "%": 1, "/": 2, "..": 3, "café": 4, "": 5 }), json({ platform: "Cloudflare Workers", format: 2 })];
   const built = await treeRepository(value);
   const expected = new Map([
-    ["cf/colo.json", json("CDG")], ["cf/tlsClientAuth.json", json({ certPresented: "0" })],
-    ["headers/cf-ray.json", json("public-CDG")], ["vars/PUBLIC.json", json([true, null])],
+    ["cf/colo.json", json("CDG")], ["cf/tls%43lient%41uth.json", json({ certPresented: "0" })],
+    ["headers/cf-ray.json", json("public-CDG")], ["vars/%50%55%42%4C%49%43.json", json([true, null])],
     ["vars/%25.json", json(1)], ["vars/%2F.json", json(2)], ["vars/%2E%2E.json", json(3)],
     ["vars/caf%C3%A9.json", json(4)], ["vars/.json", json(5)],
     ["runtime/platform.json", json("Cloudflare Workers")], ["runtime/format.json", json(2)],
@@ -34,6 +34,14 @@ test("tree metadata IDs and encoded paths match Git's independent object constru
     assert.deepEqual(await treeRepository(value), built);
     importRepository(new WebAssembly.Instance(module, {}).exports, built.repository);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("case-distinct public names remain distinct under checkout case folding", async () => {
+  const built = await treeRepository(parts({}, { A: 1, a: 2, "%41": 3, "Ä": 4, "ä": 5 }));
+  assert.equal(new Set(built.files.map((name) => name.toLowerCase())).size, built.files.length);
+  assert.ok(built.files.includes("vars/%41.json"));
+  assert.ok(built.files.includes("vars/a.json"));
+  importRepository(new WebAssembly.Instance(module, {}).exports, built.repository);
 });
 
 test("tree metadata omits empty categories and deduplicates equal bodies", async () => {
@@ -54,6 +62,9 @@ test("tree metadata bounds files, encoded names, Unicode and serialized input", 
   const longest = await treeRepository(parts({ ["a".repeat(250)]: true }));
   assert.ok(longest.files.includes("cf/" + "a".repeat(250) + ".json"));
   importRepository(new WebAssembly.Instance(module, {}).exports, longest.repository);
+  const uppercase = await treeRepository(parts({ ["A".repeat(83) + "a"]: true }));
+  assert.ok(uppercase.files.includes("cf/" + "%41".repeat(83) + "a.json"));
+  await fail(parts({ ["A".repeat(84)]: true }), 413);
   await fail(parts({ [String.fromCharCode(0xd800)]: true }), 400);
   await fail(parts({ padding: "p".repeat(8192) }), 413);
   await fail([json([]), json({}), json({}), json({})], 400);

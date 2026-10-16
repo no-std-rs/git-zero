@@ -140,7 +140,12 @@ function failure(status, message) {
 export function repositoryResponse(module, repository, target, body, method, headers) {
   const { exports } = new WebAssembly.Instance(module, {});
   importRepository(exports, repository);
-  const length = repositoryRequest(exports, target, body, headers);
+  let length;
+  try { length = repositoryRequest(exports, target, body, headers); }
+  catch (error) {
+    if (error instanceof RepositoryError && error.status === 413) return failure(413, "Request exceeds Wasm capacity");
+    throw error;
+  }
   return streamResponse(exports, exports.stream_start_repository(length, method === "POST" ? 1 : 0));
 }
 

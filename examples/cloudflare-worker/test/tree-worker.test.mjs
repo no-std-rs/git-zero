@@ -44,7 +44,7 @@ function fixture(backend = "inline") {
   };
   const env = { SNAPSHOT_LAYOUT: "tree", SNAPSHOT_STORAGE: backend,
     [backend === "kv" ? "SNAPSHOTS_KV" : "SNAPSHOTS_R2"]: store,
-    EXPOSED_VARS: "PUBLIC,PUBLIC_JSON", PUBLIC: "visible", PUBLIC_JSON: { enabled: true }, PRIVATE: credential };
+    EXPOSED_VARS: "PUBLIC,PUBLIC_JSON,A,a", PUBLIC: "visible", PUBLIC_JSON: { enabled: true }, A: "uppercase", a: "lowercase", PRIVATE: credential };
   const request = (origin) => {
     const result = new Request(origin + "/", { headers: { "cf-ray": "public-CDG", "cf-access-jwt-assertion": credential } });
     Object.defineProperty(result, "cf", { value: { colo: "CDG", nested: { rtt: 7 } } });
@@ -52,7 +52,8 @@ function fixture(backend = "inline") {
   };
   const files = new Map([
     ["cf/colo.json", json("CDG")], ["cf/nested.json", json({ rtt: 7 })], ["headers/cf-ray.json", json("public-CDG")],
-    ["vars/PUBLIC.json", json("visible")], ["vars/PUBLIC_JSON.json", json({ enabled: true })],
+    ["vars/%50%55%42%4C%49%43.json", json("visible")], ["vars/%50%55%42%4C%49%43_%4A%53%4F%4E.json", json({ enabled: true })],
+    ["vars/%41.json", json("uppercase")], ["vars/a.json", json("lowercase")],
     ["runtime/platform.json", json("Cloudflare Workers")], ["runtime/format.json", json(2)],
     ["runtime/history.json", json("one root commit; no parents")], ["runtime/layout.json", json("tree")],
   ]);
@@ -107,6 +108,23 @@ for (const backend of ["inline", "kv", "r2"]) {
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 }
+
+test("oversized request frames retain 413 for inline, KV and R2 tree URLs", async () => {
+  for (const backend of ["inline", "kv", "r2"]) {
+    const source = fixture(backend), handler = createWorker(module);
+    const snapshot = await (await handler.fetch(source.request("https://demo.example"), source.env)).json();
+    for (const [path, options] of [
+      ["/HEAD?padding=" + "x".repeat(65536), {}],
+      ["/HEAD", { headers: { "git-protocol": "x".repeat(65536) } }],
+      ["/git-upload-pack?padding=" + "x".repeat(32768), { method: "POST", body: "x".repeat(32768), headers: { "Content-Type": "application/x-git-upload-pack-request" } }],
+    ]) {
+      const response = await handler.fetch(new Request(snapshot.clone_url + path, options), source.env);
+      assert.equal(response.status, 413, backend);
+      assert.equal(response.headers.get("Retry-After"), null);
+      assert.equal(await (await handler.fetch(new Request(snapshot.clone_url + "/HEAD"), source.env)).text(), "ref: refs/heads/main\n");
+    }
+  }
+});
 
 test("tree capture validates names, file count and public selections before storage writes", async () => {
   for (const change of [

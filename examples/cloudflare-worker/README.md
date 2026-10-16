@@ -163,16 +163,17 @@ response lists the captured file paths and identifies the tree layout.
 Each nonempty category becomes a directory. For example, `request.cf.colo`
 appears as `cf/colo.json`, the selected `cf-ray` header as
 `headers/cf-ray.json`, and a selected `PUBLIC_JSON` binding as
-`vars/PUBLIC_JSON.json`. A nested value remains one JSON file. Empty categories
-are omitted and represent empty objects; the runtime category is nonempty.
+`vars/%50%55%42%4C%49%43_%4A%53%4F%4E.json`. A nested value remains one JSON file.
+Empty categories are omitted and represent empty objects; the runtime category is nonempty.
 This layout introduces no referenced empty-tree object, and its smart and dumb
 clones pass complete object checks without an assisted import.
 
-Keys use reversible UTF-8 percent encoding outside ASCII letters, digits,
-underscore and hyphen, followed by `.json`. Percent, dots and path separators
-are escaped, so names cannot collide with their encoded spellings or introduce
-path components. Names must contain valid Unicode and encode to at most 255
-bytes including the suffix. Tree capture supports at most 56 files, the existing
+Keys use reversible UTF-8 percent encoding outside lowercase ASCII letters,
+digits, underscore and hyphen, followed by `.json`. Uppercase letters are escaped
+so case-distinct keys stay distinct on case-insensitive checkouts. Percent, dots
+and path separators are escaped, so names cannot collide with their encoded
+spellings or introduce path components. Names must contain valid Unicode and
+encode to at most 255 bytes including the suffix. Tree capture supports at most 56 files, the existing
 8 KiB serialized metadata bound, and the raw ABI's 64 unique objects/128 KiB body
 arena. Capture validates the repository before writing storage or returning a
 URL; unsupported names or exhausted budgets return an error without truncation
