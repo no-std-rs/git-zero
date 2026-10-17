@@ -105,7 +105,7 @@ fn zero_timeouts_reject_before_consuming_queued_connections() {
 
 // A broken timeout implementation must release the blocking operation and join
 // rather than hang the suite. The assertion distinguishes timeout from that EOF.
-fn bounded_io<T>(peer: TcpStream, operation: impl FnOnce() -> T) -> T {
+fn assert_timeout(peer: TcpStream, operation: impl FnOnce() -> Result<(), Error>) {
     let (done, wait) = mpsc::channel();
     let task = thread::spawn(move || {
         if wait.recv_timeout(Duration::from_secs(3)).is_err() {
@@ -121,7 +121,7 @@ fn bounded_io<T>(peer: TcpStream, operation: impl FnOnce() -> T) -> T {
         !task.join().unwrap(),
         "outer watchdog interrupted unbounded I/O"
     );
-    result
+    assert_eq!(result, Err(Error::Backend));
 }
 
 #[test]
@@ -141,13 +141,12 @@ fn incomplete_request_stalls_return_backend_under_the_child_read_timeout() {
             },
         )
         .unwrap();
-        let result = bounded_io(peer, || {
+        assert_timeout(peer, || {
             without_allocations(|| {
                 read_request_with_limits(&child, &mut [0; 256], RequestLimits::default())
                     .map(|_| ())
             })
         });
-        assert_eq!(result, Err(Error::Backend));
     }
 }
 
@@ -183,10 +182,9 @@ fn write_backpressure_times_out_and_cancels_the_stream() {
         body: &[],
     };
     let mut encoder = ResponseEncoder::new(&repository, request, &mut []).unwrap();
-    let result = bounded_io(peer, || {
+    assert_timeout(peer, || {
         without_allocations(|| respond_stream(&child, &repository, &mut encoder, &mut [0; 1024]))
     });
-    assert_eq!(result, Err(Error::Backend));
     assert_eq!(
         encoder.read(&repository, &mut [0; 8]),
         Err(Error::InvalidRequest)

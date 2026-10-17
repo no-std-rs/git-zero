@@ -28,6 +28,63 @@ pub struct RequestLimits {
     pub max_body_bytes: Option<usize>,
 }
 
+impl RequestLimits {
+    // Header intake proves header <= max_wire_bytes when that policy is set.
+    // Check both known quotas before the separate physical body reservation.
+    fn check_declared(self, header: usize, body: usize, encoding: Encoding) -> Result<()> {
+        let quotas = [
+            self.max_wire_bytes.map(|limit| limit - header),
+            self.max_body_bytes
+                .filter(|_| encoding == Encoding::Identity),
+        ];
+        if quotas.into_iter().flatten().any(|limit| body > limit) {
+            Err(Error::LimitExceeded)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+// Streaming intake/output reaches the first capacity boundary. Policy wins a
+// tie; this deliberately differs from checking a fully known declared size.
+struct Capacity {
+    bytes: usize,
+    error: Error,
+}
+
+impl Capacity {
+    fn new(physical: usize, policy: Option<usize>) -> Self {
+        match policy {
+            Some(bytes) if bytes <= physical => Self {
+                bytes,
+                error: Error::LimitExceeded,
+            },
+            _ => Self {
+                bytes: physical,
+                error: Error::BufferTooSmall,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Encoding {
+    Identity,
+    Gzip,
+    Unsupported,
+}
+
+impl Encoding {
+    fn classify(value: Option<&str>) -> Self {
+        match value {
+            None => Self::Identity,
+            Some(value) if value.eq_ignore_ascii_case("identity") => Self::Identity,
+            Some(value) if value.eq_ignore_ascii_case("gzip") => Self::Gzip,
+            _ => Self::Unsupported,
+        }
+    }
+}
+
 /// Per-blocking-call timeouts applied only to the accepted socket. These do not
 /// bound accept, a complete request, or a complete response. `None` disables the
 /// corresponding timeout; zero durations are invalid. The OS may round values.
@@ -144,17 +201,8 @@ pub fn read_request_with_limits<'a>(
         .map(super::parse_length)
         .transpose()?
         .unwrap_or(0);
-    // Header intake already guarantees end <= an explicit wire quota.
-    if limits
-        .max_wire_bytes
-        .is_some_and(|limit| total > limit - end)
-        || (limits.max_body_bytes.is_some_and(|limit| total > limit)
-            && headers
-                .content_encoding
-                .is_none_or(|value| value.eq_ignore_ascii_case("identity")))
-    {
-        return Err(Error::LimitExceeded);
-    }
+    let encoding = Encoding::classify(headers.content_encoding);
+    limits.check_declared(end, total, encoding)?;
     if total > storage.len() {
         return Err(Error::BufferTooSmall);
     }
@@ -167,20 +215,17 @@ pub fn read_request_with_limits<'a>(
     }
     let (wire, expanded) = storage.split_at_mut(total);
     request.body = wire;
-    match headers.content_encoding {
-        None => {}
-        Some(value) if value.eq_ignore_ascii_case("identity") => {}
-        Some(value) if value.eq_ignore_ascii_case("gzip") => {
+    match encoding {
+        Encoding::Identity => {}
+        Encoding::Gzip => {
             use git_zero::zlib::{InflateLimits, WINDOW_SIZE, decode_gzip};
+            let capacity = Capacity::new(expanded.len(), limits.max_body_bytes);
             let length = decode_gzip(
                 request.body,
                 expanded,
                 &mut [0; WINDOW_SIZE],
                 InflateLimits {
-                    max_output: limits
-                        .max_body_bytes
-                        .map_or(expanded.len(), |limit| limit.min(expanded.len()))
-                        as u64,
+                    max_output: capacity.bytes as u64,
                     max_ratio: 128,
                     ratio_slack: expanded.len() as u64,
                 },
@@ -188,19 +233,15 @@ pub fn read_request_with_limits<'a>(
             .map_err(|error| {
                 // decode_gzip's only BufferTooSmall path is incomplete output.
                 // Input exhaustion is InvalidZlib because input is complete.
-                if error == Error::BufferTooSmall
-                    && limits
-                        .max_body_bytes
-                        .is_some_and(|limit| limit <= expanded.len())
-                {
-                    Error::LimitExceeded
+                if error == Error::BufferTooSmall {
+                    capacity.error
                 } else {
                     error
                 }
             })?;
             request.body = &expanded[..length];
         }
-        _ => return Err(Error::Unsupported),
+        Encoding::Unsupported => return Err(Error::Unsupported),
     }
     Ok(request)
 }
