@@ -8,9 +8,10 @@
 //! same persist-dir, then run verify_after_workerd_restart as separate commands.
 use git_zero_host::{
     Repository,
-    accounting::ServiceUsage,
+    accounting::{OperationUsage, ServiceUsage},
     cloudflare::HttpServices,
     hash,
+    http::Request,
     native::{NativeHost, command},
     storage::{BlobStore, DurableStateStore, Manifest, R2BlobStore, StateStore},
 };
@@ -82,6 +83,163 @@ fn restart_fixture() -> RealWorker {
 
 fn restart_marker(worker: &RealWorker) -> PathBuf {
     std::env::temp_dir().join(format!("git-zero-worker-restart-{}.json", worker.namespace))
+}
+
+fn packet(payload: &str) -> Vec<u8> {
+    format!("{:04x}{payload}", payload.len() + 4).into_bytes()
+}
+
+fn rpc(service: &str, body: Vec<u8>) -> Request {
+    Request {
+        method: "POST".into(),
+        target: format!("/repo.git/git-{service}-pack"),
+        headers: BTreeMap::from([(
+            "content-type".into(),
+            format!("application/x-git-{service}-pack-request"),
+        )]),
+        body,
+    }
+}
+
+fn operation(usage: &ServiceUsage, name: &str) -> OperationUsage {
+    usage.operations.get(name).cloned().unwrap_or_default()
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_native_bundle_uses_one_put_and_survives_restart_and_fetch() {
+    let worker = RealWorker::new("bundle");
+    let services = worker.services();
+    let directory = Directory(std::env::temp_dir().join(&worker.namespace));
+    let source = directory.0.join("source.git");
+    fs::create_dir_all(&source).unwrap();
+    git(
+        &source,
+        &["init", "--bare", "--quiet", "--object-format=sha1"],
+        &[],
+    );
+    let data = b"a small native pack and its index share one immutable R2 object\n";
+    let object_id = String::from_utf8(git(&source, &["hash-object", "-w", "--stdin"], data))
+        .unwrap()
+        .trim()
+        .to_string();
+    let packed = git(
+        &source,
+        &["pack-objects", "--stdout"],
+        format!("{object_id}\n").as_bytes(),
+    );
+    let mut body = packet(&format!(
+        "0000000000000000000000000000000000000000 {object_id} refs/tags/bundle-fixture\0report-status atomic\n"
+    ));
+    body.extend_from_slice(b"0000");
+    body.extend_from_slice(&packed);
+    let root = directory.0.join("host");
+    let mut host = NativeHost::open_cloudflare(
+        root.clone(),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        true,
+    )
+    .unwrap();
+    let before: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
+    let response = host.handle(rpc("receive", body));
+    assert_eq!(response.status, 200);
+    assert!(String::from_utf8_lossy(&response.body).contains("ok refs/tags/bundle-fixture\n"));
+    assert_eq!(host.metrics.blob_puts, 1);
+    let state = DurableStateStore::new(services.clone());
+    let published = state.load().unwrap();
+    assert_eq!(published.packs.len(), 1);
+    let stored = &published.packs[0];
+    assert_eq!(stored.bundle.len(), 1);
+    assert!(stored.pack.is_empty() && stored.index.is_empty());
+    assert_eq!(
+        host.metrics.blob_put_bytes,
+        stored.pack_bytes + stored.index_bytes
+    );
+    let pushed: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
+    assert_eq!(
+        operation(&pushed, "r2_put").successes - operation(&before, "r2_put").successes,
+        1
+    );
+    assert_eq!(pushed.r2_live_objects, 1);
+    assert_eq!(pushed.r2_live_bytes, stored.pack_bytes + stored.index_bytes);
+    drop(host);
+
+    fs::remove_dir_all(root.join("view")).unwrap();
+    let mut recovered = NativeHost::open_cloudflare(
+        root.clone(),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        true,
+    )
+    .unwrap();
+    let reopened: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
+    assert_eq!(
+        operation(&reopened, "r2_get").successes - operation(&pushed, "r2_get").successes,
+        1
+    );
+    git(&root.join("view/repo.git"), &["fsck", "--strict"], &[]);
+    assert_eq!(
+        git(
+            &root.join("view/repo.git"),
+            &["cat-file", "blob", &object_id],
+            &[]
+        ),
+        data
+    );
+
+    let mut fetch = packet(&format!("want {object_id}\n"));
+    fetch.extend_from_slice(b"0000");
+    fetch.extend(packet("done\n"));
+    let fetched = recovered.handle(rpc("upload", fetch));
+    assert_eq!(fetched.status, 200);
+    let offset = fetched
+        .body
+        .windows(4)
+        .position(|bytes| bytes == b"PACK")
+        .unwrap();
+    let destination = directory.0.join("fetched.git");
+    fs::create_dir(&destination).unwrap();
+    git(
+        &destination,
+        &["init", "--bare", "--quiet", "--object-format=sha1"],
+        &[],
+    );
+    git(
+        &destination,
+        &["index-pack", "--stdin", "--strict"],
+        &fetched.body[offset..],
+    );
+    git(
+        &destination,
+        &["update-ref", "refs/tags/bundle-fixture", &object_id],
+        &[],
+    );
+    git(&destination, &["fsck", "--strict"], &[]);
+    assert_eq!(
+        git(&destination, &["cat-file", "blob", &object_id], &[]),
+        data
+    );
+    assert_eq!(state.load().unwrap(), published);
+    assert_eq!(recovered.metrics.blob_puts, 0);
+    let after: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
+    assert_eq!(
+        operation(&after, "r2_get").successes - operation(&reopened, "r2_get").successes,
+        1
+    );
+    assert_eq!(operation(&after, "r2_put"), operation(&pushed, "r2_put"));
+    assert_eq!(
+        operation(&after, "r2_delete"),
+        operation(&pushed, "r2_delete")
+    );
+    assert_eq!(
+        operation(&after, "manifest_cas"),
+        operation(&pushed, "manifest_cas")
+    );
+    assert_eq!(after.r2_live_objects, 1);
+    assert_eq!(after.r2_live_bytes, pushed.r2_live_bytes);
 }
 
 #[test]
@@ -301,7 +459,9 @@ fn seed_before_workerd_restart() {
     .unwrap();
     let id = indexed.split_whitespace().last().unwrap();
     let index = fs::read(source.0.join(format!("objects/pack/pack-{id}.idx"))).unwrap();
-    let stored = repository.store_pack(id.into(), &data, &index, 0).unwrap();
+    let stored = repository
+        .store_bundled_pack(id.into(), &data, &index, 0)
+        .unwrap();
     let next = Manifest {
         generation: 1,
         refs: BTreeMap::from([("refs/tags/restart-fixture".into(), object_id.clone())]),
@@ -310,7 +470,7 @@ fn seed_before_workerd_restart() {
     };
     assert!(repository.publish(&previous, next.clone()).unwrap());
     let usage: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
-    assert_eq!(usage.r2_live_objects, 2);
+    assert_eq!(usage.r2_live_objects, 1);
     let marker = serde_json::json!({
         "manifest":next, "object_id":object_id, "counter_epoch":usage.counter_epoch,
     });
@@ -345,20 +505,9 @@ fn verify_after_workerd_restart() {
         "Worker/DO runtime did not restart between the two test phases"
     );
     for pack in &expected.packs {
-        assert_eq!(
-            repository
-                .read_chunks(&pack.pack, pack.pack_bytes)
-                .unwrap()
-                .len() as u64,
-            pack.pack_bytes
-        );
-        assert_eq!(
-            repository
-                .read_chunks(&pack.index, pack.index_bytes)
-                .unwrap()
-                .len() as u64,
-            pack.index_bytes
-        );
+        let (data, index) = repository.read_pack_files(pack).unwrap();
+        assert_eq!(data.len() as u64, pack.pack_bytes);
+        assert_eq!(index.len() as u64, pack.index_bytes);
     }
     let view = Directory(std::env::temp_dir().join(format!("{}-recovered", worker.namespace)));
     let host = NativeHost::open_cloudflare(

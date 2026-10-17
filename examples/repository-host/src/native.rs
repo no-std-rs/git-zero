@@ -548,16 +548,15 @@ impl NativeHost {
         for pack in &manifest.packs {
             let directory = self.view.join("objects/pack");
             fs::create_dir_all(&directory)?;
-            for (extension, chunks, length) in [
-                ("pack", &pack.pack, pack.pack_bytes),
-                ("idx", &pack.index, pack.index_bytes),
-            ] {
-                let bytes = self.repository.read_chunks(chunks, length)?;
+            let (data, index) = self.repository.read_pack_files(pack)?;
+            for (extension, chunks, bytes) in
+                [("pack", &pack.pack, &data), ("idx", &pack.index, &index)]
+            {
                 let path = directory.join(format!("pack-{}.{extension}", pack.id));
-                if chunks.len() == 1 {
+                if pack.bundle.is_empty() && chunks.len() == 1 {
                     self.repository
                         .blobs
-                        .materialize_file(&chunks[0].key, &path, &bytes)?;
+                        .materialize_file(&chunks[0].key, &path, bytes)?;
                 } else {
                     fs::write(path, bytes)?;
                 }
@@ -583,6 +582,11 @@ impl NativeHost {
         index: &[u8],
         pack_keys: Option<&[String]>,
     ) -> io::Result<StoredPack> {
+        if self.cloudflare.is_some() {
+            return self
+                .repository
+                .store_bundled_pack(pack.id.clone(), data, index, pack.level);
+        }
         let store =
             |source: &Path, bytes: &[u8], keys: Option<&[String]>| -> io::Result<Vec<Chunk>> {
                 bytes
@@ -608,6 +612,7 @@ impl NativeHost {
             id: pack.id.clone(),
             pack: store(&pack.pack, data, pack_keys)?,
             index: store(&pack.index, index, None)?,
+            bundle: Vec::new(),
             pack_bytes: data.len() as u64,
             index_bytes: index.len() as u64,
             level: pack.level,
@@ -732,25 +737,27 @@ impl NativeHost {
         // Hash large input streams while strict native validation runs. Reuse
         // only after comparing every byte of the immutable codec output. Thin
         // pack completion or compaction takes the ordinary output-hashing path.
+        // Cloud bundles include the index, so pack-only hashes do not apply.
         let input_pack = incoming_pack(&request.body).filter(|bytes| bytes.len() >= 256 * 1024);
         let chunk_bytes = self.repository.chunk_bytes;
-        let (response, input_keys) = if let Some(bytes) = input_pack {
-            std::thread::scope(|scope| -> io::Result<_> {
-                let worker = scope.spawn(|| {
-                    bytes
-                        .chunks(chunk_bytes)
-                        .map(|chunk| format!("chunks/{}", hash(chunk)))
-                        .collect::<Vec<_>>()
-                });
-                let response = git_rpc(&stage, request);
-                let keys = worker
-                    .join()
-                    .map_err(|_| io::Error::other("pack checksum thread failed"))?;
-                Ok((response?, Some(keys)))
-            })?
-        } else {
-            (git_rpc(&stage, request)?, None)
-        };
+        let (response, input_keys) =
+            if let Some(bytes) = input_pack.filter(|_| self.cloudflare.is_none()) {
+                std::thread::scope(|scope| -> io::Result<_> {
+                    let worker = scope.spawn(|| {
+                        bytes
+                            .chunks(chunk_bytes)
+                            .map(|chunk| format!("chunks/{}", hash(chunk)))
+                            .collect::<Vec<_>>()
+                    });
+                    let response = git_rpc(&stage, request);
+                    let keys = worker
+                        .join()
+                        .map_err(|_| io::Error::other("pack checksum thread failed"))?;
+                    Ok((response?, Some(keys)))
+                })?
+            } else {
+                (git_rpc(&stage, request)?, None)
+            };
         let next_refs = refs(&stage)?;
         self.metrics.receive_codec_seconds += codec_start.elapsed().as_secs_f64();
         if response.status != 200 || next_refs == previous.refs {
@@ -818,7 +825,7 @@ impl NativeHost {
                 let index = fs::read(&pack.index)?;
                 let keys = input.and(input_keys.as_deref());
                 let stored = self.import_pack(&pack, bytes, &index, keys)?;
-                self.metrics.blob_puts += (stored.pack.len() + stored.index.len()) as u64;
+                self.metrics.blob_puts += stored.chunks().count() as u64;
                 self.metrics.blob_put_bytes += (bytes.len() + index.len()) as u64;
                 for (source, extension) in [(&pack.pack, "pack"), (&pack.index, "idx")] {
                     let destination = self

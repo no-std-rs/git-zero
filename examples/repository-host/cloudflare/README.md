@@ -100,6 +100,11 @@ Registering a different codec origin returns 409 until explicitly unregistered.
 | `metrics` | GET | Inventory, actual operation counters and per-phase accounting |
 
 Blob bodies are limited to 16 MiB; the native Cloudflare adapter uses 8 MiB chunks.
+New Cloudflare packs concatenate the pack and index into `bundle` chunks, with
+`pack_bytes` marking the split. Recovery verifies each complete chunk once before
+reconstructing both files. Manifests with separate `pack` and `index` chunks remain
+readable; a pack cannot mix the two representations. Local storage retains separate
+files so single-chunk packs and indexes can share immutable blob inodes.
 Manifest request JSON is capped at 1.5 MB to stay below SQLite's row/value limit;
 larger repositories need paged metadata. Startup/orphan GC assumes exclusive codec
 ownership: generation checking alone cannot protect another writer's in-flight

@@ -229,7 +229,7 @@ impl HttpServices {
         let live_keys: Vec<_> = manifest
             .packs
             .iter()
-            .flat_map(|p| p.pack.iter().chain(&p.index))
+            .flat_map(crate::storage::StoredPack::chunks)
             .map(|chunk| &chunk.key)
             .collect();
         let value = self.json(

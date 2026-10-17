@@ -30,7 +30,7 @@ impl Manifest {
     fn live_chunks(&self) -> BTreeSet<&str> {
         self.packs
             .iter()
-            .flat_map(|pack| pack.pack.iter().chain(&pack.index))
+            .flat_map(StoredPack::chunks)
             .map(|chunk| chunk.key.as_str())
             .collect()
     }
@@ -77,9 +77,21 @@ pub struct StoredPack {
     pub id: String,
     pub pack: Vec<Chunk>,
     pub index: Vec<Chunk>,
+    /// Concatenated pack then index, split at `pack_bytes` after verification.
+    /// Empty for legacy and local packs stored as separate files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bundle: Vec<Chunk>,
     pub pack_bytes: u64,
     pub index_bytes: u64,
     pub level: u32,
+}
+
+impl StoredPack {
+    /// Include every representation so retirement and orphan recovery preserve
+    /// all referenced blobs, even before a malformed manifest is rejected.
+    pub fn chunks(&self) -> impl Iterator<Item = &Chunk> {
+        self.pack.iter().chain(&self.index).chain(&self.bundle)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -615,6 +627,13 @@ mod tests {
                 .unwrap(),
             b"index"
         );
+        let bundle = repository
+            .store_bundled_pack("bundled-pack".into(), b"compressed-pack", b"index", 0)
+            .unwrap();
+        assert_eq!(
+            repository.read_pack_files(&bundle).unwrap(),
+            (b"compressed-pack".to_vec(), b"index".to_vec())
+        );
     }
 
     #[test]
@@ -721,9 +740,11 @@ mod tests {
             ..Manifest::default()
         };
         assert!(services.state.compare_and_swap(0, &previous).unwrap());
+        let mut bundled = stored_pack("new", &["chunks/shared", "chunks/new"], &[]);
+        bundled.bundle = std::mem::take(&mut bundled.pack);
         let mut next = Manifest {
             generation: 2,
-            packs: vec![stored_pack("new", &["chunks/shared", "chunks/new"], &[])],
+            packs: vec![bundled],
             ..Manifest::default()
         };
         next.retire_replaced(&previous);
@@ -772,6 +793,74 @@ mod tests {
         assert_eq!(services.blobs.reclaim_unreferenced(&current).unwrap(), 3);
         assert_eq!(services.blobs.get("chunks/live").unwrap(), b"x");
         assert_eq!(services.blobs.reclaim_unreferenced(&current).unwrap(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bundled_cas_loser_recovery_keeps_shared_published_chunks() {
+        let root = temporary_root();
+        let services = LocalServices::new(root.clone()).unwrap();
+        let mut repository = crate::Repository::new(services.blobs.clone(), services.state.clone());
+        repository.chunk_bytes = 4;
+        let previous = repository.state.load().unwrap();
+        let winner = repository
+            .store_bundled_pack("winner".into(), b"live-tail", b"win", 0)
+            .unwrap();
+        let loser = repository
+            .store_bundled_pack("loser".into(), b"live-other", b"idx", 0)
+            .unwrap();
+        assert_eq!(winner.bundle[0].key, loser.bundle[0].key);
+        let published = Manifest {
+            packs: vec![winner.clone()],
+            ..Manifest::default()
+        };
+        assert!(repository.publish(&previous, published).unwrap());
+        assert!(
+            !repository
+                .publish(
+                    &previous,
+                    Manifest {
+                        packs: vec![loser.clone()],
+                        ..Manifest::default()
+                    }
+                )
+                .unwrap()
+        );
+        // A failed CAS does not authorize deleting any candidate chunks. Only
+        // the exclusive recovery scan can distinguish shared live data.
+        for chunk in loser.chunks() {
+            assert!(repository.blobs.get(&chunk.key).is_ok());
+        }
+        let current = repository.state.load().unwrap();
+        assert_eq!(services.blobs.reclaim_unreferenced(&current).unwrap(), 3);
+        assert_eq!(
+            repository.read_pack_files(&winner).unwrap(),
+            (b"live-tail".to_vec(), b"win".to_vec())
+        );
+        for chunk in loser.bundle.iter().skip(1) {
+            assert_eq!(
+                repository.blobs.get(&chunk.key).unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
+        }
+        let mut retired = Manifest::default();
+        retired.retire_replaced(&current);
+        assert_eq!(retired.garbage.len(), winner.bundle.len());
+        assert!(repository.publish(&current, retired).unwrap());
+        assert!(
+            repository
+                .state
+                .load()
+                .unwrap()
+                .collect_garbage(&repository.blobs)
+                .is_empty()
+        );
+        for chunk in winner.chunks() {
+            assert_eq!(
+                repository.blobs.get(&chunk.key).unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

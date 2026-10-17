@@ -152,7 +152,7 @@ fn assert_live_storage(root: &Path, published: &Manifest) {
     let live: BTreeSet<_> = published
         .packs
         .iter()
-        .flat_map(|pack| pack.pack.iter().chain(&pack.index))
+        .flat_map(git_zero_host::storage::StoredPack::chunks)
         .map(|chunk| chunk.key.clone())
         .collect();
     let blob_root = root.join("services/blobs");
