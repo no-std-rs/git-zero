@@ -538,6 +538,8 @@ impl NativeHost {
 
     fn rebuild_view(&mut self, manifest: &Manifest) -> io::Result<()> {
         self.view_dirty = true;
+        validate_snapshot_refs(&manifest.refs)?;
+        validate_snapshot_bytes(manifest.packs.iter().map(|p| (p.pack_bytes, p.index_bytes)))?;
         // The alternate object DB must contain only published data. In
         // particular, a pre-CAS crash can leave native pack links that are not
         // in the authoritative manifest. Never let a later push depend on them.
@@ -545,10 +547,10 @@ impl NativeHost {
             fs::remove_dir_all(&self.view)?;
         }
         init(&self.view)?;
-        for pack in &manifest.packs {
+        let files = self.repository.read_snapshot_files(manifest)?;
+        for (pack, (data, index)) in manifest.packs.iter().zip(files) {
             let directory = self.view.join("objects/pack");
             fs::create_dir_all(&directory)?;
-            let (data, index) = self.repository.read_pack_files(pack)?;
             for (extension, chunks, bytes) in
                 [("pack", &pack.pack, &data), ("idx", &pack.index, &index)]
             {
@@ -1109,6 +1111,51 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_snapshot_rebuild_stays_dirty_without_materializing_partial_packs() {
+        let root = std::env::temp_dir().join(format!(
+            "git-zero-rebuild-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        let valid = host
+            .repository
+            .store_pack("valid".into(), b"pack", b"index", 0)
+            .unwrap();
+        let missing = StoredPack {
+            id: "missing".into(),
+            pack: vec![Chunk {
+                key: format!("chunks/{}", hash(b"missing")),
+                len: 7,
+            }],
+            pack_bytes: 7,
+            ..StoredPack::default()
+        };
+        let manifest = Manifest {
+            packs: vec![valid, missing],
+            ..Manifest::default()
+        };
+        assert_eq!(
+            host.rebuild_view(&manifest).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(host.view_dirty);
+        assert_eq!(
+            fs::read_dir(host.view.join("objects/pack"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(refs(&host.view).unwrap().is_empty());
+        host.rebuild_view(&Manifest::default()).unwrap();
+        assert!(!host.view_dirty);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn snapshot_limits_include_ref_only_growth_and_indexes() {

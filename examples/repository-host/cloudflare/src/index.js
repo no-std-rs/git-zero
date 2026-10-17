@@ -8,6 +8,11 @@ const REPO = /^[A-Za-z0-9_-]{1,80}$/;
 const BLOB = /^chunks\/[0-9a-f]{64}$/;
 const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1_500_000;
+const MAX_BULK_KEYS = 256;
+const MAX_BULK_CHUNK_BYTES = 8 * 1024 * 1024;
+const MAX_BULK_RESPONSE_BYTES = 16 * 1024 * 1024;
+const BULK_HEADER_BYTES = 12;
+const BULK_LENGTH_BYTES = 8;
 const USAGE_HEADER = "x-git-zero-service-usage";
 const OPERATIONS = new Set(["r2_get", "r2_head", "r2_put", "r2_list", "r2_delete", "manifest_get", "manifest_cas"]);
 const OP_FIELDS = ["attempts", "successes", "failures", "read_bytes", "written_bytes"];
@@ -374,6 +379,54 @@ export class RepositoryServices {
     const repo = repoName(request.headers.get("x-hosting-repo"));
     const prefix = `${repo}/`;
     const path = new URL(request.url).pathname;
+    if (path === "/_services/blobs/read" && request.method === "POST") {
+      const body = await parseJson(request, MAX_MANIFEST_BYTES);
+      if (!plainObject(body) || !Array.isArray(body.chunks)
+          || body.chunks.length === 0 || body.chunks.length > MAX_BULK_KEYS) fail(400, "invalid bulk read shape");
+      let wireBytes = BULK_HEADER_BYTES;
+      const lengths = new Map();
+      // Validate the complete batch, including framing, before any binding I/O.
+      for (const chunk of body.chunks) {
+        if (!plainObject(chunk) || typeof chunk.key !== "string" || chunk.key.length !== 71 || !BLOB.test(chunk.key)
+            || !Number.isSafeInteger(chunk.len) || chunk.len <= 0 || chunk.len > MAX_BULK_CHUNK_BYTES
+            || (lengths.has(chunk.key) && lengths.get(chunk.key) !== chunk.len)) fail(400, "invalid bulk read chunk");
+        lengths.set(chunk.key, chunk.len);
+        wireBytes += BULK_LENGTH_BYTES + chunk.len;
+        if (!Number.isSafeInteger(wireBytes) || wireBytes > MAX_BULK_RESPONSE_BYTES) fail(413, "bulk read response too large");
+      }
+      const parts = [];
+      // Preserve scalar binding order and repeated-key semantics. Completed
+      // reads are charged before checking their expected length or framing.
+      for (const chunk of body.chunks) {
+        const data = await this.operation("r2_get", async () => {
+          const object = await this.env.BLOBS.get(prefix + chunk.key);
+          if (!object) return null;
+          try { return new Uint8Array(await object.arrayBuffer()); }
+          catch (error) {
+            // The consumed body length is unknown. Suppress this receipt so
+            // the existing Worker validator marks the accounting incomplete.
+            this.accountingComplete = false;
+            throw error;
+          }
+        }, (value) => value?.byteLength ?? 0, 0, chunk.key);
+        if (!data) fail(404, "blob not found");
+        if (data.byteLength !== chunk.len) fail(409, "blob length differs from bulk read declaration");
+        parts.push(data);
+      }
+      const data = new Uint8Array(wireBytes);
+      data.set([0x47, 0x5a, 0x42, 0x52]); // GZBR
+      const frame = new DataView(data.buffer);
+      frame.setUint32(4, 1, true);
+      frame.setUint32(8, parts.length, true);
+      let offset = BULK_HEADER_BYTES;
+      for (const part of parts) {
+        frame.setBigUint64(offset, BigInt(part.byteLength), true);
+        offset += BULK_LENGTH_BYTES;
+        data.set(part, offset);
+        offset += part.byteLength;
+      }
+      return new Response(data, { headers: { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" } });
+    }
     if (path.startsWith("/_services/blob/")) {
       const key = path.slice("/_services/blob/".length);
       if (!BLOB.test(key)) fail(400, "expected a content-addressed chunks/<SHA256> key");
@@ -504,6 +557,7 @@ export class RepositoryServices {
         this.byPhase = { [phase(request)]: { ...this.totals } };
       }
       this.firstRequest = false;
+      this.accountingComplete = true;
       let response;
       try { response = await this.handle(request); }
       catch (error) { response = json({ error: String(error.message ?? error) }, error.status ?? 500); }
@@ -516,7 +570,7 @@ export class RepositoryServices {
       const receipt = { version: 1, do_instance_epoch: this.epoch, totals,
         by_phase: byPhase, operations: this.operations };
       const headers = new Headers(response.headers);
-      headers.set(USAGE_HEADER, JSON.stringify(receipt));
+      if (this.accountingComplete) headers.set(USAGE_HEADER, JSON.stringify(receipt));
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     });
   }

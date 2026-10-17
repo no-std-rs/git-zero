@@ -95,16 +95,30 @@ Registering a different codec origin returns 409 until explicitly unregistered.
 | --- | --- | --- |
 | `register`, `unregister` | POST | Manage a loopback codec origin for this namespace |
 | `blob/chunks/<sha256>` | GET / PUT / DELETE | Immutable compressed bytes; PUT verifies content hash |
+| `blobs/read` | POST | Ordered bulk GET of `{chunks:[{key,len}]}`; binary response, one binding GET per entry |
 | `manifest` | GET / POST | Load state; CAS `{expected,next}` returns `{published}` |
 | `gc` | POST | `{expected_generation,live_keys}`; stale generation returns 409 before deletion |
 | `metrics` | GET | Inventory, actual operation counters and per-phase accounting |
 
 Blob bodies are limited to 16 MiB; the native Cloudflare adapter uses 8 MiB chunks.
 New Cloudflare packs concatenate the pack and index into `bundle` chunks, with
-`pack_bytes` marking the split. Recovery verifies each complete chunk once before
+`pack_bytes` marking the split. Recovery verifies all complete chunks before
 reconstructing both files. Manifests with separate `pack` and `index` chunks remain
 readable; a pack cannot mix the two representations. Local storage retains separate
 files so single-chunk packs and indexes can share immutable blob inodes.
+Snapshot rehydration batches across packs, with no retained chunk cache. Each batch
+allows at most 256 strict `chunks/<64 lowercase hex>` keys, positive lengths up to
+8 MiB, a 1.5 MB JSON request, and 16 MiB for the complete binary response. The frame
+is `GZBR`, a little-endian u32 version (`1`), a u32 count, then a u64 byte length and
+raw bytes per requested entry. All framing counts toward the response limit.
+Repeated keys retain one actual R2 GET per occurrence. Valid larger legacy chunks
+use scalar GETs. The Rust reader rejects bad framing, lengths and SHA-256 hashes
+before materializing pack files; a failed read leaves the native view dirty.
+Chunk and reconstructed file payloads each stay within the existing 128 MiB
+snapshot limit, with at most one 16 MiB bridge response in flight. An empty
+snapshot issues no blob RPC. Failed batches retain receipts for completed binding
+attempts and their actual bytes; an uncertain partial body read marks accounting
+incomplete through the existing missing-receipt path.
 Manifest request JSON is capped at 1.5 MB to stay below SQLite's row/value limit;
 larger repositories need paged metadata. Startup/orphan GC assumes exclusive codec
 ownership: generation checking alone cannot protect another writer's in-flight

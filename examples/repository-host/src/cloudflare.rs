@@ -2,8 +2,8 @@
 //! Native Git remains a separate local codec, not code running inside a Worker.
 use crate::http::Response;
 use crate::storage::{
-    BlobStore, CloudflareBindings, DurableStateStore, LocalBlobStore, LocalStateStore, Manifest,
-    R2BlobStore, StateStore,
+    BlobStore, Chunk, CloudflareBindings, DurableStateStore, LocalBlobStore, LocalStateStore,
+    Manifest, R2BlobStore, StateStore,
 };
 use serde_json::{Value, json};
 use std::{
@@ -17,6 +17,98 @@ use std::{
 };
 
 const MAX_RESPONSE: usize = 128 * 1024 * 1024;
+const MAX_BULK_RESPONSE: usize = 16 * 1024 * 1024;
+const MAX_BULK_KEYS: usize = 256;
+const MAX_MANIFEST_BYTES: usize = 1_500_000;
+const BULK_HEADER_BYTES: usize = 12;
+const BULK_LENGTH_BYTES: usize = 8;
+const BULK_MAGIC: &[u8; 4] = b"GZBR";
+
+fn validate_bulk_chunks(chunks: &[Chunk]) -> io::Result<()> {
+    let mut lengths = BTreeMap::new();
+    for chunk in chunks {
+        if chunk.len == 0
+            || chunk.len > MAX_RESPONSE as u64
+            || chunk.key.len() != 71
+            || !chunk.key.starts_with("chunks/")
+            || !chunk.key.as_bytes()[7..]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+            || lengths
+                .insert(&chunk.key, chunk.len)
+                .is_some_and(|len| len != chunk.len)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid bulk read chunk",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Larger legacy chunks retain the scalar route. Every bulk frame includes its
+/// header and all length fields in the same 16 MiB bound as the returned bytes.
+fn bulk_batch_len(chunks: &[Chunk]) -> usize {
+    let mut wire = BULK_HEADER_BYTES;
+    let mut count = 0;
+    for chunk in chunks.iter().take(MAX_BULK_KEYS) {
+        if chunk.len == 0 || chunk.len > crate::CHUNK_BYTES as u64 {
+            break;
+        }
+        let Some(next) = usize::try_from(chunk.len)
+            .ok()
+            .and_then(|len| wire.checked_add(BULK_LENGTH_BYTES)?.checked_add(len))
+            .filter(|wire| *wire <= MAX_BULK_RESPONSE)
+        else {
+            break;
+        };
+        wire = next;
+        count += 1;
+    }
+    count
+}
+
+fn decode_bulk_response(chunks: &[Chunk], bytes: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid bulk blob response");
+    if chunks.is_empty()
+        || chunks.len() > MAX_BULK_KEYS
+        || bulk_batch_len(chunks) != chunks.len()
+        || bytes.len() > MAX_BULK_RESPONSE
+        || bytes.len() < BULK_HEADER_BYTES
+        || &bytes[..4] != BULK_MAGIC
+        || u32::from_le_bytes(bytes[4..8].try_into().unwrap()) != 1
+        || u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize != chunks.len()
+    {
+        return Err(invalid());
+    }
+    let mut offset = BULK_HEADER_BYTES;
+    let mut result = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        let end = offset
+            .checked_add(BULK_LENGTH_BYTES)
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(invalid)?;
+        let len = u64::from_le_bytes(bytes[offset..end].try_into().unwrap());
+        if len != chunk.len {
+            return Err(invalid());
+        }
+        offset = end;
+        let end = usize::try_from(len)
+            .ok()
+            .and_then(|len| offset.checked_add(len))
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(invalid)?;
+        let data = &bytes[offset..end];
+        crate::verify_chunk(chunk, data)?;
+        result.push(data.to_vec());
+        offset = end;
+    }
+    if offset != bytes.len() {
+        return Err(invalid());
+    }
+    Ok(result)
+}
 
 pub struct HttpServices {
     authority: String,
@@ -69,6 +161,11 @@ impl HttpServices {
         body: &[u8],
         phase: Option<&str>,
     ) -> io::Result<Response> {
+        let maximum = if route == "blobs/read" {
+            MAX_BULK_RESPONSE
+        } else {
+            MAX_RESPONSE
+        };
         let current_phase = self
             .phase
             .lock()
@@ -135,7 +232,7 @@ impl HttpServices {
                 if length == 0 {
                     break;
                 }
-                if length > MAX_RESPONSE - bytes.len() {
+                if length > maximum - bytes.len() {
                     return Err(io::Error::other("emulator response too large"));
                 }
                 let start = bytes.len();
@@ -149,16 +246,14 @@ impl HttpServices {
             }
         } else if let Some(length) = headers.get("content-length") {
             let length: usize = length.parse().map_err(io::Error::other)?;
-            if length > MAX_RESPONSE {
+            if length > maximum {
                 return Err(io::Error::other("emulator response too large"));
             }
             bytes.resize(length, 0);
             reader.read_exact(&mut bytes)?;
         } else {
-            reader
-                .take((MAX_RESPONSE + 1) as u64)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > MAX_RESPONSE {
+            reader.take((maximum + 1) as u64).read_to_end(&mut bytes)?;
+            if bytes.len() > maximum {
                 return Err(io::Error::other("emulator response too large"));
             }
             if let Some(length) = headers.get("content-length") {
@@ -253,6 +348,35 @@ impl CloudflareBindings for HttpServices {
             .body
             .to_vec())
     }
+    fn r2_get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+        // Validate the complete request before issuing even its first read.
+        validate_bulk_chunks(chunks)?;
+        let mut result = Vec::with_capacity(chunks.len());
+        let mut offset = 0;
+        while offset < chunks.len() {
+            let count = bulk_batch_len(&chunks[offset..]);
+            if count == 0 {
+                let chunk = &chunks[offset];
+                let data = self.r2_get(&chunk.key)?;
+                crate::verify_chunk(chunk, &data)?;
+                result.push(data);
+                offset += 1;
+                continue;
+            }
+            let batch = &chunks[offset..offset + count];
+            let body = serde_json::to_vec(&json!({"chunks": batch})).map_err(io::Error::other)?;
+            if body.len() > MAX_MANIFEST_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "bulk read request too large",
+                ));
+            }
+            let response = self.call("POST", "blobs/read", &body, None)?;
+            result.extend(decode_bulk_response(batch, &response.body)?);
+            offset += count;
+        }
+        Ok(result)
+    }
     fn r2_put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
         self.call("PUT", &format!("blob/{key}"), bytes, None)?;
         Ok(())
@@ -316,6 +440,12 @@ impl BlobStore for HostBlobs {
             Self::Cloudflare(b, _) => b.get(key),
         }
     }
+    fn get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+        match self {
+            Self::Local(b) => b.get_many(chunks),
+            Self::Cloudflare(b, _) => b.get_many(chunks),
+        }
+    }
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
         match self {
             Self::Local(b) => b.put(key, bytes),
@@ -359,6 +489,226 @@ impl StateStore for HostState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chunk(data: &[u8]) -> Chunk {
+        Chunk {
+            key: format!("chunks/{}", crate::hash(data)),
+            len: data.len() as u64,
+        }
+    }
+
+    fn frame(parts: &[&[u8]]) -> Vec<u8> {
+        let mut bytes = BULK_MAGIC.to_vec();
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(parts.len() as u32).to_le_bytes());
+        for part in parts {
+            bytes.extend_from_slice(&(part.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(part);
+        }
+        bytes
+    }
+
+    #[test]
+    fn bulk_planning_counts_framing_keys_and_legacy_fallback() {
+        let mut chunks = vec![chunk(b"a"); 2];
+        chunks[0].len = crate::CHUNK_BYTES as u64;
+        chunks[1].len = (crate::CHUNK_BYTES - BULK_HEADER_BYTES - 2 * BULK_LENGTH_BYTES) as u64;
+        assert_eq!(bulk_batch_len(&chunks), 2);
+        chunks[1].len += 1;
+        assert_eq!(bulk_batch_len(&chunks), 1);
+        assert_eq!(
+            bulk_batch_len(&vec![chunk(b"a"); MAX_BULK_KEYS + 1]),
+            MAX_BULK_KEYS
+        );
+        assert!(
+            serde_json::to_vec(&json!({"chunks": vec![chunk(b"a"); MAX_BULK_KEYS]}))
+                .unwrap()
+                .len()
+                <= MAX_MANIFEST_BYTES
+        );
+        for len in [0, crate::CHUNK_BYTES as u64 + 1, u64::MAX] {
+            chunks[0].len = len;
+            assert_eq!(bulk_batch_len(&chunks), 0);
+        }
+        let services = HttpServices::new("http://127.0.0.1:1", "unused", "token").unwrap();
+        assert!(services.r2_get_many(&[]).unwrap().is_empty());
+        for bad in [
+            "chunks/../escape".into(),
+            format!("chunks/{}", "A".repeat(64)),
+        ] {
+            assert_eq!(
+                services
+                    .r2_get_many(&[Chunk { key: bad, len: 1 }])
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+        let mut conflict = chunk(b"a");
+        conflict.len += 1;
+        assert_eq!(
+            services
+                .r2_get_many(&[chunk(b"a"), conflict])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn bulk_decoder_rejects_count_length_hash_truncation_trailing_and_overflow() {
+        let chunks = [chunk(b"abc"), chunk(b"defgh"), chunk(b"abc")];
+        let valid = frame(&[b"abc", b"defgh", b"abc"]);
+        assert_eq!(
+            decode_bulk_response(&chunks, &valid).unwrap(),
+            vec![b"abc".to_vec(), b"defgh".to_vec(), b"abc".to_vec()]
+        );
+        for end in 0..valid.len() {
+            assert!(
+                decode_bulk_response(&chunks, &valid[..end]).is_err(),
+                "accepted truncation at {end}"
+            );
+        }
+        let mut invalid = Vec::new();
+        for offset in [0, 4, 8, 12, BULK_HEADER_BYTES + BULK_LENGTH_BYTES] {
+            let mut changed = valid.clone();
+            changed[offset] ^= 1;
+            invalid.push(changed);
+        }
+        let mut overflow = valid.clone();
+        overflow[12..20].copy_from_slice(&u64::MAX.to_le_bytes());
+        invalid.push(overflow);
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        invalid.push(trailing);
+        invalid.push(vec![0; MAX_BULK_RESPONSE + 1]);
+        for bytes in invalid {
+            assert!(decode_bulk_response(&chunks, &bytes).is_err());
+        }
+        assert!(decode_bulk_response(&[], &frame(&[])).is_err());
+    }
+
+    fn fake_services(
+        expected: Vec<(String, Vec<Chunk>, u16, Vec<u8>)>,
+    ) -> (HttpServices, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (method, chunks, status, response) in expected {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(line.starts_with(&method), "{line}");
+                let mut length = 0;
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.strip_prefix("Content-Length: ") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                if method.starts_with("POST") {
+                    let value: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(
+                        serde_json::from_value::<Vec<Chunk>>(value["chunks"].clone()).unwrap(),
+                        chunks
+                    );
+                } else {
+                    assert!(body.is_empty());
+                }
+                write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response.len()
+                )
+                .unwrap();
+                reader.get_mut().write_all(&response).unwrap();
+            }
+        });
+        (HttpServices::new(&origin, "test", "token").unwrap(), server)
+    }
+
+    #[test]
+    fn bulk_bridge_batches_repeated_keys_and_preserves_large_legacy_scalar_reads() {
+        let chunks = vec![chunk(b"a"); MAX_BULK_KEYS + 1];
+        let legacy = vec![0x62; crate::CHUNK_BYTES + 1];
+        let legacy_chunk = chunk(&legacy);
+        let expected = vec![
+            (
+                "POST /_services/blobs/read ".into(),
+                chunks[..MAX_BULK_KEYS].to_vec(),
+                200,
+                frame(&vec![b"a".as_slice(); MAX_BULK_KEYS]),
+            ),
+            (
+                "POST /_services/blobs/read ".into(),
+                vec![chunk(b"a")],
+                200,
+                frame(&[b"a"]),
+            ),
+            (
+                format!("GET /_services/blob/{} ", legacy_chunk.key),
+                vec![],
+                200,
+                legacy.clone(),
+            ),
+            (
+                "POST /_services/blobs/read ".into(),
+                vec![chunk(b"a")],
+                200,
+                frame(&[b"a"]),
+            ),
+        ];
+        let (services, server) = fake_services(expected);
+        assert!(services.r2_get_many(&[]).unwrap().is_empty());
+        let mut request = chunks.clone();
+        request.push(legacy_chunk);
+        assert_eq!(
+            services.r2_get_many(&request).unwrap(),
+            [vec![b"a".to_vec(); chunks.len()], vec![legacy]].concat()
+        );
+        // A later call performs another RPC; no chunk cache survives the call.
+        assert_eq!(
+            services.r2_get_many(&[chunk(b"a")]).unwrap(),
+            vec![b"a".to_vec()]
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn bulk_bridge_fails_closed_on_malformed_frame_and_missing_object() {
+        let mut trailing = frame(&[b"a"]);
+        trailing.push(0);
+        let (services, server) = fake_services(vec![
+            (
+                "POST /_services/blobs/read ".into(),
+                vec![chunk(b"a")],
+                200,
+                trailing,
+            ),
+            (
+                "POST /_services/blobs/read ".into(),
+                vec![chunk(b"a")],
+                404,
+                b"missing".to_vec(),
+            ),
+        ]);
+        assert!(services.r2_get_many(&[chunk(b"a")]).is_err());
+        assert_eq!(
+            services.r2_get_many(&[chunk(b"a")]).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        server.join().unwrap();
+    }
     #[test]
     fn service_bridge_rejects_nonlocal_origins_and_header_injection() {
         assert!(HttpServices::new("http://127.0.0.1:8787", "demo", "local-token").is_ok());

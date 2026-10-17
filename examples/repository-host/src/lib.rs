@@ -114,26 +114,89 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
         Ok((bytes, index))
     }
 
+    /// Validate every representation before reading, then verify the whole
+    /// snapshot before its caller materializes any disposable native files.
+    /// Flattening across packs lets a remote store bound its own read batches.
+    /// Chunk payloads and reconstructed file payloads each total at most
+    /// 128 MiB and remain transient; no blob cache survives this call.
+    pub fn read_snapshot_files(&self, manifest: &Manifest) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let mut chunks = Vec::new();
+        let mut lengths = std::collections::BTreeMap::new();
+        let mut snapshot_bytes = 0u64;
+        for pack in &manifest.packs {
+            let total = pack_total(pack.pack_bytes, pack.index_bytes)?;
+            snapshot_bytes = snapshot_bytes
+                .checked_add(total)
+                .filter(|total| *total <= MAX_PACK_BYTES)
+                .ok_or_else(|| io::Error::other("prototype snapshot limit exceeded"))?;
+            if pack.bundle.is_empty() {
+                validate_chunks(&pack.pack, pack.pack_bytes)?;
+                validate_chunks(&pack.index, pack.index_bytes)?;
+            } else {
+                if !pack.pack.is_empty() || !pack.index.is_empty() {
+                    return Err(io::Error::other("mixed pack chunk representations"));
+                }
+                validate_chunks(&pack.bundle, total)?;
+            }
+            for chunk in pack.chunks() {
+                if chunk.key.len() != 71
+                    || !chunk.key.starts_with("chunks/")
+                    || !chunk.key.as_bytes()[7..]
+                        .iter()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+                    || lengths
+                        .insert(&chunk.key, chunk.len)
+                        .is_some_and(|len| len != chunk.len)
+                {
+                    return Err(io::Error::other("invalid content-addressed chunk"));
+                }
+                chunks.push(chunk.clone());
+            }
+        }
+        let data = self.blobs.get_many(&chunks)?;
+        if data.len() != chunks.len() {
+            return Err(io::Error::other("incomplete snapshot chunks"));
+        }
+        for (chunk, data) in chunks.iter().zip(&data) {
+            verify_chunk(chunk, data)?;
+        }
+        let mut data = data.into_iter();
+        let mut files = Vec::with_capacity(manifest.packs.len());
+        for pack in &manifest.packs {
+            let mut read = |count: usize, size: u64| {
+                if count == 0 {
+                    return Vec::new();
+                }
+                let mut file = data.next().expect("verified chunk count");
+                file.reserve_exact(size as usize - file.len());
+                for chunk in data.by_ref().take(count - 1) {
+                    file.extend_from_slice(&chunk);
+                }
+                file
+            };
+            files.push(if pack.bundle.is_empty() {
+                (
+                    read(pack.pack.len(), pack.pack_bytes),
+                    read(pack.index.len(), pack.index_bytes),
+                )
+            } else {
+                let mut bytes = read(pack.bundle.len(), pack.pack_bytes + pack.index_bytes);
+                let index = bytes.split_off(pack.pack_bytes as usize);
+                (bytes, index)
+            });
+        }
+        Ok(files)
+    }
+
     pub fn read_chunks(&self, chunks: &[Chunk], expected: u64) -> io::Result<Vec<u8>> {
         if expected > MAX_PACK_BYTES {
             return Err(io::Error::other("prototype pack limit exceeded"));
         }
-        if chunks.iter().try_fold(0u64, |total, chunk| {
-            (chunk.len != 0).then_some(())?;
-            total.checked_add(chunk.len)
-        }) != Some(expected)
-        {
-            return Err(io::Error::other("invalid chunk lengths"));
-        }
+        validate_chunks(chunks, expected)?;
         let mut result = Vec::with_capacity(expected as usize);
         for chunk in chunks {
             let data = self.blobs.get(&chunk.key)?;
-            if data.len() as u64 != chunk.len
-                || chunk.key != format!("chunks/{}", hash(&data))
-                || chunk.len > expected - result.len() as u64
-            {
-                return Err(io::Error::other("corrupt chunk"));
-            }
+            verify_chunk(chunk, &data)?;
             result.extend_from_slice(&data);
         }
         if result.len() as u64 != expected {
@@ -149,6 +212,24 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
             .ok_or_else(|| io::Error::other("generation overflow"))?;
         self.state.compare_and_swap(previous.generation, &next)
     }
+}
+
+fn validate_chunks(chunks: &[Chunk], expected: u64) -> io::Result<()> {
+    if chunks.iter().try_fold(0u64, |total, chunk| {
+        (chunk.len != 0).then_some(())?;
+        total.checked_add(chunk.len)
+    }) != Some(expected)
+    {
+        return Err(io::Error::other("invalid chunk lengths"));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_chunk(chunk: &Chunk, data: &[u8]) -> io::Result<()> {
+    if data.len() as u64 != chunk.len || chunk.key != format!("chunks/{}", hash(data)) {
+        return Err(io::Error::other("corrupt chunk"));
+    }
+    Ok(())
 }
 
 fn pack_total(pack_bytes: u64, index_bytes: u64) -> io::Result<u64> {
@@ -172,6 +253,7 @@ mod tests {
         bytes: Mutex<BTreeMap<String, Vec<u8>>>,
         gets: AtomicUsize,
         puts: AtomicUsize,
+        batches: Mutex<Vec<Vec<Chunk>>>,
     }
 
     impl BlobStore for MemoryBlobs {
@@ -183,6 +265,11 @@ mod tests {
                 .get(key)
                 .cloned()
                 .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        }
+
+        fn get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+            self.batches.lock().unwrap().push(chunks.to_vec());
+            chunks.iter().map(|chunk| self.get(&chunk.key)).collect()
         }
 
         fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
@@ -211,6 +298,122 @@ mod tests {
         fn compare_and_swap(&self, _: u64, _: &Manifest) -> io::Result<bool> {
             unreachable!("file reconstruction does not publish state")
         }
+    }
+
+    #[test]
+    fn snapshot_reads_flatten_mixed_packs_and_preserve_repeated_keys_in_order() {
+        let repository = Repository::new(MemoryBlobs::default(), UnusedState);
+        let legacy = repository
+            .store_pack("legacy".into(), b"pack", b"index", 0)
+            .unwrap();
+        let bundled = repository
+            .store_bundled_pack("bundle".into(), b"other", b"index", 0)
+            .unwrap();
+        let manifest = Manifest {
+            packs: vec![legacy.clone(), bundled.clone(), legacy.clone()],
+            ..Manifest::default()
+        };
+        assert_eq!(
+            repository.read_snapshot_files(&manifest).unwrap(),
+            vec![
+                (b"pack".to_vec(), b"index".to_vec()),
+                (b"other".to_vec(), b"index".to_vec()),
+                (b"pack".to_vec(), b"index".to_vec()),
+            ]
+        );
+        assert_eq!(
+            *repository.blobs.batches.lock().unwrap(),
+            vec![
+                manifest
+                    .packs
+                    .iter()
+                    .flat_map(StoredPack::chunks)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            ]
+        );
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 5);
+        assert!(
+            repository
+                .read_snapshot_files(&Manifest::default())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 5);
+    }
+
+    #[test]
+    fn snapshot_validates_all_metadata_before_io_and_rejects_missing_or_corrupt_data() {
+        let repository = Repository::new(MemoryBlobs::default(), UnusedState);
+        let valid = repository
+            .store_bundled_pack("bundle".into(), b"pack", b"index", 0)
+            .unwrap();
+        let mut invalid = Vec::new();
+        let mut mixed = valid.clone();
+        mixed.pack = valid.bundle.clone();
+        invalid.push(mixed);
+        for len in [0, u64::MAX, valid.bundle[0].len + 1] {
+            let mut changed = valid.clone();
+            changed.bundle[0].len = len;
+            invalid.push(changed);
+        }
+        let mut bad_key = valid.clone();
+        bad_key.bundle[0].key = format!("chunks/{}", "A".repeat(64));
+        invalid.push(bad_key);
+        let mut overflow = valid.clone();
+        overflow.pack_bytes = u64::MAX;
+        invalid.push(overflow);
+        // Equal keys with conflicting expected lengths are invalid even when
+        // both packs' own sums are consistent.
+        let mut conflict = valid.clone();
+        conflict.bundle[0].len += 1;
+        conflict.pack_bytes += 1;
+        invalid.push(conflict);
+        for pack in invalid {
+            let manifest = Manifest {
+                packs: vec![valid.clone(), pack],
+                ..Manifest::default()
+            };
+            assert!(repository.read_snapshot_files(&manifest).is_err());
+        }
+        let huge = StoredPack {
+            bundle: vec![Chunk {
+                key: valid.bundle[0].key.clone(),
+                len: MAX_PACK_BYTES,
+            }],
+            pack_bytes: MAX_PACK_BYTES,
+            ..StoredPack::default()
+        };
+        assert!(
+            repository
+                .read_snapshot_files(&Manifest {
+                    packs: vec![huge.clone(), huge],
+                    ..Manifest::default()
+                })
+                .is_err()
+        );
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 0);
+        assert!(repository.blobs.batches.lock().unwrap().is_empty());
+        let manifest = Manifest {
+            packs: vec![valid.clone()],
+            ..Manifest::default()
+        };
+        repository
+            .blobs
+            .bytes
+            .lock()
+            .unwrap()
+            .get_mut(&valid.bundle[0].key)
+            .unwrap()[0] ^= 1;
+        assert!(repository.read_snapshot_files(&manifest).is_err());
+        repository.blobs.bytes.lock().unwrap().clear();
+        assert_eq!(
+            repository
+                .read_snapshot_files(&manifest)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 
     #[test]

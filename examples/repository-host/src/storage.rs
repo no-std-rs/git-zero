@@ -104,6 +104,11 @@ pub struct Chunk {
 /// A successful put must make bytes durable before a manifest can reference them.
 pub trait BlobStore: Send + Sync {
     fn get(&self, key: &str) -> io::Result<Vec<u8>>;
+    /// Read in request order. Remote stores may batch these reads; the default
+    /// preserves scalar store semantics, including repeated keys and failures.
+    fn get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+        chunks.iter().map(|chunk| self.get(&chunk.key)).collect()
+    }
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()>;
     /// Delete durably; absent keys succeed so recovery can retry partial work.
     fn delete(&self, key: &str) -> io::Result<()>;
@@ -378,6 +383,9 @@ impl StateStore for LocalStateStore {
 /// for a Worker runtime; native tests exercise delegation and semantics only.
 pub trait CloudflareBindings: Send + Sync {
     fn r2_get(&self, key: &str) -> io::Result<Vec<u8>>;
+    fn r2_get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+        chunks.iter().map(|chunk| self.r2_get(&chunk.key)).collect()
+    }
     fn r2_put(&self, key: &str, bytes: &[u8]) -> io::Result<()>;
     fn r2_delete(&self, key: &str) -> io::Result<()>;
     fn manifest_load(&self) -> io::Result<Manifest>;
@@ -398,6 +406,13 @@ impl<T: CloudflareBindings> BlobStore for R2BlobStore<T> {
     fn get(&self, key: &str) -> io::Result<Vec<u8>> {
         validate_key(key)?;
         self.bindings.r2_get(key)
+    }
+
+    fn get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+        for chunk in chunks {
+            validate_key(&chunk.key)?;
+        }
+        self.bindings.r2_get_many(chunks)
     }
 
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
@@ -556,6 +571,22 @@ mod tests {
         blobs.put("packs/abc.0", b"compressed").unwrap();
         blobs.put("packs/abc.0", b"compressed").unwrap();
         assert_eq!(blobs.get("packs/abc.0").unwrap(), b"compressed");
+        assert_eq!(
+            blobs
+                .get_many(&[
+                    Chunk {
+                        key: "packs/abc.0".into(),
+                        len: 10
+                    },
+                    Chunk {
+                        key: "packs/abc.0".into(),
+                        len: 10
+                    },
+                ])
+                .unwrap(),
+            vec![b"compressed".to_vec(), b"compressed".to_vec()]
+        );
+        assert!(blobs.get_many(&[]).unwrap().is_empty());
         assert_eq!(
             blobs.put("packs/abc.0", b"changed").unwrap_err().kind(),
             io::ErrorKind::AlreadyExists

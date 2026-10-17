@@ -13,7 +13,7 @@ use git_zero_host::{
     hash,
     http::Request,
     native::{NativeHost, command},
-    storage::{BlobStore, DurableStateStore, Manifest, R2BlobStore, StateStore},
+    storage::{BlobStore, Chunk, DurableStateStore, Manifest, R2BlobStore, StateStore},
 };
 use std::{
     collections::BTreeMap,
@@ -103,6 +103,212 @@ fn rpc(service: &str, body: Vec<u8>) -> Request {
 
 fn operation(usage: &ServiceUsage, name: &str) -> OperationUsage {
     usage.operations.get(name).cloned().unwrap_or_default()
+}
+
+fn usage(services: &HttpServices) -> ServiceUsage {
+    serde_json::from_value(services.usage().unwrap()).unwrap()
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_snapshot_bulk_reads_cross_packs_and_account_partial_missing_reads() {
+    let worker = RealWorker::new("bulk");
+    let services = worker.services();
+    let repository = Repository::new(
+        R2BlobStore::new(services.clone()),
+        DurableStateStore::new(services.clone()),
+    );
+    let legacy = repository
+        .store_pack("legacy".into(), b"legacy-pack", b"legacy-index", 0)
+        .unwrap();
+    let bundled = repository
+        .store_bundled_pack("bundle".into(), b"bundled-pack", b"bundled-index", 0)
+        .unwrap();
+    let manifest = Manifest {
+        packs: vec![legacy.clone(), bundled.clone()],
+        ..Manifest::default()
+    };
+    let before = usage(&services);
+    assert_eq!(
+        repository.read_snapshot_files(&manifest).unwrap(),
+        vec![
+            (b"legacy-pack".to_vec(), b"legacy-index".to_vec()),
+            (b"bundled-pack".to_vec(), b"bundled-index".to_vec()),
+        ]
+    );
+    let after = usage(&services);
+    let delta = after
+        .workload_counters()
+        .unwrap()
+        .checked_sub(&before.workload_counters().unwrap())
+        .unwrap();
+    assert_eq!(
+        (
+            delta.worker_service_requests,
+            delta.do_requests,
+            delta.r2_class_b
+        ),
+        (1, 1, 3)
+    );
+    assert_eq!(
+        delta.r2_read_bytes,
+        manifest
+            .packs
+            .iter()
+            .map(|pack| pack.pack_bytes + pack.index_bytes)
+            .sum::<u64>()
+    );
+    assert_eq!(
+        (delta.r2_class_a, delta.r2_deletes, delta.r2_written_bytes),
+        (0, 0, 0)
+    );
+    assert_eq!(after.accounting_complete, Some(true));
+
+    let duplicate = [legacy.pack[0].clone(), legacy.pack[0].clone()];
+    assert_eq!(
+        repository.blobs.get_many(&duplicate).unwrap(),
+        vec![b"legacy-pack".to_vec(); 2]
+    );
+    let repeated = usage(&services);
+    let delta = repeated
+        .workload_counters()
+        .unwrap()
+        .checked_sub(&after.workload_counters().unwrap())
+        .unwrap();
+    assert_eq!(
+        (
+            delta.worker_service_requests,
+            delta.do_requests,
+            delta.r2_class_b
+        ),
+        (1, 1, 2)
+    );
+    assert_eq!(delta.r2_read_bytes, 2 * legacy.pack_bytes);
+
+    let missing = Chunk {
+        key: format!("chunks/{}", hash(b"absent")),
+        len: 6,
+    };
+    assert_eq!(
+        repository
+            .blobs
+            .get_many(&[legacy.pack[0].clone(), missing, legacy.index[0].clone()])
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    let failed = usage(&services);
+    let delta = failed
+        .workload_counters()
+        .unwrap()
+        .checked_sub(&repeated.workload_counters().unwrap())
+        .unwrap();
+    assert_eq!(
+        (
+            delta.worker_service_requests,
+            delta.do_requests,
+            delta.r2_class_b
+        ),
+        (1, 1, 2)
+    );
+    assert_eq!(delta.r2_read_bytes, legacy.pack_bytes);
+    assert_eq!(
+        operation(&failed, "r2_get").attempts - operation(&repeated, "r2_get").attempts,
+        2
+    );
+    assert_eq!(failed.accounting_complete, Some(true));
+
+    let mut wrong_length = legacy.pack[0].clone();
+    wrong_length.len += 1;
+    assert!(repository.blobs.get_many(&[wrong_length]).is_err());
+    let mismatch = usage(&services);
+    let delta = mismatch
+        .workload_counters()
+        .unwrap()
+        .checked_sub(&failed.workload_counters().unwrap())
+        .unwrap();
+    assert_eq!(
+        (
+            delta.worker_service_requests,
+            delta.do_requests,
+            delta.r2_class_b
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(delta.r2_read_bytes, legacy.pack_bytes);
+    assert_eq!(mismatch.accounting_complete, Some(true));
+    assert_eq!(operation(&mismatch, "r2_put"), operation(&before, "r2_put"));
+    assert_eq!(
+        operation(&mismatch, "r2_delete"),
+        operation(&before, "r2_delete")
+    );
+    let empty_before = mismatch.workload_counters().unwrap();
+    assert!(repository.blobs.get_many(&[]).unwrap().is_empty());
+    assert_eq!(usage(&services).workload_counters().unwrap(), empty_before);
+}
+
+fn bulk_post_status(worker: &RealWorker, body: &[u8]) -> u16 {
+    use std::io::{BufRead, BufReader, Write};
+    let authority = worker.origin.strip_prefix("http://").unwrap();
+    let mut stream = std::net::TcpStream::connect(authority).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    write!(stream, "POST /_services/blobs/read HTTP/1.1\r\nHost: {authority}\r\nx-hosting-token: {}\r\nx-hosting-repo: {}\r\nx-hosting-phase: fetch\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", worker.token, worker.namespace, body.len()).unwrap();
+    stream.write_all(body).unwrap();
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).unwrap();
+    line.split_whitespace().nth(1).unwrap().parse().unwrap()
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_bulk_read_validates_all_bounds_before_binding_io() {
+    let worker = RealWorker::new("bulk-bounds");
+    let services = worker.services();
+    let key = format!("chunks/{}", hash(b"bound"));
+    let before = usage(&services);
+    let chunk = serde_json::json!({"key": key, "len": 1});
+    let invalid = vec![
+        serde_json::json!({"chunks": []}),
+        serde_json::json!({"chunks": vec![chunk.clone(); 257]}),
+        serde_json::json!({"chunks": [chunk.clone(), {"key": "chunks/invalid", "len": 1}]}),
+        serde_json::json!({"chunks": [{"key": format!("{key}\n"), "len": 1}]}),
+        serde_json::json!({"chunks": [chunk.clone(), {"key": key, "len": 2}]}),
+        serde_json::json!({"chunks": [{"key": key, "len": 0}]}),
+        serde_json::json!({"chunks": [{"key": key, "len": 8 * 1024 * 1024 + 1}]}),
+        serde_json::json!({"chunks": [{"key": key, "len": u64::MAX}]}),
+    ];
+    for body in &invalid {
+        assert_eq!(
+            bulk_post_status(&worker, &serde_json::to_vec(body).unwrap()),
+            400
+        );
+    }
+    let too_large = serde_json::json!({"chunks": [{"key": key, "len": 8 * 1024 * 1024}, {"key": key, "len": 8 * 1024 * 1024}]});
+    assert_eq!(
+        bulk_post_status(&worker, &serde_json::to_vec(&too_large).unwrap()),
+        413
+    );
+    assert_eq!(bulk_post_status(&worker, &vec![b' '; 1_500_001]), 413);
+    let after = usage(&services);
+    let delta = after
+        .workload_counters()
+        .unwrap()
+        .checked_sub(&before.workload_counters().unwrap())
+        .unwrap();
+    assert_eq!(delta.worker_service_requests, invalid.len() as u64 + 2);
+    assert_eq!(delta.do_requests, invalid.len() as u64 + 2);
+    assert_eq!(
+        (
+            delta.r2_class_b,
+            delta.r2_read_bytes,
+            delta.r2_class_a,
+            delta.r2_deletes
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(after.accounting_complete, Some(true));
 }
 
 #[test]
