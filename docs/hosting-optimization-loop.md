@@ -1,9 +1,13 @@
-# Local hosting cost optimization loop
+# Local hosting cost optimization experiments
 
 This experiment optimizes known resource dollars using actual local workerd R2 and SQLite Durable Object
 operations. It uses the Rust `hosting-bench` runner and offline Rust `hosting-cost` evaluator. Nothing is
 deployed and no paid Cloudflare resources are used. See [the runtime instructions](../examples/repository-host/cloudflare/README.md)
 and [the existing measurements](hosting-cloudflare-benchmarks.md) for topology and accounting details.
+
+The active workload is [interleaved large pushes and historical fetches](hosting-interleaved-benchmarks.md).
+The fixed 32:16 objective, reproduction commands and measured tables below retain the original batch
+experiment. They must not be compared numerically with the new 32:56 interleaved objective.
 
 ## Fixed objective and acceptance
 
@@ -192,7 +196,14 @@ objects), then latest again. Seven subsequent pushes replace 8 MiB of logical da
 The 64 MiB initial transfer is expected around 34 MiB; actual wire sizes must substantiate those labels.
 
 The existing batch reports remain evidence for their original workload. R2's projected 9.004% saving is not
-an interleaved-workload prediction, and its old batch matrix has not been run. A clean agent is extending
-the Rust runner and evaluator while retaining legacy behavior. Fresh matching interleaved baseline and
+an interleaved-workload prediction, and its old batch matrix has not been run. The Rust runner and evaluator now implement this separate schema-v4 workload while retaining legacy behavior. Fresh matching interleaved baseline and
 candidate traces will use the same runner and committed Worker, with scalar R1 versus batched R2 native
 binaries, explicit hashes, unchanged budgets and the complete ordered fixture identity.
+
+The interleaved implementation has passed independent source review, workspace tests and strict workspace
+Clippy. Each trace must observe nonzero native compaction, and every large-push label is checked against
+measured wire bytes. The final pre-measurement control uses index-only Git maintenance: multi-pack bitmap
+and split commit-graph updates, with `pack.allowPackReuse=multi`, preserving the existing fsck/fsync settings.
+Both native variants will use one frozen Git reference executable; its exact hash and the effective
+receiver configuration are part of the new workload identity. Legacy batch maintenance stays unchanged.
+This is an explicit practical Git configuration, not a claim that every Git deployment is slower.
