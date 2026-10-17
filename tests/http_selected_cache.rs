@@ -5,7 +5,7 @@ use git_zero::{
     Error, File, ObjectFormat, ObjectId, ObjectInfo, ObjectKind, Repository, Result, Snapshot,
     ValidatedRepository,
     cache::selected::{self, Buffers, FixedCache, Key, Outcome, PackCache, Selection},
-    http::{self, Request, Response, SelectionBuffers},
+    http::{self, Request, Response, SelectionBuffers, WantOptions},
     io::{SliceWriter, Write},
     pack,
 };
@@ -204,16 +204,18 @@ fn cached(
     graph: u64,
     pack_capacity: usize,
     output: &mut impl Write,
+    options: WantOptions,
 ) -> (Result<Response>, Option<Outcome>, usize) {
     let mut selection = SelectionBuffers::<16, 16, 17, 128>::new();
     let mut ids = [repository.object_format().zero_id(); 16];
     let mut pack = [0; CAPACITY];
     let (mut outcome, mut calls) = (None, 0);
     let result = allocations::without_allocations(|| {
-        http::serve_with_selected_pack(
+        http::serve_with_selected_pack_policy(
             repository,
             request,
             &mut selection.storage(graph),
+            options,
             output,
             |indices, read, framed| {
                 calls += 1;
@@ -243,6 +245,24 @@ fn run(
     graph: u64,
     pack_capacity: usize,
 ) -> Run {
+    run_policy(
+        repository,
+        request,
+        cache,
+        graph,
+        pack_capacity,
+        WantOptions::STRICT,
+    )
+}
+
+fn run_policy(
+    repository: &ValidatedRepository<'_, '_, Fixture>,
+    request: Request<'_>,
+    cache: &mut impl PackCache,
+    graph: u64,
+    pack_capacity: usize,
+    options: WantOptions,
+) -> Run {
     let mut output = [0; CAPACITY + 4096];
     let mut output = SliceWriter::new(&mut output);
     let (result, outcome, calls) = cached(
@@ -252,6 +272,7 @@ fn run(
         graph,
         pack_capacity,
         &mut output,
+        options,
     );
     Run {
         result,
@@ -516,6 +537,7 @@ fn cache_failures_invalidate_provisional_controls_and_output_failure_keeps_a_val
         65536,
         CAPACITY,
         &mut SliceWriter::new(&mut short_output),
+        WantOptions::STRICT,
     );
     assert_eq!(result.0.unwrap_err(), Error::BufferTooSmall);
     assert!(cache.key.is_some());
@@ -592,4 +614,109 @@ fn failed_replacement_preserves_old_http_entry_and_a_wrong_set_hit_fails_closed(
             .result
             .is_err()
     );
+}
+
+#[test]
+fn explicit_blob_grant_is_rechecked_before_each_warmed_cache_access() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format);
+        let (mut metadata, mut by_id) = ([None; 16], [0; 16]);
+        let repository = fixture.validate(&mut metadata, &mut by_id);
+        let blob = fixture
+            .objects
+            .iter()
+            .find(|object| object.kind == ObjectKind::Blob)
+            .unwrap()
+            .id;
+        for version in 0..=2 {
+            let mut resident = [0; CAPACITY];
+            let mut cache = FixedCache::new(&mut resident);
+            let wanted = body(
+                format,
+                version,
+                &[blob],
+                &[],
+                &["filter blob:none"],
+                true,
+                " filter",
+            );
+            let grant = WantOptions::all_visible_reachable(1);
+            let miss = run_policy(
+                &repository,
+                request(&wanted, version),
+                &mut cache,
+                0,
+                CAPACITY,
+                grant,
+            );
+            miss.result.unwrap();
+            assert_eq!(miss.outcome, Some(Outcome::Miss));
+            fixture.fail_blobs.set(true);
+            let hit = run_policy(
+                &repository,
+                request(&wanted, version),
+                &mut cache,
+                0,
+                0,
+                grant,
+            );
+            hit.result.unwrap();
+            assert_eq!(hit.outcome, Some(Outcome::Hit));
+            assert_eq!(hit.bytes, miss.bytes);
+            let before = cache.statistics();
+            for (options, wire, expected) in [
+                (WantOptions::STRICT, wanted.clone(), Error::InvalidRequest),
+                (
+                    WantOptions::all_visible_reachable(0),
+                    wanted.clone(),
+                    Error::LimitExceeded,
+                ),
+                (
+                    grant,
+                    body(format, version, &[blob, blob], &[], &[], true, ""),
+                    Error::LimitExceeded,
+                ),
+                (
+                    grant,
+                    body(
+                        format,
+                        version,
+                        &[ObjectId::from_bytes(format, &vec![9; format.id_length()]).unwrap()],
+                        &[],
+                        &[],
+                        true,
+                        "",
+                    ),
+                    Error::InvalidRequest,
+                ),
+            ] {
+                let denied = run_policy(
+                    &repository,
+                    request(&wire, version),
+                    &mut cache,
+                    0,
+                    0,
+                    options,
+                );
+                assert_eq!(denied.result.unwrap_err(), expected);
+                assert_eq!(denied.calls, 0);
+                assert!(denied.bytes.is_empty());
+                assert_eq!(cache.statistics(), before);
+            }
+            // Revocation and failures never replace the later host's policy.
+            assert_eq!(
+                run_policy(
+                    &repository,
+                    request(&wanted, version),
+                    &mut cache,
+                    0,
+                    0,
+                    grant
+                )
+                .outcome,
+                Some(Outcome::Hit)
+            );
+            fixture.fail_blobs.set(false);
+        }
+    }
 }

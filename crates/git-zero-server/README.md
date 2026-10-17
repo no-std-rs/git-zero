@@ -118,6 +118,7 @@ single structural graph-read budget remain separate finite limits. This is not
 a whole-request logical-work budget: parsing, bounded metadata scans and ordinary
 selection retain their existing accounting. A fresh request resets the counter.
 Explicit blob roots survive `blob:none`, enabling ordinary partial-clone checkout.
+
 For synchronous selected-pack caching, `serve_with_selected_pack` uses the same
 route, want authorization and bounded selection as `serve_with_selection`.
 Its trusted callback receives the exact selected indices, read scratch and a
@@ -134,3 +135,9 @@ on failure. Buffer the complete response before sending HTTP success metadata,
 or abort an already started transport. A failed sink can leave a verified cache
 entry for a later request. This synchronous hook retains no cache borrow or
 response cursor; it adds no async storage or streaming-memory guarantee.
+
+`serve_with_selected_pack_policy` accepts the same explicit `WantOptions` as
+the policy-aware uncached API. Its shared preparation rechecks the grant and
+want-occurrence cap before any callback/cache access, including a warmed hit.
+The original selected-pack hook remains strict. Neither cached bytes nor a
+client capability can enable a host policy.

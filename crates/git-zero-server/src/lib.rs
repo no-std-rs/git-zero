@@ -82,7 +82,11 @@ pub fn serve_with_selection_policy<R: Repository + ?Sized>(
     output: &mut impl Write,
 ) -> Result<Response> {
     serve_with_selected_pack_policy(
-        repository, request, storage, options, output,
+        repository,
+        request,
+        storage,
+        options,
+        output,
         |indices, read, packed| {
             pack::write_selected_with_scratch(repository, indices, read, packed).map(|_| ())
         },
@@ -110,7 +114,14 @@ pub fn serve_with_selected_pack<R: Repository + ?Sized, W: Write>(
     output: &mut W,
     write_selected: impl FnOnce(&[usize], &mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<Response> {
-    serve_with_selected_pack_policy(repository, request, storage, WantOptions::STRICT, output, write_selected)
+    serve_with_selected_pack_policy(
+        repository,
+        request,
+        storage,
+        WantOptions::STRICT,
+        output,
+        write_selected,
+    )
 }
 
 /// Apply an explicit host want policy before the selected-pack writer or cache.

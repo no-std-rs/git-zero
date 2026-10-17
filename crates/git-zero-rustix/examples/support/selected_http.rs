@@ -2,7 +2,7 @@
 use git_zero::{
     Error, ObjectId, Repository, Result, ValidatedRepository,
     cache::selected::{self, Buffers, Outcome, PackCache, Selection},
-    http::{self, Response, SelectionBuffers},
+    http::{self, Response, SelectionBuffers, WantOptions},
     io::SliceWriter,
 };
 use rustix::fd::AsFd;
@@ -41,6 +41,7 @@ impl Storage {
         socket: &impl AsFd,
         repository: &ValidatedRepository<'_, '_, R>,
         cache: &mut impl PackCache,
+        options: WantOptions,
     ) -> Result<(u16, Option<Outcome>)> {
         let mut outcome = None;
         let byte_limit = self.pack.len();
@@ -54,10 +55,11 @@ impl Storage {
                 });
             };
             request.path = path;
-            http::serve_with_selected_pack(
+            http::serve_with_selected_pack_policy(
                 repository,
                 request,
                 &mut self.selection.storage(16_777_216),
+                options,
                 &mut output,
                 |indices, read, framed| {
                     outcome = Some(selected::write(

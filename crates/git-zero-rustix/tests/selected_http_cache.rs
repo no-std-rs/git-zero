@@ -9,6 +9,7 @@ use fixture::Fixture;
 use git_zero::{
     RefRepository, ValidatedRepository,
     cache::selected::{FixedCache, Outcome, PackCache},
+    http::WantOptions,
 };
 use git_zero_rustix::{FileRepository, accept, cache::DiskCache, listen, local_port};
 use rustix::{
@@ -103,7 +104,7 @@ fn phase(
                     break;
                 }
                 let (status, outcome) = allocations::without_allocations(|| {
-                    storage.respond(&socket, &repository, cache)
+                    storage.respond(&socket, &repository, cache, WantOptions::STRICT)
                 })
                 .unwrap();
                 assert_eq!(status, 200);
@@ -216,7 +217,6 @@ impl PackCache for Failure {
 
 #[test]
 fn buffered_pack_stage_errors_replace_controls_before_any_http_success() {
-    use std::io::{Read, Write};
     let (mut tree, mut commit) = ([0; 128], [0; 512]);
     let source = git_zero::Snapshot::new(&[], &mut tree, &mut commit).unwrap();
     let (mut metadata, mut by_id) = ([None; 2], [0; 2]);
@@ -240,55 +240,159 @@ fn buffered_pack_stage_errors_replace_controls_before_any_http_success() {
         Failure::Corrupt,
         Failure::Capacity,
     ] {
-        let listener = listen(0).unwrap();
-        let mut client = TcpStream::connect(("127.0.0.1", local_port(&listener).unwrap())).unwrap();
-        let server = accept(&listener).unwrap();
-        client
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
         let mut storage = selected_http::Storage::new(if matches!(failure, Failure::Capacity) {
             0
         } else {
             8192
         })
         .unwrap();
-        std::thread::scope(|scope| {
-            let repository = &repository;
-            let serving = scope.spawn(move || {
-                let mut cache = failure;
-                allocations::without_allocations(|| {
-                    storage.respond(&server, repository, &mut cache)
-                })
-                .unwrap()
-            });
-            client.write_all(request.as_bytes()).unwrap();
-            client.shutdown(std::net::Shutdown::Write).unwrap();
-            let mut wire = Vec::new();
-            client.take(65536).read_to_end(&mut wire).unwrap();
-            let (status, outcome) = serving.join().unwrap();
-            assert_eq!(
-                status,
-                match failure {
-                    Failure::Lookup | Failure::Put => 500,
-                    Failure::Capacity => 413,
-                    Failure::Corrupt => 400,
-                }
-            );
-            assert_eq!(outcome, None);
-            assert!(wire.starts_with(format!("HTTP/1.0 {status} ").as_bytes()));
-            let body = &wire[wire
-                .windows(4)
-                .position(|bytes| bytes == b"\r\n\r\n")
-                .unwrap()
-                + 4..];
-            let mut packet = body;
-            assert!(
-                matches!(git_zero::pktline::read(&mut packet).unwrap(), Some(git_zero::pktline::Packet::Data(bytes)) if bytes.starts_with(b"ERR "))
-            );
-            assert!(
-                packet.is_empty(),
-                "provisional ACK/pack leaked into failure response"
-            );
+        let ((status, outcome), wire) = exchange(
+            &repository,
+            &mut failure.clone(),
+            &mut storage,
+            WantOptions::STRICT,
+            request.as_bytes(),
+        );
+        assert_eq!(
+            status,
+            match failure {
+                Failure::Lookup | Failure::Put => 500,
+                Failure::Capacity => 413,
+                Failure::Corrupt => 400,
+            }
+        );
+        assert_eq!(outcome, None);
+        assert!(wire.starts_with(format!("HTTP/1.0 {status} ").as_bytes()));
+        assert_error_body(&wire);
+    }
+}
+
+fn exchange<R: git_zero::Repository + Sync>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    cache: &mut (impl PackCache + Send),
+    storage: &mut selected_http::Storage,
+    options: WantOptions,
+    request: &[u8],
+) -> ((u16, Option<Outcome>), Vec<u8>) {
+    use std::io::{Read, Write};
+    let listener = listen(0).unwrap();
+    let mut client = TcpStream::connect(("127.0.0.1", local_port(&listener).unwrap())).unwrap();
+    let server = accept(&listener).unwrap();
+    client
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    std::thread::scope(|scope| {
+        let serving = scope.spawn(move || {
+            allocations::without_allocations(|| {
+                storage.respond(&server, repository, cache, options)
+            })
+            .unwrap()
         });
+        client.write_all(request).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut wire = Vec::new();
+        client.take(65536).read_to_end(&mut wire).unwrap();
+        (serving.join().unwrap(), wire)
+    })
+}
+
+fn assert_error_body(wire: &[u8]) {
+    let body = &wire[wire
+        .windows(4)
+        .position(|bytes| bytes == b"\r\n\r\n")
+        .unwrap()
+        + 4..];
+    let mut packet = body;
+    assert!(
+        matches!(git_zero::pktline::read(&mut packet).unwrap(), Some(git_zero::pktline::Packet::Data(bytes)) if bytes.starts_with(b"ERR "))
+    );
+    assert!(
+        packet.is_empty(),
+        "provisional ACK/pack leaked into failure response"
+    );
+}
+
+#[test]
+fn buffered_example_rechecks_explicit_grant_and_revocation_on_one_warmed_cache() {
+    use git_zero::{File, ObjectFormat, Repository, Snapshot};
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let files = [File {
+            name: "secret-to-strict-wants",
+            contents: b"visible authorized bytes\0\xff",
+        }];
+        let (mut tree, mut commit) = ([0; 256], [0; 512]);
+        let snapshot = Snapshot::new_with_format(&files, &mut tree, &mut commit, format).unwrap();
+        let (mut metadata, mut by_id) = ([None; 3], [0; 3]);
+        let repository = ValidatedRepository::new(
+            &snapshot,
+            &mut metadata,
+            &mut by_id,
+            &mut [0; 17],
+            &mut [0; 128],
+        )
+        .unwrap();
+        let want = snapshot.object_id(2).unwrap();
+        for version in 0..=2 {
+            let mut body = Vec::new();
+            let mut packet = |line: &str| {
+                body.extend_from_slice(format!("{:04x}{line}", line.len() + 4).as_bytes());
+            };
+            if version == 2 {
+                packet("command=fetch\n");
+                packet(&format!(
+                    "{}\n",
+                    std::str::from_utf8(format.capability()).unwrap()
+                ));
+                body.extend_from_slice(b"0001");
+                let line = format!("want {want}\n");
+                body.extend_from_slice(format!("{:04x}{line}", line.len() + 4).as_bytes());
+            } else {
+                packet(&format!(
+                    "want {want} {}\n",
+                    std::str::from_utf8(format.capability()).unwrap()
+                ));
+                body.extend_from_slice(b"0000");
+            }
+            body.extend_from_slice(b"0009done\n");
+            if version == 2 {
+                body.extend_from_slice(b"0000");
+            }
+            let mut request = format!(
+                "POST /repo.git/git-upload-pack HTTP/1.1\r\nContent-Length: {}\r\nContent-Type: application/x-git-upload-pack-request\r\n",
+                body.len()
+            );
+            if version != 0 {
+                request.push_str(&format!("Git-Protocol: version={version}\r\n"));
+            }
+            request.push_str("\r\n");
+            let mut request = request.into_bytes();
+            request.extend_from_slice(&body);
+            let mut storage = selected_http::Storage::new(8192).unwrap();
+            let mut resident = [0; 8192];
+            let mut cache = FixedCache::new(&mut resident);
+            let grant = WantOptions::all_visible_reachable(1);
+            for (options, expected) in [
+                (WantOptions::STRICT, (400, None)),
+                (grant, (200, Some(Outcome::Miss))),
+                (grant, (200, Some(Outcome::Hit))),
+                (WantOptions::STRICT, (400, None)),
+                (WantOptions::all_visible_reachable(0), (413, None)),
+                (grant, (200, Some(Outcome::Hit))),
+            ] {
+                let before = cache.statistics();
+                let (result, wire) =
+                    exchange(&repository, &mut cache, &mut storage, options, &request);
+                assert_eq!(result, expected);
+                assert!(wire.starts_with(format!("HTTP/1.0 {} ", expected.0).as_bytes()));
+                if expected.0 != 200 {
+                    assert_error_body(&wire);
+                    assert_eq!(
+                        cache.statistics(),
+                        before,
+                        "denied request consulted the cache"
+                    );
+                }
+            }
+        }
     }
 }
