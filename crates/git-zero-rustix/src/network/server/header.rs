@@ -32,7 +32,7 @@ pub(super) fn read_header(
     storage: &mut [u8],
     max_wire_bytes: Option<usize>,
 ) -> Result<(usize, usize)> {
-    let (capacity, exhausted_error) = super::capacity(storage.len(), max_wire_bytes);
+    let capacity = max_wire_bytes.map_or(storage.len(), |limit| limit.min(storage.len()));
     let mut length = 0;
     let mut scan = HeaderScan::default();
     let end = loop {
@@ -40,7 +40,11 @@ pub(super) fn read_header(
             break end;
         }
         if length == capacity {
-            return Err(exhausted_error);
+            return Err(if max_wire_bytes == Some(length) {
+                Error::LimitExceeded
+            } else {
+                Error::BufferTooSmall
+            });
         }
         let count = receive(socket, &mut storage[length..capacity])?;
         if count == 0 {
@@ -78,15 +82,17 @@ impl<'a> Headers<'a> {
             if name.eq_ignore_ascii_case("transfer-encoding") {
                 return Err(Error::Unsupported);
             }
-            let slot = [
-                ("content-type", &mut parsed.content_type),
-                ("git-protocol", &mut parsed.git_protocol),
-                ("content-encoding", &mut parsed.content_encoding),
-                ("content-length", &mut parsed.content_length),
-            ]
-            .into_iter()
-            .find_map(|(key, slot)| name.eq_ignore_ascii_case(key).then_some(slot));
-            let Some(slot) = slot else { continue };
+            let slot = if name.eq_ignore_ascii_case("content-type") {
+                &mut parsed.content_type
+            } else if name.eq_ignore_ascii_case("git-protocol") {
+                &mut parsed.git_protocol
+            } else if name.eq_ignore_ascii_case("content-encoding") {
+                &mut parsed.content_encoding
+            } else if name.eq_ignore_ascii_case("content-length") {
+                &mut parsed.content_length
+            } else {
+                continue;
+            };
             if slot.replace(value.trim_matches([' ', '\t'])).is_some() {
                 return Err(Error::InvalidRequest);
             }

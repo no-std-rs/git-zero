@@ -1,5 +1,5 @@
 //! Blocking HTTP server socket and request/response framing.
-use super::{SOCKET_FLAGS, SocketWriter, apply_timeouts, backend, close_on_exec, receive, socket};
+use super::{SOCKET_FLAGS, SocketWriter, apply_timeouts, close_on_exec, receive, socket};
 use core::{
     fmt::Write as _,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
@@ -26,31 +26,6 @@ pub struct RequestLimits {
     pub max_wire_bytes: Option<usize>,
     /// Decoded body bytes, including identity bodies, without HTTP headers.
     pub max_body_bytes: Option<usize>,
-}
-
-impl RequestLimits {
-    // Header intake proves header <= max_wire_bytes when that policy is set.
-    // Check both known quotas before the separate physical body reservation.
-    fn check_declared(self, header: usize, body: usize, identity_body: bool) -> Result<()> {
-        let quotas = [
-            self.max_wire_bytes.map(|limit| limit - header),
-            self.max_body_bytes.filter(|_| identity_body),
-        ];
-        if quotas.into_iter().flatten().any(|limit| body > limit) {
-            Err(Error::LimitExceeded)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-// Streaming intake/output reaches the first capacity boundary. Policy wins a
-// tie; this deliberately differs from checking a fully known declared size.
-fn capacity(physical: usize, policy: Option<usize>) -> (usize, Error) {
-    match policy {
-        Some(limit) if limit <= physical => (limit, Error::LimitExceeded),
-        _ => (physical, Error::BufferTooSmall),
-    }
 }
 
 /// Per-blocking-call timeouts applied only to the accepted socket. These do not
@@ -88,11 +63,11 @@ pub fn listen_on(address: SocketAddr) -> Result<OwnedFd> {
     // OpenBSD IPv6 sockets are always IPv6-only and this option is read-only.
     #[cfg(not(target_os = "openbsd"))]
     if address.is_ipv6() {
-        sockopt::set_ipv6_v6only(&socket, true).map_err(backend)?;
+        sockopt::set_ipv6_v6only(&socket, true).map_err(|_| Error::Backend)?;
     }
-    sockopt::set_socket_reuseaddr(&socket, true).map_err(backend)?;
-    net::bind(&socket, &address).map_err(backend)?;
-    net::listen(&socket, 128).map_err(backend)?;
+    sockopt::set_socket_reuseaddr(&socket, true).map_err(|_| Error::Backend)?;
+    net::bind(&socket, &address).map_err(|_| Error::Backend)?;
+    net::listen(&socket, 128).map_err(|_| Error::Backend)?;
     Ok(socket)
 }
 
@@ -102,7 +77,7 @@ pub fn local_port(socket: &impl AsFd) -> Result<u16> {
 
 /// Read the actual bound IP address, including an OS-assigned port.
 pub fn local_address(socket: &impl AsFd) -> Result<SocketAddr> {
-    let address = net::getsockname(socket).map_err(backend)?;
+    let address = net::getsockname(socket).map_err(|_| Error::Backend)?;
     SocketAddr::try_from(address).map_err(|_| Error::Backend)
 }
 
@@ -134,7 +109,8 @@ fn accept_configured(
     socket: &impl AsFd,
     configure: impl FnOnce(&OwnedFd) -> Result<()>,
 ) -> Result<OwnedFd> {
-    let client = close_on_exec(net::accept_with(socket, SOCKET_FLAGS).map_err(backend)?)?;
+    let client =
+        close_on_exec(net::accept_with(socket, SOCKET_FLAGS).map_err(|_| Error::Backend)?)?;
     configure(&client)?;
     Ok(client)
 }
@@ -168,10 +144,17 @@ pub fn read_request_with_limits<'a>(
         .map(super::parse_length)
         .transpose()?
         .unwrap_or(0);
-    let identity_body = headers
-        .content_encoding
-        .is_none_or(|value| value.eq_ignore_ascii_case("identity"));
-    limits.check_declared(end, total, identity_body)?;
+    // Header intake already guarantees end <= an explicit wire quota.
+    if limits
+        .max_wire_bytes
+        .is_some_and(|limit| total > limit - end)
+        || (limits.max_body_bytes.is_some_and(|limit| total > limit)
+            && headers
+                .content_encoding
+                .is_none_or(|value| value.eq_ignore_ascii_case("identity")))
+    {
+        return Err(Error::LimitExceeded);
+    }
     if total > storage.len() {
         return Err(Error::BufferTooSmall);
     }
@@ -184,35 +167,40 @@ pub fn read_request_with_limits<'a>(
     }
     let (wire, expanded) = storage.split_at_mut(total);
     request.body = wire;
-    if !identity_body {
-        if !headers
-            .content_encoding
-            .is_some_and(|value| value.eq_ignore_ascii_case("gzip"))
-        {
-            return Err(Error::Unsupported);
+    match headers.content_encoding {
+        None => {}
+        Some(value) if value.eq_ignore_ascii_case("identity") => {}
+        Some(value) if value.eq_ignore_ascii_case("gzip") => {
+            use git_zero::zlib::{InflateLimits, WINDOW_SIZE, decode_gzip};
+            let length = decode_gzip(
+                request.body,
+                expanded,
+                &mut [0; WINDOW_SIZE],
+                InflateLimits {
+                    max_output: limits
+                        .max_body_bytes
+                        .map_or(expanded.len(), |limit| limit.min(expanded.len()))
+                        as u64,
+                    max_ratio: 128,
+                    ratio_slack: expanded.len() as u64,
+                },
+            )
+            .map_err(|error| {
+                // decode_gzip's only BufferTooSmall path is incomplete output.
+                // Input exhaustion is InvalidZlib because input is complete.
+                if error == Error::BufferTooSmall
+                    && limits
+                        .max_body_bytes
+                        .is_some_and(|limit| limit <= expanded.len())
+                {
+                    Error::LimitExceeded
+                } else {
+                    error
+                }
+            })?;
+            request.body = &expanded[..length];
         }
-        use git_zero::zlib::{InflateLimits, WINDOW_SIZE, decode_gzip};
-        let (output_capacity, exhausted_error) = capacity(expanded.len(), limits.max_body_bytes);
-        let length = decode_gzip(
-            request.body,
-            expanded,
-            &mut [0; WINDOW_SIZE],
-            InflateLimits {
-                max_output: output_capacity as u64,
-                max_ratio: 128,
-                ratio_slack: expanded.len() as u64,
-            },
-        )
-        .map_err(|error| {
-            // decode_gzip's only BufferTooSmall path is incomplete output.
-            // Input exhaustion is InvalidZlib because input is complete.
-            if error == Error::BufferTooSmall {
-                exhausted_error
-            } else {
-                error
-            }
-        })?;
-        request.body = &expanded[..length];
+        _ => return Err(Error::Unsupported),
     }
     Ok(request)
 }
@@ -273,40 +261,37 @@ mod tests {
     #[test]
     fn explicit_ip_listeners_report_bound_addresses_and_isolate_ipv6() {
         for value in ["127.0.0.1:0", "[::1]:0"] {
-            check_ip_listener(value.parse().unwrap());
-        }
-    }
-
-    fn check_ip_listener(address: SocketAddr) {
-        let listener = listen_on(address).unwrap();
-        let bound = local_address(&listener).unwrap();
-        assert_eq!(bound.ip(), address.ip());
-        assert_ne!(bound.port(), 0);
-        assert_eq!(local_port(&listener).unwrap(), bound.port());
-        assert!(
-            rustix::io::fcntl_getfd(&listener)
-                .unwrap()
-                .contains(rustix::io::FdFlags::CLOEXEC)
-        );
-        let family = if address.is_ipv4() {
-            net::AddressFamily::INET
-        } else {
-            assert!(sockopt::ipv6_v6only(&listener).unwrap());
-            net::AddressFamily::INET6
-        };
-        let client = socket(family).unwrap();
-        net::connect(&client, &bound).unwrap();
-        let accepted = accept(&listener).unwrap();
-        assert!(
-            rustix::io::fcntl_getfd(&accepted)
-                .unwrap()
-                .contains(rustix::io::FdFlags::CLOEXEC)
-        );
-        for timeout in [sockopt::Timeout::Recv, sockopt::Timeout::Send] {
-            assert_eq!(
-                sockopt::socket_timeout(&accepted, timeout).unwrap(),
-                Some(core::time::Duration::from_secs(10))
+            let address: SocketAddr = value.parse().unwrap();
+            let listener = listen_on(address).unwrap();
+            let bound = local_address(&listener).unwrap();
+            assert_eq!(bound.ip(), address.ip());
+            assert_ne!(bound.port(), 0);
+            assert_eq!(local_port(&listener).unwrap(), bound.port());
+            assert!(
+                rustix::io::fcntl_getfd(&listener)
+                    .unwrap()
+                    .contains(rustix::io::FdFlags::CLOEXEC)
             );
+            let family = if address.is_ipv4() {
+                net::AddressFamily::INET
+            } else {
+                assert!(sockopt::ipv6_v6only(&listener).unwrap());
+                net::AddressFamily::INET6
+            };
+            let client = socket(family).unwrap();
+            net::connect(&client, &bound).unwrap();
+            let accepted = accept(&listener).unwrap();
+            assert!(
+                rustix::io::fcntl_getfd(&accepted)
+                    .unwrap()
+                    .contains(rustix::io::FdFlags::CLOEXEC)
+            );
+            for timeout in [sockopt::Timeout::Recv, sockopt::Timeout::Send] {
+                assert_eq!(
+                    sockopt::socket_timeout(&accepted, timeout).unwrap(),
+                    Some(core::time::Duration::from_secs(10))
+                );
+            }
         }
     }
 

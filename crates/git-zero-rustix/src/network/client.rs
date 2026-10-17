@@ -1,5 +1,5 @@
 //! Blocking IPv4 HTTP/1.0 client transport.
-use super::{SocketWriter, backend, content_length, header_end, receive, socket, timeouts};
+use super::{SocketWriter, content_length, header_end, receive, socket, timeouts};
 use core::{fmt::Write as _, net::SocketAddrV4};
 use git_zero::{
     Error, Result,
@@ -21,7 +21,7 @@ impl Transport for HttpTransport<'_> {
     fn request(&mut self, request: Request<'_>, response: &mut [u8]) -> Result<(u16, usize)> {
         let socket = socket(net::AddressFamily::INET)?;
         timeouts(&socket)?;
-        net::connect(&socket, &self.address).map_err(backend)?;
+        net::connect(&socket, &self.address).map_err(|_| Error::Backend)?;
         self.send_request(&socket, request)?;
         self.read_response(&socket, response)
     }
