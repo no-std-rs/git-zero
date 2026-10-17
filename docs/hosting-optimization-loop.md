@@ -164,4 +164,35 @@ The 6.7-second initial-push tails are localized to outer receive POSTs: advertis
 nearby service RPCs took 1–50 ms, and native measured phases totaled 60–83 ms. Existing logs cannot
 separate HTTP body intake, Worker forwarding and scheduling. A separate 7.8-second append stall is
 localized to a slow bundle PUT. These observations do not justify attributing every delay to one cause.
-A clean independent design agent is investigating before the next implementation.
+The [isolated transport diagnosis](benchmarks/hosting-cost-loop-2026-10-18/transport-diagnosis/REPORT.md) reproduces the body-intake stall without Git, R2 or SQLite. Direct uploads were fast. A fresh buffered-versus-streaming control did not reproduce it, so neither buffering nor concurrent accept is an evidenced fix. The original guard failures remain. Further transport changes need correlated client and Rust HTTP-stage evidence.
+
+### Round 2 design: bounded snapshot read batching
+
+An independent design agent audited the R1 receipts. The fixed cold workloads perform 166 and 296 R2
+GETs across 48 and 49 nonempty snapshot rehydrates. Batching each snapshot within a 16 MiB framed response
+is projected to remove 365 Worker and DO bridge requests while preserving the actual R2 calls and bytes.
+The projected aggregate is $1.6599239036, 9.004% below R1. This estimate is not a measured result or an
+acceptance decision. A clean implementation agent is adding bounded binary framing, scalar defaults at
+the service boundary, full length/hash checks, legacy fallback and unchanged per-binding receipts.
+
+R2 implementation is committed and pushed as `b0a24bce5877440d260b4e16266bee45c8a8c938`, with the
+bounded bulk-request intake correction in `4711983247ae912c48146465b02ffa9791e5ba7a`.
+The 38 unit, 9 hosting and lifecycle tests, workspace Clippy and all six real-workerd contracts passed.
+The actual cross-pack contract observes one Worker/DO service request containing three R2 GETs with exact
+bytes; partial missing-object reads retain complete receipts. Both declared and chunked oversized JSON
+requests are rejected before DO dispatch and a following metrics request completes normally.
+
+### Workload clarification: interleaved large writes and historical reads
+
+The user requested a realistic push/fetch sequence instead of treating one write phase and one read phase
+as representative. The next experiment therefore has an explicit `interleaved-v1` identity: 16/64 MiB,
+cold/warm, 32 pushes and 56 fetches. Every push publishes main plus an immutable historical ref, followed
+immediately by a latest fetch. Every fourth cycle also fetches two older refs (with and without existing
+objects), then latest again. Seven subsequent pushes replace 8 MiB of logical data with independent data.
+The 64 MiB initial transfer is expected around 34 MiB; actual wire sizes must substantiate those labels.
+
+The existing batch reports remain evidence for their original workload. R2's projected 9.004% saving is not
+an interleaved-workload prediction, and its old batch matrix has not been run. A clean agent is extending
+the Rust runner and evaluator while retaining legacy behavior. Fresh matching interleaved baseline and
+candidate traces will use the same runner and committed Worker, with scalar R1 versus batched R2 native
+binaries, explicit hashes, unchanged budgets and the complete ordered fixture identity.

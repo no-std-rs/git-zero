@@ -1,0 +1,7 @@
+name = "git-zero-transport-diagnostic"
+main = "worker.js"
+compatibility_date = "2026-10-06"
+workers_dev = false
+send_metrics = false
+[observability]
+enabled = false
