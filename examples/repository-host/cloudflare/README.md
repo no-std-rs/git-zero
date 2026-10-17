@@ -114,6 +114,8 @@ raw bytes per requested entry. All framing counts toward the response limit.
 Repeated keys retain one actual R2 GET per occurrence. Valid larger legacy chunks
 use scalar GETs. The Rust reader rejects bad framing, lengths and SHA-256 hashes
 before materializing pack files; a failed read leaves the native view dirty.
+The Worker finishes bounded bulk JSON intake before forwarding to the Durable
+Object; oversized uploads return 413 with one Worker request and no DO dispatch.
 Chunk and reconstructed file payloads each stay within the existing 128 MiB
 snapshot limit, with at most one 16 MiB bridge response in flight. An empty
 snapshot issues no blob RPC. Failed batches retain receipts for completed binding

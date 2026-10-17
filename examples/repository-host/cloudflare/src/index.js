@@ -231,9 +231,15 @@ export default {
         const headers = new Headers(request.headers);
         headers.set("x-hosting-repo", repo);
         headers.set("x-hosting-phase", currentPhase);
+        // Bound and finish this small JSON upload before entering the DO gate.
+        // Returning a DO error while its forwarded upload is still active can
+        // leave workerd's request pump holding the repository gate indefinitely.
+        const serviceRequest = url.pathname === "/_services/blobs/read" && request.method === "POST"
+          ? new Request(request.url, { method: request.method, headers, body: await bytes(request, MAX_MANIFEST_BYTES) })
+          : new Request(request, { headers });
         const stub = env.REPOSITORIES.get(env.REPOSITORIES.idFromName(repo));
         let response;
-        try { response = await stub.fetch(new Request(request, { headers })); }
+        try { response = await stub.fetch(serviceRequest); }
         catch (error) { incomplete(repo, "Durable Object dispatch failed; side effects may be unaccounted"); throw error; }
         try { acceptReceipt(repo, response.headers.get(USAGE_HEADER)); }
         catch { incomplete(repo, "missing or invalid Durable Object usage receipt"); }

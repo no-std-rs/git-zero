@@ -248,14 +248,38 @@ fn real_snapshot_bulk_reads_cross_packs_and_account_partial_missing_reads() {
 }
 
 fn bulk_post_status(worker: &RealWorker, body: &[u8]) -> u16 {
+    bulk_post_status_framed(worker, body, false)
+}
+
+fn bulk_post_status_framed(worker: &RealWorker, body: &[u8], chunked: bool) -> u16 {
     use std::io::{BufRead, BufReader, Write};
     let authority = worker.origin.strip_prefix("http://").unwrap();
     let mut stream = std::net::TcpStream::connect(authority).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
-    write!(stream, "POST /_services/blobs/read HTTP/1.1\r\nHost: {authority}\r\nx-hosting-token: {}\r\nx-hosting-repo: {}\r\nx-hosting-phase: fetch\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", worker.token, worker.namespace, body.len()).unwrap();
-    stream.write_all(body).unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    write!(stream, "POST /_services/blobs/read HTTP/1.1\r\nHost: {authority}\r\nx-hosting-token: {}\r\nx-hosting-repo: {}\r\nx-hosting-phase: fetch\r\n", worker.token, worker.namespace).unwrap();
+    if chunked {
+        write!(
+            stream,
+            "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(body).unwrap();
+        stream.write_all(b"\r\n0\r\n\r\n").unwrap();
+    } else {
+        write!(
+            stream,
+            "Content-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(body).unwrap();
+    }
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line).unwrap();
     line.split_whitespace().nth(1).unwrap().parse().unwrap()
@@ -291,14 +315,20 @@ fn real_bulk_read_validates_all_bounds_before_binding_io() {
         413
     );
     assert_eq!(bulk_post_status(&worker, &vec![b' '; 1_500_001]), 413);
+    assert_eq!(
+        bulk_post_status_framed(&worker, &vec![b' '; 1_500_001], true),
+        413
+    );
     let after = usage(&services);
     let delta = after
         .workload_counters()
         .unwrap()
         .checked_sub(&before.workload_counters().unwrap())
         .unwrap();
-    assert_eq!(delta.worker_service_requests, invalid.len() as u64 + 2);
-    assert_eq!(delta.do_requests, invalid.len() as u64 + 2);
+    assert_eq!(delta.worker_service_requests, invalid.len() as u64 + 3);
+    // Both oversized JSON bodies are rejected by the Worker before DO dispatch;
+    // Invalid chunks within the cap and an oversized response budget reach it.
+    assert_eq!(delta.do_requests, invalid.len() as u64 + 1);
     assert_eq!(
         (
             delta.r2_class_b,
