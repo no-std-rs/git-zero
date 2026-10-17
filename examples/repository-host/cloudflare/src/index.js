@@ -523,13 +523,14 @@ export class RepositoryServices {
       const objects = await this.inventory(prefix);
       const liveBytes = objects.reduce((sum, object) => sum + object.size, 0);
       this.peakBytes = Math.max(this.peakBytes, liveBytes);
-      const row = this.exec("SELECT LENGTH(CAST(manifest AS BLOB)) AS bytes FROM repository_state WHERE id = 1")[0];
+      const row = this.exec("SELECT generation, LENGTH(CAST(manifest AS BLOB)) AS bytes FROM repository_state WHERE id = 1")[0];
       const counters = { ...this.totals };
       if (!this.sqlRowsKnown) { counters.do_rows_read = null; counters.do_rows_written = null; }
       return json({
         ...counters, r2_live_objects: objects.length, r2_live_bytes: liveBytes,
         r2_peak_bytes: this.peakBytes, do_sqlite_bytes: this.ctx.storage.sql.databaseSize,
-        manifest_bytes: row?.bytes ?? 0, worker_cpu_ms: null, do_gb_seconds: null,
+        manifest_bytes: row?.bytes ?? 0, manifest_generation: row?.generation ?? 0,
+        worker_cpu_ms: null, do_gb_seconds: null,
         repository: repo, by_phase: this.byPhase, operations: this.operations,
         r2_key_access: {
           capacity: 256, tracked_keys: this.keyUsage.size, truncated: this.keyUsageTruncated,

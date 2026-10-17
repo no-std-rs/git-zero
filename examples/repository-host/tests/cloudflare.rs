@@ -541,6 +541,10 @@ fn real_durable_object_cas_and_failed_publication_recovery() {
     let services = worker.services();
     let state = Arc::new(DurableStateStore::new(services.clone()));
     assert_eq!(state.load().unwrap(), Manifest::default());
+    assert_eq!(
+        services.usage().unwrap()["manifest_generation"].as_u64(),
+        Some(0)
+    );
     let handles: Vec<_> = (0..8)
         .map(|_| {
             let state = state.clone();
@@ -567,6 +571,10 @@ fn real_durable_object_cas_and_failed_publication_recovery() {
     let reopened = DurableStateStore::new(worker.services());
     let published = reopened.load().unwrap();
     assert_eq!(published.generation, 1);
+    assert_eq!(
+        services.usage().unwrap()["manifest_generation"].as_u64(),
+        Some(1)
+    );
     assert!(!reopened.compare_and_swap(0, &published).unwrap());
     assert_eq!(
         reopened.compare_and_swap(1, &published).unwrap_err().kind(),
@@ -580,6 +588,10 @@ fn real_durable_object_cas_and_failed_publication_recovery() {
     let blobs = R2BlobStore::new(services.clone());
     blobs.put(&key, data).unwrap();
     assert!(!state.compare_and_swap(0, &published).unwrap());
+    assert_eq!(
+        services.usage().unwrap()["manifest_generation"].as_u64(),
+        Some(1)
+    );
     let directory = Directory(std::env::temp_dir().join(&worker.namespace));
     let host = NativeHost::open_cloudflare(
         directory.0.clone(),
