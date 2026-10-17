@@ -1,3 +1,5 @@
+#[path = "common/server.rs"]
+mod server;
 use git_zero::{
     EmptyRepository, File, Repository, Snapshot, ValidatedRepository, http, io::SliceWriter,
 };
@@ -6,10 +8,8 @@ use git_zero_rustix::{
 };
 use std::{
     ffi::CString,
-    net::TcpStream,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 struct Cleanup(PathBuf);
@@ -26,32 +26,18 @@ impl Drop for Cleanup {
     }
 }
 
-struct Stop<'a> {
-    stopped: &'a AtomicBool,
-    port: u16,
-}
-impl Drop for Stop<'_> {
-    fn drop(&mut self) {
-        self.stopped.store(true, Ordering::SeqCst);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-    }
-}
-
-fn serve(repository: &impl Repository, listener: &impl rustix::fd::AsFd, stopped: &AtomicBool) {
-    let mut request_storage = [0; 4096];
-    let mut response_storage = [0; 8192];
-    loop {
-        let socket = accept(listener).unwrap();
-        if stopped.load(Ordering::SeqCst) {
-            break;
-        }
-        let mut request = read_request(&socket, &mut request_storage).unwrap();
-        request.path = request.path.strip_prefix("/repo.git/").unwrap();
-        let mut output = SliceWriter::new(&mut response_storage);
-        let response =
-            http::serve_with_scratch(repository, request, &mut [0; 17], &mut output).unwrap();
-        respond(&socket, response, output.as_bytes()).unwrap();
-    }
+fn serve(
+    repository: &impl Repository,
+    socket: &impl rustix::fd::AsFd,
+    request_storage: &mut [u8],
+    response_storage: &mut [u8],
+) {
+    let mut request = read_request(socket, request_storage).unwrap();
+    request.path = request.path.strip_prefix("/repo.git/").unwrap();
+    let mut output = SliceWriter::new(response_storage);
+    let response =
+        http::serve_with_scratch(repository, request, &mut [0; 17], &mut output).unwrap();
+    respond(socket, response, output.as_bytes()).unwrap();
 }
 
 fn compare(repository: &(impl Repository + Sync), state: &str) {
@@ -70,35 +56,43 @@ fn compare(repository: &(impl Repository + Sync), state: &str) {
     let root = std::env::temp_dir().join(format!("git-zero-head-{}-{port}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
     let _cleanup = Cleanup(root.clone());
-    let stopped = AtomicBool::new(false);
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            serve(&repository, &listener, &stopped);
-        });
-        let _stop = Stop {
-            stopped: &stopped,
-            port,
-        };
-        let output = Command::new("python3")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../tests/server_head_states.py"
-            ))
-            .arg("--root")
-            .arg(&root)
-            .arg("--zero-url")
-            .arg(format!("http://127.0.0.1:{port}/repo.git"))
-            .arg("--state")
-            .arg(state)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{state}: {}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    });
+    let mut request_storage = [0; 4096];
+    let mut response_storage = [0; 8192];
+    server::while_serving(
+        port,
+        || accept(&listener).unwrap(),
+        |socket| {
+            serve(
+                &repository,
+                socket,
+                &mut request_storage,
+                &mut response_storage,
+            )
+        },
+        |port| compare_client(&root, port, state),
+    );
+}
+
+fn compare_client(root: &Path, port: u16, state: &str) {
+    let output = Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/server_head_states.py"
+        ))
+        .arg("--root")
+        .arg(root)
+        .arg("--zero-url")
+        .arg(format!("http://127.0.0.1:{port}/repo.git"))
+        .arg("--state")
+        .arg(state)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{state}: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

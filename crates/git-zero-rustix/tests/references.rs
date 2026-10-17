@@ -2,10 +2,12 @@
 mod allocations;
 #[path = "../examples/support/fixture.rs"]
 mod fixture;
+#[path = "common/server.rs"]
+mod server;
 
 use git_zero::{
     Error, ObjectId, RefRepository, Repository, ValidatedRepository,
-    http::{self, Response, SelectionStorage},
+    http::{self, Response, SelectionStorage, stream::ResponseEncoder},
     io::SliceWriter,
 };
 use git_zero_rustix::{
@@ -16,7 +18,7 @@ use std::{
     net::TcpStream,
     path::{Path, PathBuf},
     process::Command,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
 
@@ -30,17 +32,6 @@ impl Drop for Cleanup {
         } else {
             let _ = std::fs::remove_dir_all(&self.0);
         }
-    }
-}
-
-struct Stop<'a> {
-    stopped: &'a AtomicBool,
-    port: u16,
-}
-impl Drop for Stop<'_> {
-    fn drop(&mut self) {
-        self.stopped.store(true, Ordering::SeqCst);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
     }
 }
 
@@ -70,11 +61,11 @@ fn python(root: &Path, phase: &str, state: &str, object_format: &str, url: Optio
     );
 }
 
-fn serve<R: Repository + ?Sized>(
+fn with_reference_server<R: Repository + Sync + ?Sized>(
     repository: &ValidatedRepository<'_, '_, R>,
-    listener: &impl rustix::fd::AsFd,
-    stopped: &AtomicBool,
+    listener: &(impl rustix::fd::AsFd + Sync),
     prepared: &AtomicUsize,
+    client: impl FnOnce(u16),
 ) {
     let mut request_storage = [0; 4096];
     let mut response_storage = [0; 8192];
@@ -92,55 +83,53 @@ fn serve<R: Repository + ?Sized>(
         parse: &mut parse,
         graph_read_limit: 1_048_576,
     };
-    loop {
-        let socket = allocations::without_allocations(|| {
-            accept_with_timeouts(
-                listener,
-                AcceptedSocketTimeouts {
-                    read: Some(Duration::from_secs(2)),
-                    write: Some(Duration::from_secs(2)),
-                },
-            )
-        })
-        .unwrap();
-        if stopped.load(Ordering::SeqCst) {
-            break;
-        }
-        let result = allocations::without_allocations(|| {
-            read_request_with_limits(
-                &socket,
-                &mut request_storage,
-                RequestLimits {
-                    max_wire_bytes: Some(4096),
-                    max_body_bytes: Some(2048),
-                },
-            )
-        });
-        let mut request = match result {
-            Ok(request) => request,
-            Err(error) => {
-                respond_failure(&socket, error, &mut response_storage);
-                continue;
-            }
-        };
-        prepared.fetch_add(1, Ordering::SeqCst);
-        request.path = request.path.strip_prefix("/repo.git/").unwrap();
-        let result = allocations::without_allocations(|| {
-            http::stream::ResponseEncoder::with_selection(
-                repository,
-                request,
-                &mut selection,
-                &mut response_storage,
-            )
-        });
-        match result {
+    let timeouts = AcceptedSocketTimeouts {
+        read: Some(Duration::from_secs(2)),
+        write: Some(Duration::from_secs(2)),
+    };
+    let limits = RequestLimits {
+        max_wire_bytes: Some(4096),
+        max_body_bytes: Some(2048),
+    };
+    server::while_serving(
+        local_port(listener).unwrap(),
+        || allocations::without_allocations(|| accept_with_timeouts(listener, timeouts)).unwrap(),
+        |socket| match prepare_response(
+            repository,
+            socket,
+            prepared,
+            limits,
+            &mut request_storage,
+            &mut selection,
+            &mut response_storage,
+        ) {
             Ok(mut encoder) => {
-                git_zero_rustix::respond_stream(&socket, repository, &mut encoder, &mut staging)
+                git_zero_rustix::respond_stream(socket, repository, &mut encoder, &mut staging)
                     .unwrap()
             }
-            Err(error) => respond_failure(&socket, error, &mut response_storage),
-        }
-    }
+            Err(error) => respond_failure(socket, error, &mut response_storage),
+        },
+        client,
+    );
+}
+
+fn prepare_response<'a, R: Repository + ?Sized>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    socket: &impl rustix::fd::AsFd,
+    prepared: &AtomicUsize,
+    limits: RequestLimits,
+    request_storage: &mut [u8],
+    selection: &'a mut SelectionStorage<'_>,
+    response_storage: &'a mut [u8],
+) -> Result<ResponseEncoder<'a>, Error> {
+    let mut request = allocations::without_allocations(|| {
+        read_request_with_limits(socket, request_storage, limits)
+    })?;
+    prepared.fetch_add(1, Ordering::SeqCst);
+    request.path = request.path.strip_prefix("/repo.git/").unwrap();
+    allocations::without_allocations(|| {
+        ResponseEncoder::with_selection(repository, request, selection, response_storage)
+    })
 }
 
 fn respond_failure(socket: &impl rustix::fd::AsFd, error: Error, storage: &mut [u8]) {
@@ -194,15 +183,8 @@ fn compare_format(state: &str, object_format: &str) {
         .unwrap()
     });
     let listener = listen(0).unwrap();
-    let port = local_port(&listener).unwrap();
-    let stopped = AtomicBool::new(false);
     let prepared = AtomicUsize::new(0);
-    std::thread::scope(|scope| {
-        scope.spawn(|| serve(&repository, &listener, &stopped, &prepared));
-        let _stop = Stop {
-            stopped: &stopped,
-            port,
-        };
+    with_reference_server(&repository, &listener, &prepared, |port| {
         // Declared over-quota bodies are rejected before protocol/repository
         // preparation; the unchanged Git oracle then proves host recovery.
         reject_admission(port);

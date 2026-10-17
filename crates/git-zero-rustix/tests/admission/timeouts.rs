@@ -8,6 +8,7 @@ use git_zero_rustix::{
     local_address, read_request_with_limits, respond_stream,
 };
 use rustix::{
+    fd::AsFd,
     io::{FdFlags, fcntl_getfd},
     net::sockopt::{self, Timeout},
 };
@@ -25,50 +26,16 @@ fn accepted_settings_are_independent_and_leave_both_ip_listeners_unchanged() {
     assert_eq!(defaults.read, Some(Duration::from_secs(10)));
     assert_eq!(defaults.write, Some(Duration::from_secs(10)));
     for address in ["127.0.0.1:0", "[::1]:0"] {
-        let listener = listen_on(address.parse().unwrap()).unwrap();
-        sockopt::set_socket_timeout(&listener, Timeout::Recv, Some(Duration::from_secs(4)))
-            .unwrap();
-        sockopt::set_socket_timeout(&listener, Timeout::Send, Some(Duration::from_secs(5)))
-            .unwrap();
-        for settings in [
-            defaults,
-            AcceptedSocketTimeouts {
-                read: Some(Duration::from_secs(1)),
-                write: Some(Duration::from_secs(2)),
-            },
-            AcceptedSocketTimeouts {
-                read: None,
-                write: Some(Duration::from_secs(2)),
-            },
-            AcceptedSocketTimeouts {
-                read: Some(Duration::from_secs(1)),
-                write: None,
-            },
-            AcceptedSocketTimeouts {
-                read: None,
-                write: None,
-            },
-        ] {
-            let _peer = TcpStream::connect(local_address(&listener).unwrap()).unwrap();
-            let child = without_allocations(|| accept_with_timeouts(&listener, settings)).unwrap();
-            assert!(fcntl_getfd(&child).unwrap().contains(FdFlags::CLOEXEC));
-            assert_eq!(
-                sockopt::socket_timeout(&child, Timeout::Recv).unwrap(),
-                settings.read
-            );
-            assert_eq!(
-                sockopt::socket_timeout(&child, Timeout::Send).unwrap(),
-                settings.write
-            );
-            assert_eq!(
-                sockopt::socket_timeout(&listener, Timeout::Recv).unwrap(),
-                Some(Duration::from_secs(4))
-            );
-            assert_eq!(
-                sockopt::socket_timeout(&listener, Timeout::Send).unwrap(),
-                Some(Duration::from_secs(5))
-            );
-        }
+        check_address_timeouts(address, defaults);
+    }
+}
+
+fn check_socket_timeouts(socket: &impl AsFd, expected: AcceptedSocketTimeouts) {
+    for (option, value) in [
+        (Timeout::Recv, expected.read),
+        (Timeout::Send, expected.write),
+    ] {
+        assert_eq!(sockopt::socket_timeout(socket, option).unwrap(), value);
     }
 }
 
@@ -103,7 +70,7 @@ fn zero_timeouts_reject_before_consuming_queued_connections() {
 
 // A broken timeout implementation must release the blocking operation and join
 // rather than hang the suite. The assertion distinguishes timeout from that EOF.
-fn watchdog(peer: TcpStream) -> (mpsc::Sender<()>, thread::JoinHandle<bool>) {
+fn assert_timeout(peer: TcpStream, operation: impl FnOnce() -> Result<(), Error>) {
     let (done, wait) = mpsc::channel();
     let task = thread::spawn(move || {
         if wait.recv_timeout(Duration::from_secs(3)).is_err() {
@@ -113,7 +80,13 @@ fn watchdog(peer: TcpStream) -> (mpsc::Sender<()>, thread::JoinHandle<bool>) {
             false
         }
     });
-    (done, task)
+    let result = operation();
+    let _ = done.send(());
+    assert!(
+        !task.join().unwrap(),
+        "outer watchdog interrupted unbounded I/O"
+    );
+    assert_eq!(result, Err(Error::Backend));
 }
 
 #[test]
@@ -133,16 +106,12 @@ fn incomplete_request_stalls_return_backend_under_the_child_read_timeout() {
             },
         )
         .unwrap();
-        let (done, guard) = watchdog(peer);
-        let result = without_allocations(|| {
-            read_request_with_limits(&child, &mut [0; 256], RequestLimits::default()).map(|_| ())
+        assert_timeout(peer, || {
+            without_allocations(|| {
+                read_request_with_limits(&child, &mut [0; 256], RequestLimits::default())
+                    .map(|_| ())
+            })
         });
-        let _ = done.send(());
-        assert!(
-            !guard.join().unwrap(),
-            "outer watchdog interrupted an unbounded read"
-        );
-        assert_eq!(result, Err(Error::Backend));
     }
 }
 
@@ -178,17 +147,48 @@ fn write_backpressure_times_out_and_cancels_the_stream() {
         body: &[],
     };
     let mut encoder = ResponseEncoder::new(&repository, request, &mut []).unwrap();
-    let (done, guard) = watchdog(peer);
-    let result =
-        without_allocations(|| respond_stream(&child, &repository, &mut encoder, &mut [0; 1024]));
-    let _ = done.send(());
-    assert!(
-        !guard.join().unwrap(),
-        "outer watchdog interrupted an unbounded write"
-    );
-    assert_eq!(result, Err(Error::Backend));
+    assert_timeout(peer, || {
+        without_allocations(|| respond_stream(&child, &repository, &mut encoder, &mut [0; 1024]))
+    });
     assert_eq!(
         encoder.read(&repository, &mut [0; 8]),
         Err(Error::InvalidRequest)
     );
+}
+
+fn check_address_timeouts(address: &str, defaults: AcceptedSocketTimeouts) {
+    let listener = listen_on(address.parse().unwrap()).unwrap();
+    sockopt::set_socket_timeout(&listener, Timeout::Recv, Some(Duration::from_secs(4))).unwrap();
+    sockopt::set_socket_timeout(&listener, Timeout::Send, Some(Duration::from_secs(5))).unwrap();
+    for settings in [
+        defaults,
+        AcceptedSocketTimeouts {
+            read: Some(Duration::from_secs(1)),
+            write: Some(Duration::from_secs(2)),
+        },
+        AcceptedSocketTimeouts {
+            read: None,
+            write: Some(Duration::from_secs(2)),
+        },
+        AcceptedSocketTimeouts {
+            read: Some(Duration::from_secs(1)),
+            write: None,
+        },
+        AcceptedSocketTimeouts {
+            read: None,
+            write: None,
+        },
+    ] {
+        let _peer = TcpStream::connect(local_address(&listener).unwrap()).unwrap();
+        let child = without_allocations(|| accept_with_timeouts(&listener, settings)).unwrap();
+        assert!(fcntl_getfd(&child).unwrap().contains(FdFlags::CLOEXEC));
+        check_socket_timeouts(&child, settings);
+        check_socket_timeouts(
+            &listener,
+            AcceptedSocketTimeouts {
+                read: Some(Duration::from_secs(4)),
+                write: Some(Duration::from_secs(5)),
+            },
+        );
+    }
 }

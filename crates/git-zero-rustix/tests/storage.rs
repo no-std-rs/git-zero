@@ -1,9 +1,15 @@
+#[path = "../../../tests/common/allocations.rs"]
+mod allocations;
 #[path = "../../../tests/common/cache.rs"]
 mod cache_support;
 #[path = "../../../tests/common/mod.rs"]
 mod common;
+#[path = "common/server.rs"]
+mod server;
 #[path = "../../../tests/common/streamed.rs"]
 mod streamed;
+
+use allocations::without_allocations;
 
 use git_zero::{
     Error, File as SnapshotFile, ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader,
@@ -19,8 +25,6 @@ use git_zero_rustix::{
 };
 use rustix::fd::{FromRawFd, OwnedFd};
 use std::{
-    alloc::{GlobalAlloc, Layout, System},
-    cell::Cell,
     ffi::CString,
     fs::{File, OpenOptions},
     io::{Read as _, Seek as _, SeekFrom, Write as _},
@@ -30,59 +34,6 @@ use std::{
     process::{Command, Output},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-
-struct CountingAllocator;
-thread_local! {
-    static TRACK: Cell<bool> = const { Cell::new(false) };
-    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
-}
-fn record_allocation() {
-    let _ = TRACK.try_with(|track| {
-        if track.get() {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
-        }
-    });
-}
-// SAFETY: All operations delegate unchanged to System; counters are thread-local.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        record_allocation();
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        record_allocation();
-        unsafe { System.alloc_zeroed(layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        record_allocation();
-        unsafe { System.realloc(ptr, layout, size) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-fn without_allocations<T>(operation: impl FnOnce() -> T) -> T {
-    ALLOCATIONS.with(|count| count.set(0));
-    struct Guard;
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            TRACK.with(|track| track.set(false));
-        }
-    }
-    TRACK.with(|track| track.set(true));
-    let guard = Guard;
-    let result = operation();
-    drop(guard);
-    assert_eq!(
-        ALLOCATIONS.with(Cell::get),
-        0,
-        "adapter operation allocated"
-    );
-    result
-}
 
 struct Temporary(PathBuf);
 
@@ -652,82 +603,82 @@ fn real_git_clones_file_backed_nested_snapshots_with_and_without_prepacked_data(
         .unwrap();
         let listener = listen(0).unwrap();
         let port = local_port(&listener).unwrap();
-        let url = format!("http://127.0.0.1:{port}/repo.git");
-        let stopped = AtomicBool::new(false);
-        struct Stop<'a>(&'a AtomicBool, u16);
-        impl Drop for Stop<'_> {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::SeqCst);
-                let _ = TcpStream::connect(("127.0.0.1", self.1));
-            }
+        let mut input = [0; 4096];
+        let mut bytes = [0; 8192];
+        server::while_serving(
+            port,
+            || accept(&listener).unwrap(),
+            |socket| {
+                serve_file_clone_request(&repository, &validated, socket, &mut input, &mut bytes)
+            },
+            |port| compare_file_clones(&directory.0, &source, prepacked, port),
+        );
+    }
+}
+
+fn serve_file_clone_request(
+    repository: &FileRepository<'_>,
+    validated: &impl Repository,
+    socket: &impl rustix::fd::AsFd,
+    input: &mut [u8],
+    bytes: &mut [u8],
+) {
+    let mut request = read_request(socket, input).unwrap();
+    request.path = request.path.strip_prefix("/repo.git/").unwrap();
+    let mut output = SliceWriter::new(bytes);
+    let response = http::serve_with_pack(
+        validated,
+        request,
+        &mut [0; 17],
+        &mut output,
+        |scratch, output| repository.write_pack_with_scratch(scratch, output),
+    )
+    .unwrap();
+    respond(socket, response, output.as_bytes()).unwrap();
+}
+
+fn compare_file_clones(directory: &Path, source: &impl Repository, prepacked: bool, port: u16) {
+    let url = format!("http://127.0.0.1:{port}/repo.git");
+    for dumb in [false, true] {
+        let clone = directory.join(format!("clone-{prepacked}-{dumb}"));
+        let path = clone.to_str().unwrap();
+        git(&["clone", "-q", &url, path], dumb);
+        if dumb {
+            let empty = ObjectId::from_hex(b"4b825dc642cb6eb9a060e54bf8d69288fbee4904").unwrap();
+            let mut wire = [0; 1024];
+            let mut response = [0; 256];
+            let mut transport = HttpTransport {
+                address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+                repository_path: "/repo.git",
+                wire_storage: &mut wire,
+            };
+            let loose = client::fetch_loose(&mut transport, empty, &mut response).unwrap();
+            let objects = clone.join(".git/objects/4b");
+            std::fs::create_dir_all(&objects).unwrap();
+            std::fs::write(
+                objects.join("825dc642cb6eb9a060e54bf8d69288fbee4904"),
+                loose,
+            )
+            .unwrap();
         }
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let mut input = [0; 4096];
-                let mut bytes = [0; 8192];
-                loop {
-                    let socket = accept(&listener).unwrap();
-                    if stopped.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let mut request = read_request(&socket, &mut input).unwrap();
-                    request.path = request.path.strip_prefix("/repo.git/").unwrap();
-                    let mut output = SliceWriter::new(&mut bytes);
-                    let response = http::serve_with_pack(
-                        &validated,
-                        request,
-                        &mut [0; 17],
-                        &mut output,
-                        |scratch, output| repository.write_pack_with_scratch(scratch, output),
-                    )
-                    .unwrap();
-                    respond(&socket, response, output.as_bytes()).unwrap();
-                }
-            });
-            let _stop = Stop(&stopped, port);
-            for dumb in [false, true] {
-                let clone = directory.0.join(format!("clone-{prepacked}-{dumb}"));
-                let path = clone.to_str().unwrap();
-                git(&["clone", "-q", &url, path], dumb);
-                if dumb {
-                    let empty =
-                        ObjectId::from_hex(b"4b825dc642cb6eb9a060e54bf8d69288fbee4904").unwrap();
-                    let mut wire = [0; 1024];
-                    let mut response = [0; 256];
-                    let mut transport = HttpTransport {
-                        address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
-                        repository_path: "/repo.git",
-                        wire_storage: &mut wire,
-                    };
-                    let loose = client::fetch_loose(&mut transport, empty, &mut response).unwrap();
-                    let objects = clone.join(".git/objects/4b");
-                    std::fs::create_dir_all(&objects).unwrap();
-                    std::fs::write(
-                        objects.join("825dc642cb6eb9a060e54bf8d69288fbee4904"),
-                        loose,
-                    )
-                    .unwrap();
-                }
-                git(&["-C", path, "fsck", "--strict"], dumb);
-                git(&["-C", path, "fetch", "origin"], dumb);
-                assert_eq!(
-                    git(&["-C", path, "rev-parse", "HEAD"], dumb).stdout,
-                    format!("{}\n", source.head()).as_bytes()
-                );
-                assert_eq!(
-                    git(&["-C", path, "symbolic-ref", "HEAD"], dumb).stdout,
-                    format!("{}\n", common::HEAD_REF).as_bytes()
-                );
-                assert_eq!(
-                    std::fs::read(clone.join("a/run")).unwrap(),
-                    b"#!/bin/sh\nprintf 'snapshot\\n'\n"
-                );
-                assert_eq!(
-                    std::fs::read_link(clone.join("b/target")).unwrap(),
-                    PathBuf::from("run")
-                );
-            }
-        });
+        git(&["-C", path, "fsck", "--strict"], dumb);
+        git(&["-C", path, "fetch", "origin"], dumb);
+        assert_eq!(
+            git(&["-C", path, "rev-parse", "HEAD"], dumb).stdout,
+            format!("{}\n", source.head()).as_bytes()
+        );
+        assert_eq!(
+            git(&["-C", path, "symbolic-ref", "HEAD"], dumb).stdout,
+            format!("{}\n", common::HEAD_REF).as_bytes()
+        );
+        assert_eq!(
+            std::fs::read(clone.join("a/run")).unwrap(),
+            b"#!/bin/sh\nprintf 'snapshot\\n'\n"
+        );
+        assert_eq!(
+            std::fs::read_link(clone.join("b/target")).unwrap(),
+            PathBuf::from("run")
+        );
     }
 }
 
