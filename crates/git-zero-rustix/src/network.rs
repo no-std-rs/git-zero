@@ -27,18 +27,21 @@ const SOCKET_FLAGS: SocketFlags = SocketFlags::CLOEXEC;
 #[cfg(target_vendor = "apple")]
 const SOCKET_FLAGS: SocketFlags = SocketFlags::empty();
 
+fn backend(_: rustix::io::Errno) -> Error {
+    Error::Backend
+}
+
 fn close_on_exec(socket: OwnedFd) -> Result<OwnedFd> {
     // Darwin has no SOCK_CLOEXEC/accept4 flags; set the descriptor flag after
     // creation. Other platforms set it atomically through SOCKET_FLAGS.
     #[cfg(target_vendor = "apple")]
-    rustix::io::fcntl_setfd(&socket, rustix::io::FdFlags::CLOEXEC).map_err(|_| Error::Backend)?;
+    rustix::io::fcntl_setfd(&socket, rustix::io::FdFlags::CLOEXEC).map_err(backend)?;
     Ok(socket)
 }
 
 fn socket(family: AddressFamily) -> Result<OwnedFd> {
     close_on_exec(
-        net::socket_with(family, SocketType::STREAM, SOCKET_FLAGS, None)
-            .map_err(|_| Error::Backend)?,
+        net::socket_with(family, SocketType::STREAM, SOCKET_FLAGS, None).map_err(backend)?,
     )
 }
 
@@ -57,7 +60,7 @@ fn apply_timeouts(
     write: Option<Duration>,
 ) -> Result<()> {
     for (timeout, value) in [(Timeout::Recv, read), (Timeout::Send, write)] {
-        sockopt::set_socket_timeout(socket, timeout, value).map_err(|_| Error::Backend)?;
+        sockopt::set_socket_timeout(socket, timeout, value).map_err(backend)?;
     }
     Ok(())
 }
@@ -69,7 +72,7 @@ impl Write for SocketWriter<'_> {
         #[cfg(target_vendor = "apple")]
         let flags = {
             // Cover borrowed host sockets as well as sockets opened here.
-            sockopt::set_socket_nosigpipe(self.0, true).map_err(|_| Error::Backend)?;
+            sockopt::set_socket_nosigpipe(self.0, true).map_err(backend)?;
             SendFlags::empty()
         };
         #[cfg(not(target_vendor = "apple"))]

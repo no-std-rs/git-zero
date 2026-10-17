@@ -1,5 +1,5 @@
 //! Blocking HTTP server socket and request/response framing.
-use super::{SOCKET_FLAGS, SocketWriter, apply_timeouts, close_on_exec, receive, socket};
+use super::{SOCKET_FLAGS, SocketWriter, apply_timeouts, backend, close_on_exec, receive, socket};
 use core::{
     fmt::Write as _,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
@@ -88,11 +88,11 @@ pub fn listen_on(address: SocketAddr) -> Result<OwnedFd> {
     // OpenBSD IPv6 sockets are always IPv6-only and this option is read-only.
     #[cfg(not(target_os = "openbsd"))]
     if address.is_ipv6() {
-        sockopt::set_ipv6_v6only(&socket, true).map_err(|_| Error::Backend)?;
+        sockopt::set_ipv6_v6only(&socket, true).map_err(backend)?;
     }
-    sockopt::set_socket_reuseaddr(&socket, true).map_err(|_| Error::Backend)?;
-    net::bind(&socket, &address).map_err(|_| Error::Backend)?;
-    net::listen(&socket, 128).map_err(|_| Error::Backend)?;
+    sockopt::set_socket_reuseaddr(&socket, true).map_err(backend)?;
+    net::bind(&socket, &address).map_err(backend)?;
+    net::listen(&socket, 128).map_err(backend)?;
     Ok(socket)
 }
 
@@ -102,7 +102,7 @@ pub fn local_port(socket: &impl AsFd) -> Result<u16> {
 
 /// Read the actual bound IP address, including an OS-assigned port.
 pub fn local_address(socket: &impl AsFd) -> Result<SocketAddr> {
-    let address = net::getsockname(socket).map_err(|_| Error::Backend)?;
+    let address = net::getsockname(socket).map_err(backend)?;
     SocketAddr::try_from(address).map_err(|_| Error::Backend)
 }
 
@@ -134,8 +134,7 @@ fn accept_configured(
     socket: &impl AsFd,
     configure: impl FnOnce(&OwnedFd) -> Result<()>,
 ) -> Result<OwnedFd> {
-    let client =
-        close_on_exec(net::accept_with(socket, SOCKET_FLAGS).map_err(|_| Error::Backend)?)?;
+    let client = close_on_exec(net::accept_with(socket, SOCKET_FLAGS).map_err(backend)?)?;
     configure(&client)?;
     Ok(client)
 }
@@ -274,37 +273,40 @@ mod tests {
     #[test]
     fn explicit_ip_listeners_report_bound_addresses_and_isolate_ipv6() {
         for value in ["127.0.0.1:0", "[::1]:0"] {
-            let address: SocketAddr = value.parse().unwrap();
-            let listener = listen_on(address).unwrap();
-            let bound = local_address(&listener).unwrap();
-            assert_eq!(bound.ip(), address.ip());
-            assert_ne!(bound.port(), 0);
-            assert_eq!(local_port(&listener).unwrap(), bound.port());
-            assert!(
-                rustix::io::fcntl_getfd(&listener)
-                    .unwrap()
-                    .contains(rustix::io::FdFlags::CLOEXEC)
+            check_ip_listener(value.parse().unwrap());
+        }
+    }
+
+    fn check_ip_listener(address: SocketAddr) {
+        let listener = listen_on(address).unwrap();
+        let bound = local_address(&listener).unwrap();
+        assert_eq!(bound.ip(), address.ip());
+        assert_ne!(bound.port(), 0);
+        assert_eq!(local_port(&listener).unwrap(), bound.port());
+        assert!(
+            rustix::io::fcntl_getfd(&listener)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        let family = if address.is_ipv4() {
+            net::AddressFamily::INET
+        } else {
+            assert!(sockopt::ipv6_v6only(&listener).unwrap());
+            net::AddressFamily::INET6
+        };
+        let client = socket(family).unwrap();
+        net::connect(&client, &bound).unwrap();
+        let accepted = accept(&listener).unwrap();
+        assert!(
+            rustix::io::fcntl_getfd(&accepted)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        for timeout in [sockopt::Timeout::Recv, sockopt::Timeout::Send] {
+            assert_eq!(
+                sockopt::socket_timeout(&accepted, timeout).unwrap(),
+                Some(core::time::Duration::from_secs(10))
             );
-            let family = if address.is_ipv4() {
-                net::AddressFamily::INET
-            } else {
-                assert!(sockopt::ipv6_v6only(&listener).unwrap());
-                net::AddressFamily::INET6
-            };
-            let client = socket(family).unwrap();
-            net::connect(&client, &bound).unwrap();
-            let accepted = accept(&listener).unwrap();
-            assert!(
-                rustix::io::fcntl_getfd(&accepted)
-                    .unwrap()
-                    .contains(rustix::io::FdFlags::CLOEXEC)
-            );
-            for timeout in [sockopt::Timeout::Recv, sockopt::Timeout::Send] {
-                assert_eq!(
-                    sockopt::socket_timeout(&accepted, timeout).unwrap(),
-                    Some(core::time::Duration::from_secs(10))
-                );
-            }
         }
     }
 
