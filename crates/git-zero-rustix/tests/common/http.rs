@@ -2,7 +2,7 @@
 use git_zero::{Error, http::Request, io::Write as _};
 use git_zero_rustix::{SocketWriter, read_request};
 use rustix::{
-    fd::AsFd,
+    fd::{AsFd, OwnedFd},
     net::{self, sockopt},
 };
 use std::{thread, time::Duration};
@@ -31,6 +31,15 @@ impl From<Request<'_>> for Parsed {
 }
 
 pub fn receive(wire: &[u8], width: usize, storage: &mut [u8]) -> Result<Parsed, Error> {
+    receive_using(wire, width, storage, read_request)
+}
+
+pub fn receive_using<'a>(
+    wire: &[u8],
+    width: usize,
+    storage: &'a mut [u8],
+    read: impl FnOnce(&OwnedFd, &'a mut [u8]) -> Result<Request<'a>, Error>,
+) -> Result<Parsed, Error> {
     let (reader, writer) = net::socketpair(
         net::AddressFamily::UNIX,
         net::SocketType::STREAM,
@@ -60,7 +69,7 @@ pub fn receive(wire: &[u8], width: usize, storage: &mut [u8]) -> Result<Parsed, 
         let _ = net::shutdown(&writer, net::Shutdown::Write);
         Ok(())
     });
-    let result = read_request(&reader, storage).map(Parsed::from);
+    let result = read(&reader, storage).map(Parsed::from);
     drop(reader);
     let sent = sender.join().unwrap();
     if result.is_ok() {

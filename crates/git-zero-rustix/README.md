@@ -29,6 +29,19 @@ embedded CR/LF. The `http_framing` socket tests cover binary bodies, malformed
 requests, exact capacity and recovery with reused storage. Scan unit tests prove
 the work bound for one-byte fragments through a 64 KiB header.
 
+`read_request_with_limits` adds inclusive host quotas through `RequestLimits`:
+`max_wire_bytes` bounds the request line, headers, delimiter and encoded body;
+`max_body_bytes` bounds the decoded body, including identity uploads. `None`
+leaves a policy unset; caller storage always bounds memory. An explicit policy
+failure returns `LimitExceeded`, physical capacity returns `BufferTooSmall`,
+and a tied exhaustion boundary reports the policy failure. Exact limits allow
+empty bodies and valid empty gzip members. Header validation precedes known
+body-length policy checks. Gzip retains the full physical expansion suffix,
+the existing ratio/slack settings and checksum validation. A malformed stream
+can fail before a size limit is reached. Every failure invalidates provisional
+storage: close the connection and discard it before repository preparation.
+`read_request` retains unset policies and its previous behavior.
+
 `respond_stream` sends a prepared `http::stream::ResponseEncoder` with HTTP/1.0
 close-delimited framing and caller-owned output staging. It writes all staged
 bytes before pulling again, cancels on errors, and requires the host to close the
@@ -63,6 +76,19 @@ both families create separate listeners. Accepted sockets retain close-on-exec
 and the existing ten-second send/receive timeouts. The CLI accepts a port or a
 numeric address, for example `git-zero serve '[::1]:8080'`, and prints the bound
 URL. Its existing client transport still accepts IPv4 addresses only.
+
+`accept_with_timeouts` takes explicit `AcceptedSocketTimeouts`; its default has
+both read and write set to ten seconds, matching `accept`. `None` disables the
+corresponding child setting, and zero durations are rejected before accepting.
+The listener is unchanged, and configuration failure closes the accepted
+descriptor. These are per-blocking-call socket timeouts, with OS rounding;
+partial operations and retries can extend a whole request or response. They
+are not accept or aggregate deadlines. Hosts still own connection admission,
+polling and cancellation. The allocation-guarded `admission` socket tests cover
+quota precedence, gzip integrity at exact quotas, unread excess bytes, both IP
+families, timeout stalls, write backpressure and stream cancellation. The native
+`references` Git host uses explicit limits/timeouts and verifies rejection and
+recovery before its existing smart/dumb comparisons in both object formats.
 
 On platforms with rustix `flock` support, `DiskCache::try_lease(key)` offers
 cooperative cold-miss coordination. Contended locks return `None` without waiting;

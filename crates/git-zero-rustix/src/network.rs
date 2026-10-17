@@ -17,7 +17,8 @@ pub use client::HttpTransport;
 mod server;
 #[cfg(feature = "server")]
 pub use server::{
-    accept, listen, listen_on, local_address, local_port, read_request, respond, respond_headers,
+    AcceptedSocketTimeouts, RequestLimits, accept, accept_with_timeouts, listen, listen_on,
+    local_address, local_port, read_request, read_request_with_limits, respond, respond_headers,
     respond_stream,
 };
 
@@ -41,10 +42,22 @@ fn socket(family: AddressFamily) -> Result<OwnedFd> {
     )
 }
 
+#[cfg(feature = "client")]
 fn timeouts(socket: &impl AsFd) -> Result<()> {
-    for timeout in [Timeout::Recv, Timeout::Send] {
-        sockopt::set_socket_timeout(socket, timeout, Some(Duration::from_secs(10)))
-            .map_err(|_| Error::Backend)?;
+    apply_timeouts(
+        socket,
+        Some(Duration::from_secs(10)),
+        Some(Duration::from_secs(10)),
+    )
+}
+
+fn apply_timeouts(
+    socket: &impl AsFd,
+    read: Option<Duration>,
+    write: Option<Duration>,
+) -> Result<()> {
+    for (timeout, value) in [(Timeout::Recv, read), (Timeout::Send, write)] {
+        sockopt::set_socket_timeout(socket, timeout, value).map_err(|_| Error::Backend)?;
     }
     Ok(())
 }

@@ -2,18 +2,24 @@
 mod allocations;
 #[path = "../examples/support/fixture.rs"]
 mod fixture;
+#[path = "common/server.rs"]
+mod server;
 
 use git_zero::{
     Error, ObjectId, RefRepository, Repository, ValidatedRepository,
-    http::{self, Response, SelectionStorage},
+    http::{self, Response, SelectionStorage, stream::ResponseEncoder},
     io::SliceWriter,
 };
-use git_zero_rustix::{FileRepository, accept, listen, local_port, read_request, respond};
+use git_zero_rustix::{
+    AcceptedSocketTimeouts, FileRepository, RequestLimits, accept_with_timeouts, listen,
+    local_port, read_request_with_limits, respond,
+};
 use std::{
     net::TcpStream,
     path::{Path, PathBuf},
     process::Command,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
 };
 
 use fixture::{Fixture, OBJECTS as OBJECT_CAPACITY};
@@ -26,17 +32,6 @@ impl Drop for Cleanup {
         } else {
             let _ = std::fs::remove_dir_all(&self.0);
         }
-    }
-}
-
-struct Stop<'a> {
-    stopped: &'a AtomicBool,
-    port: u16,
-}
-impl Drop for Stop<'_> {
-    fn drop(&mut self) {
-        self.stopped.store(true, Ordering::SeqCst);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
     }
 }
 
@@ -66,10 +61,11 @@ fn python(root: &Path, phase: &str, state: &str, object_format: &str, url: Optio
     );
 }
 
-fn serve<R: Repository + ?Sized>(
+fn with_reference_server<R: Repository + Sync + ?Sized>(
     repository: &ValidatedRepository<'_, '_, R>,
-    listener: &impl rustix::fd::AsFd,
-    stopped: &AtomicBool,
+    listener: &(impl rustix::fd::AsFd + Sync),
+    prepared: &AtomicUsize,
+    client: impl FnOnce(u16),
 ) {
     let mut request_storage = [0; 4096];
     let mut response_storage = [0; 8192];
@@ -87,29 +83,53 @@ fn serve<R: Repository + ?Sized>(
         parse: &mut parse,
         graph_read_limit: 1_048_576,
     };
-    loop {
-        let socket = accept(listener).unwrap();
-        if stopped.load(Ordering::SeqCst) {
-            break;
-        }
-        let mut request = read_request(&socket, &mut request_storage).unwrap();
-        request.path = request.path.strip_prefix("/repo.git/").unwrap();
-        let result = allocations::without_allocations(|| {
-            http::stream::ResponseEncoder::with_selection(
-                repository,
-                request,
-                &mut selection,
-                &mut response_storage,
-            )
-        });
-        match result {
+    let timeouts = AcceptedSocketTimeouts {
+        read: Some(Duration::from_secs(2)),
+        write: Some(Duration::from_secs(2)),
+    };
+    let limits = RequestLimits {
+        max_wire_bytes: Some(4096),
+        max_body_bytes: Some(2048),
+    };
+    server::while_serving(
+        local_port(listener).unwrap(),
+        || allocations::without_allocations(|| accept_with_timeouts(listener, timeouts)).unwrap(),
+        |socket| match prepare_response(
+            repository,
+            socket,
+            prepared,
+            limits,
+            &mut request_storage,
+            &mut selection,
+            &mut response_storage,
+        ) {
             Ok(mut encoder) => {
-                git_zero_rustix::respond_stream(&socket, repository, &mut encoder, &mut staging)
+                git_zero_rustix::respond_stream(socket, repository, &mut encoder, &mut staging)
                     .unwrap()
             }
-            Err(error) => respond_failure(&socket, error, &mut response_storage),
-        }
-    }
+            Err(error) => respond_failure(socket, error, &mut response_storage),
+        },
+        client,
+    );
+}
+
+fn prepare_response<'a, R: Repository + ?Sized>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    socket: &impl rustix::fd::AsFd,
+    prepared: &AtomicUsize,
+    limits: RequestLimits,
+    request_storage: &mut [u8],
+    selection: &'a mut SelectionStorage<'_>,
+    response_storage: &'a mut [u8],
+) -> Result<ResponseEncoder<'a>, Error> {
+    let mut request = allocations::without_allocations(|| {
+        read_request_with_limits(socket, request_storage, limits)
+    })?;
+    prepared.fetch_add(1, Ordering::SeqCst);
+    request.path = request.path.strip_prefix("/repo.git/").unwrap();
+    allocations::without_allocations(|| {
+        ResponseEncoder::with_selection(repository, request, selection, response_storage)
+    })
 }
 
 fn respond_failure(socket: &impl rustix::fd::AsFd, error: Error, storage: &mut [u8]) {
@@ -163,14 +183,12 @@ fn compare_format(state: &str, object_format: &str) {
         .unwrap()
     });
     let listener = listen(0).unwrap();
-    let port = local_port(&listener).unwrap();
-    let stopped = AtomicBool::new(false);
-    std::thread::scope(|scope| {
-        scope.spawn(|| serve(&repository, &listener, &stopped));
-        let _stop = Stop {
-            stopped: &stopped,
-            port,
-        };
+    let prepared = AtomicUsize::new(0);
+    with_reference_server(&repository, &listener, &prepared, |port| {
+        // Declared over-quota bodies are rejected before protocol/repository
+        // preparation; the unchanged Git oracle then proves host recovery.
+        reject_admission(port);
+        assert_eq!(prepared.load(Ordering::SeqCst), 0);
         python(
             &root,
             "compare",
@@ -179,6 +197,23 @@ fn compare_format(state: &str, object_format: &str) {
             Some(&format!("http://127.0.0.1:{port}/repo.git")),
         );
     });
+}
+
+fn reject_admission(port: u16) {
+    use std::io::{Read, Write};
+    for length in [2049, 4096] {
+        let mut peer = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        write!(
+            peer,
+            "POST /repo.git/git-upload-pack HTTP/1.1\r\nContent-Length: {length}\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        peer.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.0 413 "), "{response}");
+        assert!(!response.contains("PACK"));
+    }
 }
 
 const EMPTY_BLOB_ID: &str = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";

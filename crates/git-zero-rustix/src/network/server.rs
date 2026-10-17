@@ -1,8 +1,9 @@
 //! Blocking HTTP server socket and request/response framing.
-use super::{SOCKET_FLAGS, SocketWriter, close_on_exec, receive, socket, timeouts};
+use super::{SOCKET_FLAGS, SocketWriter, apply_timeouts, close_on_exec, receive, socket};
 use core::{
     fmt::Write as _,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    time::Duration,
 };
 use git_zero::{
     Error, Result,
@@ -16,6 +17,34 @@ use rustix::{
 
 mod header;
 use header::{Headers, parse_request, read_header, request_line};
+
+/// Inclusive host admission quotas, separate from caller storage capacity.
+/// `None` leaves that quota unset; storage still bounds all request bytes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RequestLimits {
+    /// Request line, headers (including their delimiter), and encoded body.
+    pub max_wire_bytes: Option<usize>,
+    /// Decoded body bytes, including identity bodies, without HTTP headers.
+    pub max_body_bytes: Option<usize>,
+}
+
+/// Per-blocking-call timeouts applied only to the accepted socket. These do not
+/// bound accept, a complete request, or a complete response. `None` disables the
+/// corresponding timeout; zero durations are invalid. The OS may round values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedSocketTimeouts {
+    pub read: Option<Duration>,
+    pub write: Option<Duration>,
+}
+
+impl Default for AcceptedSocketTimeouts {
+    fn default() -> Self {
+        Self {
+            read: Some(Duration::from_secs(10)),
+            write: Some(Duration::from_secs(10)),
+        }
+    }
+}
 
 pub fn listen(port: u16) -> Result<OwnedFd> {
     listen_on(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
@@ -53,9 +82,36 @@ pub fn local_address(socket: &impl AsFd) -> Result<SocketAddr> {
 }
 
 pub fn accept(socket: &impl AsFd) -> Result<OwnedFd> {
+    accept_with_timeouts(socket, AcceptedSocketTimeouts::default())
+}
+
+/// Accept with host-selected child socket timeouts, preserving close-on-exec.
+/// Invalid zero durations are rejected before accepting; configuration failures
+/// close the child before returning `Backend`. The listener is unchanged.
+pub fn accept_with_timeouts(
+    socket: &impl AsFd,
+    timeouts: AcceptedSocketTimeouts,
+) -> Result<OwnedFd> {
+    if [timeouts.read, timeouts.write]
+        .into_iter()
+        .flatten()
+        .any(|value| value.is_zero())
+    {
+        return Err(Error::InvalidRequest);
+    }
+    accept_configured(socket, |client| {
+        apply_timeouts(client, timeouts.read, timeouts.write)
+    })
+}
+
+// Own the accepted descriptor throughout configuration, including failure.
+fn accept_configured(
+    socket: &impl AsFd,
+    configure: impl FnOnce(&OwnedFd) -> Result<()>,
+) -> Result<OwnedFd> {
     let client =
         close_on_exec(net::accept_with(socket, SOCKET_FLAGS).map_err(|_| Error::Backend)?)?;
-    timeouts(&client)?;
+    configure(&client)?;
     Ok(client)
 }
 
@@ -63,7 +119,20 @@ pub fn accept(socket: &impl AsFd) -> Result<OwnedFd> {
 /// compressed wire bytes and a fixed 32 KiB stack history window. Compressed
 /// plus expanded bytes and headers must fit `storage`; chunked input is rejected.
 pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Request<'a>> {
-    let (end, length) = read_header(socket, storage)?;
+    read_request_with_limits(socket, storage, RequestLimits::default())
+}
+
+/// Read one request with inclusive logical quotas. Known policy exhaustion
+/// returns `LimitExceeded`; insufficient physical storage returns
+/// `BufferTooSmall`. A tied policy/capacity boundary is a policy failure.
+/// Gzip retains the complete wire body and original physical expansion slack.
+/// All storage is provisional on failure; discard it and close the socket.
+pub fn read_request_with_limits<'a>(
+    socket: &impl AsFd,
+    storage: &'a mut [u8],
+    limits: RequestLimits,
+) -> Result<Request<'a>> {
+    let (end, length) = read_header(socket, storage, limits.max_wire_bytes)?;
     let (header, storage) = storage.split_at_mut(end);
     let mut length = length - end;
     let header = core::str::from_utf8(header).map_err(|_| Error::InvalidRequest)?;
@@ -75,6 +144,17 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
         .map(super::parse_length)
         .transpose()?
         .unwrap_or(0);
+    // Header intake already guarantees end <= an explicit wire quota.
+    if limits
+        .max_wire_bytes
+        .is_some_and(|limit| total > limit - end)
+        || (limits.max_body_bytes.is_some_and(|limit| total > limit)
+            && headers
+                .content_encoding
+                .is_none_or(|value| value.eq_ignore_ascii_case("identity")))
+    {
+        return Err(Error::LimitExceeded);
+    }
     if total > storage.len() {
         return Err(Error::BufferTooSmall);
     }
@@ -97,11 +177,27 @@ pub fn read_request<'a>(socket: &impl AsFd, storage: &'a mut [u8]) -> Result<Req
                 expanded,
                 &mut [0; WINDOW_SIZE],
                 InflateLimits {
-                    max_output: expanded.len() as u64,
+                    max_output: limits
+                        .max_body_bytes
+                        .map_or(expanded.len(), |limit| limit.min(expanded.len()))
+                        as u64,
                     max_ratio: 128,
                     ratio_slack: expanded.len() as u64,
                 },
-            )?;
+            )
+            .map_err(|error| {
+                // decode_gzip's only BufferTooSmall path is incomplete output.
+                // Input exhaustion is InvalidZlib because input is complete.
+                if error == Error::BufferTooSmall
+                    && limits
+                        .max_body_bytes
+                        .is_some_and(|limit| limit <= expanded.len())
+                {
+                    Error::LimitExceeded
+                } else {
+                    error
+                }
+            })?;
             request.body = &expanded[..length];
         }
         _ => return Err(Error::Unsupported),
@@ -230,5 +326,21 @@ mod tests {
             encoder.read(&repository, &mut [0; 3]),
             Err(Error::InvalidRequest)
         );
+    }
+
+    #[test]
+    fn failed_accepted_configuration_closes_the_child() {
+        use std::io::Read;
+        let listener = listen(0).unwrap();
+        let mut peer = std::net::TcpStream::connect(local_address(&listener).unwrap()).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert!(matches!(
+            accept_configured(&listener, |_| Err(Error::Backend)),
+            Err(Error::Backend)
+        ));
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+        // The listener remains usable after the failed child is discarded.
+        let _peer = std::net::TcpStream::connect(local_address(&listener).unwrap()).unwrap();
+        assert!(accept(&listener).is_ok());
     }
 }
