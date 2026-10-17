@@ -97,13 +97,71 @@ inspection of `comparison.decision` and its reasons; successful process exit alo
 
 ## Results ledger
 
-All results below are pending fresh measurements. Expected savings are hypotheses.
+The baseline and first candidate below are fresh. Cost reductions and latency acceptance are evaluated separately; no candidate is accepted while a declared guard is inconclusive.
 
 | State/design | Commit / pushed SHA | Paired samples | Actual counts and score | Decision/evidence |
 | --- | --- | --- | --- | --- |
-| Fresh baseline | Pending integration commit and push | Pending: 5 per profile | Pending | No fresh claim yet |
-| Bundle pack and index in immutable chunks, preserving legacy reads | Pending implementation commit and push | Pending: 2-pair screen, then 5 per profile | Expected fewer Class A PUTs and cold GETs; bytes and budgets unchanged | Approved to implement; unmeasured |
+| Fresh baseline | `9beaa1ee5021a2fdf942c3b95509547445985d76`, pushed before measurement | 5 per profile; one excluded warmup per backend | $3.1200383036 known monthly fixed-workload objective | All four profiles complete; Rust evaluator passed; latency limitations below |
+| Bundle pack and index in immutable chunks, preserving legacy reads | `556b9ecd2aa79197f86b3db2d546eee81696e899`, pushed before measurement | 5 per profile; one excluded warmup per backend | $1.8241739036, **41.53% lower**; all resource and profile cost guards pass | **Inconclusive:** 16 latency guards fail; investigate transport delays and independently rerun; does not count toward plateau |
+
+Baseline reports: [4 MiB cold](benchmarks/hosting-cost-loop-2026-10-18/baseline/4mib-cold.json.gz),
+[4 MiB warm](benchmarks/hosting-cost-loop-2026-10-18/baseline/4mib-warm.json.gz),
+[16 MiB cold](benchmarks/hosting-cost-loop-2026-10-18/baseline/16mib-cold.json.gz),
+[16 MiB warm](benchmarks/hosting-cost-loop-2026-10-18/baseline/16mib-warm.json.gz),
+[score](benchmarks/hosting-cost-loop-2026-10-18/baseline/score.json) and
+[provenance](benchmarks/hosting-cost-loop-2026-10-18/baseline/provenance.json).
+The sum of trial-minimum scores is $3.1200379036 and trial maxima sum to $3.1200399036. The small spread
+comes from measured SQLite reads; allowances and rounding are excluded. These are known subtotals, with
+Worker CPU, Durable Object duration and monthly SQLite storage still unmeasured; native compute is outside
+the model.
+
+| Profile | Known fixed-workload USD | Fixed-workload R2 A / B | Worker / DO requests | R2 peak bytes |
+| --- | ---: | ---: | ---: | ---: |
+| 4 MiB cold | 0.8715730852 | 66 / 332 | 678 / 582 | 4,739,013 |
+| 4 MiB warm | 0.6026530852 | 66 / 0 | 346 / 250 | 4,739,013 |
+| 16 MiB cold | 1.0428208666 | 67 / 543 | 884 / 788 | 11,191,107 |
+| 16 MiB warm | 0.6029912666 | 67 / 0 | 341 / 245 | 11,191,107 |
+
+Each profile passed content validation, complete observer-excluded accounting, cold-read checks and
+unchanged authoritative read-phase inventory. Worker and native hashes matched the frozen provenance, and
+the source worktree stayed clean. No experiment builds or tests ran during timing. External workloads
+caused substantial and changing contention: initial CPU pressure avg10 was 67.04% and load average 108.78
+on 24 logical CPUs. Timing tails are retained, including a 25,210.71 ms 16 MiB warm initial push and
+7,606.71 ms 4 MiB cold warm clone. The 4 MiB warm initial-push median was 6,776.04 ms despite low surrounding
+CPU pressure in later trials; recorded native receive stages do not explain those delays. These traces
+support actual operation costs but cannot establish production latency or attribute every stall to CPU
+contention. Candidate acceptance still requires the predefined latency guards and independent reruns when
+they fail.
 
 For each measured row, retain baseline/candidate IDs, raw-report and score paths/hashes, per-profile actual
 R2/Worker/DO/SQL counts, known-dollar reduction, storage and latency guard results, missing billing dimensions
 and the reason for acceptance/rejection. Record reruns as additional evidence rather than replacing failures.
+
+### Round 1: bundled pack and index
+
+The pack and index now share the same content-addressed 8 MiB chunk stream. Legacy manifests remain readable.
+Small packs use one R2 key instead of two; exact compressed bytes, cache budgets and publication ordering are
+preserved. Five paired trials per profile completed, with the unchanged benchmark, cost evaluator and Worker.
+The candidate cost envelope is $1.8241739036–$1.8241739036, below the baseline envelope. All storage, transferred
+byte and per-profile cost guards passed. This is a known resource saving, not an accepted latency improvement.
+
+| Profile | Known fixed-workload USD | Fixed-workload R2 A / B | Worker / DO requests |
+| --- | ---: | ---: | ---: |
+| 4 MiB cold | 0.4951020852 | 33 / 166 | 451 / 355 |
+| 4 MiB warm | 0.3606420852 | 33 / 0 | 285 / 189 |
+| 16 MiB cold | 0.6040948666 | 34 / 296 | 579 / 483 |
+| 16 MiB warm | 0.3643348666 | 34 / 0 | 283 / 187 |
+
+[Comparison](benchmarks/hosting-cost-loop-2026-10-18/r1-bundle/comparison.json),
+[summary](benchmarks/hosting-cost-loop-2026-10-18/r1-bundle/summary.json),
+[latency guard details](benchmarks/hosting-cost-loop-2026-10-18/r1-bundle/latency-guard-failures.json),
+[log diagnosis](benchmarks/hosting-cost-loop-2026-10-18/r1-bundle/latency-diagnostic.md) and
+[provenance](benchmarks/hosting-cost-loop-2026-10-18/r1-bundle/provenance.json) retain the measured outcome.
+Each artifact directory includes compressed raw reports, `SHA256SUMS` for published files and
+`RAW_SHA256SUMS` for the original uncompressed reports. No timing samples are removed.
+
+The 6.7-second initial-push tails are localized to outer receive POSTs: advertisements took 2–4 ms,
+nearby service RPCs took 1–50 ms, and native measured phases totaled 60–83 ms. Existing logs cannot
+separate HTTP body intake, Worker forwarding and scheduling. A separate 7.8-second append stall is
+localized to a slow bundle PUT. These observations do not justify attributing every delay to one cause.
+A clean independent design agent is investigating before the next implementation.

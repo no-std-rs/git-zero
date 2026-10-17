@@ -1,0 +1,28 @@
+{
+  "commit": "9beaa1ee5021a2fdf942c3b95509547445985d76",
+  "worktree": "/tmp/git-zero-hosting-cost-loop",
+  "branch": "perf/hosting-cost-loop-20261018",
+  "emulator_origin": "http://127.0.0.1:8808",
+  "emulator_persist": "/tmp/git-zero-hosting-loop-services-baseline",
+  "binaries": {
+    "repository-host": {
+      "path": "/tmp/git-zero-hosting-loop-artifacts/baseline/bin/repository-host",
+      "sha256": "833ef25046abca428f5ce7c20d02ff0ef6b35efd3a52ea1e3353aeabff986830"
+    },
+    "hosting-bench": {
+      "path": "/tmp/git-zero-hosting-loop-artifacts/baseline/bin/hosting-bench",
+      "sha256": "830195ae649d04a17de1df6c70aa888cea56085ebc6ec004911804469efc8bcb"
+    },
+    "hosting-cost": {
+      "path": "/tmp/git-zero-hosting-loop-artifacts/baseline/bin/hosting-cost",
+      "sha256": "cf6d52bee904ba0bfe238d47e76245120213600ddf27ecdd1da2f815b640ec45"
+    }
+  },
+  "sources": {
+    "examples/repository-host/cloudflare/src/index.js": "e8c088cff457f86cef5a25bbf18e7a17f002e3a0cbac586671778875ca6b6f22",
+    "examples/repository-host/cloudflare/wrangler.toml": "4d35c7af5e0725605b99801be715e53405689036a53c9df2682eba411cea353d",
+    "examples/repository-host/cloudflare/package-lock.json": "c68ee57e4922151c5b6c0e34eeb6042ed405633e1e249881b2dedef9b2b1d7cd"
+  },
+  "git": "git version 2.53.0",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+}
