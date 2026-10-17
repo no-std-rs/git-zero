@@ -4,6 +4,8 @@ mod allocations;
 mod cache_backend;
 #[path = "common/mod.rs"]
 mod common;
+#[path = "common/http_request.rs"]
+mod http_request;
 #[path = "common/short_reads.rs"]
 mod short_reads;
 
@@ -32,14 +34,7 @@ const INFLATE: InflateLimits = InflateLimits {
 };
 
 fn request(body: &[u8]) -> Request<'_> {
-    Request {
-        content_type: Some("application/x-git-upload-pack-request"),
-        git_protocol: None,
-        method: "POST",
-        path: "git-upload-pack",
-        query: None,
-        body,
-    }
+    http_request::upload(body, 0)
 }
 
 fn upload(id: ObjectId, capabilities: &str, extra: &str) -> Vec<u8> {

@@ -1,5 +1,9 @@
 #[path = "common/allocations.rs"]
 mod allocations;
+#[path = "common/http_request.rs"]
+mod http_request;
+
+use http_request::upload as request;
 
 use git_zero::{
     EmptyRepository, Error, File, Head, Object, ObjectFormat, ObjectId, RefRepository, Reference,
@@ -37,20 +41,6 @@ fn body(ids: &[ObjectId], version: u8, done: bool) -> Vec<u8> {
         }
     }
     bytes
-}
-fn request(bytes: &[u8], version: u8) -> Request<'_> {
-    Request {
-        method: "POST",
-        path: "git-upload-pack",
-        query: None,
-        content_type: Some("application/x-git-upload-pack-request"),
-        git_protocol: match version {
-            1 => Some("version=1"),
-            2 => Some("version=2"),
-            _ => None,
-        },
-        body: bytes,
-    }
 }
 fn discovery(version: u8) -> Request<'static> {
     Request {

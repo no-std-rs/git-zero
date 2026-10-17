@@ -74,6 +74,18 @@ impl Drop for Directory {
     }
 }
 
+fn with_snapshot<const TREE: usize>(
+    format: ObjectFormat,
+    files: &[File<'_>],
+    scenario: impl FnOnce(&Directory, &Snapshot<'_>),
+) {
+    let directory = Directory::new();
+    let mut tree = [0; TREE];
+    let mut commit = [0; 512];
+    let repository = Snapshot::new_with_format(files, &mut tree, &mut commit, format).unwrap();
+    scenario(&directory, &repository);
+}
+
 fn key(repository: &impl Repository) -> Key {
     Key::derive(
         repository,
@@ -120,7 +132,6 @@ fn request(
 #[test]
 fn persisted_misses_hits_disabled_mode_and_eviction_are_allocation_free() {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
-        let directory = Directory::new();
         let files = [
             File {
                 name: "data",
@@ -131,42 +142,42 @@ fn persisted_misses_hits_disabled_mode_and_eviction_are_allocation_free() {
                 contents: b"",
             },
         ];
-        let mut tree = [0; 512];
-        let mut commit = [0; 512];
-        let repository = Snapshot::new_with_format(&files, &mut tree, &mut commit, format).unwrap();
-        let bytes = encoded(&repository);
-        let identity = key(&repository);
-        let mut buffer = [0; 8192];
-        let mut cache = DiskCache::new(directory.fd.as_fd(), &mut buffer, [1; 16]);
-        request(&repository, &mut cache, Outcome::Miss, &bytes);
-        assert_eq!(std::fs::read(directory.entry(identity)).unwrap(), bytes);
-        import_with_git(&directory, &repository, &bytes);
-        request(&repository, &mut cache, Outcome::Hit, &bytes);
-        cache.set_enabled(false);
-        request(&repository, &mut cache, Outcome::Miss, &bytes);
-        cache.set_enabled(true);
-        request(&repository, &mut cache, Outcome::Hit, &bytes);
-        assert_eq!(cache.statistics().insertions, 1);
-        // An independent backend instance must load the persistent entry with
-        // no previous key or resident-memory state.
-        let mut other = [0; 8192];
-        let mut reopened = DiskCache::new(directory.fd.as_fd(), &mut other, [2; 16]);
-        request(&repository, &mut reopened, Outcome::Hit, &bytes);
-        assert!(allocations::without_allocations(|| reopened.evict(identity)).unwrap());
-        assert!(!reopened.evict(identity).unwrap());
-        request(&repository, &mut cache, Outcome::Miss, &bytes);
-        directory.assert_no_staging();
+        with_snapshot::<512>(format, &files, check_persistence);
     }
+}
+fn check_persistence(directory: &Directory, repository: &Snapshot<'_>) {
+    let bytes = encoded(repository);
+    let identity = key(repository);
+    let mut buffer = [0; 8192];
+    let mut cache = DiskCache::new(directory.fd.as_fd(), &mut buffer, [1; 16]);
+    request(repository, &mut cache, Outcome::Miss, &bytes);
+    assert_eq!(std::fs::read(directory.entry(identity)).unwrap(), bytes);
+    import_with_git(directory, repository, &bytes);
+    request(repository, &mut cache, Outcome::Hit, &bytes);
+    cache.set_enabled(false);
+    request(repository, &mut cache, Outcome::Miss, &bytes);
+    cache.set_enabled(true);
+    request(repository, &mut cache, Outcome::Hit, &bytes);
+    assert_eq!(cache.statistics().insertions, 1);
+    // An independent backend instance must load the persistent entry with
+    // no previous key or resident-memory state.
+    let mut other = [0; 8192];
+    let mut reopened = DiskCache::new(directory.fd.as_fd(), &mut other, [2; 16]);
+    request(repository, &mut reopened, Outcome::Hit, &bytes);
+    assert!(allocations::without_allocations(|| reopened.evict(identity)).unwrap());
+    assert!(!reopened.evict(identity).unwrap());
+    request(repository, &mut cache, Outcome::Miss, &bytes);
+    directory.assert_no_staging();
 }
 
 #[test]
 fn corrupt_truncated_and_oversized_files_fail_before_output() {
-    let directory = Directory::new();
-    let mut tree = [0; 256];
-    let mut commit = [0; 512];
-    let repository = Snapshot::new(&[], &mut tree, &mut commit).unwrap();
-    let identity = key(&repository);
-    let good = encoded(&repository);
+    with_snapshot::<256>(ObjectFormat::Sha1, &[], check_corrupt_files);
+}
+
+fn check_corrupt_files(directory: &Directory, repository: &Snapshot<'_>) {
+    let identity = key(repository);
+    let good = encoded(repository);
     for bad in [
         b"not a pack".to_vec(),
         good[..good.len() - 1].to_vec(),
@@ -180,7 +191,7 @@ fn corrupt_truncated_and_oversized_files_fail_before_output() {
         let mut output = SliceWriter::new(&mut bytes);
         let result = allocations::without_allocations(|| {
             selected::write(
-                &repository,
+                repository,
                 Selection::All,
                 &mut cache,
                 Buffers {
@@ -200,12 +211,12 @@ fn corrupt_truncated_and_oversized_files_fail_before_output() {
 
 #[test]
 fn sink_failure_leaves_a_complete_persistent_entry_for_retry() {
-    let directory = Directory::new();
-    let mut tree = [0; 256];
-    let mut commit = [0; 512];
-    let repository = Snapshot::new(&[], &mut tree, &mut commit).unwrap();
-    let good = encoded(&repository);
-    let identity = key(&repository);
+    with_snapshot::<256>(ObjectFormat::Sha1, &[], check_sink_failure);
+}
+
+fn check_sink_failure(directory: &Directory, repository: &Snapshot<'_>) {
+    let good = encoded(repository);
+    let identity = key(repository);
     let mut resident = [0; 8192];
     let mut cache = DiskCache::new(directory.fd.as_fd(), &mut resident, [8; 16]);
     let mut ids = vec![ObjectId::Sha1([0; 20]); repository.object_count()];
@@ -213,7 +224,7 @@ fn sink_failure_leaves_a_complete_persistent_entry_for_retry() {
     let mut output = SliceWriter::new(&mut []);
     assert_eq!(
         allocations::without_allocations(|| selected::write(
-            &repository,
+            repository,
             Selection::All,
             &mut cache,
             Buffers {
@@ -229,18 +240,18 @@ fn sink_failure_leaves_a_complete_persistent_entry_for_retry() {
     assert_eq!(std::fs::read(directory.entry(identity)).unwrap(), good);
     let mut retry = [0; 8192];
     let mut reopened = DiskCache::new(directory.fd.as_fd(), &mut retry, [9; 16]);
-    request(&repository, &mut reopened, Outcome::Hit, &good);
+    request(repository, &mut reopened, Outcome::Hit, &good);
     directory.assert_no_staging();
 }
 
 #[test]
 fn failed_capacity_collision_and_publication_preserve_prior_files() {
-    let directory = Directory::new();
-    let mut tree = [0; 256];
-    let mut commit = [0; 512];
-    let repository = Snapshot::new(&[], &mut tree, &mut commit).unwrap();
-    let identity = key(&repository);
-    let good = encoded(&repository);
+    with_snapshot::<256>(ObjectFormat::Sha1, &[], check_failed_publication);
+}
+
+fn check_failed_publication(directory: &Directory, repository: &Snapshot<'_>) {
+    let identity = key(repository);
+    let good = encoded(repository);
     let mut buffer = [0; 8192];
     let mut cache = DiskCache::new(directory.fd.as_fd(), &mut buffer, [9; 16]);
     allocations::without_allocations(|| cache.put(identity, &good)).unwrap();
@@ -249,12 +260,12 @@ fn failed_capacity_collision_and_publication_preserve_prior_files() {
         Err(Error::BufferTooSmall)
     );
     assert_eq!(cache.get(identity).unwrap(), Some(good.as_slice()));
-    let empty = Key::derive(&repository, Selection::Indices(&[]), &mut []).unwrap();
+    let empty = Key::derive(repository, Selection::Indices(&[]), &mut []).unwrap();
     let target = directory.entry(empty);
     std::fs::create_dir(&target).unwrap();
     let mut empty_bytes = [0; 64];
     let mut empty_output = SliceWriter::new(&mut empty_bytes);
-    pack::write_selected_with_scratch(&repository, &[], &mut [], &mut empty_output).unwrap();
+    pack::write_selected_with_scratch(repository, &[], &mut [], &mut empty_output).unwrap();
     assert_eq!(
         allocations::without_allocations(|| cache.put(empty, empty_output.as_bytes())),
         Err(Error::Backend)
@@ -282,11 +293,11 @@ fn failed_capacity_collision_and_publication_preserve_prior_files() {
 
 #[test]
 fn cache_paths_reject_symlinks_and_nonregular_files() {
-    let directory = Directory::new();
-    let mut tree = [0; 256];
-    let mut commit = [0; 512];
-    let repository = Snapshot::new(&[], &mut tree, &mut commit).unwrap();
-    let identity = key(&repository);
+    with_snapshot::<256>(ObjectFormat::Sha1, &[], check_cache_paths);
+}
+
+fn check_cache_paths(directory: &Directory, repository: &Snapshot<'_>) {
+    let identity = key(repository);
     let outside = directory.path.join("outside");
     std::fs::write(&outside, b"must not be opened or replaced").unwrap();
     let target = directory.entry(identity);
@@ -313,62 +324,67 @@ fn cache_paths_reject_symlinks_and_nonregular_files() {
 #[test]
 fn independent_reader_buffers_survive_eviction_and_reordered_replacement() {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
-        let directory = Directory::new();
         let files = [File {
             name: "data",
             contents: b"shared",
         }];
-        let mut tree = [0; 256];
-        let mut commit = [0; 512];
-        let repository = Snapshot::new_with_format(&files, &mut tree, &mut commit, format).unwrap();
-        let identity = key(&repository);
-        let first = encoded(&repository);
-        let reverse: Vec<_> = (0..repository.object_count()).rev().collect();
-        let mut reordered = [0; 8192];
-        let mut output = SliceWriter::new(&mut reordered);
-        pack::write_selected_with_scratch(&repository, &reverse, &mut [], &mut output).unwrap();
-        let second = output.as_bytes();
-        assert_ne!(first, second);
-        identity
-            .verify_pack(
-                second,
-                &mut vec![format.zero_id(); repository.object_count()],
-                8192,
-            )
-            .unwrap();
-        let mut a = [0; 8192];
-        let mut b = [0; 8192];
-        let mut reader = DiskCache::new(directory.fd.as_fd(), &mut a, [5; 16]);
-        let mut publisher = DiskCache::new(directory.fd.as_fd(), &mut b, [6; 16]);
-        publisher.put(identity, &first).unwrap();
-        let held = allocations::without_allocations(|| reader.get(identity))
-            .unwrap()
-            .unwrap();
-        allocations::without_allocations(|| publisher.evict(identity)).unwrap();
-        allocations::without_allocations(|| publisher.put(identity, second)).unwrap();
-        assert_eq!(held, first);
-        assert_eq!(publisher.get(identity).unwrap(), Some(second));
-        assert_eq!(std::fs::read(directory.entry(identity)).unwrap(), second);
-        directory.assert_no_staging();
+        with_snapshot::<256>(format, &files, |directory, repository| {
+            check_reader_replacement(format, directory, repository)
+        });
     }
+}
+fn check_reader_replacement(
+    format: ObjectFormat,
+    directory: &Directory,
+    repository: &Snapshot<'_>,
+) {
+    let identity = key(repository);
+    let first = encoded(repository);
+    let reverse: Vec<_> = (0..repository.object_count()).rev().collect();
+    let mut reordered = [0; 8192];
+    let mut output = SliceWriter::new(&mut reordered);
+    pack::write_selected_with_scratch(repository, &reverse, &mut [], &mut output).unwrap();
+    let second = output.as_bytes();
+    assert_ne!(first, second);
+    identity
+        .verify_pack(
+            second,
+            &mut vec![format.zero_id(); repository.object_count()],
+            8192,
+        )
+        .unwrap();
+    let mut a = [0; 8192];
+    let mut b = [0; 8192];
+    let mut reader = DiskCache::new(directory.fd.as_fd(), &mut a, [5; 16]);
+    let mut publisher = DiskCache::new(directory.fd.as_fd(), &mut b, [6; 16]);
+    publisher.put(identity, &first).unwrap();
+    let held = allocations::without_allocations(|| reader.get(identity))
+        .unwrap()
+        .unwrap();
+    allocations::without_allocations(|| publisher.evict(identity)).unwrap();
+    allocations::without_allocations(|| publisher.put(identity, second)).unwrap();
+    assert_eq!(held, first);
+    assert_eq!(publisher.get(identity).unwrap(), Some(second));
+    assert_eq!(std::fs::read(directory.entry(identity)).unwrap(), second);
+    directory.assert_no_staging();
 }
 
 #[test]
 fn concurrent_cold_producers_publish_only_complete_packs() {
-    let directory = Directory::new();
     let files = [File {
         name: "data",
         contents: b"racing writers",
     }];
-    let mut tree = [0; 256];
-    let mut commit = [0; 512];
-    let repository = Snapshot::new(&files, &mut tree, &mut commit).unwrap();
-    let identity = key(&repository);
-    let first = encoded(&repository);
+    with_snapshot::<256>(ObjectFormat::Sha1, &files, check_concurrent_publication);
+}
+
+fn check_concurrent_publication(directory: &Directory, repository: &Snapshot<'_>) {
+    let identity = key(repository);
+    let first = encoded(repository);
     let reverse: Vec<_> = (0..repository.object_count()).rev().collect();
     let mut second = [0; 8192];
     let mut output = SliceWriter::new(&mut second);
-    pack::write_selected_with_scratch(&repository, &reverse, &mut [], &mut output).unwrap();
+    pack::write_selected_with_scratch(repository, &reverse, &mut [], &mut output).unwrap();
     let second = output.as_bytes();
     let first = first.as_slice();
     let mut a = [0; 8192];
