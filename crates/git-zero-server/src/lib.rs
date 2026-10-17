@@ -81,6 +81,62 @@ pub fn serve_with_selection_policy<R: Repository + ?Sized>(
     options: WantOptions,
     output: &mut impl Write,
 ) -> Result<Response> {
+    serve_with_selected_pack_policy(
+        repository,
+        request,
+        storage,
+        options,
+        output,
+        |indices, read, packed| {
+            pack::write_selected_with_scratch(repository, indices, read, packed).map(|_| ())
+        },
+    )
+}
+
+/// Serve selected requests using a trusted host's raw-pack writer. Routing,
+/// authorization and bounded selection are identical to `serve_with_selection`.
+/// The writer runs once only when a pack is needed, including an empty selected
+/// set, and must emit exactly `indices` from this same stable repository.
+/// ACK-only rounds and shallow probes never invoke it. Its sink applies the
+/// current request's sideband framing; cache only the raw PACK bytes.
+///
+/// Use `cache::selected::write` with `Selection::Indices(indices)` to integrate
+/// verified caller-owned caches. Authorization and selection precede every hit.
+/// Control packets may already be written when the writer fails: discard the
+/// entire output on any error. Buffer the response before sending HTTP success,
+/// or close the transport on a late failure. The writer retains no references
+/// after this synchronous call, and a failure emits no successful terminator.
+#[cfg(feature = "read")]
+pub fn serve_with_selected_pack<R: Repository + ?Sized, W: Write>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    request: Request<'_>,
+    storage: &mut SelectionStorage<'_>,
+    output: &mut W,
+    write_selected: impl FnOnce(&[usize], &mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
+) -> Result<Response> {
+    serve_with_selected_pack_policy(
+        repository,
+        request,
+        storage,
+        WantOptions::STRICT,
+        output,
+        write_selected,
+    )
+}
+
+/// Apply an explicit host want policy before the selected-pack writer or cache.
+/// Every request, including hits and ACK-only rounds, is checked independently.
+/// Keep the authorized repository projection immutable for the entire call.
+/// Output and writer-failure contracts match `serve_with_selected_pack`.
+#[cfg(feature = "read")]
+pub fn serve_with_selected_pack_policy<R: Repository + ?Sized, W: Write>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    request: Request<'_>,
+    storage: &mut SelectionStorage<'_>,
+    options: WantOptions,
+    output: &mut W,
+    write_selected: impl FnOnce(&[usize], &mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
+) -> Result<Response> {
     let route = route::validate(request)?;
     if let Some(response) = route.rejection {
         return Ok(response);
@@ -105,7 +161,7 @@ pub fn serve_with_selection_policy<R: Repository + ?Sized>(
     )?;
     if let Some(indices) = selected.indices {
         let mut packed = selected.upload.output(output);
-        pack::write_selected_with_scratch(repository, indices, selected.read, &mut packed)?;
+        write_selected(indices, selected.read, &mut packed)?;
         packed.finish()?;
     }
     Ok(upload_response())

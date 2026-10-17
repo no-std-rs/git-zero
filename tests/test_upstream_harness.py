@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
@@ -244,6 +245,12 @@ class LifecycleTests(unittest.TestCase):
         finally:
             release.set()
             worker.join()
+            # join can return before Linux removes the native task entry.
+            task = Path(f"/proc/self/task/{worker.native_id}")
+            deadline = time.monotonic() + 1
+            while task.exists() and time.monotonic() < deadline:
+                time.sleep(0.001)
+            self.assertFalse(task.exists(), "joined thread's kernel task survived cleanup")
 
     def test_pidfd_kernel_ownership_rejects_nonchild_before_signalling(self):
         with patch.object(upstream_process.signal, "pidfd_send_signal") as send:

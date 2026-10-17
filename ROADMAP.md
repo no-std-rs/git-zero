@@ -27,8 +27,8 @@ Authentication, authorization and deployment policy belong to hosts.
 
 1. Complete shallow fetch with time/exclusion deepening, retaining the real-Git
    checkout and history comparisons for explicitly authorized promised objects.
-2. Publish packed dumb HTTP repositories and integrate requested-closure caches
-   into HTTP hosts, retaining immutable refs/pack/index consistency.
+2. Publish packed dumb HTTP repositories and extend requested-closure caches to
+   async hosts, retaining immutable refs/pack/index consistency.
 3. Finish native header policy, request deadlines, HTTP framing and independent
    connections; add the Worker preparation/storage boundary and host diagnostics.
 4. Close cross-host oracle, concurrency, fuzzing and resource-budget gaps, then
@@ -118,14 +118,19 @@ capability conflicts, unauthorized wants, truncation and exhausted budgets.
   Git filenames; selected-cache keys are a separate host identity.
 - [ ] Reuse prepacked entries/packs for the requested closure, beyond the current
   encoder's complete-HEAD reuse; validate compressed/delta inputs and dependencies.
-- [ ] Integrate selected caches with HTTP request planning. Authorization and
-  selection precede every lookup; keep ACK/shallow/sideband frames request-local.
-  Verify miss/hit equivalence, changing snapshots, failed output and eviction races.
+- [x] Synchronous selected-pack HTTP hook with authorization and selection before
+  every lookup, fresh ACK/shallow/sideband framing and explicit failure semantics.
+  Native memory/disk hosts pass real-Git miss/hit, A → B → A, exact physical-object,
+  eviction/reopen and failed-output comparisons in both formats and v0/v1/v2.
+- [x] Bounded native buffered example with an explicit private disk namespace,
+  staging nonce and optional visible-closure grant. Warmed entries never bypass
+  revoked permission or duplicate-counting want limits.
 - [ ] Async complete-pack KV/R2 adapters and cold-miss coordination, separate from
   the implemented metadata snapshot persistence. Bound reads/writes, await complete
   publication and retain independent responses across failure, expiry and eviction.
-- [ ] Host integration examples for private cache namespaces, total disk quotas,
-  crash/staging cleanup, directory durability and filesystem/distributed lock scope.
+- [ ] Production cache lifecycle integration for total disk quotas, crash/staging
+  cleanup, directory durability and filesystem/distributed lock scope. The current
+  synchronous example has one producer; cooperative leases remain an explicit API.
 - [ ] Optional bounded DEFLATE compression with selectable stored fallback.
 - [ ] Optional delta generation with explicit CPU, memory and depth budgets.
 
@@ -209,8 +214,9 @@ Local KV/R2-shaped tests do not establish deployment or propagation measurements
   including both formats and independently checked protocol behavior.
 - [ ] Complete unassisted dumb-object closure checks. Git's loose walker can omit
   a referenced empty tree; assisted import/fsck is recorded as assisted evidence.
-- [ ] HTTP-level selected-cache transition, cold-miss and eviction/concurrency
-  comparisons on both hosts, beyond separate backend and legacy-cache API tests.
+- [ ] Worker HTTP selected-cache transitions and concurrent cold-miss/eviction
+  comparisons on both hosts. Native synchronous single-producer HTTP transition,
+  failure and eviction/reopen cases are covered; backend lease tests are separate.
 - [ ] Broader upstream fixture substitution: more unchanged cases, Worker hosting
   and static dumb Alias routes. Retain licensing/provenance and no-fallback traces.
 - [ ] Sustained native HTTP-framing and concurrent/cancelled host-state fuzzing;

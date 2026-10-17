@@ -117,3 +117,37 @@ and graph-read limit. It is a host configuration option, never an HTTP option.
 The bounded `upstream-cgi` fixture host accepts the same final flag. Production
 hosts must authenticate/select their own immutable projection before constructing
 a policy-aware selected encoder; neither socket parsing nor a cache grants access.
+
+The `selected-cache` example integrates the selected HTTP hook with either
+caller-owned `FixedCache` storage or `DiskCache`. Export a canonical fixture
+using `tests/server_fixture.py`, then run:
+
+```sh
+cargo run -p git-zero-rustix --example selected-cache -- --fixture /tmp/fixture
+```
+
+It prints an ephemeral loopback clone URL. Add `--cache-directory /tmp/private-cache`
+to use an existing private directory, `--port PORT` to choose a port, and
+`--pack-bytes BYTES` to set both raw-pack staging and resident cache capacity
+(default 1 MiB, maximum 16 MiB). It separately reserves 64 KiB for a request,
+raw-pack capacity plus 128 KiB for the framed response, 256 object/ID slots,
+64 wants, 512-byte read/parse scratch and a 16 MiB graph-read budget. Fixture
+admission retains its 256-object/8-MiB raw-body bounds. Exceeding any budget
+fails instead of truncating or falling back.
+
+The example is a single-producer synchronous host. It buffers the entire body
+before emitting HTTP success; cache failures replace provisional protocol bytes
+with one error response. It performs request authorization/selection on every
+hit, and never caches refs, ACKs, shallow updates or sideband framing. Hosts own
+authentication, namespace selection, process lifetime and disk quotas. Optional
+producer leases remain a separate host policy. The real-Git test matrix covers
+memory/disk miss and hit, exact selected closures and true incremental fetch
+in both formats and v0/v1/v2; reopening the disk backend across A -> B -> A
+proves retained content reuse. No Worker or async pack storage is implied.
+
+The cache example stays strict unless `--allow-reachable-wants` explicitly
+grants the entire supplied validated visible closure, with a 64-occurrence want
+cap. Its buffered responder receives `WantOptions` on every call; revoking that
+grant denies unadvertised wants before consulting even a warmed cache. This
+trusted host flag never comes from HTTP input and does not replace authentication
+or an authorized immutable repository projection.

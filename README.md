@@ -707,8 +707,20 @@ Independent roots require selection; legacy upload-pack/cache paths return
 `cache::selected` API already provides exact-closure keys, integrity checks and
 bounded stored-pack caching. Hosts must authorize and select before every cache
 lookup, including hits, and frame ACK/shallow/sideband output separately.
-Integrating these caches into HTTP hosts and reusing arbitrary matching
-prepacked closures remain roadmap work.
+`serve_with_selected_pack` and `serve_with_selected_pack_policy` expose the exact
+selected indices to a synchronous trusted pack callback. Pass those indices and
+the supplied read scratch to `cache::selected::write`; its raw PACK bytes flow
+through fresh request-local framing. Authorization and selection run before every
+hit. ACK-only rounds and shallow probes bypass the callback; empty selections
+still emit a valid empty pack.
+
+Cache/backend errors may follow provisional control bytes. Buffer the complete
+response before sending HTTP success, or abort an already started transport on
+failure. The bounded native `selected-cache` example shares its responder with
+the memory/disk real-Git tests and supports an explicit visible-closure grant.
+See the [native cache example](crates/git-zero-rustix/README.md).
+Async Worker/pull-cursor caching and reuse of arbitrary prepacked closures remain
+roadmap work.
 
 For bodies that cannot fit in a borrowed slice, implement `Repository::object_info`,
 `read_object`, and `object_id`. `object_info` reports the kind and exact 64-bit body

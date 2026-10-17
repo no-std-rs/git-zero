@@ -1,5 +1,7 @@
 #[path = "common/allocations.rs"]
 mod allocations;
+#[path = "common/http_request.rs"]
+mod http_request;
 
 use git_zero::{
     Error, ObjectFormat, ObjectId, Repository, Snapshot, ValidatedRepository,
@@ -29,14 +31,7 @@ fn command(name: &str, format: ObjectFormat, args: &[String]) -> Vec<u8> {
 }
 
 fn request(body: &[u8]) -> Request<'_> {
-    Request {
-        method: "POST",
-        path: "git-upload-pack",
-        query: None,
-        body,
-        content_type: Some("application/x-git-upload-pack-request"),
-        git_protocol: Some("version=2"),
-    }
+    http_request::upload(body, 2)
 }
 
 fn each_format(mut check: impl FnMut(&Snapshot<'_>)) {

@@ -246,8 +246,22 @@ strict importer independently checks both formats and every imported ID/body.
 Truncations and malformed headers/zlib/Adler32/trailers never reach the sink;
 valid recomputed checksums around wrong or duplicate objects still fail exact
 set verification. Backend/sink failures, byte/ID budgets, failed-miss preservation
-and scratchless hits retain retry behavior. Concurrent host coordination and
-persistent backend policy remain future work.
+and scratchless hits retain retry behavior. Native backend persistence and
+cooperative leases have separate tests below.
+
+`http_selected_cache.rs` composes selected-pack caching with the actual HTTP
+planner: fresh ACK/shallow/sideband frames surround verified raw packs, and
+authorization and graph limits precede every hit. It covers both formats and
+v0/v1/v2, exact miss/hit bytes, empty packs, ACK/probe bypass, disabled/evicted
+entries, wrong-set/corrupt packs, backend/sink failures and warmed grant revocation.
+`crates/git-zero-rustix/tests/selected_http_cache.rs` and `server_cached.py` exercise the
+same buffered responder as the `selected-cache` example with real Git. Memory
+and disk hosts compare exact physical IDs/bodies/checkouts through A → B → A;
+disk reopen retains the old entry while the single-entry memory cache regenerates
+it. Actual-socket error cases replace provisional output before HTTP success and
+recheck revoked grants without consulting the cache. These are synchronous local
+hosts; Worker async caching and concurrent HTTP producer/eviction coverage remain
+open.
 
 The native `disk_cache` suite exercises persistent hits across independent
 backend instances, disabled mode, eviction, bounded regular-file reads, corrupt

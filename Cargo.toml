@@ -53,6 +53,10 @@ name = "selected_cache"
 required-features = ["write"]
 
 [[test]]
+name = "http_selected_cache"
+required-features = ["read", "server"]
+
+[[test]]
 name = "checkout"
 required-features = ["read"]
 
