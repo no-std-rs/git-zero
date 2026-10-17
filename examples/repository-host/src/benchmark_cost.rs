@@ -361,6 +361,8 @@ fn add_guard(guards: &mut BTreeMap<String, Vec<f64>>, key: &str, value: f64) {
     guards.entry(key.to_owned()).or_default().push(value);
 }
 
+type LatencySamples = (Vec<f64>, Vec<f64>, Vec<f64>);
+
 fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
     require(
         report["complete"] == true && count(report, "schema_version")? == 3,
@@ -430,7 +432,7 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
     let expected = workload_names();
     let mut trials = Vec::new();
     let mut guards = BTreeMap::new();
-    let mut latencies: BTreeMap<String, (Vec<f64>, Vec<f64>, Vec<f64>)> = BTreeMap::new();
+    let mut latencies: BTreeMap<String, LatencySamples> = BTreeMap::new();
     let mut missing = None;
     let mut epoch = None;
     for sample in -1..samples as i64 {
