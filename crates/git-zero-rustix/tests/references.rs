@@ -5,7 +5,7 @@ mod fixture;
 
 use git_zero::{
     Error, ObjectId, RefRepository, Repository, ValidatedRepository,
-    http::{self, Response, SelectionStorage},
+    http::{self, Response, SelectionStorage, stream::ResponseEncoder},
     io::SliceWriter,
 };
 use git_zero_rustix::{
@@ -92,48 +92,29 @@ fn serve<R: Repository + ?Sized>(
         parse: &mut parse,
         graph_read_limit: 1_048_576,
     };
+    let timeouts = AcceptedSocketTimeouts {
+        read: Some(Duration::from_secs(2)),
+        write: Some(Duration::from_secs(2)),
+    };
+    let limits = RequestLimits {
+        max_wire_bytes: Some(4096),
+        max_body_bytes: Some(2048),
+    };
     loop {
-        let socket = allocations::without_allocations(|| {
-            accept_with_timeouts(
-                listener,
-                AcceptedSocketTimeouts {
-                    read: Some(Duration::from_secs(2)),
-                    write: Some(Duration::from_secs(2)),
-                },
-            )
-        })
-        .unwrap();
+        let socket =
+            allocations::without_allocations(|| accept_with_timeouts(listener, timeouts)).unwrap();
         if stopped.load(Ordering::SeqCst) {
             break;
         }
-        let result = allocations::without_allocations(|| {
-            read_request_with_limits(
-                &socket,
-                &mut request_storage,
-                RequestLimits {
-                    max_wire_bytes: Some(4096),
-                    max_body_bytes: Some(2048),
-                },
-            )
-        });
-        let mut request = match result {
-            Ok(request) => request,
-            Err(error) => {
-                respond_failure(&socket, error, &mut response_storage);
-                continue;
-            }
-        };
-        prepared.fetch_add(1, Ordering::SeqCst);
-        request.path = request.path.strip_prefix("/repo.git/").unwrap();
-        let result = allocations::without_allocations(|| {
-            http::stream::ResponseEncoder::with_selection(
-                repository,
-                request,
-                &mut selection,
-                &mut response_storage,
-            )
-        });
-        match result {
+        match prepare_response(
+            repository,
+            &socket,
+            prepared,
+            limits,
+            &mut request_storage,
+            &mut selection,
+            &mut response_storage,
+        ) {
             Ok(mut encoder) => {
                 git_zero_rustix::respond_stream(&socket, repository, &mut encoder, &mut staging)
                     .unwrap()
@@ -141,6 +122,25 @@ fn serve<R: Repository + ?Sized>(
             Err(error) => respond_failure(&socket, error, &mut response_storage),
         }
     }
+}
+
+fn prepare_response<'a, R: Repository + ?Sized>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    socket: &impl rustix::fd::AsFd,
+    prepared: &AtomicUsize,
+    limits: RequestLimits,
+    request_storage: &mut [u8],
+    selection: &'a mut SelectionStorage<'_>,
+    response_storage: &'a mut [u8],
+) -> Result<ResponseEncoder<'a>, Error> {
+    let mut request = allocations::without_allocations(|| {
+        read_request_with_limits(socket, request_storage, limits)
+    })?;
+    prepared.fetch_add(1, Ordering::SeqCst);
+    request.path = request.path.strip_prefix("/repo.git/").unwrap();
+    allocations::without_allocations(|| {
+        ResponseEncoder::with_selection(repository, request, selection, response_storage)
+    })
 }
 
 fn respond_failure(socket: &impl rustix::fd::AsFd, error: Error, storage: &mut [u8]) {
