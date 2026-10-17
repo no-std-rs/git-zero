@@ -1,4 +1,7 @@
 //! Rust-only paired smart HTTP benchmark, including optional local workerd services.
+use git_zero_host::benchmark_cost::{
+    INTERLEAVED_FLOW, INTERLEAVED_OBJECTIVE, INTERLEAVED_SEED, interleaved_schedule,
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -74,7 +77,7 @@ fn preserve_incomplete_report(error: &dyn std::error::Error) -> Result<()> {
         }
     }
     let report = json!({
-        "schema_version":3,"complete":false,"error":error.to_string(),
+        "schema_version":if progress.metadata["flow"]==INTERLEAVED_FLOW {4}else{3},"complete":false,"error":error.to_string(),
         "run":progress.metadata,"raw":raw,"failed_operations":failures,
         "journal":progress.journal,
         "limits":["Incomplete run: completed request timings are retained for diagnosis. Rows from an unfinished backend have not passed all subsequent content, storage and accounting checks. Failed service counter snapshots must not be used for cost estimates."]
@@ -597,6 +600,433 @@ fn fixture(root: &Path, mib: f64, pushes: usize, random_fetches: usize) -> Resul
         metadata,
     })
 }
+fn interleaved_fixture(root: &Path, mib: f64) -> Result<Fixture> {
+    let source = root.join("source");
+    git(
+        root,
+        root,
+        &[
+            "init",
+            "--initial-branch=main",
+            "--object-format=sha1",
+            source.to_str().ok_or("non-UTF8 source")?,
+        ],
+        false,
+    )?;
+    git(root, &source, &["config", "user.name", "Benchmark"], false)?;
+    git(
+        root,
+        &source,
+        &["config", "user.email", "benchmark@example.invalid"],
+        false,
+    )?;
+    fs::create_dir(source.join("data"))?;
+    // Disable delta encoding for this file in both receiving implementations.
+    // Independent random halves already require about 4 MiB of new compressed
+    // bytes; the attribute also prevents a misleading tiny replacement pack.
+    fs::write(source.join(".gitattributes"), "data/large.dat -delta\n")?;
+    let large_bytes = 8 * 1024 * 1024;
+    fs::write(source.join("data/large.dat"), content(10_001, large_bytes))?;
+    let files = (mib as usize * 1024 * 1024 - large_bytes) / 65536;
+    for file in 0..files {
+        fs::write(
+            source.join(format!("data/{file}.dat")),
+            content(file, 65536),
+        )?;
+    }
+    let mut generations = Vec::new();
+    let mut tips = Vec::new();
+    let mut large_content_seed = 10_001;
+    for generation in 1..=32 {
+        let replacement = generation >= 5 && generation % 4 == 1;
+        if replacement {
+            large_content_seed = 10_000 + generation;
+            fs::write(
+                source.join("data/large.dat"),
+                content(large_content_seed, large_bytes),
+            )?;
+        } else if generation > 1 {
+            let path = source.join(format!("data/{}.dat", generation % files));
+            let mut bytes = fs::read(&path)?;
+            let change = format!("interleaved generation {generation:02}\n");
+            bytes[2048..2048 + change.len()].copy_from_slice(change.as_bytes());
+            fs::write(path, bytes)?;
+        }
+        git(root, &source, &["add", "."], false)?;
+        git(
+            root,
+            &source,
+            &[
+                "commit",
+                "-m",
+                &format!("Interleaved generation {generation:02}"),
+            ],
+            false,
+        )?;
+        let tip = git_text(root, &source, &["rev-parse", "HEAD"])?;
+        let tree = git_text(root, &source, &["rev-parse", "HEAD^{tree}"])?;
+        git(
+            root,
+            &source,
+            &[
+                "update-ref",
+                &format!("refs/heads/history-{generation}"),
+                &tip,
+            ],
+            false,
+        )?;
+        generations.push(json!({"generation":generation,"tip":tip,"tree":tree,
+            "large_push":generation==1||replacement,"replacement_logical_bytes":if replacement {large_bytes}else{0},
+            "large_content_seed":large_content_seed}));
+        tips.push(tip);
+    }
+    git(root, &source, &["gc", "--prune=now"], false)?;
+    let schedule = interleaved_schedule(&tips)?;
+    let schedule_sha256 = git_zero_host::hash(&serde_json::to_vec(&schedule)?);
+    let metadata = json!({"flow":INTERLEAVED_FLOW,"objective_identity":INTERLEAVED_OBJECTIVE,
+        "fixture_version":"independent-large-halves-v1","seed":INTERLEAVED_SEED,
+        "generations":generations,"schedule":schedule,"schedule_sha256":schedule_sha256,
+        "working_tree_bytes":mib as usize*1024*1024,"files":files+1,"bytes_per_file":65536,
+        "large_file_bytes":large_bytes,"large_file_delta_encoding":false,
+        "replacement_generations":[5,9,13,17,21,25,29],"compressible_fraction":0.5,
+        "objects":git_text(root,&source,&["count-objects","-v"])?});
+    Ok(Fixture {
+        source,
+        base: tips[0].clone(),
+        tip: tips[1].clone(),
+        append_tips: tips[2..].to_vec(),
+        fetch_probes: Vec::new(),
+        metadata,
+    })
+}
+
+fn init_fetch_client(root: &Path, client: &Path, source: &Path, have: Option<&str>) -> Result<()> {
+    git(
+        root,
+        root,
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            client.to_str().ok_or("non-UTF8 client")?,
+        ],
+        false,
+    )?;
+    git(root, client, &["config", "fetch.unpackLimit", "0"], false)?;
+    git(root, client, &["config", "gc.auto", "0"], false)?;
+    if let Some(have) = have {
+        git(
+            root,
+            client,
+            &[
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                source.to_str().ok_or("non-UTF8 source")?,
+                &format!("{have}:refs/heads/seed"),
+            ],
+            false,
+        )?;
+    }
+    Ok(())
+}
+
+fn response_cache(metrics: &Value) -> Value {
+    json!({"resident_bytes":metrics["cache_bytes"],"budget_bytes":metrics["cache_budget_bytes"],
+        "entries":metrics["cache_entries"],"entry_limit":metrics["cache_entry_limit"]})
+}
+
+fn check_response_cache(cache: &Value) -> Result<()> {
+    if cache["budget_bytes"] != 32 * 1024 * 1024
+        || cache["entry_limit"] != 256
+        || cache["resident_bytes"]
+            .as_u64()
+            .is_none_or(|n| n > 32 * 1024 * 1024)
+        || cache["entries"].as_u64().is_none_or(|n| n > 256)
+    {
+        return Err("response cache configuration changed or budget exceeded".into());
+    }
+    Ok(())
+}
+
+fn run_interleaved_backend(
+    root: &Path,
+    options: &BackendOptions<'_>,
+    fixture: &Fixture,
+    backend: &str,
+    sample: i64,
+) -> Result<Vec<Value>> {
+    let contention_before = contention_snapshot();
+    let directory = root.join(format!("{sample}-{backend}"));
+    fs::create_dir(&directory)?;
+    let store = directory.join(if backend == "git" {
+        "repo.git"
+    } else {
+        "store"
+    });
+    if backend == "git" {
+        git(
+            root,
+            root,
+            &[
+                "init",
+                "--bare",
+                "--initial-branch=main",
+                "--object-format=sha1",
+                store.to_str().ok_or("non-UTF8 store")?,
+            ],
+            false,
+        )?;
+        for (key, value) in REFERENCE_CONFIG {
+            git(root, &store, &["config", key, value], false)?;
+        }
+    }
+    let cloudflare = options.cloudflare.filter(|_| backend != "git");
+    let repo = cloudflare.map(|settings| {
+        format!(
+            "{}-{}-{}",
+            settings.repo_prefix,
+            settings.run_id,
+            if sample < 0 {
+                "warmup".to_owned()
+            } else {
+                sample.to_string()
+            }
+        )
+    });
+    let host = Host::start(
+        options.binary,
+        &store,
+        backend == "git",
+        &directory.join("host.log"),
+        cloudflare.zip(repo.as_deref()),
+    )?;
+    let latest = directory.join("latest.git");
+    init_fetch_client(root, &latest, &fixture.source, None)?;
+    let mut rows = Vec::new();
+    let mut previous_generation = 0;
+    let mut final_storage = Value::Null;
+    for operation in fixture.metadata["schedule"]
+        .as_array()
+        .ok_or("missing schedule")?
+    {
+        let key = operation["key"].as_str().ok_or("missing key")?;
+        let want = operation["want"].as_str().ok_or("missing want")?;
+        let generation = operation["generation"]
+            .as_u64()
+            .ok_or("missing generation")?;
+        let group = operation["group"].as_str().ok_or("missing group")?;
+        if operation["kind"] == "push" {
+            let mut row = measure(
+                root,
+                &host,
+                backend,
+                sample,
+                key,
+                &fixture.source,
+                &[
+                    "push",
+                    "--atomic",
+                    "--quiet",
+                    &host.url,
+                    &format!("{want}:refs/heads/main"),
+                    &format!("{want}:refs/heads/history-{generation}"),
+                ],
+            )?;
+            row["operation"] = operation.clone();
+            row["push_wire_wall_ms"] = row["wall_ms"].clone();
+            let wire_ms = row["wall_ms"].as_f64().ok_or("missing push timing")?;
+            let maintenance_row = if backend == "git" {
+                Some(maintenance(root, &store, sample, key)?)
+            } else {
+                None
+            };
+            let maintenance_ms = maintenance_row
+                .as_ref()
+                .and_then(|r| r["wall_ms"].as_f64())
+                .unwrap_or(0.);
+            row["ready_wall_ms"] = json!(wire_ms + maintenance_ms);
+            row["maintenance_wall_ms"] = json!(maintenance_ms);
+            let metrics = host.metrics().ok_or("missing host metrics")?;
+            if backend != "git" {
+                let cache = response_cache(&metrics);
+                check_response_cache(&cache)?;
+                if cache["resident_bytes"] != 0 || cache["entries"] != 0 {
+                    return Err("push failed to invalidate response cache".into());
+                }
+                row["server_cache_after_push"] = cache;
+                let delta = &row["service_metrics_delta"];
+                row["compaction_delta"] = json!({"count":delta["compactions"],"input_bytes":delta["compaction_input_bytes"],"output_bytes":delta["compaction_output_bytes"],"retired_chunk_deletes":delta["retired_chunk_deletes"]});
+            }
+            row["push_wire_bytes"] = row["service_metrics_delta"]["input_bytes"].clone();
+            let minimum_wire = if generation == 1 {
+                fixture.metadata["working_tree_bytes"]
+                    .as_f64()
+                    .ok_or("missing fixture size")?
+                    * 0.4
+            } else {
+                3. * 1024. * 1024.
+            };
+            if group == "large_push"
+                && row["push_wire_bytes"]
+                    .as_f64()
+                    .is_none_or(|bytes| bytes < minimum_wire)
+            {
+                return Err(format!("large push {generation} did not transfer its required {minimum_wire} new wire bytes").into());
+            }
+            final_storage = if host.cloudflare_repo.is_some() {
+                let usage = &metrics["cloudflare_services"];
+                let current=usage["manifest_generation"].as_u64().ok_or("missing actual manifest generation in service metrics; update the local Worker")?;
+                if current <= previous_generation {
+                    return Err("push did not advance manifest generation".into());
+                }
+                row["manifest_generation_before"] = json!(previous_generation);
+                row["manifest_generation_after"] = json!(current);
+                previous_generation = current;
+                for key in ["r2_live_bytes", "r2_live_objects"] {
+                    if usage[key].as_u64().is_none() {
+                        return Err(format!("missing actual {key} inventory").into());
+                    }
+                }
+                json!({"authoritative_services":{"logical_bytes":usage["r2_live_bytes"],"objects":usage["r2_live_objects"],"generation":current},"scope":"Actual R2 inventory and authoritative SQLite generation from the existing observer metrics RPC; full reachable-object inventory is verified once at completion."})
+            } else {
+                storage_snapshot(&store, backend, &host)?
+            };
+            row["storage_after_push"] = final_storage.clone();
+            progress_event(json!({"kind":"operation_verified","row":row}))?;
+            rows.push(row);
+            if let Some(row) = maintenance_row {
+                rows.push(row);
+            }
+        } else {
+            let client = if group == "latest_fetch" {
+                latest.clone()
+            } else {
+                directory.join(format!("{key}.git"))
+            };
+            if group != "latest_fetch" {
+                init_fetch_client(root, &client, &fixture.source, operation["have"].as_str())?;
+            }
+            let packs_before = client_packs(&client)?;
+            let mut row = measure(
+                root,
+                &host,
+                backend,
+                sample,
+                key,
+                &client,
+                &[
+                    "fetch",
+                    "--quiet",
+                    "--no-tags",
+                    "--keep",
+                    &host.url,
+                    &format!(
+                        "{}:refs/heads/result",
+                        operation["reference"].as_str().ok_or("missing ref")?
+                    ),
+                ],
+            )?;
+            row["operation"] = operation.clone();
+            let received: u64 = client_packs(&client)?
+                .iter()
+                .filter(|(name, _)| !packs_before.contains_key(*name))
+                .map(|(_, bytes)| bytes)
+                .sum();
+            if received == 0 {
+                return Err(format!("{key} transferred no pack").into());
+            }
+            if git_text(root, &client, &["rev-parse", "refs/heads/result"])? != want {
+                return Err(format!("{key} want mismatch").into());
+            }
+            let tree = git_text(root, &client, &["rev-parse", "refs/heads/result^{tree}"])?;
+            let expected_tree = git_text(
+                root,
+                &fixture.source,
+                &["rev-parse", &format!("{want}^{{tree}}")],
+            )?;
+            if tree != expected_tree {
+                return Err(format!("{key} tree mismatch").into());
+            }
+            git(root, &client, &["fsck", "--strict"], false)?;
+            git(root, &client, &["archive", "refs/heads/result"], false)?;
+            row["verified_want"] = json!(want);
+            row["verified_tree"] = json!(tree);
+            row["strict_fsck"] = json!(true);
+            row["archive_verified"] = json!(true);
+            row["client_received_pack_bytes"] = json!(received);
+            row["http_response_body_bytes"] = row["service_metrics_delta"]["output_bytes"].clone();
+            if backend != "git" {
+                let metrics = host.metrics().ok_or("missing metrics after fetch")?;
+                let cache = response_cache(&metrics);
+                check_response_cache(&cache)?;
+                row["server_cache_after_fetch"] = cache;
+                if row["service_metrics_delta"]["blob_puts"].as_f64() != Some(0.) {
+                    return Err("fetch wrote authoritative blobs".into());
+                }
+            }
+            if host.cloudflare_repo.is_some() {
+                let before = &row["cloudflare_services_before"];
+                let after = &row["cloudflare_services_after"];
+                let delta = &row["cloudflare_workload_delta"];
+                if before["manifest_generation"].as_u64() != Some(previous_generation)
+                    || after["manifest_generation"].as_u64() != Some(previous_generation)
+                    || before["r2_live_objects"] != after["r2_live_objects"]
+                    || before["r2_live_bytes"] != after["r2_live_bytes"]
+                    || delta["r2_class_a"] != 0
+                    || delta["r2_deletes"] != 0
+                    || delta["r2_written_bytes"] != 0
+                    || delta["do_rows_written"] != 0
+                {
+                    return Err(format!("{key} changed authoritative storage").into());
+                }
+                if cloudflare.is_some_and(|settings| settings.view_cache == "cold")
+                    && group == "latest_fetch"
+                    && (delta["r2_class_b"].as_u64().is_none_or(|n| n == 0)
+                        || row["service_metrics_delta"]["cloudflare_services"]["operations"]["r2_get"]["attempts"].as_f64().is_none_or(|n|n<=0.)
+                        || delta["r2_read_bytes"].as_u64().is_none_or(|n| n == 0))
+                {
+                    return Err("cold latest fetch bypassed actual R2 reads".into());
+                }
+                row["read_authority_unchanged"] = json!(true);
+                row["manifest_generation"] = json!(previous_generation);
+            }
+            progress_event(json!({"kind":"operation_verified","row":row}))?;
+            rows.push(row);
+            if group != "latest_fetch" {
+                fs::remove_dir_all(&client)?;
+            }
+        }
+    }
+    let final_objects = if host.cloudflare_repo.is_some() {
+        Some(host.object_stats()?)
+    } else {
+        None
+    };
+    let contention_after = contention_snapshot();
+    for row in &mut rows {
+        row["backend_validation_complete"] = json!(true);
+        row["run_contention_before"] = contention_before.clone();
+        row["run_contention_after"] = contention_after.clone();
+        row["final_storage"] = final_storage.clone();
+    }
+    if let Some(first) = rows.first_mut() {
+        if let Some(objects) = final_objects {
+            let usage: git_zero_host::accounting::ServiceUsage =
+                serde_json::from_value(objects["cloudflare_services"].clone())?;
+            first["estimated_service_costs"] = serde_json::to_value(
+                git_zero_host::cost::estimate_service_usage(&usage, options.monthly_runs)?,
+            )?;
+            first["final_object_stats"] = objects;
+        }
+    }
+    progress_event(
+        json!({"kind":"backend_complete","backend":backend,"sample":sample,"rows":rows}),
+    )?;
+    Ok(rows)
+}
+
 fn metrics_delta(before: &Option<Value>, after: &Option<Value>) -> Value {
     fn delta(before: &Value, after: &Value) -> Option<Value> {
         match after {
@@ -1152,6 +1582,15 @@ fn summary(rows: &[Value]) -> Vec<Value> {
     let mut result = Vec::new();
     for backend in ["prototype", "cloudflare-local", "git"] {
         for workload in [
+            "large_push",
+            "small_push",
+            "large_push_ready",
+            "small_push_ready",
+            "latest_fetch",
+            "history_no_haves",
+            "history_with_haves",
+            "latest_recheck",
+            "reference_bitmap_maintenance",
             "initial_push",
             "fresh_clone",
             "warm_clone",
@@ -1169,7 +1608,23 @@ fn summary(rows: &[Value]) -> Vec<Value> {
                 .iter()
                 .filter(|row| {
                     let name = row["workload"].as_str().unwrap_or("");
-                    let matches_workload = if workload == "random_fetch_without_haves" {
+                    let matches_workload = if workload == "reference_bitmap_maintenance" {
+                        name.starts_with("maintenance_after_push_")
+                    } else if [
+                        "large_push",
+                        "small_push",
+                        "large_push_ready",
+                        "small_push_ready",
+                        "latest_fetch",
+                        "history_no_haves",
+                        "history_with_haves",
+                        "latest_recheck",
+                    ]
+                    .contains(&workload)
+                    {
+                        row["operation"]["group"]
+                            == workload.strip_suffix("_ready").unwrap_or(workload)
+                    } else if workload == "random_fetch_without_haves" {
                         name == "random_fetch" && row["probe"]["have"].is_null()
                     } else if workload == "random_fetch_with_haves" {
                         name == "random_fetch" && !row["probe"]["have"].is_null()
@@ -1182,7 +1637,14 @@ fn summary(rows: &[Value]) -> Vec<Value> {
                     };
                     row["backend"] == backend && matches_workload && row["warmup"] == false
                 })
-                .filter_map(|row| row["wall_ms"].as_f64())
+                .filter_map(|row| {
+                    row[if workload.ends_with("_ready") {
+                        "ready_wall_ms"
+                    } else {
+                        "wall_ms"
+                    }]
+                    .as_f64()
+                })
                 .collect();
             if times.is_empty() {
                 continue;
@@ -1222,17 +1684,38 @@ fn run() -> Result<()> {
             .cloned()
             .unwrap_or_else(|| default.to_owned())
     };
-    let samples: usize = option("--samples", "4").parse()?;
-    let mib: f64 = option("--fixture-mib", "4").parse()?;
-    let pushes: usize = option("--pushes", "5").parse()?;
-    let random_fetches: usize = option("--random-fetches", "16").parse()?;
+    let flow = option("--flow", "batch");
+    let interleaved = flow == INTERLEAVED_FLOW;
+    let stage = option("--stage", "full");
+    let samples: usize = option(
+        "--samples",
+        if interleaved {
+            if stage == "screen" { "2" } else { "5" }
+        } else {
+            "4"
+        },
+    )
+    .parse()?;
+    let mib: f64 = option("--fixture-mib", if interleaved { "16" } else { "4" }).parse()?;
+    let pushes: usize = option("--pushes", if interleaved { "32" } else { "5" }).parse()?;
+    let random_fetches: usize =
+        option("--random-fetches", if interleaved { "56" } else { "16" }).parse()?;
     let reference_maintenance = option("--reference-maintenance", "bitmap");
     let cloudflare_endpoint = option("--cloudflare-endpoint", "");
     let cloudflare_token = option("--cloudflare-token", "git-zero-local-services");
     let view_cache = option("--view-cache", "cold");
     let cloudflare_repo_prefix = option("--cloudflare-repo-prefix", "bench");
     let monthly_runs: u64 = option("--monthly-runs", "1000").parse()?;
-    if !(2..=100).contains(&samples)
+    if !["batch", INTERLEAVED_FLOW].contains(&flow.as_str())
+        || (interleaved
+            && (!matches!(mib, 16. | 64.)
+                || pushes != 32
+                || random_fetches != 56
+                || reference_maintenance != "bitmap"
+                || monthly_runs != 1000
+                || !["full", "screen"].contains(&stage.as_str())
+                || samples != if stage == "screen" { 2 } else { 5 }))
+        || !(2..=100).contains(&samples)
         || !(0.25..=64.).contains(&mib)
         || !(2..=256).contains(&pushes)
         || random_fetches > 256
@@ -1291,7 +1774,7 @@ fn run() -> Result<()> {
     let progress = ProgressLog {
         journal: parent.join(format!("{report_name}.{timestamp}.progress.jsonl")),
         incomplete: parent.join(format!("{report_name}.{timestamp}.incomplete.json")),
-        metadata: json!({"output":output,"fixtures":temp.root,"host_binary":binary,
+        metadata: json!({"flow":flow,"stage":stage,"output":output,"fixtures":temp.root,"host_binary":binary,
             "host_binary_sha256":git_zero_host::hash(&fs::read(&binary)?),"worker_source":worker_source,
             "samples":samples,"fixture_mib":mib,"pushes":pushes,"random_fetches":random_fetches,
             "cloudflare":cloudflare.as_ref().map(|settings|json!({"endpoint":settings.origin,
@@ -1302,7 +1785,11 @@ fn run() -> Result<()> {
         .set(progress)
         .map_err(|_| "progress already initialized")?;
     progress_event(json!({"kind":"run_start"}))?;
-    let data = fixture(&temp.root, mib, pushes, random_fetches)?;
+    let data = if interleaved {
+        interleaved_fixture(&temp.root, mib)?
+    } else {
+        fixture(&temp.root, mib, pushes, random_fetches)?
+    };
     let options = BackendOptions {
         binary: &binary,
         cloudflare: cloudflare.as_ref(),
@@ -1313,6 +1800,11 @@ fn run() -> Result<()> {
         "cloudflare-local"
     } else {
         "prototype"
+    };
+    let run_backend = if interleaved {
+        run_interleaved_backend
+    } else {
+        run_backend
     };
     let mut rows = Vec::new();
     for backend in [prototype, "git"] {
@@ -1362,7 +1854,7 @@ fn run() -> Result<()> {
             .and_then(|value| value.split_once(':'))
             .map(|(_, value)| value.trim())
     });
-    let report = json!({"schema_version":3,"complete":true,"timestamp_unix_seconds":SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+    let mut report = json!({"schema_version":if interleaved {4}else{3},"complete":true,"timestamp_unix_seconds":SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
         "machine":{"os":env::consts::OS,"arch":env::consts::ARCH,"cpu":cpu,"logical_cpus":thread::available_parallelism()?.get(),
             "kernel":fs::read_to_string("/proc/sys/kernel/osrelease").ok().map(|text|text.trim().to_owned()),
         "memory":fs::read_to_string("/proc/meminfo").ok().and_then(|text|text.lines().next().map(str::to_owned)),
@@ -1399,6 +1891,32 @@ fn run() -> Result<()> {
         "Cloudflare-local costs price actual emulator service operation counts with explicit traffic/storage assumptions. Local codec timings are not measured cloud CPU, latency, cold-start or full hosting bills."
         ,"An operation journal is written outside measured requests. Failures preserve it, an incomplete diagnostic report and local fixtures; successful runs remove the journal."
     ]});
+    if interleaved {
+        report["config"]["flow"] = json!(INTERLEAVED_FLOW);
+        report["config"]["objective_identity"] = json!(INTERLEAVED_OBJECTIVE);
+        report["config"]["stage"] = json!(stage);
+        report["config"]["reference_random_fetch_preparation"] = json!(
+            "No setup pushes; bitmap after each measured atomic push, before its latest fetch"
+        );
+        report["config"]["cache_workloads"] = json!(
+            "Persistent latest client; distinct published historical refs; independently seeded latest recheck"
+        );
+        report["config"]["random_fetch_setup"] = json!(
+            "All 56 timed fetches transfer nonempty packs; fetch.unpackLimit=0; fresh-client ancestor seeds are local and outside timers"
+        );
+        report["config"]["storage_checks"] = json!(
+            "Every push records generation and cache invalidation; every read compares actual R2 inventory and complete counter deltas"
+        );
+        report["config"]["push_latency_guard"] =
+            json!("wire push plus separately timed reference bitmap maintenance");
+        report["config"]["response_cache_max_response_bytes"] = json!(16 * 1024 * 1024);
+        report["limits"].as_array_mut().unwrap().retain(|v| {
+            !v.as_str().is_some_and(|s| {
+                s.contains("Random-fetch and append-push") || s.contains("Retained mode")
+            })
+        });
+        report["limits"].as_array_mut().unwrap().push(json!("Interleaved v1: 32 atomic pushes + 56 timed reads; history only uses refs already published by measured pushes. Push guard includes readiness maintenance. No post-batch fixture pushes."));
+    }
     fs::write(
         &output,
         format!("{}\n", serde_json::to_string_pretty(&report)?),

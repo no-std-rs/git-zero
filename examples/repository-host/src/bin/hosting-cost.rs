@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "hosting-cost [--output SCORE.json] [--baseline PREVIOUS-SCORE.json] 4mib-cold.json 4mib-warm.json 16mib-cold.json 16mib-warm.json"
+                    "hosting-cost [--output SCORE.json] [--baseline PREVIOUS-SCORE.json] PROFILE.json PROFILE.json PROFILE.json PROFILE.json\nLegacy batch profiles: 4/16 MiB x cold/warm. interleaved-v1 profiles: 16/64 MiB x cold/warm. Flows and screen/full stages must match; two-pair screening never establishes improvement."
                 );
                 return Ok(());
             }

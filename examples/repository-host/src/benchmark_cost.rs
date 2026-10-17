@@ -15,6 +15,56 @@ use std::{
     io,
 };
 
+pub const INTERLEAVED_FLOW: &str = "interleaved-v1";
+pub const INTERLEAVED_OBJECTIVE: &str =
+    "interleaved-v1:16,64mib:cold,warm:32push,56fetch:1000repeats:peak30d:ready-latency:v1";
+pub const INTERLEAVED_SEED: u64 = 0x484f_5354_494e_4731;
+
+/// The complete immutable operation order. Historical requests can only want a
+/// published ref, and seeded clients always start at a strictly older ancestor.
+pub fn interleaved_schedule(tips: &[String]) -> io::Result<Vec<Value>> {
+    require(tips.len() == 32, "interleaved fixture requires 32 tips")?;
+    let mut state = INTERLEAVED_SEED;
+    let mut random = |limit: usize| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state as usize % limit
+    };
+    let mut result = Vec::new();
+    for generation in 1..=32 {
+        let want = &tips[generation - 1];
+        let have = generation.checked_sub(2).map(|index| &tips[index]);
+        let large = generation == 1 || (generation >= 5 && generation % 4 == 1);
+        result.push(json!({"key":format!("push_{generation:02}"),"kind":"push",
+            "group":if large {"large_push"}else{"small_push"},"generation":generation,
+            "want":want,"have":have,"reference":"refs/heads/main",
+            "history_reference":format!("refs/heads/history-{generation}")}));
+        result.push(
+            json!({"key":format!("latest_fetch_{generation:02}"),"kind":"fetch",
+            "group":"latest_fetch","generation":generation,"want":want,"have":have,
+            "reference":"refs/heads/main","client":"persistent-latest"}),
+        );
+        if generation % 4 == 0 {
+            let no_haves = 1 + random(generation - 1);
+            let choices: Vec<_> = (2..generation).filter(|n| *n != no_haves).collect();
+            let with_haves = choices[random(choices.len())];
+            let older = 1 + random(with_haves - 1);
+            for (group, target, have) in [
+                ("history_no_haves", no_haves, None),
+                ("history_with_haves", with_haves, Some(&tips[older - 1])),
+                ("latest_recheck", generation, Some(&tips[generation - 2])),
+            ] {
+                result.push(json!({"key":format!("{group}_{generation:02}"),"kind":"fetch",
+                    "group":group,"generation":generation,"want":tips[target-1],"have":have,
+                    "reference":if group=="latest_recheck" {"refs/heads/main".to_owned()} else {format!("refs/heads/history-{target}")},
+                    "client":"fresh-seeded-outside-timer"}));
+            }
+        }
+    }
+    Ok(result)
+}
+
 const REPEATS: u64 = 1_000;
 const RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
 const RESPONSE_ENTRIES: u64 = 256;
@@ -364,27 +414,46 @@ fn add_guard(guards: &mut BTreeMap<String, Vec<f64>>, key: &str, value: f64) {
 type LatencySamples = (Vec<f64>, Vec<f64>, Vec<f64>);
 
 fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
-    require(
-        report["complete"] == true && count(report, "schema_version")? == 3,
-        "requires a complete schema-v3 benchmark",
-    )?;
     let config = field(report, "config")?;
+    let interleaved = config["flow"] == INTERLEAVED_FLOW;
+    require(
+        report["complete"] == true
+            && count(report, "schema_version")? == if interleaved { 4 } else { 3 },
+        "requires a complete benchmark with its declared flow schema",
+    )?;
+    require(
+        config.get("flow").is_none()
+            || matches!(config["flow"].as_str(), Some("batch" | INTERLEAVED_FLOW)),
+        "unknown benchmark flow",
+    )?;
     let cf = field(config, "cloudflare_local")?;
     let mib = number(config, "fixture_mib")?;
     require(
-        mib == 4.0 || mib == 16.0,
-        "fixed fixture must be 4 or 16 MiB",
+        if interleaved {
+            mib == 16.0 || mib == 64.0
+        } else {
+            mib == 4.0 || mib == 16.0
+        },
+        "fixture size does not match the declared flow",
     )?;
     let view = text(cf, "view_cache")?;
     require(view == "cold" || view == "warm", "unknown view policy")?;
     let samples = count(config, "samples")?;
     require(
-        (2..=100).contains(&samples),
-        "requires 2..100 measured paired trials",
+        if interleaved {
+            match text(config, "stage")? {
+                "screen" => samples == 2,
+                "full" => samples == 5,
+                _ => false,
+            }
+        } else {
+            (2..=100).contains(&samples)
+        },
+        "interleaved requires exactly 2 screen or 5 full paired trials",
     )?;
     require(
         count(config, "push_generations_per_run")? == 32
-            && count(config, "random_fetches_per_run")? == 16
+            && count(config, "random_fetches_per_run")? == if interleaved { 56 } else { 16 }
             && count(config, "warmups_per_backend")? == 1
             && count(config, "protocol")? == 0
             && config["debug_assertions"] == false,
@@ -417,19 +486,97 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
         "invalid reference maintenance",
     )?;
     let fixture = field(report, "fixture")?;
+    let schedule = if interleaved {
+        require(
+            config["objective_identity"] == INTERLEAVED_OBJECTIVE
+                && fixture["objective_identity"] == INTERLEAVED_OBJECTIVE
+                && fixture["flow"] == INTERLEAVED_FLOW,
+            "interleaved objective identity differs",
+        )?;
+        require(
+            config["reference_push_maintenance"] == "bitmap"
+                && config["push_latency_guard"]
+                    == "wire push plus separately timed reference bitmap maintenance"
+                && count(config, "response_cache_max_response_bytes")? == 16 * 1024 * 1024,
+            "interleaved readiness/cache policy differs",
+        )?;
+        require(
+            fixture["fixture_version"] == "independent-large-halves-v1"
+                && count(fixture, "seed")? == INTERLEAVED_SEED
+                && fixture["large_file_delta_encoding"] == false
+                && count(fixture, "large_file_bytes")? == 8 * 1024 * 1024
+                && fixture["compressible_fraction"] == 0.5
+                && fixture["replacement_generations"] == json!([5, 9, 13, 17, 21, 25, 29]),
+            "interleaved large payload fixture differs",
+        )?;
+        let generations = array(fixture, "generations")?;
+        require(
+            generations.len() == 32,
+            "incomplete interleaved generations",
+        )?;
+        let mut tips = Vec::new();
+        for (index, generation) in generations.iter().enumerate() {
+            let g = index + 1;
+            require(
+                count(generation, "generation")? == g as u64,
+                "invalid fixture generation",
+            )?;
+            for key in ["tip", "tree"] {
+                let oid = text(generation, key)?;
+                require(
+                    oid.len() == 40 && oid.bytes().all(|b| b.is_ascii_hexdigit()),
+                    "invalid fixture object id",
+                )?;
+            }
+            let replacement = g >= 5 && g % 4 == 1;
+            require(
+                generation["large_push"] == (g == 1 || replacement)
+                    && count(generation, "replacement_logical_bytes")?
+                        == if replacement { 8 * 1024 * 1024 } else { 0 }
+                    && count(generation, "large_content_seed")?
+                        == 10_000 + ((g - 1) / 4 * 4 + 1) as u64,
+                "large push generation differs",
+            )?;
+            tips.push(text(generation, "tip")?.to_owned());
+        }
+        require(
+            tips.iter().collect::<BTreeSet<_>>().len() == 32,
+            "duplicate generation tips",
+        )?;
+        let expected = interleaved_schedule(&tips)?;
+        require(
+            array(fixture, "schedule")? == &expected
+                && text(fixture, "schedule_sha256")?
+                    == crate::hash(&serde_json::to_vec(&expected).map_err(io::Error::other)?),
+            "schedule or schedule SHA differs",
+        )?;
+        expected
+    } else {
+        require(
+            array(fixture, "append_tips")?.len() == 30
+                && array(fixture, "fetch_probes")?.len() == 16,
+            "incomplete fixed fixture",
+        )?;
+        for key in ["base", "tip"] {
+            text(fixture, key)?;
+        }
+        Vec::new()
+    };
     require(
-        array(fixture, "append_tips")?.len() == 30
-            && array(fixture, "fetch_probes")?.len() == 16
-            && count(fixture, "working_tree_bytes")? == mib as u64 * 1024 * 1024,
-        "incomplete fixed fixture",
+        count(fixture, "working_tree_bytes")? == mib as u64 * 1024 * 1024,
+        "fixture logical size differs",
     )?;
-    for key in ["base", "tip"] {
-        text(fixture, key)?;
-    }
     count(fixture, "files")?;
     count(fixture, "bytes_per_file")?;
     let raw = array(report, "raw")?;
-    let expected = workload_names();
+    let expected = if interleaved {
+        schedule
+            .iter()
+            .map(|operation| operation["key"].as_str().unwrap().to_owned())
+            .collect()
+    } else {
+        workload_names()
+    };
     let mut trials = Vec::new();
     let mut guards = BTreeMap::new();
     let mut latencies: BTreeMap<String, LatencySamples> = BTreeMap::new();
@@ -439,6 +586,8 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
         let mut backends = BTreeMap::new();
         for backend in ["cloudflare-local", "git"] {
             let mut rows = BTreeMap::new();
+            let mut operation_order = Vec::new();
+            let mut maintenance_keys = BTreeSet::new();
             for row in raw
                 .iter()
                 .filter(|r| r["backend"] == backend && r["sample"] == sample)
@@ -450,7 +599,17 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                 number(row, "wall_ms")?;
                 let key = operation_key(row)?;
                 if key.starts_with("maintenance_after_") && backend == "git" {
+                    if interleaved {
+                        require(
+                            maintenance_keys.insert(key.clone()),
+                            "duplicate maintenance operation",
+                        )?;
+                        operation_order.push(key);
+                    }
                     continue;
+                }
+                if interleaved {
+                    operation_order.push(key.clone());
                 }
                 require(expected.contains(&key), "unexpected benchmark operation")?;
                 require(
@@ -462,10 +621,37 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                 rows.keys().cloned().collect::<BTreeSet<_>>() == expected,
                 "incomplete paired trial workload",
             )?;
+            if interleaved {
+                let mut expected_order = Vec::new();
+                for operation in &schedule {
+                    let key = text(operation, "key")?;
+                    expected_order.push(key.to_owned());
+                    require(
+                        rows[key]["operation"] == *operation,
+                        "operation metadata differs from immutable schedule",
+                    )?;
+                    if backend == "git" && operation["kind"] == "push" {
+                        expected_order.push(format!("maintenance_after_{key}"));
+                    }
+                }
+                require(
+                    operation_order == expected_order,
+                    "interleaved operation order or bitmap maintenance coverage differs",
+                )?;
+                require(
+                    maintenance_keys.len() == if backend == "git" { 32 } else { 0 },
+                    "incorrect maintenance count",
+                )?;
+            }
             backends.insert(backend, rows);
         }
         let rows = &backends["cloudflare-local"];
-        let first = rows["initial_push"];
+        let first = rows[if interleaved {
+            "push_01"
+        } else {
+            "initial_push"
+        }];
+        let mut previous_generation = 0;
         let mut pushes = Vec::new();
         let mut fetches = Vec::new();
         let mut read_bytes = 0_u64;
@@ -497,17 +683,72 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                 epoch = Some(current_epoch);
             }
             let paired = backends["git"][key];
-            if key.starts_with("random_fetch_") {
-                let probe = field(row, "probe")?;
-                let index = count(probe, "index")? as usize;
-                let expected_probe = &fixture["fetch_probes"][index];
-                for field_name in ["want", "have", "reference"] {
+            let read = if interleaved {
+                row["operation"]["kind"] == "fetch"
+            } else {
+                key.starts_with("random_fetch_")
+            };
+            if read {
+                if interleaved {
+                    let operation = field(row, "operation")?;
+                    let want = text(operation, "want")?;
+                    let generation = array(fixture, "generations")?
+                        .iter()
+                        .find(|g| g["tip"] == want)
+                        .ok_or_else(|| invalid("unknown fetch want"))?;
+                    for fetched in [*row, paired] {
+                        require(
+                            fetched["verified_want"] == want
+                                && fetched["verified_tree"] == generation["tree"]
+                                && fetched["strict_fsck"] == true
+                                && fetched["archive_verified"] == true,
+                            "fetch content verification incomplete",
+                        )?;
+                    }
+                    let push_key = format!("push_{:02}", count(operation, "generation")?);
+                    let published = count(rows[&push_key], "manifest_generation_after")?;
                     require(
-                        probe.get(field_name).is_some()
-                            && probe[field_name] == expected_probe[field_name]
-                            && paired["probe"][field_name] == expected_probe[field_name],
-                        "probe fixture differs",
+                        count(
+                            field(row, "cloudflare_services_before")?,
+                            "manifest_generation",
+                        )? == published
+                            && count(
+                                field(row, "cloudflare_services_after")?,
+                                "manifest_generation",
+                            )? == published
+                            && count(row, "manifest_generation")? == published,
+                        "read did not use the published manifest generation",
                     )?;
+                    require(
+                        row["read_authority_unchanged"] == true
+                            && before.r2_live_bytes == after.r2_live_bytes
+                            && before.r2_live_objects == after.r2_live_objects,
+                        "read changed actual R2 inventory",
+                    )?;
+                    if view == "cold" && operation["group"] == "latest_fetch" {
+                        let get_attempts = |snapshot: &Value| {
+                            count(field(field(snapshot, "operations")?, "r2_get")?, "attempts")
+                        };
+                        require(
+                            delta.r2_class_b > 0
+                                && delta.r2_read_bytes > 0
+                                && get_attempts(field(row, "cloudflare_services_after")?)?
+                                    > get_attempts(field(row, "cloudflare_services_before")?)?,
+                            "cold latest fetch bypassed actual R2 GETs",
+                        )?;
+                    }
+                } else {
+                    let probe = field(row, "probe")?;
+                    let index = count(probe, "index")? as usize;
+                    let expected_probe = &fixture["fetch_probes"][index];
+                    for field_name in ["want", "have", "reference"] {
+                        require(
+                            probe.get(field_name).is_some()
+                                && probe[field_name] == expected_probe[field_name]
+                                && paired["probe"][field_name] == expected_probe[field_name],
+                            "probe fixture differs",
+                        )?;
+                    }
                 }
                 let pack = count(row, "client_received_pack_bytes")?;
                 require(
@@ -539,47 +780,158 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                     .checked_add(pack)
                     .ok_or_else(|| invalid("pack bytes overflow"))?;
                 fetches.push(delta);
-            } else if fixed(key) {
+            } else if interleaved || fixed(key) {
+                if interleaved {
+                    let cache = field(row, "server_cache_after_push")?;
+                    require(
+                        count(cache, "budget_bytes")? == RESPONSE_BYTES
+                            && count(cache, "entry_limit")? == RESPONSE_ENTRIES
+                            && count(cache, "resident_bytes")? == 0
+                            && count(cache, "entries")? == 0,
+                        "push did not invalidate response cache",
+                    )?;
+                    require(
+                        count(row, "manifest_generation_before")? == previous_generation
+                            && count(row, "manifest_generation_after")? > previous_generation,
+                        "push failed to advance manifest generation",
+                    )?;
+                    previous_generation = count(row, "manifest_generation_after")?;
+                    require(
+                        count(
+                            field(row, "cloudflare_services_after")?,
+                            "manifest_generation",
+                        )? == previous_generation,
+                        "published generation differs from actual service metrics",
+                    )?;
+                    let compaction = field(row, "compaction_delta")?;
+                    for (key, metric) in [
+                        ("count", "compactions"),
+                        ("input_bytes", "compaction_input_bytes"),
+                        ("output_bytes", "compaction_output_bytes"),
+                        ("retired_chunk_deletes", "retired_chunk_deletes"),
+                    ] {
+                        require(
+                            count(compaction, key)?
+                                == count(field(row, "service_metrics_delta")?, metric)?,
+                            "compaction delta differs from observed native metrics",
+                        )?;
+                    }
+                    for push in [*row, paired] {
+                        require(
+                            count(push, "push_wire_bytes")?
+                                == count(field(push, "service_metrics_delta")?, "input_bytes")?,
+                            "push wire bytes differ from observed native metrics",
+                        )?;
+                    }
+                    if row["operation"]["group"] == "large_push" {
+                        let minimum = if row["operation"]["generation"] == 1 {
+                            mib * 1024.0 * 1024.0 * 0.4
+                        } else {
+                            3.0 * 1024.0 * 1024.0
+                        };
+                        require(
+                            number(row, "push_wire_bytes")? >= minimum
+                                && number(paired, "push_wire_bytes")? >= minimum,
+                            "large push transferred too little new data",
+                        )?;
+                    }
+                    for push in [*row, paired] {
+                        let wire = number(push, "push_wire_wall_ms")?;
+                        let maintenance = number(push, "maintenance_wall_ms")?;
+                        let ready = number(push, "ready_wall_ms")?;
+                        require(
+                            (wire + maintenance - ready).abs() < 1e-6
+                                && (wire - number(push, "wall_ms")?).abs() < 1e-6,
+                            "invalid push ready time",
+                        )?;
+                    }
+                    let maintenance = raw
+                        .iter()
+                        .find(|r| {
+                            r["backend"] == "git"
+                                && r["sample"] == sample
+                                && r["workload"] == format!("maintenance_after_{key}")
+                        })
+                        .ok_or_else(|| invalid("missing reference maintenance"))?;
+                    require(
+                        (number(maintenance, "wall_ms")? - number(paired, "maintenance_wall_ms")?)
+                            .abs()
+                            < 1e-6
+                            && number(row, "maintenance_wall_ms")? == 0.0,
+                        "reference maintenance timing differs",
+                    )?;
+                }
                 pushes.push(delta);
             }
             if sample >= 0 {
-                let host_ms = number(row, "wall_ms")?;
-                let git_ms = number(paired, "wall_ms")?;
+                let latency_field = if interleaved && !read {
+                    "ready_wall_ms"
+                } else {
+                    "wall_ms"
+                };
+                let host_ms = number(row, latency_field)?;
+                let git_ms = number(paired, latency_field)?;
                 require(git_ms > 0.0, "zero reference latency")?;
-                let entry = latencies.entry(latency_group(key).to_owned()).or_default();
+                let entry = latencies
+                    .entry(
+                        if interleaved {
+                            text(field(row, "operation")?, "group")?
+                        } else {
+                            latency_group(key)
+                        }
+                        .to_owned(),
+                    )
+                    .or_default();
                 entry.0.push(host_ms);
                 entry.1.push(git_ms);
                 entry.2.push(host_ms / git_ms);
             }
         }
         require(
-            pushes.len() == 32 && fetches.len() == 16,
+            pushes.len() == 32 && fetches.len() == if interleaved { 56 } else { 16 },
             "incorrect fixed mix",
         )?;
-        let before = field(
-            field(first, "random_fetch_storage_before")?,
-            "authoritative_services",
-        )?;
-        let after = field(
-            field(first, "random_fetch_storage_after")?,
-            "authoritative_services",
-        )?;
+        let (before, after) = if interleaved {
+            let inventory = field(field(first, "final_storage")?, "authoritative_services")?;
+            (inventory, inventory)
+        } else {
+            (
+                field(
+                    field(first, "random_fetch_storage_before")?,
+                    "authoritative_services",
+                )?,
+                field(
+                    field(first, "random_fetch_storage_after")?,
+                    "authoritative_services",
+                )?,
+            )
+        };
         require(
             before == after,
             "read workload changed authoritative inventory",
         )?;
-        for key in [
-            "logical_bytes",
-            "objects",
-            "generation",
-            "refs",
-            "active_manifest_pack_and_index_bytes",
-            "active_manifest_pack_count",
-        ] {
+        for key in if interleaved {
+            &["logical_bytes", "objects", "generation"][..]
+        } else {
+            &[
+                "logical_bytes",
+                "objects",
+                "generation",
+                "refs",
+                "active_manifest_pack_and_index_bytes",
+                "active_manifest_pack_count",
+            ][..]
+        } {
             count(before, key)?;
         }
         let stats = field(first, "final_object_stats")?;
         let observed = snapshot(field(stats, "cloudflare_services")?)?;
+        if interleaved {
+            require(
+                count(field(stats, "manifest")?, "generation")? == count(after, "generation")?,
+                "final manifest generation differs from push observations",
+            )?;
+        }
         let objects = field(stats, "objects")?;
         require(
             count(objects, "unique_objects")? > 0
@@ -692,7 +1044,7 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                 / 32.0,
             known_usd_per_1000_varied_fetches: estimate(&fetch_usage, 0)?
                 .known_gross_linear_usage_usd
-                / 16.0,
+                / if interleaved { 56.0 } else { 16.0 },
             resource_monthly_usd,
         });
     }
@@ -786,7 +1138,16 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
 pub fn benchmark_cost(reports: &[Value]) -> io::Result<BenchmarkCost> {
     require(
         reports.len() == 4,
-        "requires exactly four 4/16 MiB cold/warm reports",
+        "requires exactly four size/cache reports for one objective",
+    )?;
+    let interleaved = reports[0]["config"]["flow"] == INTERLEAVED_FLOW;
+    let stage = reports[0]["config"]["stage"].clone();
+    require(
+        reports.iter().all(|r| {
+            (r["config"]["flow"] == INTERLEAVED_FLOW) == interleaved
+                && (!interleaved || r["config"]["stage"] == stage)
+        }),
+        "suite mixes objective flows or stages",
     )?;
     let mut profiles = BTreeMap::new();
     let mut build = None;
@@ -808,16 +1169,22 @@ pub fn benchmark_cost(reports: &[Value]) -> io::Result<BenchmarkCost> {
     }
     require(
         profiles.keys().map(String::as_str).collect::<BTreeSet<_>>()
-            == ["4mib-cold", "4mib-warm", "16mib-cold", "16mib-warm"]
-                .into_iter()
-                .collect(),
+            == if interleaved {
+                ["16mib-cold", "16mib-warm", "64mib-cold", "64mib-warm"]
+                    .into_iter()
+                    .collect()
+            } else {
+                ["4mib-cold", "4mib-warm", "16mib-cold", "16mib-warm"]
+                    .into_iter()
+                    .collect()
+            },
         "missing required profile",
     )?;
     let known = profiles
         .values()
         .map(|p| p.known_monthly_fixed_workload_usd.mean)
         .sum();
-    Ok(BenchmarkCost { schema_version: 1, pricing_verified_date: cost::PRICING_VERIFIED_DATE.to_owned(), objective: "Equal-weight sum of four profiles; each repeats exactly 32 timed pushes + 16 timed varied fetches 1000 times, retaining observed R2 peak once for 30 days; gross linear known resource USD".into(), monthly_workload_repetitions: REPEATS, conservative_trial_min_usd: profiles.values().map(|p| p.known_monthly_fixed_workload_usd.min).sum(), conservative_trial_max_usd: profiles.values().map(|p| p.known_monthly_fixed_workload_usd.max).sum(), total_estimate_usd: profiles.values().all(|p| p.total_estimate_usd.is_some()).then_some(known), known_monthly_fixed_workload_usd: known, profiles, limitations: vec!["Unknown Worker CPU, DO duration and monthly SQLite storage remain unknown; native codec compute is outside this model.".into(), "Local workerd wall time is a latency guard, never billed compute or the cost objective.".into(), "Whole-trace costs separately retain clone, fixture publication and verification operations; these do not change the fixed 32:16 weights.".into(), "No account allowance, baseline subscription or invoice rounding affects the score; measured current SQLite bytes are only a storage guard.".into()] })
+    Ok(BenchmarkCost { schema_version: if interleaved {2}else{1}, pricing_verified_date: cost::PRICING_VERIFIED_DATE.to_owned(), objective: if interleaved {format!("{INTERLEAVED_OBJECTIVE}:{}",stage.as_str().unwrap())}else{"Equal-weight sum of four profiles; each repeats exactly 32 timed pushes + 16 timed varied fetches 1000 times, retaining observed R2 peak once for 30 days; gross linear known resource USD".into()}, monthly_workload_repetitions: REPEATS, conservative_trial_min_usd: profiles.values().map(|p| p.known_monthly_fixed_workload_usd.min).sum(), conservative_trial_max_usd: profiles.values().map(|p| p.known_monthly_fixed_workload_usd.max).sum(), total_estimate_usd: profiles.values().all(|p| p.total_estimate_usd.is_some()).then_some(known), known_monthly_fixed_workload_usd: known, profiles, limitations: vec!["Unknown Worker CPU, DO duration and monthly SQLite storage remain unknown; native codec compute is outside this model.".into(), "Local workerd wall time is a latency guard, never billed compute or the cost objective.".into(), if interleaved {"Whole-trace costs retain observer and verification operations separately; the objective includes exactly the scheduled 32 pushes and 56 fetches without post-batch setup pushes.".into()}else{"Whole-trace costs separately retain clone, fixture publication and verification operations; these do not change the fixed 32:16 weights.".into()}, "No account allowance, baseline subscription or invoice rounding affects the score; measured current SQLite bytes are only a storage guard.".into()] })
 }
 
 /// Compare already validated suites. Latency failures are inconclusive and must
@@ -827,8 +1194,8 @@ pub fn compare_cost(
     candidate: &BenchmarkCost,
 ) -> io::Result<CostComparison> {
     require(
-        baseline.schema_version == 1
-            && candidate.schema_version == 1
+        matches!(baseline.schema_version, 1 | 2)
+            && baseline.schema_version == candidate.schema_version
             && baseline.pricing_verified_date == candidate.pricing_verified_date
             && baseline.objective == candidate.objective
             && baseline.monthly_workload_repetitions == REPEATS
@@ -892,7 +1259,12 @@ pub fn compare_cost(
     if !dollar_win {
         reasons.push("Known dollars did not improve by at least 1% with non-overlapping trial cost envelopes; wall-clock changes do not establish improvement.".into());
     }
-    let decision = if latency_failed {
+    let screening = baseline.schema_version == 2
+        && baseline.objective == format!("{INTERLEAVED_OBJECTIVE}:screen");
+    if screening {
+        reasons.push("screening only; full five-pair validation required".into());
+    }
+    let decision = if screening || latency_failed {
         Decision::Inconclusive
     } else if dollar_win && !resource_failed {
         Decision::Improved
@@ -942,7 +1314,7 @@ mod tests {
         result["accounting_complete"] = json!(true);
         result["accounting_errors"] = json!([]);
         result["by_phase"] = json!({"stats":usage(0, 0, 0, 0)});
-        result["operations"] = json!({"manifest_get":{"attempts":1,"successes":1,"failures":0,"read_bytes":0,"written_bytes":0}});
+        result["operations"] = json!({"manifest_get":{"attempts":1,"successes":1,"failures":0,"read_bytes":0,"written_bytes":0},"r2_get":{"attempts":result["r2_class_b"],"successes":result["r2_class_b"],"failures":0,"read_bytes":result["r2_read_bytes"],"written_bytes":0}});
         result
     }
     fn report(mib: u64, cold: bool, puts: u64) -> Value {
@@ -983,7 +1355,7 @@ mod tests {
                                 json!({"authoritative_services":inventory});
                             row["random_fetch_storage_after"] =
                                 json!({"authoritative_services":inventory});
-                            row["final_object_stats"] = json!({"cloudflare_services":service(usage(300, 80, 100, 10000)),"objects":{"unique_objects":10,"reachable_objects":10,"unreachable_objects":0},"cache_budget_bytes":RESPONSE_BYTES,"cache_entry_limit":RESPONSE_ENTRIES,"cache_bytes":100,"cache_entries":1});
+                            row["final_object_stats"] = json!({"cloudflare_services":service(usage(300, 80, 100, 10000)),"manifest":{"generation":32},"objects":{"unique_objects":10,"reachable_objects":10,"unreachable_objects":0},"cache_budget_bytes":RESPONSE_BYTES,"cache_entry_limit":RESPONSE_ENTRIES,"cache_bytes":100,"cache_entries":1});
                         }
                     }
                     raw.push(row);
@@ -1000,6 +1372,206 @@ mod tests {
             report(16, false, puts),
         ]
         .into()
+    }
+
+    fn interleaved_report(mib: u64, cold: bool, puts: u64, stage: &str) -> Value {
+        let mut result = report(mib, cold, puts);
+        let samples = if stage == "full" { 5 } else { 2 };
+        result["schema_version"] = json!(4);
+        result["config"]["flow"] = json!(INTERLEAVED_FLOW);
+        result["config"]["objective_identity"] = json!(INTERLEAVED_OBJECTIVE);
+        result["config"]["stage"] = json!(stage);
+        result["config"]["samples"] = json!(samples);
+        result["config"]["random_fetches_per_run"] = json!(56);
+        result["config"]["push_latency_guard"] =
+            json!("wire push plus separately timed reference bitmap maintenance");
+        result["config"]["response_cache_max_response_bytes"] = json!(16 * 1024 * 1024);
+        let tips: Vec<_> = (1..=32).map(|g| format!("{g:040x}")).collect();
+        let schedule = interleaved_schedule(&tips).unwrap();
+        let generations:Vec<_>=tips.iter().enumerate().map(|(i,tip)|{
+            let g=i+1;let replacement=g>=5&&g%4==1;
+            json!({"generation":g,"tip":tip,"tree":format!("{:040x}",g+100),"large_push":g==1||replacement,"replacement_logical_bytes":if replacement {8*1024*1024}else{0},"large_content_seed":10_000+(g-1)/4*4+1})
+        }).collect();
+        result["fixture"] = json!({"flow":INTERLEAVED_FLOW,"objective_identity":INTERLEAVED_OBJECTIVE,"fixture_version":"independent-large-halves-v1","seed":INTERLEAVED_SEED,"generations":generations,"schedule":schedule,"schedule_sha256":crate::hash(&serde_json::to_vec(&schedule).unwrap()),"working_tree_bytes":mib*1024*1024,"files":mib*16,"bytes_per_file":65536,"large_file_bytes":8*1024*1024,"large_file_delta_encoding":false,"replacement_generations":[5,9,13,17,21,25,29],"compressible_fraction":0.5});
+        let mut rows = Vec::new();
+        for sample in -1..samples {
+            for backend in ["cloudflare-local", "git"] {
+                for operation in &schedule {
+                    let fetch = operation["kind"] == "fetch";
+                    let g = operation["generation"].as_u64().unwrap();
+                    let mut row = json!({"backend":backend,"sample":sample,"warmup":sample<0,"backend_validation_complete":true,"workload":operation["key"],"operation":operation,"wall_ms":20.0});
+                    if fetch {
+                        let target = tips
+                            .iter()
+                            .position(|tip| *tip == operation["want"])
+                            .unwrap();
+                        row["verified_want"] = operation["want"].clone();
+                        row["verified_tree"] = generations[target]["tree"].clone();
+                        row["strict_fsck"] = json!(true);
+                        row["archive_verified"] = json!(true);
+                        row["client_received_pack_bytes"] = json!(100);
+                        row["http_response_body_bytes"] = json!(110);
+                        row["server_cache_after_fetch"] = json!({"budget_bytes":RESPONSE_BYTES,"entry_limit":RESPONSE_ENTRIES,"resident_bytes":100,"entries":1});
+                        row["read_authority_unchanged"] = json!(true);
+                        row["manifest_generation"] = json!(g);
+                    } else {
+                        row["push_wire_wall_ms"] = json!(20.0);
+                        row["maintenance_wall_ms"] =
+                            json!(if backend == "git" { 5.0 } else { 0.0 });
+                        row["ready_wall_ms"] = json!(if backend == "git" { 25.0 } else { 20.0 });
+                        row["push_wire_bytes"] = json!(if g == 1 {
+                            mib * 1024 * 1024 / 2
+                        } else {
+                            4 * 1024 * 1024
+                        });
+                        row["compaction_delta"] = json!({"count":0,"input_bytes":0,"output_bytes":0,"retired_chunk_deletes":0});
+                        row["service_metrics_delta"] = json!({"input_bytes":row["push_wire_bytes"],"compactions":0,"compaction_input_bytes":0,"compaction_output_bytes":0,"retired_chunk_deletes":0});
+                        row["server_cache_after_push"] = json!({"budget_bytes":RESPONSE_BYTES,"entry_limit":RESPONSE_ENTRIES,"resident_bytes":0,"entries":0});
+                        row["manifest_generation_before"] = json!(g - 1);
+                        row["manifest_generation_after"] = json!(g);
+                    }
+                    if backend == "cloudflare-local" {
+                        let delta = usage(
+                            if fetch { 2 } else { 5 },
+                            if fetch { 0 } else { puts },
+                            u64::from(cold),
+                            if cold { 100 } else { 0 },
+                        );
+                        row["cloudflare_services_before"] = service(usage(0, 0, 0, 0));
+                        row["cloudflare_services_after"] = service(delta.clone());
+                        row["cloudflare_services_before"]["manifest_generation"] =
+                            json!(if fetch { g } else { g - 1 });
+                        row["cloudflare_services_after"]["manifest_generation"] = json!(g);
+                        row["cloudflare_workload_delta"] = delta;
+                        row["counter_integrity"] = json!(true);
+                        if operation["key"] == "push_01" {
+                            row["final_storage"] = json!({"authoritative_services":{"logical_bytes":1000,"objects":2,"generation":32,"refs":33,"active_manifest_pack_and_index_bytes":1000,"active_manifest_pack_count":1}});
+                            row["final_object_stats"] = json!({"cloudflare_services":service(usage(500,100,150,15000)),"manifest":{"generation":32},"objects":{"unique_objects":10,"reachable_objects":10,"unreachable_objects":0},"cache_budget_bytes":RESPONSE_BYTES,"cache_entry_limit":RESPONSE_ENTRIES,"cache_bytes":100,"cache_entries":1});
+                        }
+                    }
+                    rows.push(row);
+                    if backend == "git" && !fetch {
+                        rows.push(json!({"backend":backend,"sample":sample,"warmup":sample<0,"backend_validation_complete":true,"workload":format!("maintenance_after_{}",operation["key"].as_str().unwrap()),"wall_ms":5.0}));
+                    }
+                }
+            }
+        }
+        result["raw"] = json!(rows);
+        result
+    }
+    fn interleaved_suite(puts: u64, stage: &str) -> Vec<Value> {
+        [(16, true), (16, false), (64, true), (64, false)]
+            .into_iter()
+            .map(|(mib, cold)| interleaved_report(mib, cold, puts, stage))
+            .collect()
+    }
+
+    #[test]
+    fn interleaved_schedule_only_reads_published_history_and_strict_ancestors() {
+        let tips: Vec<_> = (1..=32).map(|g| format!("{g:040x}")).collect();
+        let schedule = interleaved_schedule(&tips).unwrap();
+        assert_eq!(schedule.len(), 88);
+        assert_eq!(
+            schedule.iter().filter(|op| op["kind"] == "push").count(),
+            32
+        );
+        assert_eq!(
+            schedule
+                .iter()
+                .filter(|op| op["group"] == "large_push")
+                .count(),
+            8
+        );
+        assert_eq!(
+            schedule.iter().filter(|op| op["kind"] == "fetch").count(),
+            56
+        );
+        for operation in &schedule {
+            let g = operation["generation"].as_u64().unwrap() as usize;
+            let want = tips
+                .iter()
+                .position(|tip| *tip == operation["want"])
+                .unwrap()
+                + 1;
+            assert!(want <= g);
+            if let Some(have) = operation["have"].as_str() {
+                assert!(tips.iter().position(|tip| tip == have).unwrap() + 1 < want);
+            }
+        }
+        assert_eq!(schedule, interleaved_schedule(&tips).unwrap());
+    }
+
+    #[test]
+    fn interleaved_prices_the_full_mix_and_keeps_separate_latency_groups() {
+        let score = benchmark_cost(&interleaved_suite(2, "screen")).unwrap();
+        assert_eq!(score.schema_version, 2);
+        let profile = &score.profiles["64mib-cold"];
+        assert_eq!(profile.trials[0].fixed_workload.r2_class_a, 64);
+        assert_eq!(profile.trials[0].fixed_workload.r2_class_b, 88);
+        assert_eq!(
+            profile
+                .latency
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            [
+                "large_push",
+                "small_push",
+                "latest_fetch",
+                "history_no_haves",
+                "history_with_haves",
+                "latest_recheck"
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert!((profile.latency["large_push"].paired_host_to_git.mean - 0.8).abs() < 1e-12);
+        let full = benchmark_cost(&interleaved_suite(2, "full")).unwrap();
+        assert!(compare_cost(&score, &full).is_err());
+        assert!(compare_cost(&score, &benchmark_cost(&suite(2)).unwrap()).is_err());
+        assert_eq!(
+            compare_cost(
+                &score,
+                &benchmark_cost(&interleaved_suite(1, "screen")).unwrap()
+            )
+            .unwrap()
+            .decision,
+            Decision::Inconclusive
+        );
+        assert_eq!(
+            compare_cost(
+                &full,
+                &benchmark_cost(&interleaved_suite(1, "full")).unwrap()
+            )
+            .unwrap()
+            .decision,
+            Decision::Improved
+        );
+    }
+
+    #[test]
+    fn interleaved_rejects_incomplete_mixed_or_unverified_traces() {
+        for mutation in 0..10 {
+            let mut reports = interleaved_suite(2, "screen");
+            let report = &mut reports[0];
+            match mutation {
+                0 => {
+                    report["raw"].as_array_mut().unwrap().remove(2);
+                }
+                1 => report["fixture"]["schedule_sha256"] = json!("wrong"),
+                2 => report["config"]["samples"] = json!(5),
+                3 => report["raw"][1]["strict_fsck"] = json!(false),
+                4 => report["raw"][0]["push_wire_bytes"] = json!(100),
+                5 => report["raw"][1]["cloudflare_services_after"]["r2_live_bytes"] = json!(1001),
+                6 => report["raw"][0]["ready_wall_ms"] = json!(1),
+                7 => {
+                    report["raw"][1]["cloudflare_services_after"]["counter_epoch"] = json!("reset")
+                }
+                8 => report["raw"].as_array_mut().unwrap().swap(1, 2),
+                _ => report["config"]["flow"] = json!("batch"),
+            }
+            assert!(benchmark_cost(&reports).is_err(), "mutation {mutation}");
+        }
     }
 
     #[test]
