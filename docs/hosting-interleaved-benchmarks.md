@@ -18,10 +18,17 @@ paired trial starts fresh and performs exactly **32 pushes and 56 fetches**:
 
 A fixed xorshift seed selects historical wants and older haves. The fixture
 records all generation commit/tree IDs, the entire operation order, and its
-SHA-256. Each timed fetch uses `fetch.unpackLimit=0`, must install a nonempty
-pack, and passes wanted-ref/tree verification, strict fsck and archive inflation
-outside its timer. Validated temporary history/recheck clients are removed
-immediately. There are no post-batch setup pushes.
+SHA-256. Each timed fetch uses `fetch --keep` and `fetch.unpackLimit=1`, must
+install a nonempty pack, and passes wanted-ref/tree verification, strict fsck
+and archive inflation outside its timer. Local ancestor seeds use the same pack
+retention settings. Reports record `config.fetch_unpack_limit=1`, and the scorer
+requires it. On Git 2.53, a small HTTP download with `--keep` writes loose objects
+at limit 0 and retains a pack at limit 1; the same file-transport fetch retains a
+pack at both limits. A three-commit real-Git HTTP regression covers initial and
+incremental downloads by fresh and ancestor-seeded clients. Validated temporary
+history/recheck clients are removed immediately. There are no post-batch setup
+pushes. The initial attempt with a zero limit failed during its first warmup,
+before any valid pair or score; its diagnostic report remains incomplete.
 
 The initial payload is 50% compressible. Generations 5, 9, 13, 17, 21, 25 and 29
 replace an 8 MiB file using independent deterministic contents. Its Git

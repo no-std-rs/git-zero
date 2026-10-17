@@ -575,6 +575,10 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
             "interleaved objective identity differs",
         )?;
         require(
+            count(config, "fetch_unpack_limit")? == 1,
+            "interleaved fetch pack retention policy differs",
+        )?;
+        require(
             config["reference_push_maintenance"] == INTERLEAVED_REFERENCE_POLICY
                 && config["reference_maintenance_commands"]
                     == json!(INTERLEAVED_REFERENCE_COMMANDS)
@@ -1502,6 +1506,7 @@ mod tests {
         result["config"]["flow"] = json!(INTERLEAVED_FLOW);
         result["config"]["objective_identity"] = json!(INTERLEAVED_OBJECTIVE);
         result["config"]["stage"] = json!(stage);
+        result["config"]["fetch_unpack_limit"] = json!(1);
         result["config"]["samples"] = json!(samples);
         result["config"]["random_fetches_per_run"] = json!(56);
         result["config"]["push_latency_guard"] = json!(INTERLEAVED_PUSH_LATENCY_GUARD);
@@ -1724,6 +1729,21 @@ mod tests {
             }
             assert!(benchmark_cost(&reports).is_err(), "mutation {mutation}");
         }
+    }
+
+    #[test]
+    fn interleaved_requires_recorded_fetch_pack_retention() {
+        for limit in [Value::Null, json!(0), json!(2), json!("1")] {
+            let mut report = interleaved_report(16, true, 2, "screen");
+            report["config"]["fetch_unpack_limit"] = limit;
+            assert!(profile_cost(&report).is_err());
+        }
+        let mut report = interleaved_report(16, true, 2, "screen");
+        report["config"]
+            .as_object_mut()
+            .unwrap()
+            .remove("fetch_unpack_limit");
+        assert!(profile_cost(&report).is_err());
     }
 
     #[test]

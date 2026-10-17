@@ -715,7 +715,9 @@ fn init_fetch_client(root: &Path, client: &Path, source: &Path, have: Option<&st
         ],
         false,
     )?;
-    git(root, client, &["config", "fetch.unpackLimit", "0"], false)?;
+    // A positive threshold keeps every nonempty HTTP transfer packed. With
+    // zero, Git's HTTP helper can unpack even when fetch receives --keep.
+    git(root, client, &["config", "fetch.unpackLimit", "1"], false)?;
     git(root, client, &["config", "gc.auto", "0"], false)?;
     if let Some(have) = have {
         git(
@@ -725,6 +727,7 @@ fn init_fetch_client(root: &Path, client: &Path, source: &Path, have: Option<&st
                 "fetch",
                 "--quiet",
                 "--no-tags",
+                "--keep",
                 "--no-write-fetch-head",
                 source.to_str().ok_or("non-UTF8 source")?,
                 &format!("{have}:refs/heads/seed"),
@@ -2012,6 +2015,7 @@ fn run() -> Result<()> {
         report["config"]["flow"] = json!(INTERLEAVED_FLOW);
         report["config"]["objective_identity"] = json!(INTERLEAVED_OBJECTIVE);
         report["config"]["stage"] = json!(stage);
+        report["config"]["fetch_unpack_limit"] = json!(1);
         report["config"]["reference_binary"] = json!(reference_binary);
         report["config"]["reference_binary_sha256"] = json!(reference_sha256);
         report["config"]["reference"] = json!(
@@ -2031,7 +2035,7 @@ fn run() -> Result<()> {
             "Persistent latest client; distinct published historical refs; independently seeded latest recheck"
         );
         report["config"]["random_fetch_setup"] = json!(
-            "All 56 timed fetches transfer nonempty packs; fetch.unpackLimit=0; fresh-client ancestor seeds are local and outside timers"
+            "All 56 timed fetches retain nonempty packs with fetch --keep and fetch.unpackLimit=1; fresh-client ancestor seeds use the same retention settings locally and outside timers"
         );
         report["config"]["storage_checks"] = json!(
             "Every push records generation and cache invalidation; every read compares actual R2 inventory and complete counter deltas"
@@ -2060,6 +2064,168 @@ fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interleaved_fetch_clients_retain_initial_and_incremental_http_packs() -> Result<()> {
+        // Run the same Rust HTTP parser and Git CGI backend as the reference
+        // host in a child test process, so its listener is stopped by Host::drop.
+        const SERVER_REPOSITORY: &str = "GIT_ZERO_FETCH_PACK_TEST_REPOSITORY";
+        if let Some(repo) = env::var_os(SERVER_REPOSITORY) {
+            git_zero_host::http::serve(0, |request| {
+                git_zero_host::native::http_backend(Path::new(&repo), &request).unwrap_or_else(
+                    |error| git_zero_host::http::Response::error(503, &error.to_string()),
+                )
+            })?;
+            return Ok(());
+        }
+        let root = env::temp_dir().join(format!(
+            "git-zero-fetch-pack-test-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::create_dir(&root)?;
+        let source = root.join("source");
+        git(
+            &root,
+            &root,
+            &[
+                "init",
+                "--quiet",
+                "--initial-branch=main",
+                "--object-format=sha1",
+                source.to_str().ok_or("non-UTF8 source")?,
+            ],
+            false,
+        )?;
+        git(&root, &source, &["config", "user.name", "Test"], false)?;
+        git(
+            &root,
+            &source,
+            &["config", "user.email", "test@example.invalid"],
+            false,
+        )?;
+        let mut tips = Vec::new();
+        for generation in 0..3 {
+            fs::write(
+                source.join("small.txt"),
+                format!("generation {generation}\n"),
+            )?;
+            git(&root, &source, &["add", "."], false)?;
+            git(&root, &source, &["commit", "--quiet", "-m", "small"], false)?;
+            let tip = git_text(&root, &source, &["rev-parse", "HEAD"])?;
+            git(
+                &root,
+                &source,
+                &[
+                    "update-ref",
+                    &format!("refs/heads/history-{generation}"),
+                    &tip,
+                ],
+                false,
+            )?;
+            tips.push(tip);
+        }
+        let repo = root.join("repo.git");
+        git(
+            &root,
+            &root,
+            &[
+                "clone",
+                "--quiet",
+                "--bare",
+                source.to_str().ok_or("non-UTF8 source")?,
+                repo.to_str().ok_or("non-UTF8 repository")?,
+            ],
+            false,
+        )?;
+        let child = Command::new(env::current_exe()?)
+            .args([
+                "--exact",
+                "tests::interleaved_fetch_clients_retain_initial_and_incremental_http_packs",
+                "--nocapture",
+                "--quiet",
+            ])
+            .env(SERVER_REPOSITORY, &repo)
+            .stdout(Stdio::piped())
+            .stderr(fs::File::create(root.join("http.log"))?)
+            .spawn()?;
+        let mut host = Host {
+            child,
+            url: String::new(),
+            native_url: String::new(),
+            cloudflare_repo: None,
+            cloudflare_services: None,
+        };
+        let stdout = host.child.stdout.take().ok_or("missing HTTP stdout")?;
+        let (send, recv) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout)
+                .lines()
+                .map_while(std::result::Result::ok)
+            {
+                if line.starts_with("http://127.0.0.1:") {
+                    let _ = send.send(line);
+                    break;
+                }
+            }
+        });
+        host.url = recv.recv_timeout(Duration::from_secs(10))?;
+        for (name, have) in [("fresh", None), ("seeded", Some(tips[0].as_str()))] {
+            let client = root.join(format!("{name}.git"));
+            init_fetch_client(&root, &client, &source, have)?;
+            if have.is_some() {
+                assert!(!client_packs(&client)?.is_empty(), "missing seed pack");
+            }
+            for (generation, want) in tips.iter().enumerate().skip(1) {
+                let before = client_packs(&client)?;
+                git(
+                    &root,
+                    &client,
+                    &[
+                        "fetch",
+                        "--quiet",
+                        "--no-tags",
+                        "--keep",
+                        &host.url,
+                        &format!("refs/heads/history-{generation}:refs/heads/result"),
+                    ],
+                    false,
+                )?;
+                let after = client_packs(&client)?;
+                let received: u64 = after
+                    .iter()
+                    .filter(|(name, _)| !before.contains_key(*name))
+                    .map(|(_, bytes)| bytes)
+                    .sum();
+                assert!(
+                    received > 0,
+                    "{name} generation {generation} installed no pack"
+                );
+                assert!(
+                    before
+                        .iter()
+                        .all(|(name, bytes)| after.get(name) == Some(bytes))
+                );
+                assert_eq!(
+                    git_text(&root, &client, &["rev-parse", "refs/heads/result"])?,
+                    *want
+                );
+                assert_eq!(
+                    git_text(&root, &client, &["rev-parse", "refs/heads/result^{tree}"])?,
+                    git_text(&root, &source, &["rev-parse", &format!("{want}^{{tree}}")])?
+                );
+                git(&root, &client, &["fsck", "--strict"], false)?;
+                git(&root, &client, &["archive", "refs/heads/result"], false)?;
+            }
+            assert_eq!(
+                git_text(&root, &client, &["config", "fetch.unpackLimit"])?,
+                "1"
+            );
+        }
+        drop(host);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     #[test]
     fn reference_policy_is_flow_specific() {
