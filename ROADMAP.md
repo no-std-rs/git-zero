@@ -1,442 +1,316 @@
 # Roadmap
 
-The goal is a Git HTTP client/server library with an allocation-free,
-`no_std` core, stable synthetic repositories, on-demand packing, optional caching,
-and host adapters for native `rustix`, Wasm, and Cloudflare Workers.
+Build a Git HTTP client/server library with an allocation-free `no_std` core,
+stable repository identities, bounded packing/caching, and native and Wasm hosts.
 
-The current priority is **read-only HTTP server parity**, including its tests.
-Complete the server milestones below before starting further client features.
-Existing client code and regression tests remain in place. Read/write server
-support follows in section 7; completed client work and its deferred fetch/push
-follow-ups are recorded in section 8.
+The current priority is **read-only HTTP server parity**. Complete section 6
+before further client features, kernel-client extensions or receive-pack work.
+Existing client and kernel examples remain supported by regression tests.
 
-Server parity means real Git can discover refs, clone, and fetch from git-zero
-over smart and dumb HTTP with the same refs, reachable objects, checkout contents,
-and supported negotiation behavior as Git's reference server. The target includes
-protocol v0/v1/v2, SHA-1/SHA-256, and shallow/filter fetches within explicit resource
-limits. Each capability stays unadvertised until its implementation and tests
-pass. Exceeding a limit must produce a documented failure without a successful
-partial response. Byte-identical pack encoding is not an acceptance requirement.
+Checked items describe merged implementation with local/CI evidence. An unchecked
+item is a remaining deliverable, even when some prerequisites already work.
+Experiments and unpublished branches do not count as shipped features.
+The [server acceptance matrix](tests/server-acceptance.md) records named tests,
+host/protocol/object-format coverage and gaps; [tests/README.md](tests/README.md)
+owns test commands and detailed measurements.
 
-Real Git is the client and Git `http-backend` or a static bare repository is the
-oracle for server acceptance. git-zero's client must not be a prerequisite for
-proving server correctness. HTTP authentication and deployment policy belong to
-hosts. Write support (`receive-pack`) has its own implementation and acceptance
-milestone after the read-only server gate.
+Parity means real Git discovers refs, clones and fetches equivalent refs,
+reachable objects, modes and checkout contents from git-zero and Git's reference
+server. The target covers smart v0/v1/v2, dumb HTTP, SHA-1/SHA-256 and the bounded
+shallow/filter features below. Git `http-backend` or a static bare repository is
+the oracle; git-zero's client is not the acceptance oracle. Pack bytes need not
+be identical. Advertise only implemented, tested capabilities. Reject exhausted
+budgets explicitly; abort failed streamed responses without a success terminator.
+Authentication, authorization and deployment policy belong to hosts.
+
+## Next delivery order
+
+1. Complete shallow/partial fetch: authorized promised-object retrieval and
+   time/exclusion deepening, with real-Git checkout and history comparisons.
+2. Publish packed dumb HTTP repositories and integrate requested-closure caches
+   into HTTP hosts, retaining immutable refs/pack/index consistency.
+3. Finish native admission limits, timeouts, HTTP framing and independent
+   connections; add the Worker preparation/storage boundary and host diagnostics.
+4. Close cross-host oracle, concurrency, fuzzing and resource-budget gaps, then
+   evaluate the read-only completion gate. Compression and delta generation are
+   optional performance extensions, not prerequisites for valid stored packs.
 
 ## 0. Working foundation
 
-- [x] Rust workspace with `std`/`alloc` disabled in core dependencies.
-- [x] Borrowed objects, SHA-1 IDs, bounded writers, and explicit error handling.
-- [x] Root-level snapshot files, sorted tree entries, deduplicated blobs, and a
-  deterministic root commit without history.
-- [x] Smart HTTP v0 discovery/upload-pack and dumb HTTP refs/loose objects.
-- [x] Stream version-2 packs with stored DEFLATE blocks and SHA-1 trailers.
-- [x] Pluggable complete-pack cache interface and uncached operation.
-- [x] Client ref discovery, smart pack download/checksum validation, dumb loose
-  object fetch, and transport interface with caller-owned response buffers.
-- [x] Shared shallow/multi-tip fetch encoding, borrowed commit/tree/tag views,
-  and bounded complete pack materialization with a caller-owned ID index.
-- [x] Native `rustix` libraries and local CLI examples for both roles.
-- [x] Allocator-free Wasm build and stateless Cloudflare metadata snapshot demo.
-- [x] Parallel real-Git interoperability matrix and Wasm clone tests.
-- [x] README, testing instructions, and CI checks for native/Wasm/bare-metal builds.
+- [x] Safe `no_std` core without `alloc`, explicit errors and caller-owned buffers.
+- [x] Separate core/client/server/native crates, feature checks and allocator-free
+  Wasm/bare-metal builds; native CLI with a small `std` process wrapper.
+- [x] Deterministic parentless snapshots, nested trees, incremental construction
+  and configurable commit identities, times and messages.
+- [x] Read-only smart and loose-object dumb HTTP, bounded readers and pack output.
+- [x] Client discovery/fetch primitives, object decoding and checkout traversal.
+- [x] Parallel Git interoperability tests, retained failure traces, package checks
+  and CI over Linux/macOS and system/pinned Git versions.
 
 ## 1. Server objects, repositories, and refs
 
-- [x] Nested trees, executable files, symlinks, empty trees, and configurable refs.
-- [x] Caller-owned object metadata/index arrays to avoid repeated scans and hashing.
-- [x] Bounded readers for large or generated objects; explicitly size scratch and
-  resumable state, and avoid requiring a whole object in one borrowed slice.
-- [x] Incremental root-entry snapshot builder with configurable commit identity/message/time.
-- [x] Validation of custom repository object graphs, tree order, and reachability.
-- [x] Native file-backed object provider using `rustix`, with optional prepacked data.
-- [x] Empty/bare repositories, unborn and detached HEAD, symbolic refs, independent
-  branch tips, lightweight/annotated tags, and peeled ref advertisements.
-  Caller-owned refs carry independent IDs, raw symbolic targets and validated
-  final peeled IDs. Real Git discovery, clone and fetch compare native smart/dumb
-  hosts with Git's HTTP backend and static bare repositories across the Git/platform
-  CI matrix, including unborn HEAD with other refs and detached HEAD beyond them.
-- [x] Serve the correct reachable closure for selected refs and tag targets,
-  including merge histories and repositories with objects beyond HEAD's closure.
-  Per-request wants, traversal/index arrays, scratch and a graph-read byte limit
-  bound selection without allocation. Matched no-capability upload requests compare
-  exact imported objects with Git. Legacy HEAD-key caches and whole-pack hooks reject
-  independent roots; requested-closure cache keys and prepacked reuse remain in section 3.
-- [x] SHA-256 object IDs, repository validation, ref advertisements, packs, and
-  object-format negotiation alongside the existing SHA-1 path.
-  Format-tagged IDs, fixed hash state and width-aware graph/packet limits remain
-  allocation-free. Native smart/dumb Git comparisons cover both formats, empty
-  and unborn remotes, symbolic/detached HEAD, independent refs, tags and selected
-  merge closures; Git's strict importer also verifies SHA-256 snapshots.
+- [x] Nested/empty trees, regular/executable files, symlinks and configurable refs.
+- [x] Caller-owned metadata/ID indexes, offset-based readers and resumable hashing
+  for objects larger than scratch buffers.
+- [x] Custom graph validation: hashes, tree order/links, parents, tag targets and
+  exact reachability from HEAD and independent refs.
+- [x] Empty repositories, unborn/detached/symbolic HEAD, independent branch tips,
+  symbolic chains, lightweight/nested annotated tags and final peeled targets.
+- [x] Multiple/duplicate/overlapping wants, exact selected closures and common
+  history exclusion within caller-owned arrays and graph-read limits.
+- [x] SHA-1/SHA-256 object IDs, refs, validation, packs and format negotiation.
+- [x] Native immutable raw file providers and verified complete-HEAD prepacked
+  responses. This does not open arbitrary Git loose/packed object directories.
 
-Acceptance: Git `fsck --strict` accepts nested and generated snapshots; deterministic
-inputs yield identical IDs on native and Wasm without enabling an allocator.
-Real Git clone/fetch tests compare every advertised ref and reachable object's
-ID, kind, body, file mode, and checkout content with independently generated Git
-repositories. Cover empty/unborn remotes, detached HEAD, distinct branches,
-annotated tags, deep trees, merge histories, binary blobs, and both object formats.
+Acceptance: independent Git fixtures and `fsck --strict` verify IDs, kinds,
+bodies, modes, refs and checkouts. Native coverage includes merge histories,
+deep trees and binary objects. Remaining Worker fixture coverage is in section 5;
+host filesystem/name policies extend beyond core graph validation.
 
 ## 2. Smart HTTP and upload-pack parity
 
-- [x] Multiple wanted refs/IDs and bounded reachable-object selection, with an
-  explicit policy for unadvertised, unreachable, and arbitrary-object wants.
-  Only advertised HEAD, ref and peeled IDs are accepted. Unknown and merely
-  reachable wants fail before output; validation rejects unreachable provider
-  objects. Duplicate/overlapping wants share objects. Known commit haves now prune
-  complete common history; include-tag remains unadvertised.
-- [x] Broader v0 capability negotiation, ACK/have negotiation, sideband and error packets.
-  Single ACK, multi_ack and multi_ack_detailed rounds, both sideband modes,
-  no-progress and host-written terminal ERR packets have allocation-free tests.
-  Stateless requests replay wants/common haves; selected packs omit their closure
-  within one shared graph-read budget. Native Git-oracle comparisons check exact
-  incremental objects and imports in SHA-1/SHA-256. Wasm tests check framing,
-  ACKs, checksums and fixed memory; complete-pack hooks may resend common history.
-- [x] Protocol v1/v2 (`ls-refs`, `fetch`) with accurate capability advertisements.
-  Header-selected v1 discovery and stateless v2 ls-refs/fetch support symrefs,
-  peels, unborn HEAD, prefix filters, ACK rounds, include-tag and sideband packs.
-  Native real-Git comparisons cover SHA-1/SHA-256, all HEAD states, exact pack
-  membership and incremental fetch; Worker Git clones cover v0/v1/v2 and its
-  fixed-memory ABI checks both formats. Bounded shallow/blob-filter support is
-  recorded below; other optional extensions stay absent.
-- [x] Incremental requests and responses, backpressure, cancellation, and resume points.
-  Caller-owned bounded request intake waits for complete framing before command
-  parsing. Pull cursors retain pack/hash/sideband state without response-sized
-  storage; hosts stage unsent bytes and resume when writable. Terminal cancellation
-  prevents further reads or success terminators. Native close-delimited streaming
-  passes the Git-oracle matrix in both formats; Worker pulls drive streamed
-  responses. HTTP chunked request decoding and nonblocking socket polling remain
-  adapter work in section 4.
-- [ ] Shallow/filter requests with bounded traversal and documented rejection paths.
-  Absolute depth, shallow clients, absolute/relative deepening/unshallow, blob:none and
-  blob:limit now share caller-owned traversal arrays and one graph-read budget.
-  Native Git-oracle clones compare boundaries and delivered objects for v0/v1/v2
-  in SHA-1/SHA-256, including merges and combined depth/filter requests. Worker
-  clones and repeated fragmented/cancelled ABI pulls retain the 24-page ceiling.
-  Relative depth follows Git 2.55 wanted-history semantics; versioned tests retain
-  Git 2.53's unrelated-branch boundary difference. Time/exclusion deepening and
-  additional filters remain rejected.
-  Partial clones use --no-checkout: lazy promised-object wants still need an
-  explicit extension of the advertised-ID policy before general checkout works.
-- [x] Proper method/content-type checks, service selection, protocol-version
-  handling, route normalization, and a wider malformed-request corpus.
-  Shared routing rejects wrong methods/media types, duplicate services/versions,
-  unsafe path components and malformed escapes before output. Hosts pass HTTP
-  metadata explicitly; native and Worker hosts decode bounded gzip requests.
-  Negative, truncated-command, retry, output-guard and seeded fuzz cases cover
-  the new surface. HTTP streaming/chunked framing remains in sections 2 and 4.
+- [x] Protocol v0/v1 discovery/upload-pack and stateless v2 `ls-refs`/`fetch`,
+  with format-aware capabilities, symrefs, peels and unborn HEAD.
+- [x] Single/multi/detailed ACK negotiation, common-history pruning, sideband,
+  no-progress and bounded host-written terminal ERR packets. V0 include-tag and
+  ready/no-done shortcuts remain unadvertised; v2 include-tag is supported.
+- [x] Bounded request accumulation and pull-based responses with backpressure,
+  cancellation, independent buffers and resume points.
+- [x] Absolute depth, client shallow boundaries, relative deepening and
+  unshallowing, including merges and boundary updates in both formats.
+  Relative depth follows Git 2.55 wanted-history semantics; versioned tests
+  retain the Git 2.53 unrelated-branch boundary difference.
+- [x] `blob:none` and `blob:limit` selection, including combined shallow/filter
+  requests. Current partial-clone tests use `--no-checkout`.
+- [x] Method/media-type/service/version checks, normalized routes and bounded
+  gzip uploads, with malformed-input and output-guard regressions.
+- [ ] Promised-object retrieval for ordinary partial-clone checkout. Define an
+  explicit host-granted visible-object policy before accepting unadvertised wants;
+  preserve strict defaults and reject hidden/dangling/unauthorized objects.
+  Cover v0/v1/v2, both formats, native/Worker hosts, mixed wants and cache hits.
+- [ ] Time/exclusion deepening (`deepen-since`/`deepen-not`), including merges,
+  combined options, malformed inputs, boundary reset and shared traversal budgets.
+- [ ] Decide scope and rejection rules for further filters (tree/sparse/combine)
+  and optional negotiation extensions before advertising them.
 
-Acceptance: supported cases from upstream HTTP tests have mapped, reproducible
-git-zero coverage; unsupported operations return explicit errors.
-Use real Git to exercise v0/v1/v2 discovery, clone, incremental fetch, multiple
-wants, have/ACK negotiation, sideband, shallow/deepen, and advertised filters.
-Compare refs and imported object closures with Git's server; retain packet/HTTP
-traces. Test malformed packets, unsupported capabilities, unauthorized wants,
-wrong methods/media types, truncated bodies, and exhausted request/output budgets.
+Acceptance: real Git discovery, clone, incremental fetch, shallow files and lazy
+checkout match the reference server for supported cases. Compare exact selected
+objects with matched requests; retain packet/HTTP traces. Negative cases cover
+capability conflicts, unauthorized wants, truncation and exhausted budgets.
 
 ## 3. Dumb HTTP, packing, and cache backends
 
-- [ ] Serve `objects/info/packs` and valid pack/index downloads for packed dumb
-  repositories, alongside loose objects and consistently published refs/HEAD.
-- [ ] Bounded actual DEFLATE compression, with stored blocks as a selectable fallback.
-- [ ] Reuse prepacked entries and existing packs when their closure matches the request.
-- [ ] Optional delta generation with strict CPU/memory budgets.
-- [x] Stream pack index creation alongside packs for dumb HTTP reuse.
-  Caller-owned entry slots collect IDs, wire CRCs and 64-bit offsets during one
-  stored-block encoding pass; the sorted version-2 index streams after the pack.
-  SHA-1/SHA-256 indexes match Git's independent indexer byte for byte, without
-  allocation or pack-sized staging. HTTP publication remains the item above.
-- [x] Versioned keys incorporating object format, encoder choices, and requested closure.
-  `cache::selected` identifies the exact unique selected object set, independent
-  of provider order or HEAD, with explicit object format, stored codec, schema
-  and encoder revision in a stable 48-byte host serialization. Authorization,
-  graph selection and shallow/ACK framing remain request-local before every hit.
-- [ ] Fixed-memory example cache, native disk cache, and async KV/R2 host adapters.
-  A one-entry caller-buffer `FixedCache` supports disabled mode, capacity-safe
-  replacement, eviction and counters. Native `git_zero_rustix::cache::DiskCache` adds
-  fixed-buffer regular-file reads and exclusively staged, atomically replaced
-  entries. Async complete-pack KV/R2 adapters remain open.
-- [ ] Cache integrity validation, eviction, cold-miss coordination, and observability.
-  Selected stored packs are checked before hit output and miss insertion: pack
-  framing/trailer, zlib/Adler32, canonical IDs and exact unique closure. Caller
-  byte/ID limits bound work and memory. Native persistent entries, concurrent
-  cold producers, reader isolation through eviction/replacement and failed
-  publication are allocation-tested. Cooperative native cold producers can use
-  nonblocking per-key leases, recheck after acquisition and release on failure or
-  cancellation. Hosts retain retry/deadline policy, filesystem scope and lock-file
-  retention. Distributed coordination, async publication and additional codecs
-  still need integration tests.
+- [x] Loose-object dumb HTTP refs/HEAD and format-aware zlib object routes.
+- [x] Stream stored-block packs and Git v2 indexes in one encoding pass using
+  caller-owned entry metadata. Both formats match Git's independent indexer.
+- [x] Versioned selected-pack keys for the exact unique object set, object
+  format, stored codec and encoder revision, independent of provider order.
+- [x] Integrity verification before hit output and miss insertion: framing,
+  trailer/Adler-32, canonical IDs and exact unique closure, with byte/ID limits.
+- [x] Caller-buffer `FixedCache` with disabled mode, eviction and counters.
+- [x] Native `DiskCache`: bounded resident reads, exclusive staging, atomic
+  complete-file replacement, eviction, counters and isolated readers.
+- [x] Cooperative native cold-miss leases: nonblocking per-key attempts,
+  recheck after acquisition, explicit unlock and cancellation/failure cleanup.
+- [ ] Packed dumb publication: `objects/info/packs`, pack/index downloads and
+  immutable publication consistent with refs/HEAD. Use actual pack checksums for
+  Git filenames; selected-cache keys are a separate host identity.
+- [ ] Reuse prepacked entries/packs for the requested closure, beyond the current
+  encoder's complete-HEAD reuse; validate compressed/delta inputs and dependencies.
+- [ ] Integrate selected caches with HTTP request planning. Authorization and
+  selection precede every lookup; keep ACK/shallow/sideband frames request-local.
+  Verify miss/hit equivalence, changing snapshots, failed output and eviction races.
+- [ ] Async complete-pack KV/R2 adapters and cold-miss coordination, separate from
+  the implemented metadata snapshot persistence. Bound reads/writes, await complete
+  publication and retain independent responses across failure, expiry and eviction.
+- [ ] Host integration examples for private cache namespaces, total disk quotas,
+  crash/staging cleanup, directory durability and filesystem/distributed lock scope.
+- [ ] Optional bounded DEFLATE compression with selectable stored fallback.
+- [ ] Optional delta generation with explicit CPU, memory and depth budgets.
 
-Acceptance: cache miss/hit/reuse paths produce equivalent objects; cache failures,
-corrupt entries, and concurrent writers have tested behavior.
-Real Git must clone and fetch loose-only, packed-only, and mixed dumb repositories.
-Validate generated packs/indexes with Git's strict importer and object checks;
-compare compressed, stored-block, prepacked, cached, and uncached results. Cover
-corrupt/truncated cache entries, changing refs, eviction, failed writes, and
-concurrent cold misses. Optional delta generation can follow the correctness
-baseline without blocking server parity.
+Acceptance: real Git clones/fetches loose-only, packed-only and mixed dumb
+repositories. Strict Git import/index checks and exact-object comparisons cover
+stored, cached, prepacked and any new encoder paths. All producers must opt into
+cooperative leases; live lock files retain identity until namespace quiescence.
 
 ## 4. Server adapters and hosting
 
-- [ ] Native IPv6/listener and TLS integration, HTTP/1.1 request/response framing,
-  chunked transfer, keep-alive, timeouts, and configurable connection/body limits.
-  Explicit IPv4/IPv6 listeners and numeric CLI listen addresses now retain
-  close-on-exec and fixed ten-second accepted-socket timeouts. IPv6 sockets are
-  IPv6-only; real Git smart/dumb clone/fetch and extension checks run on `::1`.
-  TLS, HTTP/1.1 framing, chunking, keep-alive and configurable limits remain open.
-- [ ] Poll-based `rustix` server with independent per-connection caller-owned state.
-- [x] Streaming Wasm server ABI and host I/O callbacks without Rust allocation.
-  The start/read/cancel ABI pins one immutable snapshot per instance and streams
-  into bounded host staging through ReadableStream pull/cancel callbacks. Input
-  remains bounded and complete before prepare. Tests cover fragmented output,
-  cancellation, restart, independent instances, both formats and fixed memory;
-  real-Git Worker clones cover v0/v1/v2 and dumb HTTP. A versioned raw-object
-  import adds 64 objects, eight refs and a fixed 128 KiB body arena while keeping
-  legacy frames and URLs. Chunked import authenticates complete SHA-1/SHA-256
-  repositories before serving; request intake remains independently bounded.
-- [x] Worker integration with async storage, streaming responses, and isolate-safe reuse.
-  Optional KV/R2 snapshot bindings await publication, bound streamed reads and
-  authenticate immutable records before preparing independently owned Wasm
-  responses. Cross-isolate fixtures cover concurrency, cancellation, eviction,
-  corrupt/oversized entries and failed storage; real Git clones/fetches both
-  adapters over smart and dumb HTTP. Complete-pack storage adapters remain in
-  section 3; these bindings persist metadata snapshots.
-- [x] Replace long embedded snapshot URLs with optional immutable persisted snapshots;
-  preserve stable IDs across discovery and downloads, retries, and isolate changes.
-  Versioned SHA-256 URLs cover file contents and expiry; missing/expired/corrupt
-  records fail explicitly and never recapture current metadata. Configurable
-  retention, KV propagation limitations and R2 physical cleanup are documented.
-- [x] Tree-shaped Cloudflare metadata and public binding projection, with deployment
-  authentication and explicit public variable selection.
-  New flat captures now select public Cloudflare headers explicitly, exclude
-  Access credentials, and copy only bounded plain-JSON values from explicitly
-  named bindings. Real Git checks public objects over smart/dumb HTTP; existing
-  snapshot URLs retain their IDs. Whole-Worker Access deployment policy and
-  service authentication are documented. Explicit optional tree captures use
-  category directories and bounded encoded-key JSON files, versioned inline/KV/R2
-  records and the fixed raw import ABI. Default flat captures and all v1 IDs stay
-  compatible; independent Git constructors and smart/dumb clients verify the
-  tree layout. Deployment authentication remains host-owned and undeployed here.
-- [ ] Configurable retention, diagnostics, and CPU/memory measurements for Workers.
+### Native
 
-Acceptance: native and Worker hosts share protocol behavior; overlapping requests
-cannot overwrite each other's buffers or change repository identities.
-Run real Git clone/fetch against both adapters and compare objects/refs with the
-reference server. Exercise short reads/writes, slow and disconnected clients,
-chunked requests, concurrent sessions, timeouts, cancellation, storage failures,
-and repeated Worker requests. Define snapshot consistency across discovery and
-upload-pack, and verify bounded per-connection state and isolate-safe reuse.
+- [x] Explicit IPv4/IPv6 listeners, numeric CLI addresses, ephemeral ports,
+  close-on-exec and IPv6-only sockets; real-Git clone/fetch on `::1`.
+- [x] Fragmentation-safe bounded request storage, linear delimiter scanning,
+  one-pass header metadata validation and gzip expansion into caller storage.
+- [x] Blocking HTTP/1.0 close-delimited pull responses and accepted-socket
+  send/receive timeouts, currently fixed at ten seconds.
+- [ ] Configurable wire/header/body and expanded-body admission limits independent
+  of physical buffer capacity; document inclusive boundaries and error precedence.
+- [ ] Configurable accepted-socket timeouts with unchanged defaults, plus explicit
+  request/idle deadlines where needed. Per-I/O timeouts are not total deadlines.
+- [ ] HTTP/1.1 framing, chunked intake, keep-alive and pipelined/leftover-byte
+  handling with strict framing ambiguity rejection and cancellation tests.
+- [ ] Poll-based connections with independent caller-owned request/output state,
+  bounded connection admission and slow/disconnected-client isolation.
+- [ ] TLS integration through a documented host boundary and transport tests.
+
+### Worker/Wasm
+
+- [x] Fixed-memory start/read/cancel ABI, streamed response callbacks, pinned
+  immutable snapshots and independent instances for overlapping responses.
+- [x] Versioned canonical repository import in both formats: 64 objects, eight
+  refs and 128 KiB of complete resident bodies, alongside compatible legacy frames.
+- [x] Optional inline/KV/R2 immutable metadata snapshots, awaited publication,
+  bounded authenticated reads, expiry and isolate-safe retries without recapture.
+- [x] Configurable snapshot retention, documented KV propagation/R2 cleanup,
+  explicit public header/binding selection and Access-credential exclusion.
+- [x] Optional tree-shaped metadata, encoded-key files, versioned records and
+  preservation of existing flat snapshot IDs. Deployment authentication is host-owned.
+- [ ] An owned preparation/storage boundary for asynchronous selected-pack cache
+  I/O, keeping request identity and buffers stable across awaits. Current Rust
+  preparation/provider reads are synchronous; response pulls alone do not solve this.
+- [ ] A bounded generated/host-backed provider beyond complete resident raw import.
+- [ ] Diagnostics and measured preparation/pull CPU, JavaScript/backend/isolate
+  memory and retention behavior under overlapping requests on a deployed Worker.
+
+Acceptance: native and Worker hosts preserve snapshot identity across discovery,
+upload-pack, retries and storage changes. Exercise fragmented I/O, slow clients,
+concurrency, cancellation, timeouts, expiry, corrupt records and backend failures.
+Local KV/R2-shaped tests do not establish deployment or propagation measurements.
 
 ## 5. Server parity tests and resource budgets
 
-Tests accompany each server milestone above. Existing git-zero client tests
-remain regression coverage; server completion is measured with real Git clients.
+- [x] Pinned upstream HTTP feature map and auditable server acceptance matrix.
+- [x] Reusable Git-created fixture export; six unchanged Git v2.53.0 `t5551`
+  cases (2–7) run with native CGI substitution and a separate reference server,
+  v0/v2 × SHA-1/SHA-256. External GPL tests/config stay unchanged.
+- [x] Native rich fixture: 40-level trees, 32 changing historical blobs, merge,
+  384 KiB binary, modes and nested tags, v0/v1/v2/dumb in both formats. The
+  independent packed Git source contains deltas; git-zero exports raw objects.
+- [x] Scaled Worker history fixture: 44 objects, seven refs, side/merge history,
+  nine tree levels and a 96 KiB binary; both-format smart full/incremental clones.
+- [x] Native A → B → A snapshot fetches with real Git, exact object/checkout
+  checks, complete-pack hits and eviction; lower-level selected-cache race tests.
+- [x] Seven bounded libFuzzer targets plus ordinary-Cargo seed replay and CI ASan
+  smoke campaigns for packets, responses, routing, graphs, inflation, loose
+  objects and pack entries/deltas; shallow/filter cancellation seeds are included.
+- [x] Allocation counters for providers, validation, selection, pack/index/cache
+  operations and decoding. Worker ABI tests enforce a 24-page ceiling and no growth.
+- [x] Paired HTTP/object-read benchmark harness, pinned caller-repository inputs,
+  matched/default encoder profiles, raw observations and opt-in wall/CPU/RSS caps.
+  Bounded Linux process-tree sampling and CI caps reject incomplete observations.
+- [x] Preserve the [historical Linux v6.12 snapshot evidence](tests/benchmarks/linux-v6.12-f71/README.md):
+  91,865 objects, warm loopback clone, separate download/index/checkout and decoder
+  experiments at `f71e266`, with raw data, provenance and reproduction limits.
+- [ ] Bring Worker coverage to the full native fixture/HEAD/ref/shallow matrix,
+  including both formats and independently checked protocol behavior.
+- [ ] Complete unassisted dumb-object closure checks. Git's loose walker can omit
+  a referenced empty tree; assisted import/fsck is recorded as assisted evidence.
+- [ ] HTTP-level selected-cache transition, cold-miss and eviction/concurrency
+  comparisons on both hosts, beyond separate backend and legacy-cache API tests.
+- [ ] Broader upstream fixture substitution: more unchanged cases, Worker hosting
+  and static dumb Alias routes. Retain licensing/provenance and no-fallback traces.
+- [ ] Sustained native HTTP-framing and concurrent/cancelled host-state fuzzing;
+  selected-cache/key/pack-index boundaries and regression seeds as APIs expand.
+- [ ] Define and enforce total request-preparation work, including parsing,
+  metadata probes and traversal, separately from graph bytes and buffer sizes.
+  Test exhaustion before output and clean state reuse after failure/cancellation.
+- [ ] Controlled cold-cache, WAN/concurrent and current-revision comparisons;
+  investigate mapped/indexed native object storage and authenticated decoder costs.
+- [ ] Full Linux history/incremental-fetch preparation and a committed reproducible
+  driver for the separate kernel download/index/checkout/decoder experiments.
+  The historical parentless snapshot and buffered frontend do not complete this.
 
-- [x] Map upstream `t5550`/`t5551` cases to supported/planned/out-of-scope features;
-  see `tests/upstream-http.md` for the pinned reference and independent comparisons.
-- [x] Extend that map into a server acceptance matrix with a named local case,
-  reference-server comparison, host/protocol/object-format coverage, and explicit
-  remaining gap for every in-scope feature. Separate server results from client
-  limitations; a Git-only reference baseline does not prove git-zero server parity.
-  `tests/server-acceptance.md` records native/Worker, protocol and format coverage,
-  independent oracle evidence and explicit unimplemented or untested gaps.
-- [x] Reusable upstream fixture adapter where Git's harness allows replacing a server;
-  record GPL provenance for any copied tests rather than copying them silently.
-  `tests/server_fixture.py` now exports any Git-created fixture's reachable raw
-  objects, refs and HEAD for the native file-provider harness, including packed
-  sources and both object formats. `tests/upstream_harness.py` now runs six exact
-  unchanged Git v2.53.0 `t5551` cases (2–7) with a private CGI substitution and a
-  separate Git reference, v0/v2 × SHA-1/SHA-256. Native traces prove discovery,
-  upload-pack and both publication heads without fallback. External GPL shell
-  tests/configuration stay unchanged; Linux Apache is required. Whole-suite,
-  Worker and Apache's static dumb Alias substitution remain separate gaps.
-- [ ] Empty/bare repositories, arbitrary refs, tags, large binary blobs, deep histories,
-  nested trees, aggressive packing, and deltas served by git-zero in the real-Git
-  client interoperability matrix, including protocol versions and object formats.
-  Native `references` now compares 40-level trees, 32 changing historical blobs,
-  a merge, a 384 KiB binary, executables, symlinks, unusual refs and nested tags
-  over v0/v1/v2 and dumb HTTP in SHA-1/SHA-256, with full and incremental clones.
-  The Git oracle is packed-only and must contain deltas; git-zero serves the same
-  exported raw objects. A separate scaled Worker fixture has 44 objects, seven
-  refs, eight mainline commits plus a side/merge, nine tree levels including root,
-  a 96 KiB binary and nested tags. Both formats pass smart v0/v1/v2 full and
-  incremental clone comparisons. Loose dumb clones omit the referenced canonical
-  empty tree, matching an unchanged Git-created loose server; direct-object
-  verification and explicit import precede assisted 44-object fsck. Full native
-  fixture parity, unassisted complete dumb closure and server compressed/delta
-  pack generation/reuse remain gaps rather than inferred coverage.
-- [ ] Incremental fetch after changing a backend snapshot, pack reuse and eviction races.
-  Native smart/dumb tests now fetch file-backed snapshots through A → B → A at
-  one URL, validate refs, object bodies and checkouts with real Git, and exercise
-  fixed-memory complete-pack hits and eviction without allocation. Core tests
-  cover cache/backend/output failures and bounded retries. Concurrent eviction
-  and writer coordination remain host-backend work.
-- [ ] Fuzz packet lines, HTTP routing, zlib/pack parsers, and object-graph validation.
-  Seven bounded libFuzzer targets now cover packet lines, client discovery/HEAD/
-  pack framing, HTTP routing/upload requests, commit/tree/tag graph validation,
-  selected closures and
-  incremental zlib inflation with expansion budgets, loose-object envelopes and
-  pack entries/delta instructions.
-  Their shared assertions and seeded mutations also run in ordinary Cargo tests;
-  CI runs AddressSanitizer smoke campaigns. Pack-index parsing needs coverage
-  when its client API is implemented.
-- [ ] Expand server fuzz coverage for capability/want/have negotiation, v2 commands,
-  shallow/filter state, incremental HTTP framing, and concurrent/cancelled request
-  state. Retain regressions and check bounded work, state reset, and output guards.
-  V0 capability conflicts, ACK/have phases and sideband responses and v2 command
-  framing, ls-refs/fetch, unsupported extensions and HTTP gzip envelopes have
-  seeded mutations. Shallow/filter mutations now exercise selected synchronous
-  and pull responses, boundary framing, budgets and cancellation. Native header
-  intake now retains scan progress and validates metadata in one field pass,
-  with a 64 KiB one-byte-fragment work bound
-  and socket cases for malformed/truncated input, storage limits and reuse.
-  Continuous native framing and concurrent host-state campaigns remain planned.
-- [x] Allocation tracking for native file providers, repository validation, prepacked
-  verification, and pack generation/serving.
-- [ ] Fixed-budget benchmarks and Wasm memory growth checks.
-  `tests/benchmark.py` uses a configurable synthetic Git repository and identical
-  file-provider export through a shared Rust HTTP host. Paired discovery/clone/fetch
-  measurements retain client and server wall/CPU/RSS, child usage, response bytes,
-  startup costs and buffer budgets. Encoded files share a sendfile path with bounded
-  fallbacks; optional Rust loose caching charges preparation to startup. Opt-in
-  bounded Linux `/proc` sweeps now sample each server frontend and its live
-  descendants together per HTTP operation, recording aggregate RSS, process
-  counts and observer overhead separately from lifetime peaks. Missed short-lived
-  CGI descendants are explicit partial observations; observer failures/budget
-  exhaustion fail the workload. Sampling cannot establish between-sweep peaks or
-  unique physical memory. Wasm/isolate accounting remains future work.
-  Git 2.53.0 is pinned for timing comparisons. Explicit matched/default/custom
-  compression and delta policies identify equivalent server features. Two local
-  object-read workloads now compare Git and the new decoder against identical
-  loose/packed inputs, verify complete object output and record actual pack
-  deltas. Pinned CI covers matched and default Git policies; additional server
-  compression/delta encoders remain planned in section 3.
-  Local decoder throughput now uses budgeted bulk stored/back-reference copies,
-  small Huffman prefix tables, batched Adler-32 and slicing-by-eight pack CRCs.
-  The native read host allocates exact entry sizes and delta-only reconstruction
-  slots, indexes bases and buffers batch output. Checksums, canonical IDs,
-  chunk-independent failure positions and allocation-free core decoding remain
-  covered. Reports now separate user/system CPU, voluntary/involuntary context
-  switches and minor/major page faults. The paired measurements and remaining
-  authenticated pack-read overhead are recorded in `tests/README.md`; controlled
-  cold-cache tests and native mapped/indexed object storage remain performance
-  work. Measurements are not a server parity/performance gate.
-  Worker ABI tests now enforce a 24-page initial linear-memory ceiling, fixed
-  input/output capacities and no growth across repeated, full-capacity and invalid
-  requests. Explicit opt-in wall/CPU/RSS limits now check the largest raw
-  benchmark observations, retain failures in schema-3 reports, and enforce native
-  memory caps in CI. Native sampled-tree RSS now has an opt-in limit and CI
-  coverage; partial/missing observations cannot pass that cap. JavaScript/isolate
-  memory accounting remains future work.
-- [ ] Opt-in local Linux kernel repository benchmark using a caller-provided clone
-  and pinned revision; compare supported clone/fetch and object-reading workloads
-  with real Git over loopback, recording wall/CPU time, peak RSS, throughput,
-  and caller-owned buffer budgets for cold/warm runs.
-  Pinned caller-repository fixtures now feed eight paired HTTP and two local
-  object-read workloads, with bounded object/body loading and source-preservation
-  tests. A [historical Linux v6.12 snapshot experiment](tests/benchmarks/linux-v6.12-f71/README.md)
-  at revision `f71e266` records 91,865 objects, warm loopback clones, separate
-  download/index/checkout and direct decoder observations. It excludes Linux
-  history, uses an external driver/probe and a buffered benchmark frontend, and
-  does not measure later revisions. Full-history/incremental-fetch preparation,
-  controlled cold-cache and concurrent/deployed measurements remain future work.
-- [x] Protocol traces and retained artifacts on failure; CI matrix over Git versions
-  and Linux/macOS, with jobs isolated by temporary paths and ephemeral ports.
-
-Acceptance: each server feature has positive and negative tests using independent
-fixtures and the reference server. Native/Wasm allocation and memory ceilings,
-concurrency isolation, and malformed-input campaigns are enforced in CI. Benchmarks
-compare real Git clients against Git and git-zero servers on identical repositories,
-including cold/warm clone and incremental fetch; retain wall/CPU/RSS, wire bytes,
-throughput, startup costs, and caller-owned buffer budgets. Keep optional
-kernel-scale benchmarks separate from mandatory, reproducible correctness checks.
+Acceptance: each server feature has positive and negative independent-oracle
+cases, enforced allocation/memory/work budgets and retained failure artifacts.
+Keep correctness gates separate from optional timing experiments. Record client
+and server CPU/wall, wire bytes, startup and buffer budgets; sampled RSS can miss
+peaks and double-count shared mappings. Whole-isolate accounting remains open.
 
 ## 6. Server parity completion gate
 
-- [ ] All in-scope server cases have passing real-Git comparisons on native and
-  Worker/Wasm hosts across the supported Git/platform CI matrix.
-- [ ] Smart v0/v1/v2 and dumb HTTP clone/fetch, refs/tags/HEAD, incremental and
-  shallow/filter fetches, and SHA-1/SHA-256 pass their acceptance tests.
-- [ ] Streaming, concurrent requests, cancellation, cache/storage failures, and
-  resource-limit failures preserve repository consistency and bounded memory.
-- [ ] Server documentation accurately lists capabilities, host responsibilities,
-  configured limits, and remaining optional work; no advertised feature lacks tests.
+- [ ] All in-scope server cases pass independent real-Git comparisons on native
+  and Worker/Wasm hosts across the supported Git/platform matrix.
+- [ ] Smart v0/v1/v2 and loose/packed dumb HTTP clone/fetch, HEAD/refs/tags,
+  incremental/shallow/partial fetch and both object formats pass acceptance.
+- [ ] Streaming, concurrent sessions, cancellation, storage/cache failures and
+  exhausted limits preserve immutable repository identity and bounded resources.
+- [ ] Capability/limit/host contracts match the implementation; unsupported and
+  optional extensions remain explicit, with no untested advertised capability.
 
-Start further client development after this gate passes. The next implementation
-step is completing shallow/partial-fetch follow-ups (time/exclusion
-deepening and promised-object retrieval), then packed dumb HTTP publication and
-the remaining native/Worker hosting work.
+Compression and delta generation can follow the valid stored-pack baseline.
+Start further client and write-server features only after this gate passes.
 
-## 7. Read/write server support
+## 7. Read/write server support — deferred until server parity
 
-- [ ] A host-owned writable object store and ref transaction interface, with
-  explicit durability, locking, and compare-and-swap semantics for old/new IDs.
-- [ ] `receive-pack` discovery, bounded update-command and capability parsing,
-  pack ingestion, and accurate status/error responses.
-- [ ] Quarantine incoming objects until pack checksums, object IDs, delta bases,
-  graph connectivity, and requested ref updates have been validated. Bound
-  request size, object count, expanded bytes, delta depth, and validation work.
-- [ ] Branch/tag creation, update, and deletion; configurable fast-forward/force
-  policy and host authorization before publishing objects or changing refs.
-- [ ] Advertise atomic updates only when the host can commit the complete ref
-  transaction atomically. Failed validation or rejected atomic pushes publish
-  no ref changes; retries and concurrent pushes preserve old-ID checks.
-- [ ] Real Git push tests against git-zero and Git's reference server: initial
-  and incremental pushes, annotated tags, deletion, non-fast-forward rejection,
-  allowed force pushes, stale old IDs, multiple refs, and atomic failures.
-- [ ] Negative and resource tests for corrupt/truncated packs, missing bases,
-  disconnected objects, denied updates, storage failures, concurrent writers,
-  interrupted requests, and exhausted caller-owned buffers.
+- [ ] Host-owned writable object storage and ref transactions with durability,
+  locking and old/new-ID compare-and-swap semantics.
+- [ ] `receive-pack` discovery, bounded commands/capabilities, pack ingestion and
+  accurate status/error responses.
+- [ ] Quarantine objects until checksums, canonical IDs, delta bases, graph
+  connectivity and requested ref updates pass bounded validation.
+- [ ] Authorized branch/tag creation/update/deletion, explicit fast-forward/force
+  policy, and atomic advertisement only when the full ref transaction is atomic.
+- [ ] Real-Git push comparisons: initial/incremental pushes, tags, deletions,
+  stale IDs, multiple refs, force policy and atomic failures.
+- [ ] Corrupt/truncated/disconnected input, denied updates, storage failure,
+  concurrent writers, interruption and exact resource limits.
 
-Acceptance: real Git can push, then clone/fetch and pass `fsck --strict` against
-the accepted repository. Rejected pushes leave the promised ref/object visibility
-unchanged. Native and Worker hosts document writable storage, authentication,
-durability, and transaction guarantees before enabling receive-pack.
+Acceptance: push then clone/fetch passes strict Git verification. Failed pushes
+preserve promised object/ref visibility; retries retain old-ID checks. Each host
+documents authentication, durability and transaction guarantees before enabling it.
 
 ## 8. Client work — deferred until server parity
 
-- [x] Incremental zlib inflation into caller buffers with output/ratio limits.
-  The core decoder handles stored/fixed/dynamic DEFLATE, validates Adler-32,
-  borrows a 32 KiB history window and uses less than 2 KiB of resumable state.
-  Output and prefix expansion budgets are enforced before each emitted byte;
-  callers explicitly choose a prefix allowance. Python zlib, real Git loose
-  objects, allocation tracking and a bounded fuzz target cover the decoder.
-- [x] Validate loose-object headers, lengths, and IDs before exposing contents.
-  `Object::from_loose`, `client::decode_loose` and `fetch_loose_object` require a
-  canonical header, exact body size and matching SHA-1 before returning a body.
-  Complete zlib validation and rejection of trailing bytes precede exposure.
-- [x] Pack entry reader, CRC checks, object IDs, and bounded delta resolution.
-  The SHA-1 pack reader checks container framing/checksum, entry lengths and
-  exact count/closure, computes wire CRCs for comparison with index CRCs, and
-  reconstructs offset/reference deltas against explicitly supplied bases.
-  Canonical IDs, same-pack offset identity and output/instruction/depth budgets
-  are checked; base lookup and whole-fetch storage remain host responsibilities.
-- [ ] Caller-owned pack indexes and object sinks for complete smart fetches.
-- [ ] Dumb object-graph traversal, `objects/info/packs` and pack/index downloads,
-  with an explicit memory bound for visited objects and traversal state.
-- [ ] Correct empty/unborn remotes, symbolic refs, branch/tag selection, and SHA-256.
-- [ ] A complete clone/materialization example using a host object sink and checkout.
-- [ ] Client capability and ACK/have negotiation, protocol v1/v2, sideband/error
-  decoding, shallow/filter requests, and bounded incremental transport state.
-- [ ] Client push: receive-pack discovery, ref selection, old/new-ID commands,
-  bounded outgoing pack generation, capability negotiation, and per-ref status
-  handling. Support creation/update/deletion and explicitly requested force or
-  atomic operations within the server's advertised capabilities.
-- [ ] Fetch/push interoperability against both Git and git-zero servers, with
-  corrupt transfers, rejected refs, interrupted I/O, and exact buffer limits.
-- [ ] Native client DNS/IPv6/TLS, HTTP/1.1/chunked framing, redirects, content-type
-  validation, and configurable transport limits.
+- [x] V0 smart/dumb discovery, empty/unborn handling, HEAD/symbolic-ref resolution,
+  exact branch/tag selection and SHA-1/SHA-256 IDs and pack trailers.
+- [x] Multiple-tip and shallow request encoding; checksum-validated raw smart
+  packs and validated dumb loose-object download with caller-owned buffers.
+- [x] Incremental stored/fixed/dynamic zlib decoding, checksums, expansion limits,
+  canonical loose envelopes and expected-ID validation.
+- [x] Pack entry/CRC/ID verification and bounded offset/reference deltas;
+  complete non-thin SHA-1 materialization into a caller arena and sorted ID index.
+- [x] Borrowed commit/tree/tag views and shared checkout traversal, modes and
+  blob/symlink validation; used by the kernel example.
+- [ ] Persistent object sinks, external pack-index parsing/lookup and reusable
+  indexed storage for complete/incremental smart fetches.
+- [ ] SHA-256 complete-pack materialization with format-aware index storage,
+  graph checks and allocation/work limits, preserving the existing SHA-1 API.
+- [ ] Dumb graph traversal and packed/mixed dumb repositories, with bounded
+  visited-object state and pack/index downloads.
+- [ ] Complete native clone/materialization/checkout writer using host object
+  sinks and explicit filesystem/name/symlink policy.
+- [ ] Expanded capability/ACK/have negotiation, v1/v2, sideband/ERR decoding,
+  filter requests and bounded incremental transport state.
+- [ ] Push discovery, old/new-ID commands, outgoing packs, capability negotiation
+  and per-ref status, including authorized force/deletion/atomic operations.
+- [ ] Fetch/push interoperability against Git and git-zero with corrupt transfers,
+  denied refs, interrupted I/O and exact resource limits.
+- [ ] Native DNS/IPv6/TLS, HTTP/1.1/chunking, redirects, media-type checks and
+  configurable transport limits. Current native client is blocking IPv4 HTTP/1.0.
 - [ ] Streaming Wasm client ABI and transport callbacks without Rust allocation.
-- [ ] GitHub Pages demo at `no-std-rs/git-zero`: run the Wasm client in the browser,
-  fetch this project's own repository from GitHub, resolve the default branch's
-  tip ref, check out that commit in memory, and list every file in its tree.
-  Plan browser CORS support or an optional HTTP proxy so the demo exercises the
-  Git client rather than substituting a GitHub API file listing.
-- [ ] Optional `git://` transport after HTTP server and client compatibility.
+- [ ] GitHub Pages demo fetching this repository through Git HTTP, resolving its
+  default tip, checking it out in memory and listing files; plan CORS/proxy access
+  rather than replacing Git fetches with a GitHub API listing.
+- [ ] Optional `git://` transport after HTTP compatibility.
 
-Acceptance: git-zero imports and checks out a real Git repository through both
-HTTP protocols, including packed dumb repositories and delta-compressed packs.
-Its push client publishes supported ref updates to Git and git-zero servers;
-real Git independently verifies the resulting refs, objects, and checkouts.
-Client-specific upstream coverage, parser fuzzing, and host transport tests expand
-with those deferred features.
+Acceptance: complete HTTP clone/checkout, including packed dumb and delta packs;
+push results independently verified with real Git. Existing primitives and tests
+do not establish a complete clone or push implementation.
+
+## 9. Experimental Linux kernel host — extensions deferred until server parity
+
+- [x] Read-only pinned checkout and refs/message/tree views through shared client,
+  pack materialization and checkout APIs, with bounded SHA-1 object caches.
+- [x] Kernel HTTP/HTTPS sockets, DNS, bounded chunked framing, shallow smart
+  imports/deltas, offline warm reads and QEMU regression fixtures.
+- [ ] Authenticate HTTPS peers: the current example encrypts with handshake-only
+  TLS and does not validate certificates, hostnames or server signatures.
+- [ ] SHA-256 through the kernel ABI, IPv6 and private-repository authentication;
+  these are not implied by the shared core's format/transport support.
+- [ ] Persistent caching and scalable miss concurrency beyond the current
+  per-mount serialized fetch path, with VFS/cache memory and cancellation budgets.
+- [ ] Broader kernel/architecture build and runtime coverage beyond the documented
+  x86-64 target; retain failed-mount/unmount cleanup and pinned/offline semantics.
+
+See [the kernel example](examples/linux-kernel/README.md) for build requirements,
+current transport limits, cache ownership and the unprivileged QEMU tests.

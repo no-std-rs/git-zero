@@ -115,4 +115,3 @@ Run `python3 scripts/check-features.py` to compile each feature combination
 independently; a workspace-wide build can unify features and hide missing gates.
 Run `python3 scripts/check-public-packages.py` to verify publishable metadata and
 dependency ordering. Release helper tests run with the existing Python suite.
-See [RELEASING.md](RELEASING.md) for the release lifecycle and local package capture.
