@@ -806,6 +806,7 @@ fn run_interleaved_backend(
     init_fetch_client(root, &latest, &fixture.source, None)?;
     let mut rows = Vec::new();
     let mut previous_generation = 0;
+    let mut observed_compactions = 0.0;
     let mut final_storage = Value::Null;
     for operation in fixture.metadata["schedule"]
         .as_array()
@@ -857,6 +858,11 @@ fn run_interleaved_backend(
                 }
                 row["server_cache_after_push"] = cache;
                 let delta = &row["service_metrics_delta"];
+                let compactions = delta["compactions"]
+                    .as_f64()
+                    .filter(|n| n.is_finite() && *n >= 0. && n.fract() == 0.)
+                    .ok_or("missing actual compaction count")?;
+                observed_compactions += compactions;
                 row["compaction_delta"] = json!({"count":delta["compactions"],"input_bytes":delta["compaction_input_bytes"],"output_bytes":delta["compaction_output_bytes"],"retired_chunk_deletes":delta["retired_chunk_deletes"]});
             }
             row["push_wire_bytes"] = row["service_metrics_delta"]["input_bytes"].clone();
@@ -999,8 +1005,15 @@ fn run_interleaved_backend(
             }
         }
     }
+    if backend != "git" && observed_compactions <= 0. {
+        return Err("interleaved trace exercised no native compaction".into());
+    }
     let final_objects = if host.cloudflare_repo.is_some() {
-        Some(host.object_stats()?)
+        let objects = host.object_stats()?;
+        if objects["compactions"].as_f64() != Some(observed_compactions) {
+            return Err("compaction sum differs from final native metrics".into());
+        }
+        Some(objects)
     } else {
         None
     };
@@ -1012,6 +1025,7 @@ fn run_interleaved_backend(
         row["final_storage"] = final_storage.clone();
     }
     if let Some(first) = rows.first_mut() {
+        first["observed_native_compactions"] = json!(observed_compactions);
         if let Some(objects) = final_objects {
             let usage: git_zero_host::accounting::ServiceUsage =
                 serde_json::from_value(objects["cloudflare_services"].clone())?;

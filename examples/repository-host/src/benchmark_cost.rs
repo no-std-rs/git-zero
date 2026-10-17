@@ -652,6 +652,7 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
             "initial_push"
         }];
         let mut previous_generation = 0;
+        let mut observed_compactions = 0_u64;
         let mut pushes = Vec::new();
         let mut fetches = Vec::new();
         let mut read_bytes = 0_u64;
@@ -804,6 +805,9 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                         "published generation differs from actual service metrics",
                     )?;
                     let compaction = field(row, "compaction_delta")?;
+                    observed_compactions = observed_compactions
+                        .checked_add(count(compaction, "count")?)
+                        .ok_or_else(|| invalid("compaction count overflow"))?;
                     for (key, metric) in [
                         ("count", "compactions"),
                         ("input_bytes", "compaction_input_bytes"),
@@ -925,6 +929,14 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
             count(before, key)?;
         }
         let stats = field(first, "final_object_stats")?;
+        if interleaved {
+            require(
+                observed_compactions > 0
+                    && count(first, "observed_native_compactions")? == observed_compactions
+                    && count(stats, "compactions")? == observed_compactions,
+                "trace exercised no native compaction or compaction totals differ",
+            )?;
+        }
         let observed = snapshot(field(stats, "cloudflare_services")?)?;
         if interleaved {
             require(
@@ -1355,7 +1367,7 @@ mod tests {
                                 json!({"authoritative_services":inventory});
                             row["random_fetch_storage_after"] =
                                 json!({"authoritative_services":inventory});
-                            row["final_object_stats"] = json!({"cloudflare_services":service(usage(300, 80, 100, 10000)),"manifest":{"generation":32},"objects":{"unique_objects":10,"reachable_objects":10,"unreachable_objects":0},"cache_budget_bytes":RESPONSE_BYTES,"cache_entry_limit":RESPONSE_ENTRIES,"cache_bytes":100,"cache_entries":1});
+                            row["final_object_stats"] = json!({"cloudflare_services":service(usage(300, 80, 100, 10000)),"compactions":1,"manifest":{"generation":32},"objects":{"unique_objects":10,"reachable_objects":10,"unreachable_objects":0},"cache_budget_bytes":RESPONSE_BYTES,"cache_entry_limit":RESPONSE_ENTRIES,"cache_bytes":100,"cache_entries":1});
                         }
                     }
                     raw.push(row);
@@ -1424,8 +1436,9 @@ mod tests {
                         } else {
                             4 * 1024 * 1024
                         });
-                        row["compaction_delta"] = json!({"count":0,"input_bytes":0,"output_bytes":0,"retired_chunk_deletes":0});
-                        row["service_metrics_delta"] = json!({"input_bytes":row["push_wire_bytes"],"compactions":0,"compaction_input_bytes":0,"compaction_output_bytes":0,"retired_chunk_deletes":0});
+                        let compact = u64::from(g == 5);
+                        row["compaction_delta"] = json!({"count":compact,"input_bytes":compact*4096,"output_bytes":compact*2048,"retired_chunk_deletes":compact});
+                        row["service_metrics_delta"] = json!({"input_bytes":row["push_wire_bytes"],"compactions":compact,"compaction_input_bytes":compact*4096,"compaction_output_bytes":compact*2048,"retired_chunk_deletes":compact});
                         row["server_cache_after_push"] = json!({"budget_bytes":RESPONSE_BYTES,"entry_limit":RESPONSE_ENTRIES,"resident_bytes":0,"entries":0});
                         row["manifest_generation_before"] = json!(g - 1);
                         row["manifest_generation_after"] = json!(g);
@@ -1445,8 +1458,9 @@ mod tests {
                         row["cloudflare_workload_delta"] = delta;
                         row["counter_integrity"] = json!(true);
                         if operation["key"] == "push_01" {
+                            row["observed_native_compactions"] = json!(1);
                             row["final_storage"] = json!({"authoritative_services":{"logical_bytes":1000,"objects":2,"generation":32,"refs":33,"active_manifest_pack_and_index_bytes":1000,"active_manifest_pack_count":1}});
-                            row["final_object_stats"] = json!({"cloudflare_services":service(usage(500,100,150,15000)),"manifest":{"generation":32},"objects":{"unique_objects":10,"reachable_objects":10,"unreachable_objects":0},"cache_budget_bytes":RESPONSE_BYTES,"cache_entry_limit":RESPONSE_ENTRIES,"cache_bytes":100,"cache_entries":1});
+                            row["final_object_stats"] = json!({"cloudflare_services":service(usage(500,100,150,15000)),"compactions":1,"manifest":{"generation":32},"objects":{"unique_objects":10,"reachable_objects":10,"unreachable_objects":0},"cache_budget_bytes":RESPONSE_BYTES,"cache_entry_limit":RESPONSE_ENTRIES,"cache_bytes":100,"cache_entries":1});
                         }
                     }
                     rows.push(row);
@@ -1551,7 +1565,7 @@ mod tests {
 
     #[test]
     fn interleaved_rejects_incomplete_mixed_or_unverified_traces() {
-        for mutation in 0..10 {
+        for mutation in 0..11 {
             let mut reports = interleaved_suite(2, "screen");
             let report = &mut reports[0];
             match mutation {
@@ -1568,7 +1582,28 @@ mod tests {
                     report["raw"][1]["cloudflare_services_after"]["counter_epoch"] = json!("reset")
                 }
                 8 => report["raw"].as_array_mut().unwrap().swap(1, 2),
-                _ => report["config"]["flow"] = json!("batch"),
+                9 => report["config"]["flow"] = json!("batch"),
+                _ => {
+                    for row in report["raw"].as_array_mut().unwrap() {
+                        if row["backend"] == "cloudflare-local"
+                            && row["operation"]["kind"] == "push"
+                        {
+                            row["compaction_delta"] = json!({"count":0,"input_bytes":0,"output_bytes":0,"retired_chunk_deletes":0});
+                            for key in [
+                                "compactions",
+                                "compaction_input_bytes",
+                                "compaction_output_bytes",
+                                "retired_chunk_deletes",
+                            ] {
+                                row["service_metrics_delta"][key] = json!(0);
+                            }
+                            if row["operation"]["key"] == "push_01" {
+                                row["observed_native_compactions"] = json!(0);
+                                row["final_object_stats"]["compactions"] = json!(0);
+                            }
+                        }
+                    }
+                }
             }
             assert!(benchmark_cost(&reports).is_err(), "mutation {mutation}");
         }

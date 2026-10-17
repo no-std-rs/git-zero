@@ -40,7 +40,9 @@ Every push checks response-cache invalidation and actual manifest-generation
 advance. Every read compares actual R2 inventory and complete counter epochs,
 and rejects Class A operations, deletes, written bytes, or SQLite row writes.
 Every cold latest fetch must perform actual R2 GETs and read positive bytes.
-Per-push metrics include actual compaction deltas. Lightweight existing metrics
+Per-push metrics include actual compaction deltas. Every native trace must
+observe at least one compaction, with its per-push count sum matching final
+native metrics; zero-compaction traces cannot score. Lightweight existing metrics
 supply inventory and SQLite generation; the full reachable-object inventory is
 checked once at completion. Raw observer counters remain in the trace and are
 excluded by the pricing model. The response cache stays at 32 MiB / 256 entries
