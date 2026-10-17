@@ -81,8 +81,10 @@ supports SHA-256 packs.
 A complete native clone/checkout writer, dumb repository walker, client filters,
 client protocol v1/v2, push and standalone `git://` transport remain planned.
 
-Server partial clones currently require `--no-checkout`: lazy retrieval of
-unadvertised promised objects is rejected by the advertised-ID want policy.
+Server partial clones can perform ordinary lazy checkout when the host explicitly
+grants retrieval from its immutable visible closure. The default advertised-ID
+want policy still requires `--no-checkout`; the grant never exposes objects
+outside the supplied validated repository view.
 Time/exclusion deepening and tree/sparse/combine filters remain unsupported.
 The native server uses blocking sockets and HTTP/1.0 close-delimited responses;
 Hosts can set inclusive complete-wire/decoded-body quotas and independent
@@ -611,8 +613,9 @@ budget reporting. Separate owners keep overlapping responses independent.
 Both selection arrays need one slot per provider object. Wants need one slot per
 distinct requested ID. Scratch follows validation's header/tree-name limits;
 `graph_read_limit` caps actual structural read bytes, including buffered reads and
-rereads. Selection uses no body-sized buffer or allocation. Only advertised HEAD,
-ref and peeled IDs are accepted; unknown or merely reachable IDs are rejected.
+rereads. Selection uses no body-sized buffer or allocation. By default only
+advertised HEAD, ref and peeled IDs are accepted; unknown or merely reachable
+IDs are rejected.
 Duplicate and overlapping wants produce each object once. Ordinary requests without `done`
 negotiate ACK/NAK without graph traversal. Selection failures occur before output,
 and the same storage can be reused on retry. Known commit haves omit their complete
@@ -620,6 +623,20 @@ closure, sharing `graph_read_limit` across common and wanted traversals. Unknown
 and non-commit haves are ignored. Requests replay wants and common haves each
 round; no connection state or have-ID array is retained. A client's shallow
 boundaries stop common-history traversal, so missing parents are never excluded.
+
+Hosts may opt into `WantOptions::all_visible_reachable(max_want_lines)` through
+`serve_with_selection_policy` or the policy-aware selected response encoders.
+Authenticate and project the repository first: this grant permits every object
+kind in that exact validated visible closure. It does not consult a physical
+object pool or infer authorization from wire capabilities. The occurrence cap
+counts duplicate want lines before deduplication; request-byte, array and graph
+limits remain separate from a total request-work budget.
+
+The native demonstration accepts `git-zero serve --allow-reachable-wants`.
+Worker loaders and deployments have an explicit optional policy; old interfaces
+remain strict and incompatible opt-in interfaces fail closed. V0/v1 opt-in
+discovery adds `allow-reachable-sha1-in-want` after complete packet preflight;
+v2 uses its normal fetch command. Hosts own immutable URL retention and GC.
 
 V0 advertisements include `multi_ack`, `multi_ack_detailed`, `side-band`,
 `side-band-64k` and `no-progress`. A client chooses at most one ACK mode and one
@@ -653,9 +670,9 @@ Git 2.55; versioned oracle tests retain Git 2.53's unrelated-branch difference.
 V0's initial shallow-list probe has no ACK/NAK; v2 uses a shallow-info section.
 
 Blob filters omit bodies of the selected size or larger and retain explicitly
-wanted blobs. Partial clones currently require `--no-checkout`: the advertised-ID
-want policy still rejects requests for unadvertised promised blobs, so lazy
-checkout retrieval remains deferred. Time/exclusion deepening
+wanted blobs. An explicit visible-closure grant permits lazy retrieval of promised
+blobs for ordinary partial-clone checkout; strict hosts still require
+`--no-checkout`. Time/exclusion deepening
 (`deepen-since`/`deepen-not`), tree/sparse/combine filters, unknown/non-commit
 shallow IDs, malformed/duplicate options and exhausted budgets fail before
 output. Shallow probes also traverse within the graph budget; hosts must size

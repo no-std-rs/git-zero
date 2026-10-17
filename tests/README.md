@@ -909,3 +909,16 @@ executables through every helper link. Both Git's source and installation remain
 unchanged. The [coverage map](upstream-http.md)
 documents provenance, limits and the exact substitution hook. The broader suites,
 HTTP/2, Worker and Apache's static dumb Alias remain separate coverage gaps.
+
+
+The explicit promised-object policy uses one project-authored Git oracle at
+[`promised-oracle.mjs`](../examples/cloudflare-worker/test/promised-oracle.mjs).
+`cargo test -p git-zero-rustix --test promised --locked` runs its native socket
+host; `npm test` in `examples/cloudflare-worker` runs the corresponding Worker
+and Git HTTP backend comparison. Native acceptance therefore also requires Node
+22 or newer, Python3 and Git with HTTP/partial-clone support. Set
+`GIT_ZERO_TEST_GIT=/path/to/git` to use the same selected Git in fixture generation,
+client operations and the reference HTTP backend. Both formats and v0/v1/v2
+exercise physical omission, lazy checkout, canonical pack/object sets and modes;
+these are correctness tests, without benchmark or deployed-host claims. Worker
+plain/gzip policy and lifecycle guards supplement the ordinary Git transport.

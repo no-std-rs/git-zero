@@ -50,8 +50,9 @@ the versioned native oracle asserts both outcomes and identical imported objects
 Depth requests retransmit their bounded closure; ordinary shallow haves stop
 common traversal at the client's boundary. Root commits at the depth limit stay
 shallow, matching Git. Time/exclusion deepening and other filters are
-rejected. The advertised-ID want policy still requires partial clones to use
-`--no-checkout`; lazy promised-object retrieval is deferred. Legacy complete-pack
+rejected. The default advertised-ID want policy requires partial clones to use
+`--no-checkout`. Explicitly authorized hosts can enable lazy promised-object
+retrieval as described below. Legacy complete-pack
 APIs omit these capabilities and reject extended requests before output.
 Ready shortcuts and other optional v2 features stay unadvertised.
 V2 preflights every selected ls-refs line, including its attributes, against the
@@ -86,3 +87,34 @@ backend read can be retried with the same stable provider; failed-call bytes are
 invalid. Once HTTP headers are sent, unrecoverable errors require aborting the
 transport. These cursors do not implement HTTP range requests or serialized
 cross-process checkpoints. Separate cursors and buffers permit overlapping work.
+
+
+`WantOptions::all_visible_reachable(max_want_lines)` is an explicit host grant
+for policy-aware selected responses. Use `serve_with_selection_policy` or
+`ResponseEncoder::with_selection_policy` / `with_selection_storage_policy` after
+routing/authentication and validation of the exact immutable public projection.
+Old entry points pass `WantOptions::STRICT` and retain their bytes and denial
+rules. Complete-pack/HEAD-only APIs do not grant this policy.
+
+The grant permits any object kind in the validated union of visible HEAD/refs,
+including unadvertised commits, trees, blobs and nested tags. Physical backing
+objects outside that union are denied. This is stateless read authorization,
+not proof of an earlier promise. Discovery and content/cache keys grant no
+access: authorize every request before selection or cache lookup. Hosts retain
+immutable generations for as long as their promised downloads should work;
+changing a projection or collecting its objects can revoke previous wants.
+
+V0/v1 advertise `allow-reachable-sha1-in-want` only with the explicit grant;
+v2 uses its existing fetch command. Client packets, headers and queries cannot
+turn it on. The exact opt-in discovery packets are preflighted before any output,
+including unborn HEAD/first-ref capability carriers. The added 29 bytes can make
+an old-limit ref fail with `LimitExceeded`; strict discovery limits are unchanged.
+
+Every want occurrence, including duplicates, consumes the configured cap before
+output. Exhaustion returns `LimitExceeded`; insufficient distinct selection
+slots/scratch retain `BufferTooSmall`. Authorization uses the validated ID index
+without body reads. Existing request bytes, object/ref/selection arrays and the
+single structural graph-read budget remain separate finite limits. This is not
+a whole-request logical-work budget: parsing, bounded metadata scans and ordinary
+selection retain their existing accounting. A fresh request resets the counter.
+Explicit blob roots survive `blob:none`, enabling ordinary partial-clone checkout.

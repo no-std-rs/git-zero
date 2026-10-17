@@ -55,6 +55,10 @@ name = "references"
 required-features = ["cli"]
 
 [[test]]
+name = "promised"
+required-features = ["cli"]
+
+[[test]]
 name = "http_framing"
 required-features = ["server"]
 

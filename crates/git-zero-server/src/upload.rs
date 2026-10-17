@@ -245,15 +245,22 @@ impl<'a> UploadRequest<'a> {
     }
 
     #[cfg(feature = "read")]
-    pub(crate) fn parse_selected(
-        repository: &impl Repository,
+    pub(crate) fn parse_selected<R: Repository + ?Sized>(
+        repository: &git_zero_core::ValidatedRepository<'_, '_, R>,
         body: &'a [u8],
         version: crate::route::Version,
         wants: &mut [ObjectId],
+        options: crate::WantOptions,
     ) -> Result<(Self, usize)> {
         let mut count = 0;
+        let mut remaining = options.max_want_lines;
         let upload = Self::parse(body, repository.object_format(), version, |id| {
-            if !crate::advertised(repository, id) {
+            remaining = remaining.checked_sub(1).ok_or(Error::LimitExceeded)?;
+            let allowed = match options.policy {
+                crate::WantPolicy::AdvertisedOnly => crate::advertised(repository, id),
+                crate::WantPolicy::AllVisibleReachable => repository.find_index(id).is_some(),
+            };
+            if !allowed {
                 return Err(Error::InvalidRequest);
             }
             if !wants[..count].contains(&id) {

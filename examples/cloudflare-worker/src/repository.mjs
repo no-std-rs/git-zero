@@ -1,5 +1,6 @@
 import { readRequestBody } from "./bytes.mjs";
 import { streamResponse } from "./stream.mjs";
+import { wantPolicy } from "./want-policy.mjs";
 
 const encoder = new TextEncoder();
 const KINDS = { commit: 1, tree: 2, blob: 3, tag: 4 };
@@ -137,7 +138,7 @@ function failure(status, message) {
   return new Response(`${message}\n`, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export function repositoryResponse(module, repository, target, body, method, headers) {
+export function repositoryResponse(module, repository, target, body, method, headers, policy = null) {
   const { exports } = new WebAssembly.Instance(module, {});
   importRepository(exports, repository);
   let length;
@@ -146,11 +147,15 @@ export function repositoryResponse(module, repository, target, body, method, hea
     if (error instanceof RepositoryError && error.status === 413) return failure(413, "Request exceeds Wasm capacity");
     throw error;
   }
-  return streamResponse(exports, exports.stream_start_repository(length, method === "POST" ? 1 : 0));
+  const result = policy
+    ? exports.stream_start_repository_policy(length, method === "POST" ? 1 : 0, 1, policy.maxWantLines)
+    : exports.stream_start_repository(length, method === "POST" ? 1 : 0);
+  return streamResponse(exports, result);
 }
 
-// The trusted async loader returns { repository, target }, or null for no route.
-// Authentication and the immutable repository URL policy belong to its host.
+// The trusted loader returns { repository, target, wantPolicy?, maxWantLines? },
+// or null. Authentication, public projection and immutable URL retention belong
+// to its host. Policy scalars are copied before awaiting the request body.
 export function createRepositoryWorker(module, loadRepository) {
   if (typeof loadRepository !== "function") throw new TypeError("A repository loader is required");
   return {
@@ -160,11 +165,14 @@ export function createRepositoryWorker(module, loadRepository) {
       try { selected = await loadRepository(request); }
       catch { return failure(503, "Repository unavailable"); }
       if (!selected) return failure(404, "Repository not found");
+      let policy;
+      try { policy = wantPolicy(module, selected.wantPolicy, selected.maxWantLines, "stream_start_repository_policy"); }
+      catch { return failure(503, "Invalid host want policy or missing Wasm export"); }
       let body;
       try { body = await readRequestBody(request, 32768); }
       catch { return failure(400, "Invalid or oversized request"); }
       try {
-        return repositoryResponse(module, selected.repository, selected.target, body, request.method, request.headers);
+        return repositoryResponse(module, selected.repository, selected.target, body, request.method, request.headers, policy);
       } catch (error) {
         return failure(error instanceof RepositoryError ? error.status : 502, "Invalid or oversized repository");
       }

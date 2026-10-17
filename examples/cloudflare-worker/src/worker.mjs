@@ -2,6 +2,7 @@ import { decodeSnapshot, loadSnapshot, MAX_SNAPSHOT_BYTES, persistSnapshot, Snap
 import { readRequestBody } from "./bytes.mjs";
 import { captureMetadata } from "./metadata.mjs";
 import { streamResponse } from "./stream.mjs";
+import { WantPolicyError, wantPolicy } from "./want-policy.mjs";
 import { importRepository, repositoryResponse } from "./repository.mjs";
 import { treeRepository } from "./tree.mjs";
 
@@ -19,7 +20,7 @@ function decodeToken(token, version = 1) {
   return decodeSnapshot(bytes, version);
 }
 
-function invoke(module, parts, target, body, method, headers) {
+function invoke(module, parts, target, body, method, headers, policy) {
   // Each response owns an instance, so overlapping fetches cannot share
   // Rust's fixed input/output arrays. The compiled module itself is reusable.
   const { exports } = new WebAssembly.Instance(module, {});
@@ -47,7 +48,9 @@ function invoke(module, parts, target, body, method, headers) {
     offset += value.length;
   }
   input.set(body, offset);
-  const result = exports.stream_start(length, method === "POST" ? 1 : 0, 0);
+  const result = policy
+    ? exports.stream_start_policy(length, method === "POST" ? 1 : 0, 0, 1, policy.maxWantLines)
+    : exports.stream_start(length, method === "POST" ? 1 : 0, 0);
   return streamResponse(exports, result);
 }
 
@@ -55,6 +58,14 @@ export function createWorker(module) {
   return {
     async fetch(request, env = {}) {
       const url = new URL(request.url);
+      let policy;
+      try {
+        policy = wantPolicy(module, env.GIT_WANT_POLICY, env.GIT_MAX_WANT_LINES === undefined ? 64 : Number(env.GIT_MAX_WANT_LINES),
+          "stream_start_policy", "stream_start_repository_policy");
+      } catch (error) {
+        if (!(error instanceof WantPolicyError)) throw error;
+        return new Response(`${error.message}\n`, { status: 503 });
+      }
       if (url.pathname === "/" && request.method === "GET") {
         try {
           const layout = env.SNAPSHOT_LAYOUT ?? "flat";
@@ -97,10 +108,10 @@ export function createWorker(module) {
         const parts = inline ? decodeToken(inline[1], version) : await loadSnapshot(env, stored[1], stored[2], version);
         const body = await readRequestBody(request, 32768);
         const target = `${inline ? inline[2] : stored[3]}${url.search}`;
-        if (version === 1) return invoke(module, parts, target, body, request.method, request.headers);
+        if (version === 1) return invoke(module, parts, target, body, request.method, request.headers, policy);
         try {
           const tree = await treeRepository(parts);
-          return repositoryResponse(module, tree.repository, target, body, request.method, request.headers);
+          return repositoryResponse(module, tree.repository, target, body, request.method, request.headers, policy);
         } catch (error) {
           throw new SnapshotError("Invalid or oversized tree snapshot", stored ? 502 : error.status === 413 ? 413 : 400);
         }
