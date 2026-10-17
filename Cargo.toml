@@ -12,7 +12,7 @@ readme = "README.md"
 include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*"]
 
 [workspace]
-members = ["crates/git-zero-core", "crates/git-zero-client", "crates/git-zero-server", "crates/git-zero-rustix", "examples/cloudflare-worker/wasm", "examples/linux-kernel/codec"]
+members = ["crates/git-zero-core", "crates/git-zero-client", "crates/git-zero-server", "crates/git-zero-rustix", "examples/cloudflare-worker/wasm", "examples/linux-kernel/codec", "examples/repository-host"]
 default-members = [".", "crates/git-zero-rustix"]
 resolver = "3"
 
@@ -165,6 +165,11 @@ panic = "abort"
 lto = true
 codegen-units = 1
 opt-level = "s"
+
+# The native hosting experiment prioritizes throughput over Wasm/core size.
+[profile.hosting]
+inherits = "release"
+opt-level = 3
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

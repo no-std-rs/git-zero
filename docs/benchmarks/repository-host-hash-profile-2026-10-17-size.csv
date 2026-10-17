@@ -1,0 +1,10 @@
+round,method,wall_ms
+0,git_zero_host_hash,19.804449
+0,sha2_raw_digest,19.744246
+0,format_digest_only,0.000561
+1,git_zero_host_hash,19.785925
+1,sha2_raw_digest,19.761700
+1,format_digest_only,0.000190
+2,git_zero_host_hash,19.764936
+2,sha2_raw_digest,19.993694
+2,format_digest_only,0.000401

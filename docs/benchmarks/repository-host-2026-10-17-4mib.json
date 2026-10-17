@@ -1,0 +1,5594 @@
+{
+  "config": {
+    "cache_workloads": "fresh_clone cold response cache; warm_clone identical request after cold clone",
+    "debug_assertions": false,
+    "fixture_mib": 4.0,
+    "host_binary": "/var/home/pawel/no_std_rs/git-zero/main/target/release/repository-host",
+    "host_binary_sha256": "e85ca15a164c8f92c3e90031541587f88059d0275fa7b6036ea47487d9ec2779",
+    "http_post_buffer": 268435456,
+    "order": "AB BA alternating paired samples; fresh repositories each run",
+    "protocol": 0,
+    "push_generations_per_run": 5,
+    "reference": [
+      [
+        "receive.unpackLimit",
+        "0"
+      ],
+      [
+        "transfer.unpackLimit",
+        "0"
+      ],
+      [
+        "receive.autogc",
+        "false"
+      ],
+      [
+        "gc.auto",
+        "0"
+      ],
+      [
+        "receive.fsckObjects",
+        "true"
+      ],
+      [
+        "core.fsync",
+        "committed"
+      ],
+      [
+        "core.fsyncMethod",
+        "fsync"
+      ],
+      [
+        "core.multiPackIndex",
+        "true"
+      ],
+      [
+        "repack.writeBitmaps",
+        "true"
+      ],
+      [
+        "pack.writeReverseIndex",
+        "true"
+      ],
+      [
+        "pack.threads",
+        "0"
+      ],
+      [
+        "pack.window",
+        "10"
+      ],
+      [
+        "pack.depth",
+        "50"
+      ],
+      [
+        "http.receivepack",
+        "true"
+      ]
+    ],
+    "reference_maintenance": "git repack -adb --write-bitmap-index after each push; separate timings",
+    "samples": 5,
+    "warmups_per_backend": 1
+  },
+  "fixture": {
+    "append_tips": [
+      "a1a2664e17301aaacfda1a5ee1ce178e2f0c2325",
+      "00bdd682988e7f4ce035e234036c65a74e113986",
+      "db2a978f975ff439d8988c9f2e1f06f8f448b464"
+    ],
+    "base": "ffe24c3db9ff49d09ec3bb87c6338ae692489af8",
+    "bytes_per_file": 65536,
+    "files": 64,
+    "objects": "count: 0\nsize: 0\nin-pack: 90\npacks: 1\nsize-pack: 2091\nprune-packable: 0\ngarbage: 0\nsize-garbage: 0",
+    "tip": "5c41ee19e8a245e258223098539353eafbc4317d",
+    "working_tree_bytes": 4194304
+  },
+  "limits": [
+    "Synthetic corpus, loopback, hot OS caches, one client, protocol v0; no Cloudflare services contacted.",
+    "Tuned stock Git baseline; these measurements cannot establish superiority over every Git server.",
+    "Prototype inline maintenance is inside push; reference bitmap maintenance is separate and must be added for total ingest cost.",
+    "GNU time reports Git client CPU and maximum RSS; it excludes the independent host process and server Git children.",
+    "Server metrics are recorded only when /metrics is available; absent metrics are null. Logical storage excludes filesystem allocation overhead.",
+    "Completion durability follows the host and recorded Git fsync settings; no simulated power-loss test is performed.",
+    "Both servers currently use native Git codec subprocesses; this local prototype does not demonstrate a deployable Worker codec.",
+    "Cloud costs require service operation counts and current published prices; local timings are not cloud cost estimates."
+  ],
+  "machine": {
+    "arch": "x86_64",
+    "cpu": "AMD Ryzen 9 7900 12-Core Processor",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.7-ba29.fc43.x86_64",
+    "logical_cpus": 24,
+    "memory": "MemTotal:       131020852 kB",
+    "os": "linux",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+  },
+  "raw": [
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 12012.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034904032,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2139025.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 102.668505,
+      "warmup": true,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 8520.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034904032,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 89.952775,
+      "warmup": true,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8464.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034904032,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 1.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 69.00119600000001,
+      "warmup": true,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8820.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034904032,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 271257.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 44.592399,
+      "warmup": true,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8404.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034904032,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 27.044248,
+      "warmup": true,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7908.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034904032,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36609.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 36.370014999999995,
+      "warmup": true,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8176.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034904032,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2175935.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 2476428.0,
+        "compaction_output_bytes": 2172455.0,
+        "compactions": 1.0,
+        "inline_maintenance_seconds": 0.034904032,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 77.824654,
+      "warmup": true,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8720.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034904032,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36593.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 36.217049,
+      "warmup": true,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 11664.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 70.80062199999999,
+      "warmup": true,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7508.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "wall_ms": 12.313097,
+      "warmup": true,
+      "workload": "maintenance_after_initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8432.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 74.750163,
+      "warmup": true,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8096.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 74.224829,
+      "warmup": true,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8712.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 33.294902,
+      "warmup": true,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7644.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "wall_ms": 11.946752,
+      "warmup": true,
+      "workload": "maintenance_after_incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8356.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.867065,
+      "warmup": true,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8044.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.324561,
+      "warmup": true,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7556.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "wall_ms": 12.121669,
+      "warmup": true,
+      "workload": "maintenance_after_append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8196.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.166164000000002,
+      "warmup": true,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7308.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "wall_ms": 11.945829999999999,
+      "warmup": true,
+      "workload": "maintenance_after_append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8296.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 23.949127,
+      "warmup": true,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7484.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": -1,
+      "wall_ms": 12.004951,
+      "warmup": true,
+      "workload": "maintenance_after_append_push_3"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 11756.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034401031,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2139025.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 87.60849900000001,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8296.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034401031,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 76.487061,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8052.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034401031,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 1.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 68.097245,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8896.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034401031,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 271257.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 50.278648000000004,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8448.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034401031,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.408768000000002,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8336.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034401031,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36609.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 35.528121000000006,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8440.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034401031,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2175935.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 2476428.0,
+        "compaction_output_bytes": 2172455.0,
+        "compactions": 1.0,
+        "inline_maintenance_seconds": 0.034401031,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 75.450292,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8808.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034401031,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36593.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 34.75814,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 12080.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 69.561183,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7328.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "wall_ms": 11.209992999999999,
+      "warmup": false,
+      "workload": "maintenance_after_initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 7932.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137776.0,
+        "requests": 2.0
+      },
+      "wall_ms": 76.81248000000001,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8308.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 74.232754,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8808.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 33.664413999999994,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7836.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "wall_ms": 11.912047,
+      "warmup": false,
+      "workload": "maintenance_after_incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8648.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.954769,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8208.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 23.74219,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7288.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "wall_ms": 11.437228000000001,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8480.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.223501000000002,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7280.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "wall_ms": 11.376826,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8232.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 23.458579,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7676.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280011,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 0,
+      "wall_ms": 11.36338,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 12156.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 70.958368,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7160.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "wall_ms": 11.912066000000001,
+      "warmup": false,
+      "workload": "maintenance_after_initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 7976.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137746.0,
+        "requests": 2.0
+      },
+      "wall_ms": 74.721629,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 30.0,
+        "client_cpu_user_ms": 30.0,
+        "client_max_rss_kib": 8308.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137776.0,
+        "requests": 2.0
+      },
+      "wall_ms": 74.587107,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 9052.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 33.015138,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8116.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "wall_ms": 12.671678,
+      "warmup": false,
+      "workload": "maintenance_after_incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8076.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.967644,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8460.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.776204,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7476.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "wall_ms": 12.321092,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8164.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.118363,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7380.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "wall_ms": 12.808073,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8512.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.252926000000002,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7568.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 1,
+      "wall_ms": 12.243316,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_3"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 12024.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.035409329,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2139025.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 88.857606,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 30.0,
+        "client_max_rss_kib": 8200.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.035409329,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 81.910037,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8652.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.035409329,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 1.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 66.385272,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8972.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.035409329,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 271257.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 44.712905,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8476.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.035409329,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 27.161257000000003,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8300.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.035409329,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36609.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 35.550151,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8392.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.035409329,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2175935.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 2476428.0,
+        "compaction_output_bytes": 2172455.0,
+        "compactions": 1.0,
+        "inline_maintenance_seconds": 0.035409329,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 77.053341,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8088.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.035409329,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 1,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36593.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 36.304874,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 12136.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034637995,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2139025.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 88.379982,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8468.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034637995,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 74.566358,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 30.0,
+        "client_max_rss_kib": 8456.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034637995,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 1.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 66.18971599999999,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8992.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034637995,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 271257.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 44.737721,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 10.0,
+        "client_max_rss_kib": 8448.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034637995,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.916648000000002,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8364.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034637995,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36609.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 35.02549,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8396.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034637995,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2175935.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 2476428.0,
+        "compaction_output_bytes": 2172455.0,
+        "compactions": 1.0,
+        "inline_maintenance_seconds": 0.034637995,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 76.236152,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8296.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034637995,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36593.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 34.942735,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 11760.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 70.35322500000001,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7248.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "wall_ms": 11.863696,
+      "warmup": false,
+      "workload": "maintenance_after_initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8308.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137776.0,
+        "requests": 2.0
+      },
+      "wall_ms": 73.026066,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 30.0,
+        "client_max_rss_kib": 8508.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137776.0,
+        "requests": 2.0
+      },
+      "wall_ms": 75.927715,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8532.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 32.595043,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8060.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "wall_ms": 11.419986,
+      "warmup": false,
+      "workload": "maintenance_after_incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8372.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.814035999999998,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8572.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.629209999999997,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7352.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "wall_ms": 11.629406999999999,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8228.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.329629,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7316.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "wall_ms": 12.117462000000002,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8636.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.090241,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7532.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 2,
+      "wall_ms": 11.296174,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 11592.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 70.83735200000001,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7632.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "wall_ms": 11.416077999999999,
+      "warmup": false,
+      "workload": "maintenance_after_initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8700.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137776.0,
+        "requests": 2.0
+      },
+      "wall_ms": 73.511033,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8464.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137776.0,
+        "requests": 2.0
+      },
+      "wall_ms": 74.10950299999999,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8788.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 31.992445,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7856.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "wall_ms": 11.43801,
+      "warmup": false,
+      "workload": "maintenance_after_incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8276.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 25.974155,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8552.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 23.889916,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7540.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "wall_ms": 12.214492,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8336.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.241124,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7588.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "wall_ms": 11.650056000000001,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8324.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 23.431078,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7444.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280016,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 3,
+      "wall_ms": 11.512108,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_3"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 11748.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034866172,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2139025.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 87.39524,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8336.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034866172,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 75.661036,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 30.0,
+        "client_max_rss_kib": 8364.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034866172,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 1.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 68.00037400000001,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8444.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034866172,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 271257.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 43.676285,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8568.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034866172,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 26.569199,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8320.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034866172,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36609.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 35.98727,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8456.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034866172,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2175935.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 2476428.0,
+        "compaction_output_bytes": 2172455.0,
+        "compactions": 1.0,
+        "inline_maintenance_seconds": 0.034866172,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 75.689829,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8672.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034866172,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 3,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36593.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 35.604684,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 12220.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034628127,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2139025.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 87.19043599999999,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8144.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034628127,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137761.0,
+        "requests": 2.0
+      },
+      "wall_ms": 76.239468,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 30.0,
+        "client_cpu_user_ms": 30.0,
+        "client_max_rss_kib": 8368.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034628127,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 1.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137761.0,
+        "requests": 2.0
+      },
+      "wall_ms": 66.32492900000001,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 9112.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034628127,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 271257.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 43.840633,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8376.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034628127,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 1.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 26.088628999999997,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8380.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034628127,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36609.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 34.626494,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8272.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034628127,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 2175935.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 2476428.0,
+        "compaction_output_bytes": 2172455.0,
+        "compactions": 1.0,
+        "inline_maintenance_seconds": 0.034628127,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 76.35660700000001,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "prototype",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8272.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 4659419,
+        "blob_puts": 10,
+        "cache_hits": 1,
+        "cache_misses": 3,
+        "compaction_input_bytes": 2476428,
+        "compaction_output_bytes": 2172455,
+        "compactions": 1,
+        "inline_maintenance_seconds": 0.034628127,
+        "input_bytes": 2140076,
+        "output_bytes": 4279986,
+        "requests": 18
+      },
+      "final_storage": {
+        "active_manifest_pack_and_index_bytes": 2212528,
+        "authoritative_services": {
+          "files": 11,
+          "logical_bytes": 4660127
+        },
+        "disposable_native_view": {
+          "files": 29,
+          "logical_bytes": 4685949
+        },
+        "files": 40,
+        "logical_bytes": 9346076
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 36593.0,
+        "blob_puts": 2.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 34.960047,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 11540.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2136262.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 70.535286,
+      "warmup": false,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7548.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "wall_ms": 11.099998,
+      "warmup": false,
+      "workload": "maintenance_after_initial_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 20.0,
+        "client_cpu_user_ms": 40.0,
+        "client_max_rss_kib": 8008.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 76.859588,
+      "warmup": false,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 10.0,
+        "client_cpu_user_ms": 50.0,
+        "client_max_rss_kib": 8316.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 183.0,
+        "output_bytes": 2137771.0,
+        "requests": 2.0
+      },
+      "wall_ms": 79.81094,
+      "warmup": false,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8604.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 1232.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 43.388817,
+      "warmup": false,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7776.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "wall_ms": 11.563585,
+      "warmup": false,
+      "workload": "maintenance_after_incremental_push"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8372.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 245.0,
+        "output_bytes": 1538.0,
+        "requests": 2.0
+      },
+      "wall_ms": 26.023889,
+      "warmup": false,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8288.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 565.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.581138999999997,
+      "warmup": false,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7540.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "wall_ms": 11.51292,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_1"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8288.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 554.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.495469,
+      "warmup": false,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7696.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "wall_ms": 11.630089,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_2"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 8336.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "service_metrics_delta": {
+        "blob_put_bytes": 0.0,
+        "blob_puts": 0.0,
+        "cache_hits": 0.0,
+        "cache_misses": 0.0,
+        "compaction_input_bytes": 0.0,
+        "compaction_output_bytes": 0.0,
+        "compactions": 0.0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 557.0,
+        "output_bytes": 272.0,
+        "requests": 2.0
+      },
+      "wall_ms": 24.428514,
+      "warmup": false,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "client_resources": {
+        "client_cpu_system_ms": 0.0,
+        "client_cpu_user_ms": 0.0,
+        "client_max_rss_kib": 7568.0
+      },
+      "final_service_metrics": {
+        "blob_put_bytes": 0,
+        "blob_puts": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compaction_input_bytes": 0,
+        "compaction_output_bytes": 0,
+        "compactions": 0,
+        "inline_maintenance_seconds": 0.0,
+        "input_bytes": 2140076,
+        "output_bytes": 4280006,
+        "requests": 18
+      },
+      "final_storage": {
+        "files": 25,
+        "logical_bytes": 2169257
+      },
+      "sample": 4,
+      "wall_ms": 11.400089000000001,
+      "warmup": false,
+      "workload": "maintenance_after_append_push_3"
+    }
+  ],
+  "schema_version": 1,
+  "summary": [
+    {
+      "backend": "prototype",
+      "median_ms": 87.60849900000001,
+      "p95_ms": 88.857606,
+      "samples": 5,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "prototype",
+      "median_ms": 76.239468,
+      "p95_ms": 81.910037,
+      "samples": 5,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "prototype",
+      "median_ms": 66.385272,
+      "p95_ms": 68.097245,
+      "samples": 5,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "prototype",
+      "median_ms": 44.712905,
+      "p95_ms": 50.278648000000004,
+      "samples": 5,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "prototype",
+      "median_ms": 26.088628999999997,
+      "p95_ms": 27.161257000000003,
+      "samples": 5,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "prototype",
+      "median_ms": 35.528121000000006,
+      "p95_ms": 35.98727,
+      "samples": 5,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "prototype",
+      "median_ms": 76.236152,
+      "p95_ms": 77.053341,
+      "samples": 5,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "prototype",
+      "median_ms": 34.960047,
+      "p95_ms": 36.304874,
+      "samples": 5,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "median_ms": 70.535286,
+      "p95_ms": 70.958368,
+      "samples": 5,
+      "workload": "initial_push"
+    },
+    {
+      "backend": "git",
+      "median_ms": 74.721629,
+      "p95_ms": 76.859588,
+      "samples": 5,
+      "workload": "fresh_clone"
+    },
+    {
+      "backend": "git",
+      "median_ms": 74.587107,
+      "p95_ms": 79.81094,
+      "samples": 5,
+      "workload": "warm_clone"
+    },
+    {
+      "backend": "git",
+      "median_ms": 33.015138,
+      "p95_ms": 43.388817,
+      "samples": 5,
+      "workload": "incremental_push"
+    },
+    {
+      "backend": "git",
+      "median_ms": 25.967644,
+      "p95_ms": 26.023889,
+      "samples": 5,
+      "workload": "incremental_fetch"
+    },
+    {
+      "backend": "git",
+      "median_ms": 11.416077999999999,
+      "p95_ms": 11.912066000000001,
+      "samples": 5,
+      "workload": "maintenance_after_initial_push"
+    },
+    {
+      "backend": "git",
+      "median_ms": 11.563585,
+      "p95_ms": 12.671678,
+      "samples": 5,
+      "workload": "maintenance_after_incremental_push"
+    },
+    {
+      "backend": "git",
+      "median_ms": 24.581138999999997,
+      "p95_ms": 24.776204,
+      "samples": 5,
+      "workload": "append_push_1"
+    },
+    {
+      "backend": "git",
+      "median_ms": 24.241124,
+      "p95_ms": 25.329629,
+      "samples": 5,
+      "workload": "append_push_2"
+    },
+    {
+      "backend": "git",
+      "median_ms": 24.090241,
+      "p95_ms": 24.428514,
+      "samples": 5,
+      "workload": "append_push_3"
+    },
+    {
+      "backend": "git",
+      "median_ms": 11.629406999999999,
+      "p95_ms": 12.321092,
+      "samples": 5,
+      "workload": "maintenance_after_append_push_1"
+    },
+    {
+      "backend": "git",
+      "median_ms": 11.650056000000001,
+      "p95_ms": 12.808073,
+      "samples": 5,
+      "workload": "maintenance_after_append_push_2"
+    },
+    {
+      "backend": "git",
+      "median_ms": 11.400089000000001,
+      "p95_ms": 12.243316,
+      "samples": 5,
+      "workload": "maintenance_after_append_push_3"
+    }
+  ],
+  "timestamp_unix_seconds": 1792244072
+}

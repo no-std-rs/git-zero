@@ -252,6 +252,13 @@ Start further client and write-server features only after this gate passes.
 
 ## 7. Read/write server support — deferred until server parity
 
+The separate [Rust hosting experiment](examples/repository-host/README.md) tests
+compressed chunk storage, atomic manifest publication and bounded inline compaction
+with native Git as its codec. Its [local Cloudflare adapter](examples/repository-host/cloudflare/README.md)
+accepts real pushes through workerd and reports object statistics, service operations
+and cost scenarios. The [design](docs/hosting-design.md) and [measurements](docs/hosting-cloudflare-benchmarks.md)
+remain experimental; they do not complete the portable server acceptance gate.
+
 - [ ] Host-owned writable object storage and ref transactions with durability,
   locking and old/new-ID compare-and-swap semantics.
 - [ ] `receive-pack` discovery, bounded commands/capabilities, pack ingestion and

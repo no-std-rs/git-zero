@@ -1,0 +1,12 @@
+{
+  "name": "git-zero-local-repository-services",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --ip 127.0.0.1 --show-interactive-dev-session=false"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  }
+}
