@@ -26,42 +26,7 @@ fn accepted_settings_are_independent_and_leave_both_ip_listeners_unchanged() {
     assert_eq!(defaults.read, Some(Duration::from_secs(10)));
     assert_eq!(defaults.write, Some(Duration::from_secs(10)));
     for address in ["127.0.0.1:0", "[::1]:0"] {
-        let listener = listen_on(address.parse().unwrap()).unwrap();
-        sockopt::set_socket_timeout(&listener, Timeout::Recv, Some(Duration::from_secs(4)))
-            .unwrap();
-        sockopt::set_socket_timeout(&listener, Timeout::Send, Some(Duration::from_secs(5)))
-            .unwrap();
-        for settings in [
-            defaults,
-            AcceptedSocketTimeouts {
-                read: Some(Duration::from_secs(1)),
-                write: Some(Duration::from_secs(2)),
-            },
-            AcceptedSocketTimeouts {
-                read: None,
-                write: Some(Duration::from_secs(2)),
-            },
-            AcceptedSocketTimeouts {
-                read: Some(Duration::from_secs(1)),
-                write: None,
-            },
-            AcceptedSocketTimeouts {
-                read: None,
-                write: None,
-            },
-        ] {
-            let _peer = TcpStream::connect(local_address(&listener).unwrap()).unwrap();
-            let child = without_allocations(|| accept_with_timeouts(&listener, settings)).unwrap();
-            assert!(fcntl_getfd(&child).unwrap().contains(FdFlags::CLOEXEC));
-            check_socket_timeouts(&child, settings);
-            check_socket_timeouts(
-                &listener,
-                AcceptedSocketTimeouts {
-                    read: Some(Duration::from_secs(4)),
-                    write: Some(Duration::from_secs(5)),
-                },
-            );
-        }
+        check_address_timeouts(address, defaults);
     }
 }
 
@@ -189,4 +154,41 @@ fn write_backpressure_times_out_and_cancels_the_stream() {
         encoder.read(&repository, &mut [0; 8]),
         Err(Error::InvalidRequest)
     );
+}
+
+fn check_address_timeouts(address: &str, defaults: AcceptedSocketTimeouts) {
+    let listener = listen_on(address.parse().unwrap()).unwrap();
+    sockopt::set_socket_timeout(&listener, Timeout::Recv, Some(Duration::from_secs(4))).unwrap();
+    sockopt::set_socket_timeout(&listener, Timeout::Send, Some(Duration::from_secs(5))).unwrap();
+    for settings in [
+        defaults,
+        AcceptedSocketTimeouts {
+            read: Some(Duration::from_secs(1)),
+            write: Some(Duration::from_secs(2)),
+        },
+        AcceptedSocketTimeouts {
+            read: None,
+            write: Some(Duration::from_secs(2)),
+        },
+        AcceptedSocketTimeouts {
+            read: Some(Duration::from_secs(1)),
+            write: None,
+        },
+        AcceptedSocketTimeouts {
+            read: None,
+            write: None,
+        },
+    ] {
+        let _peer = TcpStream::connect(local_address(&listener).unwrap()).unwrap();
+        let child = without_allocations(|| accept_with_timeouts(&listener, settings)).unwrap();
+        assert!(fcntl_getfd(&child).unwrap().contains(FdFlags::CLOEXEC));
+        check_socket_timeouts(&child, settings);
+        check_socket_timeouts(
+            &listener,
+            AcceptedSocketTimeouts {
+                read: Some(Duration::from_secs(4)),
+                write: Some(Duration::from_secs(5)),
+            },
+        );
+    }
 }

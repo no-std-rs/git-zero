@@ -76,12 +76,7 @@ fn unset_policy_preserves_default_results_and_borrowed_binary_metadata() {
         b"POST / HTTP/1.0\r\nContent-Encoding: br\r\n\r\n",
     ];
     for wire in cases {
-        for width in [1, 3, 31, wire.len()] {
-            assert_eq!(
-                receive(wire, width, &mut [0; 1024], RequestLimits::default()),
-                http::receive(wire, width, &mut [0; 1024])
-            );
-        }
+        check_default_request(wire);
     }
     let parsed = receive(
         &valid,
@@ -105,30 +100,7 @@ fn unset_policy_preserves_default_results_and_borrowed_binary_metadata() {
 fn inclusive_wire_and_identity_quotas_distinguish_physical_capacity() {
     let body = b"\0\xffbody";
     for encoding in [None, Some("identity"), Some("IDENTITY")] {
-        let wire = request(body, encoding);
-        let n = wire.len();
-        let header = n - body.len();
-        check_cases(
-            &wire,
-            &[1, 7, n],
-            &[
-                (n, quotas(Some(n), Some(body.len())), Ok(body)),
-                (n, quotas(Some(n + 1), Some(body.len() + 1)), Ok(body)),
-                (1024, quotas(Some(n - 1), None), Err(Error::LimitExceeded)),
-                (
-                    1024,
-                    quotas(None, Some(body.len() - 1)),
-                    Err(Error::LimitExceeded),
-                ),
-                // Known body policy precedes insufficient physical body storage.
-                (
-                    header,
-                    quotas(None, Some(body.len() - 1)),
-                    Err(Error::LimitExceeded),
-                ),
-                (header, quotas(None, None), Err(Error::BufferTooSmall)),
-            ],
-        );
+        check_identity_encoding(body, encoding);
     }
     let header = b"GET /HEAD HTTP/1.0\r\n\r\n";
     let n = header.len();
@@ -211,16 +183,7 @@ fn malformed_truncated_and_overflow_cases_preserve_error_order_and_recovery() {
     let valid = request(b"0000", None);
     let mut storage = [0xa5; 1024];
     for (wire, limits, error) in cases {
-        for width in [1, 7, wire.len()] {
-            check(wire, width, &mut storage, *limits, Err(*error));
-            check(
-                &valid,
-                width,
-                &mut storage,
-                quotas(Some(valid.len()), Some(4)),
-                Ok(b"0000"),
-            );
-        }
+        check_rejection_and_recovery(wire, *limits, *error, &valid, &mut storage);
     }
 }
 
@@ -264,110 +227,176 @@ fn gzip(body: &[u8]) -> Vec<u8> {
 #[test]
 fn gzip_exact_output_quota_and_physical_capacity_are_independent() {
     for body in [Vec::new(), b"\0\xffbinary\r\n".to_vec(), vec![b'z'; 8192]] {
-        let compressed = gzip(&body);
-        let wire = request(&compressed, Some("gzip"));
-        let n = wire.len();
-        let decoded = body.len();
-        for width in [1, 7, n] {
-            for extra in [0, 1, 37] {
-                let mut storage = vec![0xa5; n + decoded + extra];
-                check(
-                    &wire,
-                    width,
-                    &mut storage,
-                    quotas(Some(n), Some(decoded)),
-                    Ok(&body),
-                );
-                assert!(storage[n + decoded..].iter().all(|&byte| byte == 0xa5));
-            }
-        }
-        if !body.is_empty() {
-            check_cases(
-                &wire,
-                &[1, 7, n],
-                &[
-                    (
-                        n + decoded + 17,
-                        quotas(None, Some(decoded - 1)),
-                        Err(Error::LimitExceeded),
-                    ),
-                    (
-                        n + decoded - 1,
-                        quotas(None, Some(decoded)),
-                        Err(Error::BufferTooSmall),
-                    ),
-                    (
-                        n + decoded - 1,
-                        quotas(None, Some(decoded - 1)),
-                        Err(Error::LimitExceeded),
-                    ),
-                    (
-                        n + decoded - 1,
-                        quotas(None, None),
-                        Err(Error::BufferTooSmall),
-                    ),
-                ],
-            );
-        }
-        check_cases(
-            &wire,
-            &[1, 7, n],
-            &[(
-                n + decoded,
-                quotas(Some(n - 1), Some(decoded)),
-                Err(Error::LimitExceeded),
-            )],
-        );
+        check_gzip_capacity_case(&body);
     }
 }
 
 #[test]
 fn malformed_gzip_at_exact_and_zero_quotas_keeps_checksum_errors() {
     for body in [b"".as_slice(), b"checksum at quota".as_slice()] {
-        let valid = gzip(body);
-        let mut crc = valid.clone();
-        let tail = crc.len() - 8;
-        crc[tail] ^= 1;
-        let mut size = valid.clone();
-        let tail = size.len() - 4;
-        size[tail] ^= 1;
-        let mut header = valid.clone();
-        header[2] = 0;
-        let mut deflate = valid.clone();
-        deflate[10] = 0x07; // Reserved DEFLATE block type.
-        let mut trailing = valid.clone();
-        trailing.push(0);
-        let mut concatenated = valid.clone();
-        concatenated.extend_from_slice(&valid);
-        for bad in [
-            crc,
-            size,
-            header,
-            deflate,
-            trailing,
-            concatenated,
-            valid[..valid.len() - 1].to_vec(),
-        ] {
-            let wire = request(&bad, Some("gzip"));
-            let n = wire.len();
-            let decoded = body.len();
-            check_cases(
+        check_gzip_corruptions(body);
+    }
+}
+
+fn check_default_request(wire: &[u8]) {
+    for width in [1, 3, 31, wire.len()] {
+        assert_eq!(
+            receive(wire, width, &mut [0; 1024], RequestLimits::default()),
+            http::receive(wire, width, &mut [0; 1024])
+        );
+    }
+}
+
+fn check_identity_encoding(body: &[u8], encoding: Option<&str>) {
+    let wire = request(body, encoding);
+    let n = wire.len();
+    let header = n - body.len();
+    check_cases(
+        &wire,
+        &[1, 7, n],
+        &[
+            (n, quotas(Some(n), Some(body.len())), Ok(body)),
+            (n, quotas(Some(n + 1), Some(body.len() + 1)), Ok(body)),
+            (1024, quotas(Some(n - 1), None), Err(Error::LimitExceeded)),
+            (
+                1024,
+                quotas(None, Some(body.len() - 1)),
+                Err(Error::LimitExceeded),
+            ),
+            // Known body policy precedes insufficient physical body storage.
+            (
+                header,
+                quotas(None, Some(body.len() - 1)),
+                Err(Error::LimitExceeded),
+            ),
+            (header, quotas(None, None), Err(Error::BufferTooSmall)),
+        ],
+    );
+}
+
+fn check_rejection_and_recovery(
+    wire: &[u8],
+    limits: RequestLimits,
+    error: Error,
+    valid: &[u8],
+    storage: &mut [u8],
+) {
+    for width in [1, 7, wire.len()] {
+        check(wire, width, storage, limits, Err(error));
+        check(
+            valid,
+            width,
+            storage,
+            quotas(Some(valid.len()), Some(4)),
+            Ok(b"0000"),
+        );
+    }
+}
+
+fn check_gzip_capacity_case(body: &[u8]) {
+    let compressed = gzip(body);
+    let wire = request(&compressed, Some("gzip"));
+    let n = wire.len();
+    let decoded = body.len();
+    for width in [1, 7, n] {
+        for extra in [0, 1, 37] {
+            let mut storage = vec![0xa5; n + decoded + extra];
+            check(
                 &wire,
-                &[1, n],
-                &[
-                    (
-                        n + decoded,
-                        quotas(Some(n), Some(decoded)),
-                        Err(Error::InvalidZlib),
-                    ),
-                    (
-                        n + decoded + 19,
-                        quotas(Some(n), Some(decoded)),
-                        Err(Error::InvalidZlib),
-                    ),
-                    (n + decoded, quotas(None, None), Err(Error::InvalidZlib)),
-                ],
+                width,
+                &mut storage,
+                quotas(Some(n), Some(decoded)),
+                Ok(body),
             );
+            assert!(storage[n + decoded..].iter().all(|&byte| byte == 0xa5));
         }
     }
+    if !body.is_empty() {
+        check_cases(
+            &wire,
+            &[1, 7, n],
+            &[
+                (
+                    n + decoded + 17,
+                    quotas(None, Some(decoded - 1)),
+                    Err(Error::LimitExceeded),
+                ),
+                (
+                    n + decoded - 1,
+                    quotas(None, Some(decoded)),
+                    Err(Error::BufferTooSmall),
+                ),
+                (
+                    n + decoded - 1,
+                    quotas(None, Some(decoded - 1)),
+                    Err(Error::LimitExceeded),
+                ),
+                (
+                    n + decoded - 1,
+                    quotas(None, None),
+                    Err(Error::BufferTooSmall),
+                ),
+            ],
+        );
+    }
+    check_cases(
+        &wire,
+        &[1, 7, n],
+        &[(
+            n + decoded,
+            quotas(Some(n - 1), Some(decoded)),
+            Err(Error::LimitExceeded),
+        )],
+    );
+}
+
+fn check_gzip_corruptions(body: &[u8]) {
+    let valid = gzip(body);
+    let mut crc = valid.clone();
+    let tail = crc.len() - 8;
+    crc[tail] ^= 1;
+    let mut size = valid.clone();
+    let tail = size.len() - 4;
+    size[tail] ^= 1;
+    let mut header = valid.clone();
+    header[2] = 0;
+    let mut deflate = valid.clone();
+    deflate[10] = 0x07; // Reserved DEFLATE block type.
+    let mut trailing = valid.clone();
+    trailing.push(0);
+    let mut concatenated = valid.clone();
+    concatenated.extend_from_slice(&valid);
+    for bad in [
+        crc,
+        size,
+        header,
+        deflate,
+        trailing,
+        concatenated,
+        valid[..valid.len() - 1].to_vec(),
+    ] {
+        check_bad_gzip(&bad, body.len());
+    }
+}
+
+fn check_bad_gzip(bad: &[u8], decoded: usize) {
+    let wire = request(bad, Some("gzip"));
+    let n = wire.len();
+    check_cases(
+        &wire,
+        &[1, n],
+        &[
+            (
+                n + decoded,
+                quotas(Some(n), Some(decoded)),
+                Err(Error::InvalidZlib),
+            ),
+            (
+                n + decoded + 19,
+                quotas(Some(n), Some(decoded)),
+                Err(Error::InvalidZlib),
+            ),
+            (n + decoded, quotas(None, None), Err(Error::InvalidZlib)),
+        ],
+    );
 }
