@@ -32,17 +32,17 @@ pub(super) fn read_header(
     storage: &mut [u8],
     max_wire_bytes: Option<usize>,
 ) -> Result<(usize, usize)> {
-    let capacity = super::Capacity::new(storage.len(), max_wire_bytes);
+    let (capacity, exhausted_error) = super::capacity(storage.len(), max_wire_bytes);
     let mut length = 0;
     let mut scan = HeaderScan::default();
     let end = loop {
         if let Some(end) = scan.end(&storage[..length]) {
             break end;
         }
-        if length == capacity.bytes {
-            return Err(capacity.error);
+        if length == capacity {
+            return Err(exhausted_error);
         }
-        let count = receive(socket, &mut storage[length..capacity.bytes])?;
+        let count = receive(socket, &mut storage[length..capacity])?;
         if count == 0 {
             return Err(Error::InvalidRequest);
         }

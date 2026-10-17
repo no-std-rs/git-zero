@@ -31,11 +31,10 @@ pub struct RequestLimits {
 impl RequestLimits {
     // Header intake proves header <= max_wire_bytes when that policy is set.
     // Check both known quotas before the separate physical body reservation.
-    fn check_declared(self, header: usize, body: usize, encoding: Encoding) -> Result<()> {
+    fn check_declared(self, header: usize, body: usize, identity_body: bool) -> Result<()> {
         let quotas = [
             self.max_wire_bytes.map(|limit| limit - header),
-            self.max_body_bytes
-                .filter(|_| encoding == Encoding::Identity),
+            self.max_body_bytes.filter(|_| identity_body),
         ];
         if quotas.into_iter().flatten().any(|limit| body > limit) {
             Err(Error::LimitExceeded)
@@ -47,41 +46,10 @@ impl RequestLimits {
 
 // Streaming intake/output reaches the first capacity boundary. Policy wins a
 // tie; this deliberately differs from checking a fully known declared size.
-struct Capacity {
-    bytes: usize,
-    error: Error,
-}
-
-impl Capacity {
-    fn new(physical: usize, policy: Option<usize>) -> Self {
-        match policy {
-            Some(bytes) if bytes <= physical => Self {
-                bytes,
-                error: Error::LimitExceeded,
-            },
-            _ => Self {
-                bytes: physical,
-                error: Error::BufferTooSmall,
-            },
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Encoding {
-    Identity,
-    Gzip,
-    Unsupported,
-}
-
-impl Encoding {
-    fn classify(value: Option<&str>) -> Self {
-        match value {
-            None => Self::Identity,
-            Some(value) if value.eq_ignore_ascii_case("identity") => Self::Identity,
-            Some(value) if value.eq_ignore_ascii_case("gzip") => Self::Gzip,
-            _ => Self::Unsupported,
-        }
+fn capacity(physical: usize, policy: Option<usize>) -> (usize, Error) {
+    match policy {
+        Some(limit) if limit <= physical => (limit, Error::LimitExceeded),
+        _ => (physical, Error::BufferTooSmall),
     }
 }
 
@@ -201,8 +169,10 @@ pub fn read_request_with_limits<'a>(
         .map(super::parse_length)
         .transpose()?
         .unwrap_or(0);
-    let encoding = Encoding::classify(headers.content_encoding);
-    limits.check_declared(end, total, encoding)?;
+    let identity_body = headers
+        .content_encoding
+        .is_none_or(|value| value.eq_ignore_ascii_case("identity"));
+    limits.check_declared(end, total, identity_body)?;
     if total > storage.len() {
         return Err(Error::BufferTooSmall);
     }
@@ -215,33 +185,35 @@ pub fn read_request_with_limits<'a>(
     }
     let (wire, expanded) = storage.split_at_mut(total);
     request.body = wire;
-    match encoding {
-        Encoding::Identity => {}
-        Encoding::Gzip => {
-            use git_zero::zlib::{InflateLimits, WINDOW_SIZE, decode_gzip};
-            let capacity = Capacity::new(expanded.len(), limits.max_body_bytes);
-            let length = decode_gzip(
-                request.body,
-                expanded,
-                &mut [0; WINDOW_SIZE],
-                InflateLimits {
-                    max_output: capacity.bytes as u64,
-                    max_ratio: 128,
-                    ratio_slack: expanded.len() as u64,
-                },
-            )
-            .map_err(|error| {
-                // decode_gzip's only BufferTooSmall path is incomplete output.
-                // Input exhaustion is InvalidZlib because input is complete.
-                if error == Error::BufferTooSmall {
-                    capacity.error
-                } else {
-                    error
-                }
-            })?;
-            request.body = &expanded[..length];
+    if !identity_body {
+        if !headers
+            .content_encoding
+            .is_some_and(|value| value.eq_ignore_ascii_case("gzip"))
+        {
+            return Err(Error::Unsupported);
         }
-        Encoding::Unsupported => return Err(Error::Unsupported),
+        use git_zero::zlib::{InflateLimits, WINDOW_SIZE, decode_gzip};
+        let (output_capacity, exhausted_error) = capacity(expanded.len(), limits.max_body_bytes);
+        let length = decode_gzip(
+            request.body,
+            expanded,
+            &mut [0; WINDOW_SIZE],
+            InflateLimits {
+                max_output: output_capacity as u64,
+                max_ratio: 128,
+                ratio_slack: expanded.len() as u64,
+            },
+        )
+        .map_err(|error| {
+            // decode_gzip's only BufferTooSmall path is incomplete output.
+            // Input exhaustion is InvalidZlib because input is complete.
+            if error == Error::BufferTooSmall {
+                exhausted_error
+            } else {
+                error
+            }
+        })?;
+        request.body = &expanded[..length];
     }
     Ok(request)
 }
