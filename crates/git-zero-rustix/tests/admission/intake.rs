@@ -35,6 +35,33 @@ fn quotas(wire: Option<usize>, body: Option<usize>) -> RequestLimits {
     }
 }
 
+// Keep expected outcomes explicit in each case. Fragmentation changes only the
+// transport; one runner owns storage sizing and the allocation-guarded assertion.
+type Case<'a> = (usize, RequestLimits, Result<&'a [u8], Error>);
+
+fn check(
+    wire: &[u8],
+    width: usize,
+    storage: &mut [u8],
+    limits: RequestLimits,
+    expected: Result<&[u8], Error>,
+) {
+    assert_eq!(
+        receive(wire, width, storage, limits).map(|request| request.body),
+        expected.map(<[u8]>::to_vec),
+        "width={width}, capacity={}, limits={limits:?}, wire={wire:?}",
+        storage.len(),
+    );
+}
+
+fn check_cases(wire: &[u8], widths: &[usize], cases: &[Case<'_>]) {
+    for &width in widths {
+        for &(capacity, limits, expected) in cases {
+            check(wire, width, &mut vec![0; capacity], limits, expected);
+        }
+    }
+}
+
 #[test]
 fn unset_policy_preserves_default_results_and_borrowed_binary_metadata() {
     assert_eq!(RequestLimits::default(), quotas(None, None));
@@ -79,110 +106,48 @@ fn inclusive_wire_and_identity_quotas_distinguish_physical_capacity() {
     let body = b"\0\xffbody";
     for encoding in [None, Some("identity"), Some("IDENTITY")] {
         let wire = request(body, encoding);
-        for width in [1, 7, wire.len()] {
-            for extra in [0, 1] {
-                assert_eq!(
-                    receive(
-                        &wire,
-                        width,
-                        &mut vec![0; wire.len()],
-                        quotas(Some(wire.len() + extra), Some(body.len() + extra))
-                    )
-                    .unwrap()
-                    .body,
-                    body
-                );
-            }
-            assert_eq!(
-                receive(
-                    &wire,
-                    width,
-                    &mut [0; 1024],
-                    quotas(Some(wire.len() - 1), None)
+        let n = wire.len();
+        let header = n - body.len();
+        check_cases(
+            &wire,
+            &[1, 7, n],
+            &[
+                (n, quotas(Some(n), Some(body.len())), Ok(body)),
+                (n, quotas(Some(n + 1), Some(body.len() + 1)), Ok(body)),
+                (1024, quotas(Some(n - 1), None), Err(Error::LimitExceeded)),
+                (
+                    1024,
+                    quotas(None, Some(body.len() - 1)),
+                    Err(Error::LimitExceeded),
                 ),
-                Err(Error::LimitExceeded)
-            );
-            assert_eq!(
-                receive(
-                    &wire,
-                    width,
-                    &mut [0; 1024],
-                    quotas(None, Some(body.len() - 1))
+                // Known body policy precedes insufficient physical body storage.
+                (
+                    header,
+                    quotas(None, Some(body.len() - 1)),
+                    Err(Error::LimitExceeded),
                 ),
-                Err(Error::LimitExceeded)
-            );
-            // A known body quota rejection precedes the otherwise insufficient physical body storage.
-            let header = wire.len() - body.len();
-            assert_eq!(
-                receive(
-                    &wire,
-                    width,
-                    &mut vec![0; header],
-                    quotas(None, Some(body.len() - 1))
-                ),
-                Err(Error::LimitExceeded)
-            );
-            assert_eq!(
-                receive(&wire, width, &mut vec![0; header], quotas(None, None)),
-                Err(Error::BufferTooSmall)
-            );
-        }
+                (header, quotas(None, None), Err(Error::BufferTooSmall)),
+            ],
+        );
     }
     let header = b"GET /HEAD HTTP/1.0\r\n\r\n";
-    for width in [1, 4, header.len()] {
-        assert!(
-            receive(
-                header,
-                width,
-                &mut vec![0; header.len()],
-                quotas(Some(header.len()), Some(0))
-            )
-            .is_ok()
-        );
-        assert_eq!(
-            receive(
-                header,
-                width,
-                &mut [0; 256],
-                quotas(Some(header.len() - 1), None)
-            ),
-            Err(Error::LimitExceeded)
-        );
-        assert_eq!(
-            receive(
-                header,
-                width,
-                &mut vec![0; header.len() - 1],
-                quotas(Some(header.len()), None)
-            ),
-            Err(Error::BufferTooSmall)
-        );
-        assert_eq!(
-            receive(
-                header,
-                width,
-                &mut vec![0; header.len() - 1],
-                quotas(Some(header.len() - 1), None)
-            ),
-            Err(Error::LimitExceeded)
-        );
-        assert_eq!(
-            receive(header, width, &mut [], quotas(Some(0), None)),
-            Err(Error::LimitExceeded)
-        );
-        assert_eq!(
-            receive(header, width, &mut [], quotas(None, None)),
-            Err(Error::BufferTooSmall)
-        );
-    }
-    assert_eq!(
-        receive(
-            &request(b"x", None),
-            1,
-            &mut [0; 512],
-            quotas(None, Some(0))
-        ),
-        Err(Error::LimitExceeded)
+    let n = header.len();
+    check_cases(
+        header,
+        &[1, 4, n],
+        &[
+            (n, quotas(Some(n), Some(0)), Ok(b"")),
+            (256, quotas(Some(n - 1), None), Err(Error::LimitExceeded)),
+            (n - 1, quotas(Some(n), None), Err(Error::BufferTooSmall)),
+            (n - 1, quotas(Some(n - 1), None), Err(Error::LimitExceeded)),
+            (0, quotas(Some(0), None), Err(Error::LimitExceeded)),
+            (0, quotas(None, None), Err(Error::BufferTooSmall)),
+        ],
+    );
+    check_cases(
+        &request(b"x", None),
+        &[1],
+        &[(512, quotas(None, Some(0)), Err(Error::LimitExceeded))],
     );
 }
 
@@ -247,21 +212,13 @@ fn malformed_truncated_and_overflow_cases_preserve_error_order_and_recovery() {
     let mut storage = [0xa5; 1024];
     for (wire, limits, error) in cases {
         for width in [1, 7, wire.len()] {
-            assert_eq!(
-                receive(wire, width, &mut storage, *limits),
-                Err(*error),
-                "wire={wire:?}"
-            );
-            assert_eq!(
-                receive(
-                    &valid,
-                    width,
-                    &mut storage,
-                    quotas(Some(valid.len()), Some(4))
-                )
-                .unwrap()
-                .body,
-                b"0000"
+            check(wire, width, &mut storage, *limits, Err(*error));
+            check(
+                &valid,
+                width,
+                &mut storage,
+                quotas(Some(valid.len()), Some(4)),
+                Ok(b"0000"),
             );
         }
     }
@@ -309,74 +266,58 @@ fn gzip_exact_output_quota_and_physical_capacity_are_independent() {
     for body in [Vec::new(), b"\0\xffbinary\r\n".to_vec(), vec![b'z'; 8192]] {
         let compressed = gzip(&body);
         let wire = request(&compressed, Some("gzip"));
-        for width in [1, 7, wire.len()] {
+        let n = wire.len();
+        let decoded = body.len();
+        for width in [1, 7, n] {
             for extra in [0, 1, 37] {
-                let mut storage = vec![0xa5; wire.len() + body.len() + extra];
-                assert_eq!(
-                    receive(
-                        &wire,
-                        width,
-                        &mut storage,
-                        quotas(Some(wire.len()), Some(body.len()))
-                    )
-                    .unwrap()
-                    .body,
-                    body
-                );
-                assert!(
-                    storage[wire.len() + body.len()..]
-                        .iter()
-                        .all(|&byte| byte == 0xa5)
-                );
-            }
-            if !body.is_empty() {
-                assert_eq!(
-                    receive(
-                        &wire,
-                        width,
-                        &mut vec![0; wire.len() + body.len() + 17],
-                        quotas(None, Some(body.len() - 1))
-                    ),
-                    Err(Error::LimitExceeded)
-                );
-                assert_eq!(
-                    receive(
-                        &wire,
-                        width,
-                        &mut vec![0; wire.len() + body.len() - 1],
-                        quotas(None, Some(body.len()))
-                    ),
-                    Err(Error::BufferTooSmall)
-                );
-                assert_eq!(
-                    receive(
-                        &wire,
-                        width,
-                        &mut vec![0; wire.len() + body.len() - 1],
-                        quotas(None, Some(body.len() - 1))
-                    ),
-                    Err(Error::LimitExceeded)
-                );
-                assert_eq!(
-                    receive(
-                        &wire,
-                        width,
-                        &mut vec![0; wire.len() + body.len() - 1],
-                        quotas(None, None)
-                    ),
-                    Err(Error::BufferTooSmall)
-                );
-            }
-            assert_eq!(
-                receive(
+                let mut storage = vec![0xa5; n + decoded + extra];
+                check(
                     &wire,
                     width,
-                    &mut vec![0; wire.len() + body.len()],
-                    quotas(Some(wire.len() - 1), Some(body.len()))
-                ),
-                Err(Error::LimitExceeded)
+                    &mut storage,
+                    quotas(Some(n), Some(decoded)),
+                    Ok(&body),
+                );
+                assert!(storage[n + decoded..].iter().all(|&byte| byte == 0xa5));
+            }
+        }
+        if !body.is_empty() {
+            check_cases(
+                &wire,
+                &[1, 7, n],
+                &[
+                    (
+                        n + decoded + 17,
+                        quotas(None, Some(decoded - 1)),
+                        Err(Error::LimitExceeded),
+                    ),
+                    (
+                        n + decoded - 1,
+                        quotas(None, Some(decoded)),
+                        Err(Error::BufferTooSmall),
+                    ),
+                    (
+                        n + decoded - 1,
+                        quotas(None, Some(decoded - 1)),
+                        Err(Error::LimitExceeded),
+                    ),
+                    (
+                        n + decoded - 1,
+                        quotas(None, None),
+                        Err(Error::BufferTooSmall),
+                    ),
+                ],
             );
         }
+        check_cases(
+            &wire,
+            &[1, 7, n],
+            &[(
+                n + decoded,
+                quotas(Some(n - 1), Some(decoded)),
+                Err(Error::LimitExceeded),
+            )],
+        );
     }
 }
 
@@ -408,28 +349,25 @@ fn malformed_gzip_at_exact_and_zero_quotas_keeps_checksum_errors() {
             valid[..valid.len() - 1].to_vec(),
         ] {
             let wire = request(&bad, Some("gzip"));
-            for width in [1, wire.len()] {
-                for spare in [0, 19] {
-                    assert_eq!(
-                        receive(
-                            &wire,
-                            width,
-                            &mut vec![0; wire.len() + body.len() + spare],
-                            quotas(Some(wire.len()), Some(body.len()))
-                        ),
-                        Err(Error::InvalidZlib)
-                    );
-                }
-                assert_eq!(
-                    receive(
-                        &wire,
-                        width,
-                        &mut vec![0; wire.len() + body.len()],
-                        quotas(None, None)
+            let n = wire.len();
+            let decoded = body.len();
+            check_cases(
+                &wire,
+                &[1, n],
+                &[
+                    (
+                        n + decoded,
+                        quotas(Some(n), Some(decoded)),
+                        Err(Error::InvalidZlib),
                     ),
-                    Err(Error::InvalidZlib)
-                );
-            }
+                    (
+                        n + decoded + 19,
+                        quotas(Some(n), Some(decoded)),
+                        Err(Error::InvalidZlib),
+                    ),
+                    (n + decoded, quotas(None, None), Err(Error::InvalidZlib)),
+                ],
+            );
         }
     }
 }
