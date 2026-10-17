@@ -85,15 +85,17 @@ fn unset_policy_preserves_default_results_and_borrowed_binary_metadata() {
         quotas(Some(valid.len()), Some(19)),
     )
     .unwrap();
-    assert_eq!(parsed.method, "POST");
-    assert_eq!(parsed.path, "/repo.git/git-upload-pack");
-    assert_eq!(parsed.query.as_deref(), Some("service=git-upload-pack"));
     assert_eq!(
-        parsed.content_type.as_deref(),
-        Some("application/x-git-upload-pack-request")
+        parsed,
+        http::Parsed {
+            method: "POST".into(),
+            path: "/repo.git/git-upload-pack".into(),
+            query: Some("service=git-upload-pack".into()),
+            content_type: Some("application/x-git-upload-pack-request".into()),
+            git_protocol: Some("version=2".into()),
+            body: b"0000\0\xff\r\n\r\npayload".to_vec(),
+        }
     );
-    assert_eq!(parsed.git_protocol.as_deref(), Some("version=2"));
-    assert_eq!(parsed.body, b"0000\0\xff\r\n\r\npayload");
 }
 
 #[test]
