@@ -100,3 +100,18 @@ times, plus its observed R2 peak held once for 30 days. Full comparisons retain
 the existing ≥1% known-cost improvement, separated trial envelopes, read-byte
 and storage guards, and paired Git-normalized median/p95 limits. Unknown cloud
 compute remains unknown. Local timings are latency guards, not billed compute.
+
+## Iteration budget
+
+The user selected two-pair screens for each optimization, followed by five-pair validation of the final
+candidate. Keep a matching two-pair scalar baseline for screening. Use complete screen counters and
+resource/latency guards to choose the next provisional candidate; do not treat the CLI's screen decision
+as formal acceptance. Each change still has a clean designer, clean implementation, committed and pushed
+source, and independent measurement.
+
+Stop screening when two independent viable designs fail to lower known cost by 1%, or a separately
+substantiated bound rules out a meaningful remaining saving. Invalid, resource-regressing and noisy or
+incomparable attempts do not establish that condition. Then measure the original scalar baseline and
+final candidate with five pairs and the identical runner/reference/runtime policy. Report the full
+comparison's outcome and all earlier screens; no screen counts as a formally accepted result or formal
+plateau by itself. A failed final latency guard remains inconclusive rather than becoming a speed claim.
