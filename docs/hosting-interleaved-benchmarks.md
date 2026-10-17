@@ -30,11 +30,35 @@ servers must observe initial wire bytes of at least 40% of logical fixture size,
 and at least 3 MiB for each later large push. Other generations make small
 mutations. Existing body, snapshot and response-cache caps remain in force.
 
-Stock Git repacks with bitmap indexes after **every** push, before the next
-fetch. Reports preserve wire-push latency, maintenance latency and their sum,
-`ready_wall_ms`; the push guard uses readiness. Prototype inline maintenance is
-already inside its wire-push time. Latency groups are `large_push`, `small_push`,
-`latest_fetch`, `history_no_haves`, `history_with_haves`, and `latest_recheck`.
+Stock Git uses the fixed `midx-bitmap-graph-v1` reference policy. Its receiver
+adds `pack.allowPackReuse=multi` to the existing configuration, including
+`receive.fsckObjects=true`, `core.fsync=committed` and `core.fsyncMethod=fsync`.
+The effective receiver configuration is queried and recorded for every trial.
+After **every** push, before the next fetch, it runs these two commands in order:
+
+```sh
+git multi-pack-index write --bitmap
+git commit-graph write --reachable --split
+```
+
+Accepted packs remain in place. The MIDX command does not use `--incremental`,
+which is incompatible with `--bitmap`. Each existing maintenance row retains
+both command timings and resources. Its wall time sums both commands; measured
+CPU times sum and maximum RSS takes the larger peak. An unavailable command
+resource measurement leaves the aggregate null. Reports preserve wire-push
+latency, maintenance latency and their sum, `ready_wall_ms`; the push guard uses
+readiness. Prototype inline maintenance is already inside its wire-push time.
+Latency groups are `large_push`, `small_push`, `latest_fetch`, `history_no_haves`,
+`history_with_haves`, and `latest_recheck`.
+
+The interleaved flow defaults to this exact policy and rejects other
+`--reference-maintenance` values. Its objective identity records the policy.
+The batch flow still defaults to `bitmap` with its existing full-repack behavior.
+An interleaved-only `--reference-binary PATH` chooses the Git HTTP wrapper;
+it defaults to the adjacent `repository-host`. Freeze one reference binary and
+pass it to both baseline and candidate runs. Its SHA-256 stays in comparison
+identity, while its filesystem path is provenance. The runner checks that the
+binary remains unchanged, and the scorer rejects mixed reference builds.
 
 Every push checks response-cache invalidation and actual manifest-generation
 advance. Every read compares actual R2 inventory and complete counter epochs,
@@ -59,6 +83,7 @@ For example, after building the Rust binaries and starting the local Worker:
 ```sh
 hosting-bench --flow interleaved-v1 --stage full --fixture-mib 16 \
   --cloudflare-endpoint http://127.0.0.1:8808 --view-cache cold \
+  --reference-binary /path/to/frozen/repository-host \
   --output interleaved-16mib-cold.json
 ```
 

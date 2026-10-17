@@ -1,6 +1,8 @@
 //! Rust-only paired smart HTTP benchmark, including optional local workerd services.
 use git_zero_host::benchmark_cost::{
-    INTERLEAVED_FLOW, INTERLEAVED_OBJECTIVE, INTERLEAVED_SEED, interleaved_schedule,
+    INTERLEAVED_FLOW, INTERLEAVED_OBJECTIVE, INTERLEAVED_PUSH_LATENCY_GUARD,
+    INTERLEAVED_REFERENCE_COMMANDS, INTERLEAVED_REFERENCE_EXTRA_CONFIG,
+    INTERLEAVED_REFERENCE_POLICY, INTERLEAVED_SEED, interleaved_schedule,
 };
 use serde_json::{Value, json};
 use std::{
@@ -136,6 +138,7 @@ struct CloudflareSettings {
 }
 struct BackendOptions<'a> {
     binary: &'a Path,
+    reference_binary: &'a Path,
     cloudflare: Option<&'a CloudflareSettings>,
     reference_bitmap_after_push: bool,
     monthly_runs: u64,
@@ -765,6 +768,7 @@ fn run_interleaved_backend(
     } else {
         "store"
     });
+    let mut reference_effective_config = Vec::new();
     if backend == "git" {
         git(
             root,
@@ -778,8 +782,16 @@ fn run_interleaved_backend(
             ],
             false,
         )?;
-        for (key, value) in REFERENCE_CONFIG {
+        for (key, value) in REFERENCE_CONFIG
+            .iter()
+            .chain(INTERLEAVED_REFERENCE_EXTRA_CONFIG)
+        {
             git(root, &store, &["config", key, value], false)?;
+            let effective = git_text(root, &store, &["config", "--get", key])?;
+            if effective != *value {
+                return Err(format!("reference receiver config {key} differs").into());
+            }
+            reference_effective_config.push(json!([key, effective]));
         }
     }
     let cloudflare = options.cloudflare.filter(|_| backend != "git");
@@ -796,7 +808,11 @@ fn run_interleaved_backend(
         )
     });
     let host = Host::start(
-        options.binary,
+        if backend == "git" {
+            options.reference_binary
+        } else {
+            options.binary
+        },
         &store,
         backend == "git",
         &directory.join("host.log"),
@@ -836,10 +852,13 @@ fn run_interleaved_backend(
                 ],
             )?;
             row["operation"] = operation.clone();
+            if backend == "git" && generation == 1 {
+                row["reference_effective_config"] = json!(reference_effective_config);
+            }
             row["push_wire_wall_ms"] = row["wall_ms"].clone();
             let wire_ms = row["wall_ms"].as_f64().ok_or("missing push timing")?;
             let maintenance_row = if backend == "git" {
-                Some(maintenance(root, &store, sample, key)?)
+                Some(interleaved_maintenance(root, &store, sample, key)?)
             } else {
                 None
             };
@@ -1154,6 +1173,45 @@ fn maintenance(root: &Path, store: &Path, sample: i64, after: &str) -> Result<Va
     progress_event(json!({"kind":"operation","row":row}))?;
     Ok(row)
 }
+// Preserve each command measurement; an unavailable resource measurement makes
+// the aggregate unknown rather than silently treating it as zero.
+fn reference_maintenance_resources(commands: &[Value]) -> Value {
+    let resources: Option<Vec<&Value>> = commands
+        .iter()
+        .map(|command| {
+            command
+                .get("client_resources")
+                .filter(|value| !value.is_null())
+        })
+        .collect();
+    let Some(resources) = resources else {
+        return Value::Null;
+    };
+    json!({
+        "client_cpu_user_ms":resources.iter().map(|r| r["client_cpu_user_ms"].as_f64().unwrap()).sum::<f64>(),
+        "client_cpu_system_ms":resources.iter().map(|r| r["client_cpu_system_ms"].as_f64().unwrap()).sum::<f64>(),
+        "client_max_rss_kib":resources.iter().map(|r| r["client_max_rss_kib"].as_f64().unwrap()).fold(0., f64::max),
+    })
+}
+
+fn interleaved_maintenance(root: &Path, store: &Path, sample: i64, after: &str) -> Result<Value> {
+    let mut commands = Vec::new();
+    let mut wall_ms = 0.;
+    for args in INTERLEAVED_REFERENCE_COMMANDS {
+        let result = git(root, store, args, true)?;
+        wall_ms += result.wall_ms;
+        commands.push(
+            json!({"args":args,"wall_ms":result.wall_ms,"client_resources":result.resources}),
+        );
+    }
+    let resources = reference_maintenance_resources(&commands);
+    let row = json!({"backend":"git","sample":sample,"warmup":sample<0,
+        "workload":format!("maintenance_after_{after}"),"reference_policy":INTERLEAVED_REFERENCE_POLICY,
+        "wall_ms":wall_ms,"client_resources":resources,"commands":commands});
+    progress_event(json!({"kind":"operation","row":row}))?;
+    Ok(row)
+}
+
 fn record_push_storage(rows: &mut [Value], store: &Path, backend: &str, host: &Host) -> Result<()> {
     rows.last_mut().ok_or("missing push result")?["storage_after_push"] =
         storage_snapshot(store, backend, host)?;
@@ -1689,6 +1747,22 @@ fn main() -> Result<()> {
     result
 }
 
+fn default_reference_policy(interleaved: bool) -> &'static str {
+    if interleaved {
+        INTERLEAVED_REFERENCE_POLICY
+    } else {
+        "bitmap"
+    }
+}
+
+fn reference_policy_allowed(interleaved: bool, policy: &str) -> bool {
+    if interleaved {
+        policy == INTERLEAVED_REFERENCE_POLICY
+    } else {
+        matches!(policy, "bitmap" | "retained")
+    }
+}
+
 fn run() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let option = |name: &str, default: &str| {
@@ -1714,7 +1788,10 @@ fn run() -> Result<()> {
     let pushes: usize = option("--pushes", if interleaved { "32" } else { "5" }).parse()?;
     let random_fetches: usize =
         option("--random-fetches", if interleaved { "56" } else { "16" }).parse()?;
-    let reference_maintenance = option("--reference-maintenance", "bitmap");
+    let reference_maintenance = option(
+        "--reference-maintenance",
+        default_reference_policy(interleaved),
+    );
     let cloudflare_endpoint = option("--cloudflare-endpoint", "");
     let cloudflare_token = option("--cloudflare-token", "git-zero-local-services");
     let view_cache = option("--view-cache", "cold");
@@ -1725,7 +1802,6 @@ fn run() -> Result<()> {
             && (!matches!(mib, 16. | 64.)
                 || pushes != 32
                 || random_fetches != 56
-                || reference_maintenance != "bitmap"
                 || monthly_runs != 1000
                 || !["full", "screen"].contains(&stage.as_str())
                 || samples != if stage == "screen" { 2 } else { 5 }))
@@ -1733,7 +1809,8 @@ fn run() -> Result<()> {
         || !(0.25..=64.).contains(&mib)
         || !(2..=256).contains(&pushes)
         || random_fetches > 256
-        || !["bitmap", "retained"].contains(&reference_maintenance.as_str())
+        || !reference_policy_allowed(interleaved, &reference_maintenance)
+        || (!interleaved && args.iter().any(|arg| arg == "--reference-binary"))
         || !["cold", "warm"].contains(&view_cache.as_str())
         || !(1..=1_000_000_000).contains(&monthly_runs)
         || cloudflare_repo_prefix.is_empty()
@@ -1743,7 +1820,7 @@ fn run() -> Result<()> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(
-            "use --samples 2..100 --fixture-mib 0.25..64 --pushes 2..256 --random-fetches 0..256 --reference-maintenance bitmap|retained; optional --cloudflare-endpoint LOOPBACK_ORIGIN --cloudflare-token TOKEN --view-cache cold|warm --cloudflare-repo-prefix NAME(1..32) --monthly-runs 1..1000000000"
+            "use --samples 2..100 --fixture-mib 0.25..64 --pushes 2..256 --random-fetches 0..256 --reference-maintenance bitmap|retained (batch) or midx-bitmap-graph-v1 (interleaved-v1); interleaved-only --reference-binary PATH; optional --cloudflare-endpoint LOOPBACK_ORIGIN --cloudflare-token TOKEN --view-cache cold|warm --cloudflare-repo-prefix NAME(1..32) --monthly-runs 1..1000000000"
                 .into(),
         );
     }
@@ -1752,6 +1829,20 @@ fn run() -> Result<()> {
     if !binary.is_file() {
         return Err("build both binaries: cargo build --release -p git-zero-host --bins".into());
     }
+    let reference_binary = if interleaved {
+        PathBuf::from(option(
+            "--reference-binary",
+            binary.to_str().ok_or("non-UTF8 binary")?,
+        ))
+        .canonicalize()?
+    } else {
+        binary.clone()
+    };
+    let reference_sha256 = if interleaved {
+        Some(git_zero_host::hash(&fs::read(&reference_binary)?))
+    } else {
+        None
+    };
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let cloudflare = if cloudflare_endpoint.is_empty() {
         None
@@ -1785,7 +1876,7 @@ fn run() -> Result<()> {
         .ok_or("output has no filename")?
         .to_string_lossy();
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    let progress = ProgressLog {
+    let mut progress = ProgressLog {
         journal: parent.join(format!("{report_name}.{timestamp}.progress.jsonl")),
         incomplete: parent.join(format!("{report_name}.{timestamp}.incomplete.json")),
         metadata: json!({"flow":flow,"stage":stage,"output":output,"fixtures":temp.root,"host_binary":binary,
@@ -1795,6 +1886,11 @@ fn run() -> Result<()> {
                 "view_cache":settings.view_cache,"repository_prefix":settings.repo_prefix,"run_id":settings.run_id})),
             "contention_at_start":contention_snapshot()}),
     };
+    if interleaved {
+        progress.metadata["reference_binary"] = json!(reference_binary);
+        progress.metadata["reference_binary_sha256"] = json!(reference_sha256);
+        progress.metadata["reference_push_maintenance"] = json!(reference_maintenance);
+    }
     PROGRESS
         .set(progress)
         .map_err(|_| "progress already initialized")?;
@@ -1806,6 +1902,7 @@ fn run() -> Result<()> {
     };
     let options = BackendOptions {
         binary: &binary,
+        reference_binary: &reference_binary,
         cloudflare: cloudflare.as_ref(),
         reference_bitmap_after_push: reference_maintenance == "bitmap",
         monthly_runs,
@@ -1849,6 +1946,12 @@ fn run() -> Result<()> {
                     .into(),
             );
         }
+    }
+    if interleaved
+        && reference_sha256.as_deref()
+            != Some(git_zero_host::hash(&fs::read(&reference_binary)?).as_str())
+    {
+        return Err("Reference binary changed during the benchmark".into());
     }
     let cloudflare_runs:Vec<_> = rows.iter().filter(|row|row.get("final_object_stats").is_some()).map(|row|json!({
         "sample":row["sample"],"warmup":row["warmup"],"repository":row["cloudflare_repo"],
@@ -1909,8 +2012,20 @@ fn run() -> Result<()> {
         report["config"]["flow"] = json!(INTERLEAVED_FLOW);
         report["config"]["objective_identity"] = json!(INTERLEAVED_OBJECTIVE);
         report["config"]["stage"] = json!(stage);
+        report["config"]["reference_binary"] = json!(reference_binary);
+        report["config"]["reference_binary_sha256"] = json!(reference_sha256);
+        report["config"]["reference"] = json!(
+            REFERENCE_CONFIG
+                .iter()
+                .chain(INTERLEAVED_REFERENCE_EXTRA_CONFIG)
+                .collect::<Vec<_>>()
+        );
+        report["config"]["reference_maintenance_commands"] = json!(INTERLEAVED_REFERENCE_COMMANDS);
+        report["config"]["reference_maintenance"] = json!(
+            "git multi-pack-index write --bitmap then git commit-graph write --reachable --split after each push; separate command timings"
+        );
         report["config"]["reference_random_fetch_preparation"] = json!(
-            "No setup pushes; bitmap after each measured atomic push, before its latest fetch"
+            "No setup pushes; MIDX bitmap and split commit-graph after each measured atomic push, before its latest fetch"
         );
         report["config"]["cache_workloads"] = json!(
             "Persistent latest client; distinct published historical refs; independently seeded latest recheck"
@@ -1921,8 +2036,7 @@ fn run() -> Result<()> {
         report["config"]["storage_checks"] = json!(
             "Every push records generation and cache invalidation; every read compares actual R2 inventory and complete counter deltas"
         );
-        report["config"]["push_latency_guard"] =
-            json!("wire push plus separately timed reference bitmap maintenance");
+        report["config"]["push_latency_guard"] = json!(INTERLEAVED_PUSH_LATENCY_GUARD);
         report["config"]["response_cache_max_response_bytes"] = json!(16 * 1024 * 1024);
         report["limits"].as_array_mut().unwrap().retain(|v| {
             !v.as_str().is_some_and(|s| {
@@ -1941,4 +2055,54 @@ fn run() -> Result<()> {
     }
     println!("Report: {}", output.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reference_policy_is_flow_specific() {
+        assert_eq!(default_reference_policy(false), "bitmap");
+        assert_eq!(default_reference_policy(true), INTERLEAVED_REFERENCE_POLICY);
+        for policy in [
+            "bitmap",
+            "retained",
+            INTERLEAVED_REFERENCE_POLICY,
+            "unknown",
+        ] {
+            assert_eq!(
+                reference_policy_allowed(true, policy),
+                policy == INTERLEAVED_REFERENCE_POLICY
+            );
+            assert_eq!(
+                reference_policy_allowed(false, policy),
+                matches!(policy, "bitmap" | "retained")
+            );
+        }
+        assert!(
+            !REFERENCE_CONFIG
+                .iter()
+                .any(|(key, _)| *key == "pack.allowPackReuse")
+        );
+    }
+
+    #[test]
+    fn maintenance_resources_sum_cpu_and_take_peak_rss_with_explicit_unknowns() {
+        let first = json!({"client_resources":{"client_cpu_user_ms":1.,"client_cpu_system_ms":2.,"client_max_rss_kib":1000.}});
+        let second = json!({"client_resources":{"client_cpu_user_ms":3.,"client_cpu_system_ms":4.,"client_max_rss_kib":900.}});
+        assert_eq!(
+            reference_maintenance_resources(&[first.clone(), second.clone()]),
+            json!({"client_cpu_user_ms":4.,"client_cpu_system_ms":6.,"client_max_rss_kib":1000.})
+        );
+        let unknown = json!({"client_resources":null});
+        assert_eq!(
+            reference_maintenance_resources(&[first, unknown.clone()]),
+            Value::Null
+        );
+        assert_eq!(
+            reference_maintenance_resources(&[unknown, second]),
+            Value::Null
+        );
+    }
 }

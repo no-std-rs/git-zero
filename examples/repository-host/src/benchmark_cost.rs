@@ -16,8 +16,15 @@ use std::{
 };
 
 pub const INTERLEAVED_FLOW: &str = "interleaved-v1";
-pub const INTERLEAVED_OBJECTIVE: &str =
-    "interleaved-v1:16,64mib:cold,warm:32push,56fetch:1000repeats:peak30d:ready-latency:v1";
+pub const INTERLEAVED_OBJECTIVE: &str = "interleaved-v1:16,64mib:cold,warm:32push,56fetch:1000repeats:peak30d:ready-latency:midx-bitmap-graph-v1:v2";
+pub const INTERLEAVED_REFERENCE_POLICY: &str = "midx-bitmap-graph-v1";
+pub const INTERLEAVED_REFERENCE_EXTRA_CONFIG: &[(&str, &str)] = &[("pack.allowPackReuse", "multi")];
+pub const INTERLEAVED_REFERENCE_COMMANDS: &[&[&str]] = &[
+    &["multi-pack-index", "write", "--bitmap"],
+    &["commit-graph", "write", "--reachable", "--split"],
+];
+pub const INTERLEAVED_PUSH_LATENCY_GUARD: &str =
+    "wire push plus separately timed MIDX bitmap and split commit-graph maintenance";
 pub const INTERLEAVED_SEED: u64 = 0x484f_5354_494e_4731;
 
 /// The complete immutable operation order. Historical requests can only want a
@@ -411,6 +418,76 @@ fn add_guard(guards: &mut BTreeMap<String, Vec<f64>>, key: &str, value: f64) {
     guards.entry(key.to_owned()).or_default().push(value);
 }
 
+fn validate_interleaved_maintenance(row: &Value) -> io::Result<()> {
+    require(
+        row["reference_policy"] == INTERLEAVED_REFERENCE_POLICY,
+        "unrecorded or changed reference maintenance policy",
+    )?;
+    let commands = array(row, "commands")?;
+    require(
+        commands.len() == INTERLEAVED_REFERENCE_COMMANDS.len(),
+        "incomplete reference maintenance commands",
+    )?;
+    let mut wall_ms = 0.;
+    let mut resources = Vec::new();
+    for (command, expected) in commands.iter().zip(INTERLEAVED_REFERENCE_COMMANDS) {
+        require(
+            command["args"] == json!(expected),
+            "reference maintenance command differs",
+        )?;
+        let elapsed = number(command, "wall_ms")?;
+        require(elapsed > 0., "untimed reference maintenance command")?;
+        wall_ms += elapsed;
+        let resource = command
+            .get("client_resources")
+            .ok_or_else(|| invalid("missing reference command resources"))?;
+        if !resource.is_null() {
+            for key in [
+                "client_cpu_user_ms",
+                "client_cpu_system_ms",
+                "client_max_rss_kib",
+            ] {
+                number(resource, key)?;
+            }
+        }
+        resources.push(resource);
+    }
+    require(
+        (number(row, "wall_ms")? - wall_ms).abs() < 1e-6,
+        "reference maintenance command time sum differs",
+    )?;
+    let aggregate = row
+        .get("client_resources")
+        .ok_or_else(|| invalid("missing reference maintenance resources"))?;
+    if resources.iter().any(|resource| resource.is_null()) {
+        require(
+            aggregate.is_null(),
+            "unknown reference resources became known",
+        )?;
+    } else {
+        for key in [
+            "client_cpu_user_ms",
+            "client_cpu_system_ms",
+            "client_max_rss_kib",
+        ] {
+            let measurements = resources
+                .iter()
+                .map(|resource| number(resource, key))
+                .collect::<io::Result<Vec<_>>>()?;
+            let expected = if key == "client_max_rss_kib" {
+                measurements.into_iter().fold(0., f64::max)
+            } else {
+                measurements.iter().sum()
+            };
+            require(
+                (number(aggregate, key)? - expected).abs() < 1e-6,
+                "reference maintenance resource aggregate differs",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 type LatencySamples = (Vec<f64>, Vec<f64>, Vec<f64>);
 
 fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
@@ -479,10 +556,14 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
         field(config, key)?;
     }
     require(
-        matches!(
-            text(config, "reference_push_maintenance")?,
-            "bitmap" | "retained"
-        ),
+        if interleaved {
+            text(config, "reference_push_maintenance")? == INTERLEAVED_REFERENCE_POLICY
+        } else {
+            matches!(
+                text(config, "reference_push_maintenance")?,
+                "bitmap" | "retained"
+            )
+        },
         "invalid reference maintenance",
     )?;
     let fixture = field(report, "fixture")?;
@@ -494,12 +575,30 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
             "interleaved objective identity differs",
         )?;
         require(
-            config["reference_push_maintenance"] == "bitmap"
-                && config["push_latency_guard"]
-                    == "wire push plus separately timed reference bitmap maintenance"
+            config["reference_push_maintenance"] == INTERLEAVED_REFERENCE_POLICY
+                && config["reference_maintenance_commands"]
+                    == json!(INTERLEAVED_REFERENCE_COMMANDS)
+                && config["push_latency_guard"] == INTERLEAVED_PUSH_LATENCY_GUARD
                 && count(config, "response_cache_max_response_bytes")? == 16 * 1024 * 1024,
             "interleaved readiness/cache policy differs",
         )?;
+        let reference_sha256 = text(config, "reference_binary_sha256")?;
+        text(config, "reference_binary")?;
+        require(
+            reference_sha256.len() == 64
+                && reference_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "invalid reference binary SHA-256",
+        )?;
+        let reference = array(config, "reference")?;
+        for (key, value) in INTERLEAVED_REFERENCE_EXTRA_CONFIG {
+            require(
+                reference.iter().filter(|entry| entry[0] == *key).count() == 1
+                    && reference.contains(&json!([key, value])),
+                "reference receiver configuration differs",
+            )?;
+        }
         require(
             fixture["fixture_version"] == "independent-large-halves-v1"
                 && count(fixture, "seed")? == INTERLEAVED_SEED
@@ -600,6 +699,7 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                 let key = operation_key(row)?;
                 if key.starts_with("maintenance_after_") && backend == "git" {
                     if interleaved {
+                        validate_interleaved_maintenance(row)?;
                         require(
                             maintenance_keys.insert(key.clone()),
                             "duplicate maintenance operation",
@@ -622,6 +722,12 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                 "incomplete paired trial workload",
             )?;
             if interleaved {
+                if backend == "git" {
+                    require(
+                        rows["push_01"]["reference_effective_config"] == config["reference"],
+                        "effective reference receiver configuration differs or is unrecorded",
+                    )?;
+                }
                 let mut expected_order = Vec::new();
                 for operation in &schedule {
                     let key = text(operation, "key")?;
@@ -636,7 +742,7 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                 }
                 require(
                     operation_order == expected_order,
-                    "interleaved operation order or bitmap maintenance coverage differs",
+                    "interleaved operation order or reference maintenance coverage differs",
                 )?;
                 require(
                     maintenance_keys.len() == if backend == "git" { 32 } else { 0 },
@@ -1070,7 +1176,7 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
         "unexpected backend or sample",
     )?;
     let mut identity_config = config.clone();
-    for key in ["host_binary", "host_binary_sha256"] {
+    for key in ["host_binary", "host_binary_sha256", "reference_binary"] {
         identity_config.as_object_mut().unwrap().remove(key);
     }
     for key in ["endpoint", "repository_prefix", "run_id", "worker_source"] {
@@ -1157,9 +1263,12 @@ pub fn benchmark_cost(reports: &[Value]) -> io::Result<BenchmarkCost> {
     require(
         reports.iter().all(|r| {
             (r["config"]["flow"] == INTERLEAVED_FLOW) == interleaved
-                && (!interleaved || r["config"]["stage"] == stage)
+                && (!interleaved
+                    || (r["config"]["stage"] == stage
+                        && r["config"]["reference_binary_sha256"]
+                            == reports[0]["config"]["reference_binary_sha256"]))
         }),
-        "suite mixes objective flows or stages",
+        "suite mixes objective flows, stages or reference builds",
     )?;
     let mut profiles = BTreeMap::new();
     let mut build = None;
@@ -1395,8 +1504,12 @@ mod tests {
         result["config"]["stage"] = json!(stage);
         result["config"]["samples"] = json!(samples);
         result["config"]["random_fetches_per_run"] = json!(56);
-        result["config"]["push_latency_guard"] =
-            json!("wire push plus separately timed reference bitmap maintenance");
+        result["config"]["push_latency_guard"] = json!(INTERLEAVED_PUSH_LATENCY_GUARD);
+        result["config"]["reference_push_maintenance"] = json!(INTERLEAVED_REFERENCE_POLICY);
+        result["config"]["reference_maintenance_commands"] = json!(INTERLEAVED_REFERENCE_COMMANDS);
+        result["config"]["reference"] = json!(INTERLEAVED_REFERENCE_EXTRA_CONFIG);
+        result["config"]["reference_binary"] = json!("/frozen/repository-host");
+        result["config"]["reference_binary_sha256"] = json!("a".repeat(64));
         result["config"]["response_cache_max_response_bytes"] = json!(16 * 1024 * 1024);
         let tips: Vec<_> = (1..=32).map(|g| format!("{g:040x}")).collect();
         let schedule = interleaved_schedule(&tips).unwrap();
@@ -1463,9 +1576,13 @@ mod tests {
                             row["final_object_stats"] = json!({"cloudflare_services":service(usage(500,100,150,15000)),"compactions":1,"manifest":{"generation":32},"objects":{"unique_objects":10,"reachable_objects":10,"unreachable_objects":0},"cache_budget_bytes":RESPONSE_BYTES,"cache_entry_limit":RESPONSE_ENTRIES,"cache_bytes":100,"cache_entries":1});
                         }
                     }
+                    if backend == "git" && operation["key"] == "push_01" {
+                        row["reference_effective_config"] = result["config"]["reference"].clone();
+                    }
                     rows.push(row);
                     if backend == "git" && !fetch {
-                        rows.push(json!({"backend":backend,"sample":sample,"warmup":sample<0,"backend_validation_complete":true,"workload":format!("maintenance_after_{}",operation["key"].as_str().unwrap()),"wall_ms":5.0}));
+                        let commands: Vec<_> = INTERLEAVED_REFERENCE_COMMANDS.iter().enumerate().map(|(i,args)|json!({"args":args,"wall_ms":if i==0 {3.0}else{2.0},"client_resources":{"client_cpu_user_ms":(i+1) as f64,"client_cpu_system_ms":(i+1) as f64*2.,"client_max_rss_kib":1000.-i as f64*100.}})).collect();
+                        rows.push(json!({"backend":backend,"sample":sample,"warmup":sample<0,"backend_validation_complete":true,"workload":format!("maintenance_after_{}",operation["key"].as_str().unwrap()),"reference_policy":INTERLEAVED_REFERENCE_POLICY,"wall_ms":5.0,"client_resources":{"client_cpu_user_ms":3.,"client_cpu_system_ms":6.,"client_max_rss_kib":1000.},"commands":commands}));
                     }
                 }
             }
@@ -1607,6 +1724,110 @@ mod tests {
             }
             assert!(benchmark_cost(&reports).is_err(), "mutation {mutation}");
         }
+    }
+
+    #[test]
+    fn interleaved_rejects_changed_or_unrecorded_reference_policy_and_measurements() {
+        for mutation in 0..19 {
+            let mut report = interleaved_report(16, true, 2, "screen");
+            let row = report["raw"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|row| {
+                    row["backend"] == "git" && row["workload"] == "maintenance_after_push_01"
+                })
+                .unwrap();
+            let push = row - 1;
+            match mutation {
+                0 => report["config"]["reference_push_maintenance"] = json!("bitmap"),
+                1 => {
+                    report["config"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("reference_push_maintenance");
+                }
+                2 => report["config"]["reference"][0][1] = json!("true"),
+                3 => report["config"]["reference"] = json!([]),
+                4 => {
+                    report["raw"][push]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("reference_effective_config");
+                }
+                5 => report["raw"][push]["reference_effective_config"][0][1] = json!("true"),
+                6 => {
+                    report["config"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("reference_maintenance_commands");
+                }
+                7 => report["raw"][row]["reference_policy"] = json!("other-policy"),
+                8 => {
+                    report["raw"][row]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("reference_policy");
+                }
+                9 => {
+                    report["raw"][row]["commands"].as_array_mut().unwrap().pop();
+                }
+                10 => report["raw"][row]["commands"]
+                    .as_array_mut()
+                    .unwrap()
+                    .swap(0, 1),
+                11 => {
+                    report["raw"][row]["commands"][0]["args"] =
+                        json!(["multi-pack-index", "write", "--bitmap", "--incremental"])
+                }
+                12 => report["raw"][row]["commands"][0]["wall_ms"] = json!(1.0),
+                13 => report["raw"][row]["client_resources"]["client_cpu_user_ms"] = json!(2.0),
+                14 => report["raw"][row]["client_resources"]["client_max_rss_kib"] = json!(1900.0),
+                15 => report["raw"][row]["commands"][0]["client_resources"] = Value::Null,
+                16 => report["config"]["reference_binary_sha256"] = json!("invalid"),
+                17 => {
+                    report["config"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("reference_binary_sha256");
+                }
+                _ => {
+                    report["raw"][row]["commands"][1]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("client_resources");
+                }
+            }
+            assert!(profile_cost(&report).is_err(), "mutation {mutation}");
+        }
+    }
+
+    #[test]
+    fn interleaved_preserves_unknown_reference_resources_and_frozen_reference_identity() {
+        let mut reports = interleaved_suite(2, "screen");
+        let baseline = benchmark_cost(&reports).unwrap();
+        for report in &mut reports {
+            for row in report["raw"].as_array_mut().unwrap() {
+                if row["reference_policy"] == INTERLEAVED_REFERENCE_POLICY {
+                    row["commands"][0]["client_resources"] = Value::Null;
+                    row["client_resources"] = Value::Null;
+                }
+            }
+        }
+        let unknown = benchmark_cost(&reports).unwrap();
+        assert!(compare_cost(&baseline, &unknown).is_ok());
+        reports[0]["config"]["reference_binary_sha256"] = json!("b".repeat(64));
+        assert!(benchmark_cost(&reports).is_err());
+        for report in &mut reports {
+            report["config"]["reference_binary_sha256"] = json!("b".repeat(64));
+        }
+        let changed = benchmark_cost(&reports).unwrap();
+        assert!(compare_cost(&baseline, &changed).is_err());
+        for report in &mut reports {
+            report["config"]["reference_binary_sha256"] = json!("a".repeat(64));
+            report["config"]["reference_binary"] = json!("/another/path/to/the/same/binary");
+        }
+        assert!(compare_cost(&baseline, &benchmark_cost(&reports).unwrap()).is_ok());
     }
 
     #[test]
