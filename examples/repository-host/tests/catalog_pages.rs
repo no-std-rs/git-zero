@@ -1065,6 +1065,10 @@ fn native_recovery(fault: &str) {
         .unwrap()
         .register("http://127.0.0.1:1")
         .unwrap();
+    // This is the retained R12 compatibility control. Select its historical
+    // registration after the current SDK handshake; the separate R14 Native
+    // contract exercises the new inline capability and atomic protocol.
+    worker.register(2);
     assert!(
         !schema(&worker.state(), "entries"),
         "Native registration must not migrate"

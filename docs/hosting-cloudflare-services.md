@@ -360,7 +360,13 @@ next same-page upload. Older fresh clients remain eager; existing v2 pages
 remain readable after capability or registry loss. More than 256 debt keys use
 the existing scalar fallback without retaining an oversized in-memory debt set.
 
-Actual PUT/catalog sync still precedes publication; publication sync still
+For the separate catalog representation, actual PUT/catalog sync precedes
+publication; publication sync still
 precedes physical retirement. Same-key resurrection, no-upload publication,
 last peak carriers and other exceptional shapes use eager durable barriers.
 Observer inventory does not certify or repair pending production state.
+
+The [inline metadata contract](hosting-inline-metadata.md) describes the
+separate opt-in that atomically couples one bounded root and the manifest in a
+single SQL row. Its publication sync still precedes physical retirement;
+durable decoding and charged fallback remain available to older clients.

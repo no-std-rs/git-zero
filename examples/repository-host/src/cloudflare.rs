@@ -83,6 +83,25 @@ fn upload_supported(value: &Value) -> bool {
         }))
 }
 
+fn validate_inline_catalog_registration(value: &Value) -> io::Result<()> {
+    let Some(inline) = value.get("catalog_inline") else {
+        // Older Workers keep the existing upload and catalog protocol.
+        return Ok(());
+    };
+    if inline == &json!({"version": 1, "members": 32, "manifest_bytes": 8192})
+        && value.get("catalog_peak") == Some(&json!({"version": 1}))
+        && value.get("catalog_pages") == Some(&json!({"version": 1}))
+        && deferred_catalog_supported(value)
+        && upload_supported(value)
+    {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "invalid inline catalog registration capability",
+    ))
+}
+
 /// None is a bounds/capability fallback decided before sending any request.
 fn upload_frame(
     expected: u64,
@@ -728,9 +747,12 @@ impl HttpServices {
         let response = self.json(
             "POST",
             "register",
-            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1, "catalog_deferred": 1})),
+            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1, "catalog_deferred": 1, "catalog_inline": 1})),
             Some("stats"),
         )?;
+        // Inline ownership is selected by the private Worker registration, so
+        // acknowledge it before installing any capabilities for this session.
+        validate_inline_catalog_registration(&response)?;
         *self
             .generation_witness
             .lock()
@@ -1286,6 +1308,164 @@ mod tests {
             std::mem::size_of_val(&services.retirement_proof)
         );
         assert!(HttpServices::retirement_proof_storage_bytes() >= RETIREMENT_PROOF_BYTES);
+    }
+
+    fn inline_catalog_registration() -> Value {
+        json!({
+            "registered": true,
+            "manifest_retire": {"version": 1},
+            "manifest_upload_retire": {
+                "version": 1, "wire_bytes": MAX_BULK_RESPONSE,
+                "metadata_bytes": MAX_MANIFEST_BYTES, "chunk_bytes": MAX_BULK_CHUNK_BYTES,
+                "retirement_keys": MAX_RETIREMENT_KEYS,
+            },
+            "catalog_peak": {"version": 1},
+            "catalog_pages": {"version": 1},
+            "catalog_deferred": {"version": 1, "proof_bytes": RETIREMENT_PROOF_BYTES},
+            "catalog_inline": {"version": 1, "members": 32, "manifest_bytes": 8192},
+        })
+    }
+
+    #[test]
+    fn inline_catalog_ack_is_optional_and_keeps_the_existing_upload_protocol() {
+        let (next, pending) = staged_upload(b"tail".to_vec());
+        let uploaded = json!({"version":1,"uploaded":pending.chunk(),"published":true,
+            "retirement":{"generation":1,"outcomes":[]}});
+        let expected_frame = upload_frame(0, &next, &pending).unwrap().unwrap();
+        for inline in [false, true] {
+            let mut registration = inline_catalog_registration();
+            if !inline {
+                registration
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("catalog_inline");
+            }
+            let (services, server) = proof_services(vec![
+                proof_reply(registration, None),
+                proof_reply(uploaded.clone(), None),
+            ]);
+            services.register("http://127.0.0.1:1234").unwrap();
+            assert!(services.retirement_proof.lock().unwrap().enabled);
+            assert!(matches!(
+                services
+                    .try_compare_and_swap_upload_retiring(0, &next, &pending)
+                    .unwrap(),
+                UploadRetiringCas::Published { .. }
+            ));
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests[0].target.starts_with("POST /_services/register "));
+            let request: Value = serde_json::from_slice(&requests[0].body).unwrap();
+            for field in [
+                "manifest_upload_retire",
+                "catalog_peak",
+                "catalog_pages",
+                "catalog_deferred",
+                "catalog_inline",
+            ] {
+                assert_eq!(request[field], 1);
+            }
+            assert!(
+                requests[1]
+                    .target
+                    .starts_with("POST /_services/manifest/upload-retire ")
+            );
+            assert_eq!(requests[1].body, expected_frame);
+            assert_eq!(
+                requests[1].headers.keys().collect::<Vec<_>>(),
+                requests[0].headers.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_inline_ack_or_dependencies_disable_the_prior_session_before_any_upload() {
+        let exact = inline_catalog_registration();
+        let mut invalid = Vec::new();
+        for value in [json!(null), json!(true), json!(1), json!([]), json!({})] {
+            let mut response = exact.clone();
+            response["catalog_inline"] = value;
+            invalid.push(response);
+        }
+        for (field, expected) in [("version", 1), ("members", 32), ("manifest_bytes", 8192)] {
+            let mut response = exact.clone();
+            response["catalog_inline"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            invalid.push(response);
+            for value in [
+                json!(null),
+                json!(true),
+                json!(expected.to_string()),
+                json!(f64::from(expected)),
+                json!(expected - 1),
+                json!(expected + 1),
+            ] {
+                let mut response = exact.clone();
+                response["catalog_inline"][field] = value;
+                invalid.push(response);
+            }
+        }
+        let mut extra = exact.clone();
+        extra["catalog_inline"]["extra"] = json!(true);
+        invalid.push(extra);
+        for field in [
+            "catalog_peak",
+            "catalog_pages",
+            "catalog_deferred",
+            "manifest_upload_retire",
+        ] {
+            let mut absent = exact.clone();
+            absent.as_object_mut().unwrap().remove(field);
+            invalid.push(absent);
+            for value in [json!(null), json!(1), json!({"version": 2})] {
+                let mut response = exact.clone();
+                response[field] = value;
+                invalid.push(response);
+            }
+            let mut extra = exact.clone();
+            extra[field]["extra"] = json!(true);
+            invalid.push(extra);
+        }
+        for pointer in [
+            "/catalog_deferred/proof_bytes",
+            "/manifest_upload_retire/wire_bytes",
+            "/manifest_upload_retire/metadata_bytes",
+            "/manifest_upload_retire/chunk_bytes",
+            "/manifest_upload_retire/retirement_keys",
+        ] {
+            let mut response = exact.clone();
+            *response.pointer_mut(pointer).unwrap() = json!(0);
+            invalid.push(response);
+        }
+        let (next, pending) = staged_upload(b"tail".to_vec());
+        let token = format!("01{}", "ab".repeat(88));
+        for response in invalid {
+            let (services, server) = proof_services(vec![
+                proof_reply(exact.clone(), None),
+                proof_reply(response.clone(), None),
+            ]);
+            services.register("http://127.0.0.1:1234").unwrap();
+            assert!(services.manifest_upload_retire.load(Ordering::Acquire));
+            services.retirement_proof.lock().unwrap().token = RetirementProof::parse(&token);
+            let error = services.register("http://127.0.0.1:1234").unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{response}");
+            assert!(!services.manifest_retire.load(Ordering::Acquire));
+            assert!(!services.manifest_upload_retire.load(Ordering::Acquire));
+            {
+                let proof = services.retirement_proof.lock().unwrap();
+                assert!(!proof.enabled);
+                assert!(proof.token.is_none());
+            }
+            assert_eq!(
+                services
+                    .try_compare_and_swap_upload_retiring(0, &next, &pending)
+                    .unwrap(),
+                UploadRetiringCas::Unsupported
+            );
+            assert_eq!(server.join().unwrap().len(), 2);
+        }
     }
 
     #[test]
@@ -2000,6 +2180,7 @@ mod tests {
                     assert_eq!(value["catalog_peak"], 1);
                     assert_eq!(value["catalog_pages"], 1);
                     assert_eq!(value["catalog_deferred"], 1);
+                    assert_eq!(value["catalog_inline"], 1);
                 } else if !method.starts_with("POST") {
                     assert!(body.is_empty());
                 }

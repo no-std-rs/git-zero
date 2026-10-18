@@ -362,6 +362,17 @@ fn actual_registered_native_deferred_retirement_recovers_before_next_mutation() 
             repo: format!("native-{mode}-{}", std::process::id()),
         };
         let native = NativeProcess::start(&worker, &case_root);
+        // Retain this as the R13 compatibility protocol while the separate
+        // inline_native contract exercises the newly negotiated R14 path.
+        worker.json(
+            "POST",
+            "/_services/register",
+            json!({
+                "codec_origin":native.origin,"manifest_retire":1,
+                "manifest_upload_retire":1,"catalog_peak":1,"catalog_pages":1,
+                "catalog_deferred":1
+            }),
+        );
         let url = format!("{}/{}/repo.git", runtime.origin, worker.repo);
         let mut parent = None;
         for generation in 1..=3 {
