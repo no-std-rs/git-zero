@@ -62,6 +62,9 @@ fn main() -> io::Result<()> {
         }
         let mut host =
             NativeHost::open_cloudflare(PathBuf::from(root), &origin, &repo, &token, cold)?;
+        let services = host
+            .cloudflare_services()
+            .ok_or_else(|| io::Error::other("missing Cloudflare registration services"))?;
         return http::serve_with_ready(
             port,
             |request| host.handle(request),

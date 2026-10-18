@@ -109,6 +109,689 @@ fn usage(services: &HttpServices) -> ServiceUsage {
     serde_json::from_value(services.usage().unwrap()).unwrap()
 }
 
+// Small Rust-only HTTP test glue; curl preserves gateway streaming and exact
+// queries while the listener exposes the trusted headers before native dispatch.
+fn local_request(
+    origin: &str,
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> (u16, Vec<u8>) {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut process = Command::new("curl");
+    process.args([
+        "--silent",
+        "--show-error",
+        "--max-time",
+        "20",
+        "--path-as-is",
+        "--request",
+        method,
+        "--write-out",
+        "\n%{http_code}",
+    ]);
+    for (name, value) in headers {
+        process.arg("--header").arg(format!("{name}: {value}"));
+    }
+    if !body.is_empty() {
+        process.args(["--data-binary", "@-"]);
+    }
+    let mut child = process
+        .arg(format!("{origin}{target}"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(body).unwrap();
+    let mut output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "curl transport failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let boundary = output.stdout.len().checked_sub(4).unwrap();
+    assert_eq!(output.stdout[boundary], b'\n');
+    let status = std::str::from_utf8(&output.stdout[boundary + 1..])
+        .unwrap()
+        .parse()
+        .unwrap();
+    output.stdout.truncate(boundary);
+    (status, output.stdout)
+}
+
+fn gateway_exchange(
+    worker: &RealWorker,
+    listener: &std::net::TcpListener,
+    suffix: &str,
+    extra_headers: &[(&str, &str)],
+    handler: impl FnOnce(Request) -> git_zero_host::http::Response,
+) -> Request {
+    use std::io::{BufRead, BufReader, Write};
+    let target = format!("/{}/repo.git/{suffix}", worker.namespace);
+    let origin = worker.origin.clone();
+    let headers: Vec<_> = extra_headers
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    let client = std::thread::spawn(move || {
+        let headers: Vec<_> = headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        local_request(&origin, "GET", &target, &headers, &[])
+    });
+    listener.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "gateway did not forward to the codec"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("codec accept failed: {error}"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let mut parts = line.split_whitespace();
+    let method = parts.next().unwrap().into();
+    let target = parts.next().unwrap().into();
+    let mut headers = BTreeMap::new();
+    loop {
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(!line.is_empty() && line.len() <= 8192);
+        if line == "\r\n" {
+            break;
+        }
+        let (name, value) = line.split_once(':').unwrap();
+        headers.insert(name.to_ascii_lowercase(), value.trim().into());
+    }
+    let request = Request {
+        method,
+        target,
+        headers,
+        body: vec![],
+    };
+    let response = handler(request.clone());
+    write!(
+        reader.get_mut(),
+        "HTTP/1.1 {} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        response.status,
+        response.body.len()
+    )
+    .unwrap();
+    reader.get_mut().write_all(&response.body).unwrap();
+    drop(reader);
+    let (status, body) = client.join().unwrap();
+    assert_eq!(status, response.status);
+    assert_eq!(body.as_slice(), response.body.as_ref());
+    request
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_gateway_generation_witness_receipts_compatibility_and_queued_generation() {
+    use git_zero_host::http::Response;
+    const HEADER: &str = "x-git-zero-internal-generation-witness";
+    const SUFFIX: &str = "info/refs?service=git-receive-pack&case=%2F";
+    let worker = RealWorker::new("witness");
+    let services = worker.services();
+    let state = DurableStateStore::new(services.clone());
+    assert!(
+        state
+            .compare_and_swap(
+                0,
+                &Manifest {
+                    generation: 1,
+                    ..Manifest::default()
+                }
+            )
+            .unwrap()
+    );
+    let directory = Directory(std::env::temp_dir().join(&worker.namespace));
+    let mut host = NativeHost::open_cloudflare(
+        directory.0.clone(),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        false,
+    )
+    .unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let codec_origin = format!("http://{}", listener.local_addr().unwrap());
+    let registration = host.cloudflare_services().unwrap();
+    registration.register(&codec_origin).unwrap();
+    let before = usage(&services);
+    let forwarded = gateway_exchange(
+        &worker,
+        &listener,
+        SUFFIX,
+        &[
+            (HEADER, "public-forgery"),
+            ("x-git-zero-internal-future-proof", "forged"),
+            ("x-hosting-repo", "wrong-repo"),
+            ("x-hosting-phase", "stats"),
+        ],
+        |request| host.handle(request),
+    );
+    assert_eq!(forwarded.target, format!("/repo.git/{SUFFIX}"));
+    assert!(
+        forwarded
+            .headers
+            .get(HEADER)
+            .is_some_and(|proof| proof.len() < 256 && proof != "public-forgery")
+    );
+    assert!(
+        !forwarded
+            .headers
+            .contains_key("x-git-zero-internal-future-proof")
+    );
+    assert_eq!(forwarded.headers["x-hosting-repo"], worker.namespace);
+    assert_eq!(forwarded.headers["x-hosting-phase"], "push");
+    assert_eq!(host.metrics.generation_witness_hits, 1);
+    assert_eq!(host.metrics.generation_witness_fallbacks, 0);
+    let first = usage(&services);
+    let delta = first.checked_workload_delta(&before).unwrap();
+    assert_eq!(
+        (
+            delta.worker_requests,
+            delta.worker_gateway_requests,
+            delta.worker_service_requests,
+            delta.do_requests
+        ),
+        (1, 1, 0, 1)
+    );
+    assert_eq!(
+        (delta.do_rows_read, delta.do_rows_written),
+        (Some(1), Some(0))
+    );
+    assert_eq!(
+        operation(&first, "manifest_get").attempts - operation(&before, "manifest_get").attempts,
+        1
+    );
+    // A genuine discovery cache hit still does its one authority read, wholly
+    // inside the existing gateway invocation, with no native manifest callback.
+    gateway_exchange(&worker, &listener, SUFFIX, &[], |request| {
+        host.handle(request)
+    });
+    let cached = usage(&services);
+    let delta = cached.checked_workload_delta(&first).unwrap();
+    assert_eq!(
+        (
+            delta.worker_requests,
+            delta.worker_gateway_requests,
+            delta.worker_service_requests,
+            delta.do_requests
+        ),
+        (1, 1, 0, 1)
+    );
+    assert_eq!(
+        (
+            delta.do_rows_read,
+            delta.do_rows_written,
+            delta.r2_class_a,
+            delta.r2_class_b
+        ),
+        (Some(1), Some(0), 0, 0)
+    );
+    assert_eq!(
+        operation(&cached, "manifest_get").attempts - operation(&first, "manifest_get").attempts,
+        1
+    );
+    assert_eq!(host.metrics.discovery_cache_hits, 1);
+
+    // Direct requests, forged proofs, bad versions and a changed exact query
+    // use the ordinary callback even when the response itself is cached.
+    for variant in 0..5 {
+        let mut request = forwarded.clone();
+        match variant {
+            0 => {
+                request.headers.remove(HEADER);
+            }
+            1 => {
+                request.headers.insert(HEADER.into(), "malformed".into());
+            }
+            2 => {
+                request.headers.insert(
+                    HEADER.into(),
+                    format!("2{}", &forwarded.headers[HEADER][1..]),
+                );
+            }
+            3 => {
+                let mut proof = forwarded.headers[HEADER].clone();
+                proof.pop();
+                proof.push(if forwarded.headers[HEADER].ends_with('0') {
+                    '1'
+                } else {
+                    '0'
+                });
+                request.headers.insert(HEADER.into(), proof);
+            }
+            _ => {
+                request.target.push_str("&changed=1");
+            }
+        }
+        assert_eq!(host.handle(request).status, 200);
+    }
+    let direct = usage(&services);
+    let delta = direct.checked_workload_delta(&cached).unwrap();
+    assert_eq!(
+        (
+            delta.worker_requests,
+            delta.worker_service_requests,
+            delta.worker_gateway_requests,
+            delta.do_requests
+        ),
+        (5, 5, 0, 5)
+    );
+    assert_eq!(
+        operation(&direct, "manifest_get").attempts - operation(&cached, "manifest_get").attempts,
+        5
+    );
+    assert_eq!(host.metrics.generation_witness_fallbacks, 5);
+
+    // A repeated registration safely rotates the private session. The old
+    // proof is rejected even for the same generation and exact request.
+    registration.register(&codec_origin).unwrap();
+    let fallbacks = host.metrics.generation_witness_fallbacks;
+    assert_eq!(host.handle(forwarded).status, 200);
+    assert_eq!(host.metrics.generation_witness_fallbacks, fallbacks + 1);
+    let register_headers = [
+        ("x-hosting-token", worker.token.as_str()),
+        ("x-hosting-repo", worker.namespace.as_str()),
+        ("x-hosting-phase", "stats"),
+    ];
+    let legacy = serde_json::to_vec(&serde_json::json!({"codec_origin": codec_origin})).unwrap();
+    let (status, response) = local_request(
+        &worker.origin,
+        "POST",
+        "/_services/register",
+        &register_headers,
+        &legacy,
+    );
+    assert_eq!(status, 200);
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&response)
+            .unwrap()
+            .get("generation_witness")
+            .is_none()
+    );
+    let old_before = usage(&services);
+    let old_request = gateway_exchange(
+        &worker,
+        &listener,
+        SUFFIX,
+        &[(HEADER, "forged"), ("x-git-zero-internal-any", "forged")],
+        |request| host.handle(request),
+    );
+    assert!(
+        !old_request
+            .headers
+            .keys()
+            .any(|name| name.starts_with("x-git-zero-internal-"))
+    );
+    let old_after = usage(&services);
+    let delta = old_after.checked_workload_delta(&old_before).unwrap();
+    assert_eq!(
+        (
+            delta.worker_requests,
+            delta.worker_gateway_requests,
+            delta.worker_service_requests,
+            delta.do_requests
+        ),
+        (2, 1, 1, 1)
+    );
+    assert_eq!(
+        operation(&old_after, "manifest_get").attempts
+            - operation(&old_before, "manifest_get").attempts,
+        1
+    );
+    let other = serde_json::to_vec(
+        &serde_json::json!({"codec_origin": "http://127.0.0.1:1", "generation_witness": 1}),
+    )
+    .unwrap();
+    assert_eq!(
+        local_request(
+            &worker.origin,
+            "POST",
+            "/_services/register",
+            &register_headers,
+            &other
+        )
+        .0,
+        409
+    );
+
+    registration.register(&codec_origin).unwrap();
+    // Capture a request queued before a later publication, in the same session.
+    let queued = gateway_exchange(&worker, &listener, SUFFIX, &[], |_| {
+        Response::error(200, "queued")
+    });
+    assert!(
+        state
+            .compare_and_swap(
+                1,
+                &Manifest {
+                    generation: 2,
+                    ..Manifest::default()
+                }
+            )
+            .unwrap()
+    );
+    let before_reload = usage(&services);
+    let fallbacks = host.metrics.generation_witness_fallbacks;
+    gateway_exchange(&worker, &listener, SUFFIX, &[], |request| {
+        host.handle(request)
+    });
+    assert_eq!(host.metrics.generation_witness_fallbacks, fallbacks + 1);
+    let reloaded = usage(&services);
+    // Prefetch + the unchanged dispatch reload + recover reload. The recovery
+    // GC remains present and counted, including its actual inventory LIST.
+    assert_eq!(
+        operation(&reloaded, "manifest_get").attempts
+            - operation(&before_reload, "manifest_get").attempts,
+        3
+    );
+    let delta = reloaded.checked_workload_delta(&before_reload).unwrap();
+    assert_eq!(
+        (
+            delta.worker_requests,
+            delta.worker_service_requests,
+            delta.worker_gateway_requests,
+            delta.do_requests
+        ),
+        (4, 3, 1, 4)
+    );
+    assert_eq!(delta.r2_class_a, 1);
+    assert_eq!(host.handle(queued).status, 200);
+    let after_queue = usage(&services);
+    let delta = after_queue.checked_workload_delta(&reloaded).unwrap();
+    assert_eq!(
+        (
+            delta.worker_requests,
+            delta.worker_service_requests,
+            delta.do_requests
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(
+        operation(&after_queue, "manifest_get").attempts
+            - operation(&reloaded, "manifest_get").attempts,
+        1
+    );
+    assert_eq!(after_queue.accounting_complete, Some(true));
+    assert_eq!(after_queue.counter_epoch, before.counter_epoch);
+    let stats = host.handle(Request {
+        method: "GET".into(),
+        target: "/_object-stats".into(),
+        headers: BTreeMap::new(),
+        body: vec![],
+    });
+    let stats: serde_json::Value = serde_json::from_slice(&stats.body).unwrap();
+    assert_eq!(stats["manifest"]["generation"], 2);
+    registration.unregister().unwrap();
+}
+
+#[test]
+#[ignore = "requires workerd CODEC_ORIGIN and matching GIT_ZERO_CLOUDFLARE_CODEC_ORIGIN loopback origin"]
+fn codec_origin_fallback_keeps_one_authoritative_callback_without_prefetch() {
+    let worker = RealWorker::new("codec-origin");
+    let codec_origin = std::env::var("GIT_ZERO_CLOUDFLARE_CODEC_ORIGIN")
+        .expect("set the codec origin configured in workerd CODEC_ORIGIN");
+    HttpServices::new(&codec_origin, &worker.namespace, &worker.token).unwrap();
+    let listener =
+        std::net::TcpListener::bind(codec_origin.strip_prefix("http://").unwrap()).unwrap();
+    let services = worker.services();
+    let state = DurableStateStore::new(services.clone());
+    assert!(
+        state
+            .compare_and_swap(
+                0,
+                &Manifest {
+                    generation: 1,
+                    ..Manifest::default()
+                }
+            )
+            .unwrap()
+    );
+    let directory = Directory(std::env::temp_dir().join(&worker.namespace));
+    let mut host = NativeHost::open_cloudflare(
+        directory.0.clone(),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        false,
+    )
+    .unwrap();
+    let before = usage(&services);
+    let request = gateway_exchange(
+        &worker,
+        &listener,
+        "info/refs?service=git-receive-pack",
+        &[("x-git-zero-internal-generation-witness", "forged")],
+        |request| host.handle(request),
+    );
+    assert!(
+        !request
+            .headers
+            .keys()
+            .any(|name| name.starts_with("x-git-zero-internal-"))
+    );
+    assert_eq!(host.metrics.generation_witness_hits, 0);
+    assert_eq!(host.metrics.generation_witness_fallbacks, 1);
+    let after = usage(&services);
+    let delta = after.checked_workload_delta(&before).unwrap();
+    assert_eq!(
+        (
+            delta.worker_requests,
+            delta.worker_gateway_requests,
+            delta.worker_service_requests,
+            delta.do_requests
+        ),
+        (2, 1, 1, 1)
+    );
+    assert_eq!(
+        (delta.do_rows_read, delta.do_rows_written),
+        (Some(1), Some(0))
+    );
+    assert_eq!(
+        operation(&after, "manifest_get").attempts - operation(&before, "manifest_get").attempts,
+        1
+    );
+}
+
+struct NativeProcess {
+    child: std::process::Child,
+    origin: String,
+}
+impl Drop for NativeProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn start_registered_native(
+    worker: &RealWorker,
+    root: &std::path::Path,
+    port: u16,
+) -> NativeProcess {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    let child = Command::new(env!("CARGO_BIN_EXE_repository-host"))
+        .args([
+            "--cloudflare",
+            &worker.origin,
+            "--repo",
+            &worker.namespace,
+            "--token",
+            &worker.token,
+            "--view-cache",
+            "warm",
+        ])
+        .arg(root)
+        .arg(port.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut native = NativeProcess {
+        child,
+        origin: String::new(),
+    };
+    let mut ready = String::new();
+    BufReader::new(native.child.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    native.origin = ready
+        .trim()
+        .strip_suffix("/repo.git")
+        .expect("native codec failed before registration")
+        .into();
+    native
+}
+
+fn native_metrics(native: &NativeProcess) -> serde_json::Value {
+    let (status, body) = local_request(&native.origin, "GET", "/metrics", &[], &[]);
+    assert_eq!(status, 200);
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_registered_gateway_push_fetch_invalidates_cache_and_recovers_after_codec_restart() {
+    let worker = RealWorker::new("witness-git");
+    let directory = Directory(std::env::temp_dir().join(&worker.namespace));
+    let source = directory.0.join("source.git");
+    fs::create_dir_all(&source).unwrap();
+    git(
+        &source,
+        &["init", "--bare", "--quiet", "--object-format=sha1"],
+        &[],
+    );
+    git(&source, &["config", "user.name", "Gateway contract"], &[]);
+    git(
+        &source,
+        &["config", "user.email", "contract@example.invalid"],
+        &[],
+    );
+    let root = directory.0.join("native");
+    let mut native = start_registered_native(&worker, &root, 0);
+    let port: u16 = native.origin.rsplit(':').next().unwrap().parse().unwrap();
+    let url = format!("{}/{}/repo.git", worker.origin, worker.namespace);
+    let mut parent: Option<String> = None;
+    let mut last_blob = String::new();
+    let mut last_tree = String::new();
+    for generation in 1..=2 {
+        let data = format!("gateway generation {generation}\n").repeat(512);
+        let blob = String::from_utf8(git(
+            &source,
+            &["hash-object", "-w", "--stdin"],
+            data.as_bytes(),
+        ))
+        .unwrap()
+        .trim()
+        .to_string();
+        let tree = String::from_utf8(git(
+            &source,
+            &["mktree"],
+            format!("100644 blob {blob}\tdata.txt\n").as_bytes(),
+        ))
+        .unwrap()
+        .trim()
+        .to_string();
+        let mut args = vec!["commit-tree", &tree];
+        if let Some(parent) = &parent {
+            args.extend(["-p", parent]);
+        }
+        let tip = String::from_utf8(git(&source, &args, b"gateway fixture\n"))
+            .unwrap()
+            .trim()
+            .to_string();
+        git(
+            &source,
+            &["push", "--quiet", &url, &format!("{tip}:refs/heads/main")],
+            &[],
+        );
+        let metrics = native_metrics(&native);
+        assert_eq!(
+            metrics["cache_entries"], 0,
+            "publication must invalidate all cached responses"
+        );
+        assert_eq!(metrics["generation_witness_fallbacks"], 0);
+        assert!(metrics["generation_witness_hits"].as_u64().unwrap() >= generation * 2);
+        let clone = format!("clone-{generation}.git");
+        git(
+            &directory.0,
+            &["clone", "--bare", "--quiet", &url, &clone],
+            &[],
+        );
+        let clone = directory.0.join(clone);
+        git(&clone, &["fsck", "--strict"], &[]);
+        assert_eq!(
+            String::from_utf8(git(&clone, &["rev-parse", "refs/heads/main"], &[]))
+                .unwrap()
+                .trim(),
+            tip
+        );
+        assert_eq!(
+            String::from_utf8(git(&clone, &["rev-parse", "refs/heads/main^{tree}"], &[]))
+                .unwrap()
+                .trim(),
+            tree
+        );
+        assert_eq!(
+            git(&clone, &["cat-file", "blob", &blob], &[]),
+            data.as_bytes()
+        );
+        parent = Some(tip);
+        last_blob = blob;
+        last_tree = tree;
+    }
+    let before = usage(&worker.services());
+    let epoch = before.counter_epoch.clone();
+    drop(native);
+    fs::remove_dir_all(root.join("view")).unwrap();
+    native = start_registered_native(&worker, &root, port);
+    git(
+        &directory.0,
+        &["clone", "--bare", "--quiet", &url, "clone-restarted.git"],
+        &[],
+    );
+    let clone = directory.0.join("clone-restarted.git");
+    git(&clone, &["fsck", "--strict"], &[]);
+    assert_eq!(
+        String::from_utf8(git(&clone, &["rev-parse", "refs/heads/main^{tree}"], &[]))
+            .unwrap()
+            .trim(),
+        last_tree
+    );
+    assert_eq!(
+        git(&clone, &["cat-file", "blob", &last_blob], &[]),
+        "gateway generation 2\n".repeat(512).as_bytes()
+    );
+    let metrics = native_metrics(&native);
+    assert_eq!(metrics["generation_witness_fallbacks"], 0);
+    assert!(metrics["generation_witness_hits"].as_u64().unwrap() >= 2);
+    let after = usage(&worker.services());
+    assert_eq!(after.accounting_complete, Some(true));
+    assert_eq!(after.counter_epoch, epoch);
+    after.checked_workload_delta(&before).unwrap();
+    worker.services().unregister().unwrap();
+}
+
 #[test]
 #[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
 fn real_snapshot_bulk_reads_cross_packs_and_account_partial_missing_reads() {

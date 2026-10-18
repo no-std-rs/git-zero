@@ -290,6 +290,7 @@ name = "git-zero-host"
 version = "0.1.0"
 dependencies = [
  "git-zero-core",
+ "hmac",
  "serde",
  "serde_json",
  "sha1",

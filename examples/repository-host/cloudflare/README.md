@@ -100,6 +100,40 @@ Registering a different codec origin returns 409 until explicitly unregistered.
 | `gc` | POST | `{expected_generation,live_keys}`; stale generation returns 409 before deletion |
 | `metrics` | GET | Inventory, actual operation counters and per-phase accounting |
 
+New codec registrations opt into `generation_witness: 1`. The authenticated
+registration response supplies a private random 32-byte HMAC key and random
+session; only the registering host's shared HTTP adapter retains them. Neither
+appears in metrics or benchmark reports. Registration at the same origin rotates
+both; a different origin still returns 409. Legacy registrations and
+`CODEC_ORIGIN` forwarding perform no gateway manifest prefetch. A new codec
+registered with an older Worker receives no capability and uses ordinary callbacks.
+
+For an opted-in codec, the existing gateway invocation reads the actual DO
+manifest and merges its normal operation receipt before forwarding Git. It signs
+an HMAC-SHA256 witness over a versioned JSON array containing the session,
+repository, HTTP method, exact forwarded path including query, and safe-integer
+generation. The canonical ASCII JSON array is
+`["git-zero-generation-witness",1,session,repository,method,target,generation]`.
+The header `x-git-zero-internal-generation-witness` carries
+`1:<session>:<generation>:<64 lowercase hex MAC characters>`. The gateway removes
+every incoming `x-git-zero-internal-*` header before setting its own compact
+witness. Rust uses the standard `hmac` crate's constant-time verifier. A valid matching generation skips only the dispatch
+manifest callback. Missing, malformed, forged, unsupported, old-session or
+mismatched-generation proofs use the existing authoritative load and recovery.
+Dirty-view recovery always runs first, and a prefetched manifest never seeds
+recovery. CAS, garbage collection, chunk storage and cache budgets are unchanged.
+`generation_witness_hits` and `generation_witness_fallbacks` expose native outcomes.
+
+The actual DO request, manifest GET and SQL remain counted; the hypothesis removes
+one Worker callback per matching Git HTTP request. Prefetch/receipt/signing errors
+fail the gateway request, and missing receipts still mark accounting incomplete.
+Git request bodies continue streaming without another body buffer. The witness
+relies on this experiment's trusted loopback gateway-to-codec channel; it proves
+an authority read for the forwarded request, not its body or production identity.
+An earlier queued proof whose generation differs after publication forces a fresh
+load. Matching proofs place the authority read at the gateway DO read, with the
+existing publication CAS preserving concurrent-write checks.
+
 Blob bodies are limited to 16 MiB; the native Cloudflare adapter uses 8 MiB chunks.
 New Cloudflare packs concatenate the pack and index into `bundle` chunks, with
 `pack_bytes` marking the split. Recovery verifies all complete chunks before

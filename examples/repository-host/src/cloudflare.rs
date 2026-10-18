@@ -1,11 +1,13 @@
 //! Local-only HTTP bridge to real Wrangler R2/Durable Object bindings.
 //! Native Git remains a separate local codec, not code running inside a Worker.
-use crate::http::Response;
+use crate::http::{Request, Response};
 use crate::storage::{
     BlobStore, Chunk, CloudflareBindings, DurableStateStore, LocalBlobStore, LocalStateStore,
     Manifest, R2BlobStore, StateStore,
 };
+use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
+use sha2::Sha256;
 use std::{
     collections::BTreeMap,
     fs::OpenOptions,
@@ -123,11 +125,89 @@ fn decode_bulk_response(chunks: &[Chunk], bytes: &[u8]) -> io::Result<Vec<Vec<u8
     Ok(result)
 }
 
+const WITNESS_HEADER: &str = "x-git-zero-internal-generation-witness";
+const WITNESS_DOMAIN: &str = "git-zero-generation-witness";
+const MAX_SAFE_GENERATION: u64 = 9_007_199_254_740_991;
+
+// Private per-registration capability. Never serialize or include it in metrics.
+struct GenerationWitness {
+    key: [u8; 32],
+    session: String,
+}
+
+fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if value.len() != N * 2
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return None;
+    }
+    let mut result = [0; N];
+    for (index, byte) in result.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(result)
+}
+
+impl GenerationWitness {
+    fn from_registration(value: &Value) -> Option<Self> {
+        let config = value.get("generation_witness")?;
+        if config.get("version")?.as_u64()? != 1 {
+            return None;
+        }
+        let session = config.get("session")?.as_str()?;
+        decode_hex::<16>(session)?;
+        Some(Self {
+            key: decode_hex(config.get("key")?.as_str()?)?,
+            session: session.into(),
+        })
+    }
+
+    fn message(&self, repo: &str, request: &Request, generation: u64) -> Option<Vec<u8>> {
+        // URL paths forwarded by workerd are ASCII, including percent escapes.
+        if !request.method.is_ascii() || !request.target.is_ascii() {
+            return None;
+        }
+        serde_json::to_vec(&(
+            WITNESS_DOMAIN,
+            1,
+            &self.session,
+            repo,
+            &request.method,
+            &request.target,
+            generation,
+        ))
+        .ok()
+    }
+
+    fn verify(&self, repo: &str, request: &Request) -> Option<u64> {
+        let header = request.headers.get(WITNESS_HEADER)?;
+        if header.len() > 256 {
+            return None;
+        }
+        let fields: Vec<_> = header.split(':').collect();
+        if fields.len() != 4 || fields[0] != "1" || fields[1] != self.session {
+            return None;
+        }
+        let generation: u64 = fields[2].parse().ok()?;
+        if generation > MAX_SAFE_GENERATION || generation.to_string() != fields[2] {
+            return None;
+        }
+        let signature = decode_hex::<32>(fields[3])?;
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).ok()?;
+        mac.update(&self.message(repo, request, generation)?);
+        mac.verify_slice(&signature).ok()?;
+        Some(generation)
+    }
+}
+
 pub struct HttpServices {
     authority: String,
     repo: String,
     token: String,
     phase: Mutex<String>,
+    generation_witness: Mutex<Option<GenerationWitness>>,
 }
 
 impl HttpServices {
@@ -156,6 +236,7 @@ impl HttpServices {
             repo: repo.into(),
             token: token.into(),
             phase: Mutex::new("startup".into()),
+            generation_witness: Mutex::new(None),
         })
     }
 
@@ -315,13 +396,32 @@ impl HttpServices {
     pub fn register(&self, codec_origin: &str) -> io::Result<()> {
         // Reuse strict loopback validation so registration cannot enable SSRF.
         Self::new(codec_origin, &self.repo, &self.token)?;
-        self.json(
+        let response = self.json(
             "POST",
             "register",
-            Some(&json!({"codec_origin": codec_origin})),
+            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1})),
             Some("stats"),
         )?;
+        *self
+            .generation_witness
+            .lock()
+            .map_err(|_| io::Error::other("witness config lock poisoned"))? =
+            GenerationWitness::from_registration(&response);
         Ok(())
+    }
+
+    pub(crate) fn generation_witness_matches(
+        &self,
+        request: &Request,
+        generation: u64,
+    ) -> io::Result<bool> {
+        Ok(self
+            .generation_witness
+            .lock()
+            .map_err(|_| io::Error::other("witness config lock poisoned"))?
+            .as_ref()
+            .and_then(|config| config.verify(&self.repo, request))
+            == Some(generation))
     }
 
     pub fn unregister(&self) -> io::Result<()> {
@@ -502,6 +602,111 @@ impl StateStore for HostState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn witness() -> GenerationWitness {
+        GenerationWitness {
+            key: [11; 32],
+            session: "01".repeat(16),
+        }
+    }
+
+    fn witness_request() -> Request {
+        Request {
+            method: "GET".into(),
+            target: "/repo.git/info/refs?service=git-upload-pack&x=%2F".into(),
+            headers: BTreeMap::new(),
+            body: vec![],
+        }
+    }
+
+    #[test]
+    fn generation_witness_matches_standard_hmac_and_binds_authority_and_exact_request() {
+        let config = witness();
+        let mut request = witness_request();
+        // Independent Python stdlib hmac/hashlib SHA-256 vector for this exact
+        // canonical JSON, also exercised against WebCrypto by workerd tests.
+        let signature = "d54a7a042252a66fc453bf0dab6970062fb04e23af0b4f05411aa347c54d8a45";
+        let proof = format!("1:{}:7:{signature}", config.session);
+        request.headers.insert(WITNESS_HEADER.into(), proof.clone());
+        assert_eq!(config.verify("demo", &request), Some(7));
+        assert_eq!(config.verify("other", &request), None);
+        assert_eq!(
+            GenerationWitness {
+                session: "02".repeat(16),
+                ..witness()
+            }
+            .verify("demo", &request),
+            None
+        );
+        assert_eq!(
+            GenerationWitness {
+                key: [12; 32],
+                ..witness()
+            }
+            .verify("demo", &request),
+            None
+        );
+        for target in [
+            "/repo.git/info/refs?service=git-upload-pack&x=%2f",
+            "/repo.git/info/refs?x=%2F&service=git-upload-pack",
+            "/repo.git/info/refs?service=git-receive-pack&x=%2F",
+            "/repo.git/git-upload-pack",
+        ] {
+            let mut changed = request.clone();
+            changed.target = target.into();
+            assert_eq!(config.verify("demo", &changed), None);
+        }
+        let mut changed = request.clone();
+        changed.method = "POST".into();
+        assert_eq!(config.verify("demo", &changed), None);
+        for invalid in [
+            proof.replacen(":7:", ":8:", 1),
+            proof.replacen("1:", "2:", 1),
+            proof.replacen(":7:", ":07:", 1),
+            proof.replacen(":7:", ":9007199254740992:", 1),
+            format!("1:{}:7:{}", config.session, "0".repeat(64)),
+            format!("{proof}:extra"),
+            proof[..proof.len() - 1].into(),
+            "x".repeat(257),
+            String::new(),
+        ] {
+            changed.headers.insert(WITNESS_HEADER.into(), invalid);
+            assert_eq!(config.verify("demo", &changed), None);
+        }
+        changed.headers.clear();
+        assert_eq!(config.verify("demo", &changed), None);
+    }
+
+    #[test]
+    fn generation_witness_registration_compatibility_defaults_to_callbacks() {
+        let valid = json!({"generation_witness": {
+            "version": 1, "key": "0b".repeat(32), "session": "01".repeat(16)
+        }});
+        assert!(GenerationWitness::from_registration(&valid).is_some());
+        for response in [
+            json!({"registered": true}),
+            json!({"generation_witness": null}),
+            json!({"generation_witness": {"version": 2, "key": "0b".repeat(32), "session": "01".repeat(16)}}),
+            json!({"generation_witness": {"version": 1, "key": "0b".repeat(31), "session": "01".repeat(16)}}),
+            json!({"generation_witness": {"version": 1, "key": "0b".repeat(32), "session": "bad"}}),
+        ] {
+            assert!(GenerationWitness::from_registration(&response).is_none());
+        }
+        let services = HttpServices::new("http://127.0.0.1:1", "demo", "token").unwrap();
+        let mut request = witness_request();
+        request.headers.insert(
+            WITNESS_HEADER.into(),
+            format!(
+                "1:{}:7:{}",
+                witness().session,
+                "d54a7a042252a66fc453bf0dab6970062fb04e23af0b4f05411aa347c54d8a45"
+            ),
+        );
+        assert!(!services.generation_witness_matches(&request, 7).unwrap());
+        *services.generation_witness.lock().unwrap() = Some(witness());
+        assert!(services.generation_witness_matches(&request, 7).unwrap());
+        assert!(!services.generation_witness_matches(&request, 8).unwrap());
+    }
 
     fn chunk(data: &[u8]) -> Chunk {
         Chunk {

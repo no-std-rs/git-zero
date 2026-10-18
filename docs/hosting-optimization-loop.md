@@ -193,6 +193,36 @@ change chunk storage, frame version, snapshot limits or cache budgets. Fewer bri
 known Worker/DO request costs on cold reads; the aggregate 1% threshold, latency and total runtime
 memory remain unmeasured until the independent paired screens and final validation.
 
+### Generation-witness hypothesis: move the authority read into the gateway
+
+The opted-in local gateway now reads the actual DO manifest inside its existing
+Worker invocation and forwards an HMAC-SHA256 generation witness to the native
+codec. Matching witnesses remove only the native dispatch manifest callback;
+actual DO requests, SQL rows and operation receipts remain charged. Old clients,
+`CODEC_ORIGIN`, older Workers and invalid/mismatched proofs retain ordinary
+callbacks. Dirty recovery, CAS and every storage/cache limit remain unchanged.
+The [service contract](../examples/repository-host/cloudflare/README.md) records
+the private registration capability, exact request binding and failure behavior.
+
+The 32-push/56-fetch interleaved schedule uses 176 Git HTTP requests (64 push and
+112 fetch requests). If each matches, moving those 176 authority reads removes
+176 Worker callbacks per profile, excluding startup and fallbacks. At the fixed
+1,000 repetitions and $0.30 per million Worker requests, this projects $0.0528
+per profile, or $0.2112 across four profiles, before fallback overhead. This is a
+hypothesis, not a measured aggregate saving or acceptance decision. Actual R2,
+DO and SQL costs are not projected to fall. Worker HMAC CPU, DO duration, monthly
+SQLite storage and native codec compute remain unknown. Independent paired
+screens and final five-pair validation must measure costs and latency guards.
+
+Focused Rust contracts against real local workerd observe one Worker gateway
+request, zero native service callbacks, one DO request, one manifest GET and one
+SQL row read for a matching cached advertisement. The legacy registration control
+observes one gateway plus one callback and the same single DO read. Contracts also
+cover forged-header stripping, rotated sessions, exact query binding, queued old
+generations, cache invalidation, strict Git object/ref/tree checks and codec view
+recovery after restart. These are correctness/accounting checks, not paired
+workload measurements or latency acceptance evidence.
+
 ### Workload clarification: interleaved large writes and historical reads
 
 The user requested a realistic push/fetch sequence instead of treating one write phase and one read phase

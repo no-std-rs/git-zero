@@ -414,6 +414,8 @@ pub struct Metrics {
     pub cache_entry_limit: u64,
     pub discovery_cache_hits: u64,
     pub cloud_view_rehydrates: u64,
+    pub generation_witness_hits: u64,
+    pub generation_witness_fallbacks: u64,
 }
 
 struct CandidatePack {
@@ -496,6 +498,11 @@ impl NativeHost {
             HostState::Cloudflare(DurableStateStore::new(services.clone())),
         );
         Self::with_services(root, repository, Some(services), cold_view)
+    }
+
+    /// Share the host's registration capability with its listening HTTP runner.
+    pub fn cloudflare_services(&self) -> Option<Arc<HttpServices>> {
+        self.cloudflare.clone()
     }
 
     fn with_services(
@@ -892,10 +899,15 @@ impl NativeHost {
         if self.view_dirty {
             self.recover()?;
         }
-        if self.cloudflare.is_some() {
-            let manifest = self.repository.state.load()?;
-            if manifest.generation != self.manifest.generation {
-                self.recover()?;
+        if let Some(services) = &self.cloudflare {
+            if services.generation_witness_matches(request, self.manifest.generation)? {
+                self.metrics.generation_witness_hits += 1;
+            } else {
+                self.metrics.generation_witness_fallbacks += 1;
+                let manifest = self.repository.state.load()?;
+                if manifest.generation != self.manifest.generation {
+                    self.recover()?;
+                }
             }
         }
         let path = request
@@ -1111,6 +1123,138 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn witness_only_skips_dispatch_load_and_never_skips_dirty_recovery() {
+        use hmac::{Hmac, Mac};
+        use std::io::{BufRead, BufReader};
+        let root = std::env::temp_dir().join(format!(
+            "git-zero-witness-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        // Keep the real local StateStore/recovery path, using an authenticated
+        // registration fixture only to install the private bridge capability.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let services = Arc::new(
+            HttpServices::new(
+                &format!("http://{}", listener.local_addr().unwrap()),
+                "demo",
+                "token",
+            )
+            .unwrap(),
+        );
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with("POST /_services/register "));
+            let mut length = 0;
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.strip_prefix("Content-Length: ") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()["generation_witness"],
+                1
+            );
+            let response = serde_json::to_vec(
+                &serde_json::json!({"registered": true, "generation_witness": {
+                    "version": 1, "key": "0b".repeat(32), "session": "01".repeat(16)
+                }}),
+            )
+            .unwrap();
+            write!(
+                reader.get_mut(),
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                response.len()
+            )
+            .unwrap();
+            reader.get_mut().write_all(&response).unwrap();
+        });
+        services.register("http://127.0.0.1:1234").unwrap();
+        server.join().unwrap();
+        host.cloudflare = Some(services);
+        let mut request = Request {
+            method: "GET".into(),
+            target: "/repo.git/info/refs?service=git-receive-pack".into(),
+            headers: BTreeMap::new(),
+            body: vec![],
+        };
+        let message = serde_json::to_vec(&(
+            "git-zero-generation-witness",
+            1,
+            "01".repeat(16),
+            "demo",
+            "GET",
+            &request.target,
+            0,
+        ))
+        .unwrap();
+        let mut mac = Hmac::<Sha256>::new_from_slice(&[11; 32]).unwrap();
+        mac.update(&message);
+        let signature: String = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let proof = format!("1:{}:0:{signature}", "01".repeat(16));
+        let state = root.join("services/manifest.json");
+        fs::write(&state, b"corrupt authoritative state").unwrap();
+        // Missing, forged and unsupported proofs must attempt the actual load.
+        for header in [None, Some("forged"), Some("2:unsupported")] {
+            request.headers.clear();
+            if let Some(header) = header {
+                request.headers.insert(
+                    "x-git-zero-internal-generation-witness".into(),
+                    header.into(),
+                );
+            }
+            assert_eq!(host.handle(request.clone()).status, 503);
+        }
+        assert_eq!(host.metrics.generation_witness_fallbacks, 3);
+        request
+            .headers
+            .insert("x-git-zero-internal-generation-witness".into(), proof);
+        assert_eq!(host.handle(request.clone()).status, 200);
+        assert_eq!(host.metrics.generation_witness_hits, 1);
+        // A matching proof never authorizes reuse of a dirty view.
+        host.view_dirty = true;
+        assert_eq!(host.handle(request.clone()).status, 503);
+        assert_eq!(host.metrics.generation_witness_hits, 1);
+        let next = Manifest {
+            generation: 1,
+            ..Manifest::default()
+        };
+        fs::write(&state, serde_json::to_vec(&next).unwrap()).unwrap();
+        assert_eq!(host.handle(request.clone()).status, 200);
+        assert!(!host.view_dirty);
+        assert_eq!(host.manifest.generation, 1);
+        assert_eq!(host.metrics.generation_witness_hits, 1);
+        assert_eq!(host.metrics.generation_witness_fallbacks, 4);
+        // A queued old proof after publication uses a fresh authoritative load.
+        fs::write(&state, b"corrupt again").unwrap();
+        assert_eq!(host.handle(request).status, 503);
+        assert_eq!(host.metrics.generation_witness_fallbacks, 5);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn failed_snapshot_rebuild_stays_dirty_without_materializing_partial_packs() {

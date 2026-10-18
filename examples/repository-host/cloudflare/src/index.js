@@ -14,6 +14,9 @@ const MAX_BULK_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const BULK_HEADER_BYTES = 12;
 const BULK_LENGTH_BYTES = 8;
 const MAX_BULK_RESPONSE_BYTES = MAX_BULK_PAYLOAD_BYTES + BULK_HEADER_BYTES + BULK_LENGTH_BYTES * MAX_BULK_KEYS;
+const WITNESS_PREFIX = "x-git-zero-internal-";
+const WITNESS_HEADER = `${WITNESS_PREFIX}generation-witness`;
+const WITNESS_DOMAIN = "git-zero-generation-witness";
 const USAGE_HEADER = "x-git-zero-service-usage";
 const OPERATIONS = new Set(["r2_get", "r2_head", "r2_put", "r2_list", "r2_delete", "manifest_get", "manifest_cas"]);
 const OP_FIELDS = ["attempts", "successes", "failures", "read_bytes", "written_bytes"];
@@ -193,6 +196,48 @@ function loopbackOrigin(value) {
   return origin.origin;
 }
 
+// Both callback and gateway reads use exactly the same receipt validation.
+// This helper dispatches one DO RPC, never another Worker service request.
+async function dispatchService(env, repo, request, requireReceipt = false) {
+  const stub = env.REPOSITORIES.get(env.REPOSITORIES.idFromName(repo));
+  let response;
+  try { response = await stub.fetch(request); }
+  catch (error) { incomplete(repo, "Durable Object dispatch failed; side effects may be unaccounted"); throw error; }
+  try { acceptReceipt(repo, response.headers.get(USAGE_HEADER)); }
+  catch {
+    incomplete(repo, "missing or invalid Durable Object usage receipt");
+    if (requireReceipt) fail(502, "generation read has no valid usage receipt");
+  }
+  const headers = new Headers(response.headers);
+  headers.delete(USAGE_HEADER);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function hex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function registrationWitness() {
+  const rawKey = crypto.getRandomValues(new Uint8Array(32));
+  const session = hex(crypto.getRandomValues(new Uint8Array(16)));
+  const key = await crypto.subtle.importKey("raw", rawKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return { private: { key, session }, response: { version: 1, key: hex(rawKey), session } };
+}
+
+async function generationWitness(env, repo, currentPhase, method, target, config) {
+  // Construct this request from trusted routing inputs; public headers cannot
+  // choose the repository, phase or route of the authoritative read.
+  const response = await dispatchService(env, repo, new Request("https://local/_services/manifest", {
+    headers: { "x-hosting-repo": repo, "x-hosting-phase": currentPhase },
+  }), true);
+  if (!response.ok) fail(502, "authoritative generation read failed");
+  const generation = (await response.json()).generation;
+  if (!validCount(generation)) fail(502, "invalid authoritative generation");
+  const message = JSON.stringify([WITNESS_DOMAIN, 1, config.session, repo, method, target, generation]);
+  const signature = await crypto.subtle.sign("HMAC", config.key, new TextEncoder().encode(message));
+  return `1:${config.session}:${generation}:${hex(new Uint8Array(signature))}`;
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -218,12 +263,16 @@ export default {
         if (url.pathname === "/_services/register" && request.method === "POST") {
           const body = await parseJson(request, 1024);
           const origin = loopbackOrigin(body.codec_origin);
-          if (registry.has(repo) && registry.get(repo) !== origin) {
+          const witness = body.generation_witness === 1 ? await registrationWitness() : null;
+          // Recheck after asynchronous key creation so concurrent registrations
+          // cannot replace a different origin or exceed the bounded registry.
+          if (registry.has(repo) && registry.get(repo).origin !== origin) {
             fail(409, "a different local codec is already registered; unregister it first");
           }
           if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
-          registry.set(repo, origin);
-          return json({ registered: true, repository: repo, codec_origin: origin });
+          registry.set(repo, { origin, witness: witness?.private });
+          return json({ registered: true, repository: repo, codec_origin: origin,
+            ...(witness ? { generation_witness: witness.response } : {}) });
         }
         if (url.pathname === "/_services/unregister" && request.method === "POST") {
           registry.delete(repo);
@@ -238,21 +287,14 @@ export default {
         const serviceRequest = url.pathname === "/_services/blobs/read" && request.method === "POST"
           ? new Request(request.url, { method: request.method, headers, body: await bytes(request, MAX_MANIFEST_BYTES) })
           : new Request(request, { headers });
-        const stub = env.REPOSITORIES.get(env.REPOSITORIES.idFromName(repo));
-        let response;
-        try { response = await stub.fetch(serviceRequest); }
-        catch (error) { incomplete(repo, "Durable Object dispatch failed; side effects may be unaccounted"); throw error; }
-        try { acceptReceipt(repo, response.headers.get(USAGE_HEADER)); }
-        catch { incomplete(repo, "missing or invalid Durable Object usage receipt"); }
-        const cleanHeaders = new Headers(response.headers);
-        cleanHeaders.delete(USAGE_HEADER);
-        const clean = new Response(response.body, { status: response.status, statusText: response.statusText, headers: cleanHeaders });
+        const clean = await dispatchService(env, repo, serviceRequest);
         if (observer && clean.ok) return json(mergeWorkerUsage(await clean.json(), repo));
         return clean;
       }
       const forwardedPath = prefixed ? url.pathname.slice(repo.length + 1) : url.pathname;
       if (!forwardedPath.startsWith("/repo.git/")) return json({ error: "unknown route" }, 404);
-      const origin = registry.get(repo) ?? env.CODEC_ORIGIN;
+      const registered = registry.get(repo);
+      const origin = registered?.origin ?? env.CODEC_ORIGIN;
       if (!origin) return json({ error: "register a local Rust codec first" }, 503);
       const gitPhase = forwardedPath.endsWith("/git-receive-pack")
         || url.searchParams.get("service") === "git-receive-pack" ? "push" : "fetch";
@@ -260,9 +302,19 @@ export default {
       const headers = new Headers(request.headers);
       headers.delete("host");
       headers.delete("x-hosting-token");
+      for (const name of [...headers.keys()]) {
+        if (name.startsWith(WITNESS_PREFIX)) headers.delete(name);
+      }
       headers.set("x-hosting-repo", repo);
       headers.set("x-hosting-phase", gitPhase);
-      const target = loopbackOrigin(origin) + forwardedPath + url.search;
+      const forwardedTarget = forwardedPath + url.search;
+      const target = loopbackOrigin(origin) + forwardedTarget;
+      if (registered?.witness) {
+        // Any prefetch/signing failure returns an error. Never silently issue
+        // a second callback after completed, receipt-backed DO work.
+        headers.set(WITNESS_HEADER, await generationWitness(
+          env, repo, gitPhase, request.method, forwardedTarget, registered.witness));
+      }
       // This awaits Rust outside a Durable Object. Rust can safely call back
       // into /_services while its Git request is in flight.
       return await fetch(new Request(target, {
