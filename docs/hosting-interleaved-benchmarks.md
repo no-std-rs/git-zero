@@ -123,8 +123,8 @@ plateau by itself. A failed final latency guard remains inconclusive rather than
 The [isolated workflow](../.github/workflows/hosting-isolated.yml) runs only on explicit pushes to
 `perf/hosting-isolated-ci-20261018`, or dispatches selecting that branch. Each of the four profiles gets
 a standard `ubuntu-24.04` VM. A screen freshly measures its declared ordered native providers on
-the same VM, once each with two measured pairs and an excluded warmup per backend. The earlier
-R2–R5 batch used four providers; the next R5–R8 batch also uses four. Every provider gets a fresh local
+the same VM, once each with two measured pairs and an excluded warmup per backend. The completed
+R2–R5 and R5–R8 batches each used four providers. Every provider gets a fresh local
 Wrangler process and persistent-state directory. No reports from an earlier
 workflow attempt or local workstation may substitute for any provider's measurements.
 
@@ -148,7 +148,7 @@ Its source remains at `scalar-baseline` and its build at `baseline-target` under
 preserving the reference executable's original build paths and hash. Screen native hosts build from
 their pushed `SCREEN_RN_COMMIT` refs at deterministic `providers/rN` source paths and corresponding
 `provider-targets/rN` build paths. The earlier R2–R5 batch used `providers/r2` through `providers/r5`;
-the next batch retains `providers/r5` and adds `providers/r6`, `providers/r7` and `providers/r8`. Duplicate refs or
+the R5–R8 batch retained `providers/r5` and added `providers/r6`, `providers/r7` and `providers/r8`. Duplicate refs or
 native source trees block the screen.
 Provenance records every label, commit, source tree, manifest path/hash and post-run clean status.
 
@@ -203,11 +203,11 @@ at `e2a54d69ebcd79a157c77c1979d265fbfd44ee81`, failed workflow validation becaus
 not expose the `runner` context. No jobs started and no measurements were collected. Experiment paths
 now use the available `github.workspace` context at job scope, retaining stable paths outside checkout.
 
-## Next declared screen: retirement, verification and discovery
+## Completed R5–R8 screen: retirement, verification and discovery
 
-After reviewing the complete R2–R5 screen below, the next batch measures the
+After reviewing the complete R2–R5 screen below, this batch measured the
 provisional R5 anchor (`086229b`), R6 fused retirement (`e4cdb32`), R7 single
-verification (`50e2fd8`) and R8 certified native discovery (`0f9f62e`). It uses
+verification (`50e2fd8`) and R8 certified native discovery (`0f9f62e`). It used
 fresh service state and two pairs per provider on each of the same four profile
 VMs, with one warmup per backend. Intermediate suites serve both adjacent
 comparisons; these comparisons are correlated. All six earlier-to-later
@@ -237,14 +237,26 @@ workflow's exact Git environment. Independent source review found no blocker
 after the safe zero-value environment fix. The existing 32 MiB allocation budget
 includes the bounded template, reported separately from the response cache.
 
-R6's callback saving and R8's discovery saving are projections; neither has
-benchmark results yet. R7's CPU reduction has no known-dollar saving in this
-model. The fresh R5 cold traces support an R8 projection of 444 fewer R2 GETs and
-2,311,388,922 fewer read bytes across the two cold profiles per complete workload,
-retaining the first full bootstrap. These are not measured R8 results. Warm
-transport/client stalls remain unexplained. Final validation still uses five
-fresh pairs of original scalar R1 and the selected final candidate across all
-four profiles.
+[Run 39087721879](https://github.com/no-std-rs/git-zero/actions/runs/39087721879)
+completed every profile and scoring. Its fresh fixed scores were R5
+$2.33324593618, R6 $2.29544193618, R7 $2.29545493618 and R8 $2.05460443618.
+R8 is **11.942226% below R5** and 10.492495% below R7. All 216 resource guards
+and 24 profile-cost guards pass. R7 versus R6 has no known-dollar improvement;
+its tiny SQL-read variance does not price CPU work.
+
+All six comparisons remain inconclusive. R8 versus R5 fails four latency groups:
+16 MiB warm historical reads without haves and large pushes, and 64 MiB cold
+large pushes and latest rechecks. Its 116.9-second cold historical-fetch tail is
+retained. Every profile stays at 24,576 SQLite bytes, with unchanged storage and
+wire/pack sizes. R8 avoids exactly 31 full discovery reconstructions per cold
+trial, reducing GETs 685→494 at 16 MiB and 907→654 at 64 MiB.
+
+[Published evidence](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r5-r8-screen/README.md)
+retains the five original archives, all guards/ratios/tails, counter scopes and
+independent exact offline reproduction. After reviewing every guard, R8 is the
+provisional known-cost anchor. This establishes neither a speed win nor formal
+acceptance or stopping. Final validation still requires five fresh original-R1
+and selected-final pairs on all four profiles.
 
 ## Completed R2–R5 screen
 
@@ -279,10 +291,10 @@ retains clean and independent combined correctness checks, including transport
 failures and the actual CLI restart. The
 [historical-prefix proposal](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/history-prefix-design/README.md)
 uses ephemeral lineage and explicitly prices the final full inventory restore.
-Neither candidate has benchmark results. Their implementation preparation uses
-completed R5 evidence; promotion and fresh screen controls remain gated on the
-complete running R5–R8 results. The current experiment stays frozen at its own
-pushed source; no reports will carry into later trials.
+Neither candidate has benchmark results. Their implementation preparation used
+completed R5 evidence. The complete R5–R8 guard review now permits preparing the
+next fresh screen; source pins and backward compatibility must be reviewed
+before triggering it. No reports carry into later trials.
 
 The [bounded response experiment](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/fetch-transport-diagnosis/README.md)
 did not reproduce the retained response stalls. It also disproved a proposed
@@ -294,5 +306,8 @@ now covers the implementation, honest final restoration receipts and a generic
 metadata-only empty receive probe. The fixed workload does not send that probe,
 so its actual default-client benefit is kept separate. The
 [peak-in-catalog design](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/peak-catalog-design/README.md)
-proposes reducing SQL writes with explicit capability and recovery gates. It
-remains unimplemented pending the preceding complete screen review.
+proposes reducing SQL writes with explicit capability and recovery gates. Its
+implementation is underway after the complete screen review. Actual early
+11/13-row catalog shapes with 33 refs and 11 pack descriptors retain 24,576-byte
+SQLite storage; first-mutation migration writes are counted. Full source, fault
+and restart validation remain required before any benchmark.

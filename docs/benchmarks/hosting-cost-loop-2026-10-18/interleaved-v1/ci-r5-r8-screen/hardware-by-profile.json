@@ -1,0 +1,242 @@
+{
+  "16mib-cold/r5": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.00 avg60=0.12 avg300=0.48 total=6117467\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.70 0.87 0.53 1/272 25481",
+      "timestamp_unix_seconds": 1792288465
+    },
+    "cpu": "Intel(R) Xeon(R) 6973P-C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372440 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "16mib-cold/r6": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.12 avg60=0.08 avg300=0.21 total=7585799\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.90 0.88 0.63 1/271 41778",
+      "timestamp_unix_seconds": 1792288746
+    },
+    "cpu": "Intel(R) Xeon(R) 6973P-C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372440 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "16mib-cold/r7": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.01 avg60=0.03 avg300=0.12 total=9025881\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.92 0.91 0.70 1/274 58079",
+      "timestamp_unix_seconds": 1792289002
+    },
+    "cpu": "Intel(R) Xeon(R) 6973P-C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372440 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "16mib-cold/r8": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.02 avg60=0.07 avg300=0.09 total=10437438\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.96 0.92 0.76 1/271 74174",
+      "timestamp_unix_seconds": 1792289252
+    },
+    "cpu": "Intel(R) Xeon(R) 6973P-C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372440 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "16mib-warm/r5": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.18 avg60=0.27 avg300=0.92 total=9150103\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "1.03 0.90 0.49 1/274 25464",
+      "timestamp_unix_seconds": 1792288467
+    },
+    "cpu": "Intel(R) Xeon(R) 6973P-C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372440 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "16mib-warm/r6": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.00 avg60=0.00 avg300=0.31 total=10498454\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.80 0.84 0.58 1/268 41753",
+      "timestamp_unix_seconds": 1792288782
+    },
+    "cpu": "Intel(R) Xeon(R) 6973P-C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372440 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "16mib-warm/r7": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.00 avg60=0.01 avg300=0.12 total=11910443\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.78 0.82 0.65 1/272 58039",
+      "timestamp_unix_seconds": 1792289085
+    },
+    "cpu": "Intel(R) Xeon(R) 6973P-C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372440 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "16mib-warm/r8": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.00 avg60=0.06 avg300=0.09 total=13376414\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "1.04 1.03 0.79 1/272 74377",
+      "timestamp_unix_seconds": 1792289365
+    },
+    "cpu": "Intel(R) Xeon(R) 6973P-C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372440 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "64mib-cold/r5": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.27 avg60=0.13 avg300=0.27 total=10406882\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.78 0.79 0.66 1/280 25515",
+      "timestamp_unix_seconds": 1792288926
+    },
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16373452 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "64mib-cold/r6": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.03 avg60=0.16 avg300=0.16 total=15134695\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "1.51 1.13 0.84 1/276 41881",
+      "timestamp_unix_seconds": 1792289739
+    },
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16373452 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "64mib-cold/r7": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.16 avg60=0.14 avg300=0.15 total=19451190\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "1.04 1.08 0.97 1/276 58174",
+      "timestamp_unix_seconds": 1792290343
+    },
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16373452 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "64mib-cold/r8": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.14 avg60=0.14 avg300=0.12 total=23493244\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "1.18 0.96 0.91 1/276 74279",
+      "timestamp_unix_seconds": 1792291061
+    },
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16373452 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "64mib-warm/r5": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.00 avg60=0.02 avg300=0.39 total=12535913\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.76 0.93 0.74 1/274 25715",
+      "timestamp_unix_seconds": 1792288825
+    },
+    "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372436 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "64mib-warm/r6": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.12 avg60=0.07 avg300=0.14 total=15986553\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "1.46 1.27 1.00 1/273 42082",
+      "timestamp_unix_seconds": 1792289353
+    },
+    "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372436 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "64mib-warm/r7": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.15 avg60=0.06 avg300=0.09 total=19577300\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.85 1.06 1.05 1/273 58388",
+      "timestamp_unix_seconds": 1792289948
+    },
+    "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372436 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "64mib-warm/r8": {
+    "arch": "x86_64",
+    "contention_at_report": {
+      "cpu_pressure": "some avg10=0.12 avg60=0.09 avg300=0.10 total=23281205\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+      "loadavg": "0.93 1.05 1.06 1/273 74682",
+      "timestamp_unix_seconds": 1792290498
+    },
+    "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "git": "git version 2.53.0",
+    "kernel": "6.17.0-1022-azure",
+    "logical_cpus": 4,
+    "memory": "MemTotal:       16372436 kB",
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  }
+}

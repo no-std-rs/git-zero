@@ -1,0 +1,23 @@
+{
+  "path": "/tmp/git-zero-hosting-loop-artifacts/interleaved-v1/evaluators/zero-get-fix/hosting-cost",
+  "sha256": "01b36df2f5f2019eeb09ebe79eb8ae80e9f86d0cdf39667c9fec9b0584e61fb8",
+  "same_evaluator_source_as_ci": true,
+  "four_scores_and_six_comparisons_byte_identical_to_ci": true,
+  "identical_files": [
+    "r5-score.json",
+    "r6-score.json",
+    "r6-vs-r5.json",
+    "r7-score.json",
+    "r7-vs-r5.json",
+    "r7-vs-r6.json",
+    "r8-score.json",
+    "r8-vs-r5.json",
+    "r8-vs-r6.json",
+    "r8-vs-r7.json"
+  ],
+  "unchanged_source_sha256": {
+    "examples/repository-host/src/bin/hosting-cost.rs": "5840e26bf04c3d3672823cfdd4ac26395060d05162462087d5e850a805e6c3e2",
+    "examples/repository-host/src/benchmark_cost.rs": "0dc340f39d51c4baf86e7d8b142f0a02ffaf9dc10345af7c22b27d59fc581401",
+    "examples/repository-host/src/cost.rs": "fd27fe75cb9a87117151eb779ff561ddf8a02b550e10f5d7b1ddd4b2181b6756"
+  }
+}

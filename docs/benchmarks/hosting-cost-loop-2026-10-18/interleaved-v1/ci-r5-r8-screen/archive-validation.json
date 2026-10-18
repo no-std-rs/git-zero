@@ -1,0 +1,47 @@
+{
+  "per_archive_cap_bytes": 4194304,
+  "total_cap_bytes": 20971520,
+  "total_archive_bytes": 6570665,
+  "artifacts": [
+    {
+      "artifact_id": 12123060533,
+      "name": "hosting-screen-64mib-cold-1",
+      "api_zip_bytes": 1717501,
+      "tar_gz_bytes": 1717337,
+      "sha256": "a5ce7a7294a752bcd1b0d15e57aeb8d57dd67fd14a024265990fb9ef5c222d90",
+      "path": "downloads/hosting-screen-64mib-cold-1/hosting-64mib-cold.tar.gz"
+    },
+    {
+      "artifact_id": 12122946259,
+      "name": "hosting-scores-screen-1",
+      "api_zip_bytes": 312010,
+      "tar_gz_bytes": 311854,
+      "sha256": "afb4ae6c97c625ffb0bf5a4109e4bcb2af99d6da34c5a1095f904054455a29f5",
+      "path": "downloads/hosting-scores-screen-1/hosting-scores.tar.gz"
+    },
+    {
+      "artifact_id": 12121939471,
+      "name": "hosting-screen-64mib-warm-1",
+      "api_zip_bytes": 1445120,
+      "tar_gz_bytes": 1444956,
+      "sha256": "ef940d231dc56b845d5e854518d2122b0fb3e30fd3ff7e411276bf9738367df8",
+      "path": "downloads/hosting-screen-64mib-warm-1/hosting-64mib-warm.tar.gz"
+    },
+    {
+      "artifact_id": 12121534461,
+      "name": "hosting-screen-16mib-warm-1",
+      "api_zip_bytes": 1425267,
+      "tar_gz_bytes": 1425103,
+      "sha256": "ba804b41cdc234877c91764be31c8b436163ecb9a236347c80d3868ae9dff364",
+      "path": "downloads/hosting-screen-16mib-warm-1/hosting-16mib-warm.tar.gz"
+    },
+    {
+      "artifact_id": 12121403141,
+      "name": "hosting-screen-16mib-cold-1",
+      "api_zip_bytes": 1671579,
+      "tar_gz_bytes": 1671415,
+      "sha256": "bd622680e84f65cd93a33bd82e1703499b5d076a0aa6a5ba2a7828ec86f13a75",
+      "path": "downloads/hosting-screen-16mib-cold-1/hosting-16mib-cold.tar.gz"
+    }
+  ]
+}
