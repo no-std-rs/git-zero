@@ -1,0 +1,752 @@
+{
+  "kind": "isolated_R15_implementation_correctness_topology_control_not_benchmark",
+  "source_commit": "5a7f74f58336b5474dc9920cd20857ab8e573910",
+  "reviewed_R14_parent": "5759726b0a4545f6613553e1f2303f303eb65384",
+  "native_src_tree": "f6c9a339159083a06531dd4982cc201ec46c13de",
+  "whole_worker_src_tree": "2944d3ecf512c09452e9d4487bd8bfc0b3815f91",
+  "all_worker_src_sha256": {
+    "examples/repository-host/cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+    "examples/repository-host/cloudflare/src/first-read.js": "2dcc11b30a6bb5628dbc1ee50eff336f65de134d89402b94aec86345e704bbf3",
+    "examples/repository-host/cloudflare/src/index.js": "bd42e9b9fc4039688b554c97a47d89202df4422fa5b91e008ec892811bb39f17",
+    "examples/repository-host/cloudflare/src/inline-catalog.js": "b13edf1cc493e814b1b08b406c48b5544122bbaa6130e01d71d7e6555b2aec71",
+    "examples/repository-host/cloudflare/src/retirement-proof.js": "3ce5c71f08af064d65c712c38d64bf1c2ad75fbf861708d882f8bb14348a182c"
+  },
+  "new_and_modified_source_inventory": "source-inventory.json",
+  "independent_source_review": {
+    "result": "SOURCE-ONLY APPROVED exact5a; ledger continuity is a separate review",
+    "report": "independent-source-review.md",
+    "original_path": "/tmp/git-zero-gateway-first-read-source-rereview.md",
+    "sha256": "a69ea55a9e1cdca4540762a1f6a7709971eae73e4f96c861c496a661093aa55c"
+  },
+  "behavior": "For an opted-in standard cold Git upload-pack POST with a valid local view, the existing gateway invocation authenticates a stateless Native plan, performs one authoritative DO manifest read and the first exact GET batch, then authenticates an owned bounded continuation. Native validates and consumes that prefix once, with any suffix fetched by ordinary code. Original discovery, warm, receive, unsupported and old-capability paths remain ordinary.",
+  "limits": {
+    "original_POST_bytes": 131072,
+    "snapshot_bytes": 134217728,
+    "incoming_pack_bytes": 67108864,
+    "bulk_payload_bytes": 16777216,
+    "bulk_max_framing_bytes": 2060,
+    "batch_keys": 256,
+    "joint_cache_bytes": 33554432,
+    "cache_entries": 256,
+    "lineage_certificate_bytes": 32768,
+    "logical_headers": 256,
+    "logical_header_total_bytes": 65536,
+    "logical_header_line_bytes": 8192,
+    "continuation_metadata_bytes": 1500000,
+    "continuation_total_bytes": 18410368,
+    "new_metadata_ownership": "All owning Option<AuthorityFingerprint> bytes and new fixed key Mutex/Atomic metadata charged to existing joint32MiB budget; no new object cache or retained R2 data."
+  },
+  "authentication_and_authority": [
+    "Distinct optional exact registration capability and32B HMAC key paired atomically with a valid same-session generation witness; absent legacy capability is allowed, malformed/unsolicited/duplicate capabilities fail registration and reset all local capabilities before further I/O.",
+    "Full frame HMAC covers original semantic request including exact body, all metadata, ordered manifest representation and garbage, exact full/prefix selection, ordered first batch and every payload byte; SHA256 verifies owned payload chunks before materialization. The proposed content-address-only authentication refinement was not used.",
+    "Authoritative manifest read and actual generation/full fingerprint match precede GETs. Native re-derives the complete plan after sequential handler release and never retains a pending session map, blob stash or lock across callbacks.",
+    "Published/local fingerprint pair is saved only after strict winning publication before local successful-retirement cleanup, invalidated before unknown transitions, refreshed by existing actual recover, and checked with generation/local digest plus existing lineage identity. This preserves full durable garbage authentication after real compaction.",
+    "Worker accepts each actual DO receipt once. Native continuation carries no service receipt to echo. Missing/unknown/truncated/corrupt/ambiguous outcomes remain charged or unknown and never trigger hidden retry; valid paid-but-unused prefetch falls back with costs retained."
+  ],
+  "cache_key_transport_exclusions": [
+    "host",
+    "connection",
+    "content-length",
+    "transfer-encoding",
+    "accept-encoding",
+    "cf-worker",
+    "cf-connecting-ip",
+    "private fetch authentication header"
+  ],
+  "cache_key_exclusion_scope": "Only named transport fields unused by Git/auth semantics are omitted from cache identity. Original Authorization, Cookie, Git-Protocol, Content-Type, Content-Encoding, Accept, User-Agent, custom fields, deterministic generation witness and body remain keyed. Ordinary HTTP parser limits unchanged. Exact ordinary/continuation header difference is retained in activation-04-debug/native.stderr; early debug variants lack complete source/binary provenance and are diagnostic only.",
+  "final_actual_runs": [
+    {
+      "name": "5a-candidate",
+      "cwd": "/tmp/git-zero-hosting-gateway-first-read",
+      "env": {
+        "GIT_ZERO_FIRST_READ_CLOUDFLARE_ORIGIN": "http://127.0.0.1:8835",
+        "GIT_ZERO_FIRST_READ_OWN_RUNTIME": "1",
+        "GIT_ZERO_FIRST_READ_WRANGLER": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js",
+        "GIT_ZERO_FIRST_READ_MODE": "on",
+        "GIT_ZERO_FIRST_READ_ARTIFACTS": "/tmp/git-zero-first-read-5a-candidate"
+      },
+      "command": "cargo test -p git-zero-host --test first_read_cloudflare --profile hosting --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 -- --ignored --nocapture",
+      "combined_output": "/tmp/git-zero-first-read-5a-candidate.runner.log",
+      "result": "PASS",
+      "seconds": 42.66
+    },
+    {
+      "name": "5a-control",
+      "cwd": "/tmp/git-zero-hosting-gateway-first-read",
+      "env": {
+        "GIT_ZERO_FIRST_READ_CLOUDFLARE_ORIGIN": "http://127.0.0.1:8835",
+        "GIT_ZERO_FIRST_READ_OWN_RUNTIME": "1",
+        "GIT_ZERO_FIRST_READ_WRANGLER": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js",
+        "GIT_ZERO_FIRST_READ_MODE": "off",
+        "GIT_ZERO_FIRST_READ_ARTIFACTS": "/tmp/git-zero-first-read-5a-control"
+      },
+      "command": "cargo test -p git-zero-host --test first_read_cloudflare --profile hosting --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 -- --ignored --nocapture",
+      "combined_output": "/tmp/git-zero-first-read-5a-control.runner.log",
+      "result": "PASS",
+      "seconds": 43.59
+    },
+    {
+      "name": "faults-final",
+      "cwd": "/tmp/git-zero-hosting-gateway-first-read",
+      "env": {
+        "GIT_ZERO_FIRST_READ_CLOUDFLARE_ORIGIN": "http://127.0.0.1:8835",
+        "GIT_ZERO_FIRST_READ_OWN_RUNTIME": "1",
+        "GIT_ZERO_FIRST_READ_WRANGLER": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js",
+        "GIT_ZERO_FIRST_READ_MODE": "on",
+        "GIT_ZERO_FIRST_READ_ARTIFACTS": "/tmp/git-zero-first-read-faults-final",
+        "GIT_ZERO_FIRST_READ_FAULTS": "1"
+      },
+      "command": "cargo test -p git-zero-host --test first_read_cloudflare --profile hosting --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 -- --ignored --nocapture",
+      "combined_output": "/tmp/git-zero-first-read-faults-final.runner.log",
+      "result": "PASS",
+      "seconds": 43.05
+    },
+    {
+      "name": "headers-final",
+      "cwd": "/tmp/git-zero-hosting-gateway-first-read",
+      "env": {
+        "GIT_ZERO_FIRST_READ_CLOUDFLARE_ORIGIN": "http://127.0.0.1:8835",
+        "GIT_ZERO_FIRST_READ_OWN_RUNTIME": "1",
+        "GIT_ZERO_FIRST_READ_WRANGLER": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js",
+        "GIT_ZERO_FIRST_READ_MODE": "on",
+        "GIT_ZERO_FIRST_READ_ARTIFACTS": "/tmp/git-zero-first-read-headers-final",
+        "GIT_ZERO_FIRST_READ_FAULTS": "1",
+        "GIT_ZERO_FIRST_READ_HEADER_CHECK": "after"
+      },
+      "command": "cargo test -p git-zero-host --test first_read_cloudflare --profile hosting --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 -- --ignored --nocapture",
+      "combined_output": "/tmp/git-zero-first-read-headers-final.runner.log",
+      "result": "PASS",
+      "seconds": 22.36
+    }
+  ],
+  "final_source_continuity": {
+    "candidate_control_faults": "All30 entry source+binary before/after maps exactly identical and match final5a. No source editing while runtimes/watchers active. All common production Worker files and Native source hash-exact.",
+    "headers": "Header-final intentionally returns early and has source-before.json ONLY. That map equals the same30-entry final map; later full candidate/control/fault after-maps and clean exact5a establish continuity. It has no independent source-after map.",
+    "native_binary": {
+      "bytes": 1420768,
+      "path": "/tmp/git-zero-gateway-first-read-target-j2/hosting/repository-host",
+      "sha256": "22dc125c556e14e2edcda3939d7528713463d509a15685278d4976cb1809bbaf"
+    },
+    "first_read_runner_binary": {
+      "bytes": 1338456,
+      "path": "/tmp/git-zero-gateway-first-read-target-j2/hosting/deps/first_read_cloudflare-520915ed846fd43e",
+      "sha256": "3201dacdf0c2770fab8e67a5de22395924c635e423f8743a494d8a6ecaf419fa"
+    }
+  },
+  "actual_on_off_control": {
+    "scope": "Correctness/topology control, not frozen32-push benchmark, cost screen or latency acceptance. Candidate on and control off differ only in INITIAL capability request; ordinary generation witness remains valid from handshake, no manual re-registration. Same fixed commit dates, fixture bytes, common source/binary, Git, configuration, cache flags and ordering.",
+    "validation": "combined-validation.json",
+    "actual_verified_git_fresh_and_seeded": [
+      {
+        "name": "real-no-haves",
+        "candidate": {
+          "worker_requests": 3,
+          "worker_gateway_requests": 2,
+          "worker_service_requests": 0,
+          "do_requests": 3,
+          "r2_class_b": 2,
+          "r2_read_bytes": 9443985,
+          "do_rows_read": 3,
+          "do_rows_written": 0,
+          "consumed": 1,
+          "manifest_get": 2
+        },
+        "control": {
+          "worker_requests": 4,
+          "worker_gateway_requests": 2,
+          "worker_service_requests": 1,
+          "do_requests": 4,
+          "r2_class_b": 2,
+          "r2_read_bytes": 9443985,
+          "do_rows_read": 3,
+          "do_rows_written": 0,
+          "consumed": 0,
+          "manifest_get": 2
+        }
+      },
+      {
+        "name": "real-with-haves",
+        "candidate": {
+          "worker_requests": 3,
+          "worker_gateway_requests": 2,
+          "worker_service_requests": 0,
+          "do_requests": 3,
+          "r2_class_b": 2,
+          "r2_read_bytes": 9443985,
+          "do_rows_read": 3,
+          "do_rows_written": 0,
+          "consumed": 1,
+          "manifest_get": 2
+        },
+        "control": {
+          "worker_requests": 4,
+          "worker_gateway_requests": 2,
+          "worker_service_requests": 1,
+          "do_requests": 4,
+          "r2_class_b": 2,
+          "r2_read_bytes": 9443985,
+          "do_rows_read": 3,
+          "do_rows_written": 0,
+          "consumed": 0,
+          "manifest_get": 2
+        }
+      }
+    ],
+    "observer_scope": "Each per-Git receipt includes the same post-read stats observer W1/DO1/SQLread1. Public Git advertisement+POST are both included. Observer is separately phased; no extra authority is hidden.",
+    "whole_fetch_phase": {
+      "candidate": {
+        "consumed": 9,
+        "unsupported": 1,
+        "cache_hits": 1,
+        "sql_bytes": 20480,
+        "fetch_phase": {
+          "do_requests": 15,
+          "do_rows_read": 13,
+          "do_rows_written": 0,
+          "r2_class_a": 0,
+          "r2_class_b": 30,
+          "r2_deletes": 0,
+          "r2_read_bytes": 104943319,
+          "r2_written_bytes": 0,
+          "worker_gateway_requests": 13,
+          "worker_observer_requests": 0,
+          "worker_requests": 15,
+          "worker_service_requests": 2
+        },
+        "manifest": 9
+      },
+      "control": {
+        "consumed": 0,
+        "unsupported": 0,
+        "cache_hits": 1,
+        "sql_bytes": 20480,
+        "fetch_phase": {
+          "do_requests": 24,
+          "do_rows_read": 13,
+          "do_rows_written": 0,
+          "r2_class_a": 0,
+          "r2_class_b": 30,
+          "r2_deletes": 0,
+          "r2_read_bytes": 104943319,
+          "r2_written_bytes": 0,
+          "worker_gateway_requests": 13,
+          "worker_observer_requests": 0,
+          "worker_requests": 24,
+          "worker_service_requests": 11
+        },
+        "manifest": 9
+      }
+    },
+    "interpretation": "9 consumed prefetches save exactly9 external service Worker requests and9 DO calls in this fixture; same13 SQLreads/0writes,30 actual GETs/104943319 readbytes, same cache hit and20480B SQLite. Five response bodies byte-identical. No speed conclusion from serial elapsed correctness times.",
+    "identical_response_bodies": [
+      {
+        "name": "latest.body",
+        "bytes": 9442137,
+        "sha256": "2de2b6c3b0185fe088bf1a8049b71a2d3685f6d3648449fda8103b4816e83a55"
+      },
+      {
+        "name": "history-no-haves.body",
+        "bytes": 9440855,
+        "sha256": "40a92075b5b07c902598ce362ab97822c78cf84a05e881bb7b11d54737c48038"
+      },
+      {
+        "name": "history-with-haves.body",
+        "bytes": 338,
+        "sha256": "ce5e1fbbf856feb84a8c97e49d0065d5046ea8dff1becbb728c6cbbce7909441"
+      },
+      {
+        "name": "retirement-5-immediate.body",
+        "bytes": 9441369,
+        "sha256": "0239c55d207180784205cddcaeb099a3427e92f9cf1b0662b37304c67a039fd5"
+      },
+      {
+        "name": "large-latest.body",
+        "bytes": 19931394,
+        "sha256": "4acca74cb75683d09e8bd3ad79647d42589ca679903762ea4ad026b4b633cdb8"
+      }
+    ]
+  },
+  "fault_contract": {
+    "report": "raw/git-zero-first-read-faults-final/fault-contract.json in correctness-evidence.tar.gz",
+    "modes": [
+      {
+        "mode": "normal-full",
+        "status": 200,
+        "first_read_gets_actual_trace": 5
+      },
+      {
+        "mode": "normal-prefix",
+        "status": 200,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "plan-auth",
+        "status": 502,
+        "first_read_gets_actual_trace": 0
+      },
+      {
+        "mode": "plan-response-auth",
+        "status": 502,
+        "first_read_gets_actual_trace": 0
+      },
+      {
+        "mode": "continue-auth",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-corrupt-signed",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-truncate-signed",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-wrong-repo-signed",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-wrong-session-signed",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-wrong-target-signed",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-wrong-body-signed",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-wrong-selection",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-duplicate-signed",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-drop",
+        "status": 500,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-cache-fill",
+        "status": 200,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "continue-local-push",
+        "status": 200,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "generation-change",
+        "status": 200,
+        "first_read_gets_actual_trace": 0
+      },
+      {
+        "mode": "get-failure",
+        "status": 502,
+        "first_read_gets_actual_trace": 1
+      },
+      {
+        "mode": "get-corrupt",
+        "status": 503,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "unknown-sql",
+        "status": 200,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "missing-receipt",
+        "status": 502,
+        "first_read_gets_actual_trace": 2
+      },
+      {
+        "mode": "get-body-failure",
+        "status": 502,
+        "first_read_gets_actual_trace": 1
+      },
+      {
+        "mode": "registry-loss",
+        "status": 502,
+        "first_read_gets_actual_trace": 0
+      }
+    ],
+    "scope": "Production Worker/DO/R2 through a test-only binding wrapper, actual calls/attempts/order/bytes, no fabricated service receipt. Full vs prefix exact flattened chunk sequence; first actual batch consumed once; ordinary suffix only. Cache-fill/local-push hooks invoke actual same Native between plan/continue, preserve paid GETs and discard once. Generation-change performs0firstGET; ordinary recovery remains charged. Unknown SQL leaves row costs unknown; missing receipt/body failure makes accounting incomplete. Error modes do not silently reread. The contract.json final stats precede fault mutations; fault-contract.json is the separate later matrix.",
+    "success_validation": "Real Git strict fsck, archive/content and ref checks; no write/storage growth from successful read controls."
+  },
+  "header_contract": {
+    "report": "raw/git-zero-first-read-headers-final/header-contract.json in correctness-evidence.tar.gz",
+    "rows": [
+      {
+        "actual_logical_header_count": 9,
+        "custom_header_count": 1,
+        "label": "underscore",
+        "status": 200,
+        "actual_first_read_GETs": 2
+      },
+      {
+        "actual_logical_header_count": 9,
+        "custom_header_count": 1,
+        "label": "dot",
+        "status": 200,
+        "actual_first_read_GETs": 2
+      },
+      {
+        "actual_logical_header_count": 9,
+        "custom_header_count": 1,
+        "label": "tab",
+        "status": 200,
+        "actual_first_read_GETs": 2
+      },
+      {
+        "actual_logical_header_count": 8,
+        "custom_header_count": 3,
+        "label": "spoof",
+        "status": 200,
+        "actual_first_read_GETs": 2
+      },
+      {
+        "actual_logical_header_count": 252,
+        "custom_header_count": 244,
+        "label": "count",
+        "status": 200,
+        "actual_first_read_GETs": 2
+      },
+      {
+        "actual_logical_header_count": 253,
+        "custom_header_count": 245,
+        "label": "count",
+        "status": 200,
+        "actual_first_read_GETs": 2
+      },
+      {
+        "actual_logical_header_count": 254,
+        "custom_header_count": 246,
+        "label": "count",
+        "status": 200,
+        "actual_first_read_GETs": 2
+      },
+      {
+        "actual_logical_header_count": 255,
+        "custom_header_count": 247,
+        "label": "count",
+        "status": 200,
+        "actual_first_read_GETs": 2
+      },
+      {
+        "actual_logical_header_count": 256,
+        "custom_header_count": 248,
+        "label": "count",
+        "status": 200,
+        "actual_first_read_GETs": 2
+      },
+      {
+        "actual_logical_header_count": null,
+        "custom_header_count": 249,
+        "label": "count",
+        "status": 200,
+        "actual_first_read_GETs": 0
+      },
+      {
+        "actual_logical_header_count": null,
+        "custom_header_count": 250,
+        "label": "count",
+        "status": 200,
+        "actual_first_read_GETs": 0
+      },
+      {
+        "actual_logical_header_count": null,
+        "custom_header_count": 251,
+        "label": "count",
+        "status": 200,
+        "actual_first_read_GETs": 0
+      },
+      {
+        "actual_logical_header_count": null,
+        "custom_header_count": 252,
+        "label": "count",
+        "status": 200,
+        "actual_first_read_GETs": 0
+      }
+    ],
+    "scope": "Actual public private-header spoof stripping plus legal underscore/dot header names and embedded HTAB; actual sanitized252..256logical header boundaries use optimized read,257+ are typed pre-I/O unsupported and productive ordinary fallback. Both proven independent-review P2 findings corrected without widening ordinary parser limits."
+  },
+  "legacy_controls": [
+    {
+      "name": "legacy-inline-production",
+      "cwd": "/tmp/git-zero-hosting-gateway-first-read",
+      "env": {
+        "GIT_ZERO_INLINE_ARTIFACTS": "/tmp/git-zero-first-read-legacy-inline-production"
+      },
+      "command": "cargo test -p git-zero-host --test fused_metadata --profile hosting --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 actual_inline_metadata_production_gate -- --ignored --exact --nocapture",
+      "combined_output": "/tmp/git-zero-first-read-legacy-inline-production.runner.log",
+      "raw_report": "/tmp/git-zero-first-read-legacy-inline-production/production.json",
+      "result": "PASS",
+      "seconds": 11.74,
+      "source": "final5a production source and unchanged pre-existing Rust test driver; exact source/runner manifests retained"
+    },
+    {
+      "name": "legacy-inline-storage",
+      "cwd": "/tmp/git-zero-hosting-gateway-first-read",
+      "env": {
+        "GIT_ZERO_INLINE_ARTIFACTS": "/tmp/git-zero-first-read-legacy-inline-storage"
+      },
+      "command": "cargo test -p git-zero-host --test fused_metadata --profile hosting --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 actual_inline_metadata_realistic_storage -- --ignored --exact --nocapture",
+      "combined_output": "/tmp/git-zero-first-read-legacy-inline-storage.runner.log",
+      "raw_report": "/tmp/git-zero-first-read-legacy-inline-storage/storage.json",
+      "result": "PASS",
+      "seconds": 23.04,
+      "source": "final5a production source and unchanged pre-existing Rust test driver; exact source/runner manifests retained"
+    },
+    {
+      "name": "legacy-deferred-proof",
+      "cwd": "/tmp/git-zero-hosting-gateway-first-read",
+      "env": {
+        "GIT_ZERO_DEFERRED_ARTIFACTS": "/tmp/git-zero-first-read-legacy-deferred-proof"
+      },
+      "command": "cargo test -p git-zero-host --test deferred_catalog --profile hosting --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 actual_deferred_catalog_proofs_and_compatibility -- --ignored --exact --nocapture",
+      "combined_output": "/tmp/git-zero-first-read-legacy-deferred-proof.runner.log",
+      "raw_report": "/tmp/git-zero-first-read-legacy-deferred-proof/proofs.json",
+      "result": "PASS",
+      "seconds": 37.13,
+      "source": "final5a production source and unchanged pre-existing Rust test driver; exact source/runner manifests retained"
+    },
+    {
+      "name": "legacy-native",
+      "cwd": "/tmp/git-zero-hosting-gateway-first-read",
+      "env": {
+        "GIT_ZERO_INLINE_NATIVE_ARTIFACTS": "/tmp/git-zero-first-read-legacy-native",
+        "GIT_ZERO_INLINE_NATIVE_PORT": "8835",
+        "GIT_ZERO_WRANGLER_CLI": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js"
+      },
+      "command": "cargo test -p git-zero-host --test inline_native --profile hosting --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 actual_registered_native_inline_faults_recover_before_next_mutation -- --ignored --exact --nocapture",
+      "combined_output": "/tmp/git-zero-first-read-legacy-native.runner.log",
+      "raw_report": "/tmp/git-zero-first-read-legacy-native/report.json",
+      "result": "PASS",
+      "seconds": 65.54,
+      "source": "final5a production source and unchanged pre-existing Rust test driver; exact source/runner manifests retained"
+    }
+  ],
+  "legacy_storage": [
+    {
+      "final": {
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5267,
+        "r2_live_objects": 11,
+        "r2_live_bytes": 52432971,
+        "r2_peak_bytes": 68157518
+      },
+      "fold_before": {
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5268,
+        "r2_live_objects": 10,
+        "r2_live_bytes": 52428875,
+        "r2_peak_bytes": 68157518
+      },
+      "folded": {
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5267,
+        "r2_live_objects": 11,
+        "r2_live_bytes": 52432971,
+        "r2_peak_bytes": 68157518
+      },
+      "initial": {
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5467,
+        "r2_live_objects": 13,
+        "r2_live_bytes": 68157518,
+        "r2_peak_bytes": 68157518
+      },
+      "normal": {
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5467,
+        "r2_live_objects": 13,
+        "r2_live_bytes": 68157518,
+        "r2_peak_bytes": 68157518
+      },
+      "normal_before": {
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5467,
+        "r2_live_objects": 13,
+        "r2_live_bytes": 68157518,
+        "r2_peak_bytes": 68157518
+      }
+    },
+    {
+      "reopened": {
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5267,
+        "r2_live_objects": 11,
+        "r2_live_bytes": 52432971,
+        "r2_peak_bytes": 68157518
+      }
+    }
+  ],
+  "legacy_native_faults": [
+    "fused-sql-before",
+    "fused-transaction",
+    "fused-sync-after",
+    "lost-retirement-reply",
+    "delete-second",
+    "cursor-unknown"
+  ],
+  "legacy_native_scope": "Six real same-Native receive/retirement faults, publication rollback or ambiguity as appropriate, next mutation performs actual recovery/GC before PUT; strict fsck/content/ref/cache/caps checks. Existing R14/R13 Rust drivers unchanged.",
+  "library": {
+    "command": "cargo test -p git-zero-host --lib --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2",
+    "log": "raw/git-zero-first-read-lib-committed.log",
+    "result": "113 passed;0failed",
+    "seconds": 4.94,
+    "source": "exact committed5a"
+  },
+  "clippy": {
+    "command": "cargo clippy -p git-zero-host --all-targets --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 -- -D warnings",
+    "log": "raw/git-zero-first-read-clippy-final-02.log",
+    "result": "PASS",
+    "seconds": 8.87
+  },
+  "format": "cargo fmt --all --check and git diff --check PASS before source commit; no subsequent source changes.",
+  "warm_control": {
+    "validation": {
+      "exit_code": 0,
+      "test_seconds": 2.83,
+      "kind": "production_warm_correctness_not_benchmark",
+      "source_before_manifest_sha256": "918872d104f6f534d22b39647474ffd5d618432533e0a5ea5828338b46015b89",
+      "all26_source_files_unchanged_after_test": true,
+      "production_identical_to_failed01": true,
+      "binary_files": {
+        "/tmp/git-zero-gateway-first-read-target-j2/hosting/repository-host": {
+          "bytes": 1420640,
+          "sha256": "2a99e7a0e4a55dea843b8b1ed2720046e42f19717afc313a53963afb3479c38b"
+        },
+        "/tmp/git-zero-gateway-first-read-target-j2/hosting/deps/first_read_warm-9c9e6ae3de1aa3f2": {
+          "bytes": 1188608,
+          "sha256": "0001e0a407f0783bb890241f10e33c75caa0095a4c41de98cfb9acccee1a69b0"
+        }
+      },
+      "verified_real_git_reads": 5,
+      "fetch_phase_usage": {
+        "do_requests": 12,
+        "do_rows_read": 12,
+        "do_rows_written": 0,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_gateway_requests": 12,
+        "worker_observer_requests": 0,
+        "worker_requests": 12,
+        "worker_service_requests": 0
+      },
+      "all_gateway_first_read_counters": {
+        "gateway_read_consumed": 0,
+        "gateway_read_errors": 0,
+        "gateway_read_generation_changed": 0,
+        "gateway_read_paid_discards": 0,
+        "gateway_read_plans": 0,
+        "gateway_read_unsupported": 0
+      },
+      "cache_recheck": {
+        "cache_hits": [
+          0,
+          1
+        ],
+        "cache_misses": [
+          6,
+          6
+        ]
+      },
+      "final_storage": {
+        "r2_live_objects": 3,
+        "r2_live_bytes": 1053224,
+        "r2_peak_bytes": 1053224,
+        "r2_written_bytes": 1053224,
+        "do_sqlite_bytes": 20480,
+        "do_rows_written": 12
+      },
+      "observer_list_operations_paid_and_retained": 14,
+      "cleanup": {
+        "ss_ports_8835_8836": "no listeners",
+        "owned_artifact_and_native_process_match": "pgrep exit1"
+      },
+      "full_bill_cpu": null,
+      "speed_claim": null
+    },
+    "source_label": "PRE-header-fix frozen variant, not relabeled final5a. Its26 before/after source+binary identities are retained in the warm source manifest/validation. Later metadata eligibility correction does not execute in warm mode; independently reviewed warm fast-exit path unchanged. No rerun only for report wording.",
+    "worker_index_sha256": "99aeac68f8020c649d7b9c0b0fe98963f27d82432efe957c6b033ecc25449e52",
+    "first_read_module_sha256": "8c34ee1fda72108ea795ed03d5f8bad4f4818a23c93dc325390f85c7ff978ffa",
+    "command": "GIT_ZERO_FIRST_READ_WARM_ORIGIN=http://127.0.0.1:8835 GIT_ZERO_FIRST_READ_WARM_ARTIFACTS=/tmp/git-zero-first-read-warm-02 GIT_ZERO_FIRST_READ_WARM_WRANGLER=<shared Wrangler CLI> cargo test -p git-zero-host --test first_read_warm --profile hosting --target-dir /tmp/git-zero-gateway-first-read-target-j2 -j 2 -- --ignored --nocapture",
+    "scope": "Three actual push/latest cycles, fresh and seeded historical packet negotiations, cache recheck, final refs/fsck/archive.14 observer LISTs retained in actual total; fetch phase itself has0R2GET/A/B/bytes/writes and0servicecallbacks/first-read counters."
+  },
+  "pre_final_variants_and_failures": [
+    {
+      "artifacts": "activation-01/02/03/04-debug",
+      "result": "Cache recheck regression exposed workerd transport header differences; named exclusions fixed it. Debug04 additionally ends503. Exact header diff retained. These early variants have no complete old source/binary snapshot; diagnostic only, no invented hashes or final-source attribution."
+    },
+    {
+      "artifacts": "activation-05 / pair-candidate-01",
+      "result": "Intermediate normal activation success predating strict caps/fingerprint debt/header correction; superseded by final exact5a on/off, not acceptance."
+    },
+    {
+      "artifacts": "retirement-before-fix",
+      "result": "Real immediate g5 fetch502 after three actual DELETEs before g6 push: local cleaned garbage differed from same-generation durable manifest. Before-fix source archive/manifest/binarySHA retained. Published/local paired digest fix then passed retirement-after-fix; final5a contracts re-prove immediate compaction read."
+    },
+    {
+      "artifacts": "final-candidate-01 / final-control-01 / actual-paired-control.json",
+      "result": "Pre-header-fix deterministic on/off first established1W+1DO saving with sameGETs/bytes. Honest older source maps retained; final exact5a on/off supersedes this proof."
+    },
+    {
+      "artifacts": "faults-01/02",
+      "result": "Exploratory fixture expected502 for intentional dropped continuation/get corruption; actual500/503 correctly fail without reread. Only expected statuses corrected; faults-03 passed19modes on pre-header source. Final5a23mode matrix supersedes."
+    },
+    {
+      "artifacts": "headers-before-fix",
+      "result": "Independent reviewer proved actual forwarded logical header count could exceed256 after additions, valid token underscore/dot names and HTAB values rejected. Actual before-fix regression rows and exact source archive/manifest/binarySHA retained. Sanitized eligibility and legal token grammar fixed, headers-after-fix then final5a12case control passed."
+    },
+    {
+      "artifacts": "warm-01 / warm-02",
+      "result": "Warm01 test mistakenly compared total ClassA including stats observer LIST rather than fetch phase. Test corrected to assert fetch phase0 and retain14observerLISTs. Production hashes identical between warm01 and warm02; warm02 passed. Both are older frozen source variants."
+    },
+    {
+      "artifacts": "lib-01 / lib-02 / clippy-final.log",
+      "result": "Initial socket binds denied in sandbox; scoped authorized loopback rerun passed. Two actual fixture/ordinary-TE normalization regressions corrected during development. Initial finalClippy reported test constant-assert warning; changed to const assertion only. Final113lib+alltargetClippy pass. Earlier failures retained as diagnostics."
+    }
+  ],
+  "canonical_manifest_vector": {
+    "sha256": "3679df2c35f192f8832484fb1d25d20a482f0819994a96b6202e87f9601f374a",
+    "scope": "Independent actual Worker/Rust/Python vector includes UTF8-byte ref order/non-BMP, full representations and ordered garbage; no JSON.stringify/serde order assumption."
+  },
+  "unknowns": {
+    "worker_CPU_ms": null,
+    "DO_GB_seconds": null,
+    "Native_HTTP_CPU_compute_cost": null,
+    "monthly_storage_time_integral": null,
+    "known_full_bill_USD": null,
+    "speed_claim": null,
+    "frozen_interleaved_benchmark_result": null,
+    "Git_smart_server_comparison": null,
+    "reason": "Local workerd operation counts are actual, cloud/native compute and duration remain unpriced. Entire bounded frame is HMAC-hashed, with added Native HTTP exchanges. Formal two-pair four-profile screen and final five-pair validation belong to independent measurement; this correctness gate cannot establish net cost or speed acceptance."
+  },
+  "cleanup": "cleanup.json; owned ports8834/8835/8836 no listeners, owned Native processes empty, worktree clean before ledger. All owned watcher/native process groups stopped; no paid deployment, primary edit, push, CI trigger or R16/R17 process mutation.",
+  "evidence": {
+    "inventory": "artifact-inventory.json",
+    "raw_bundle": "correctness-evidence.tar.gz",
+    "included_files": 2122,
+    "inventoried_files": 2330,
+    "packaging": "Offline SHA256/JSON/tar packaging only, actual production test runners are Rust. Raw generated Git directories/R2/SQLite state and ELF binaries excluded; exact binary and omitted Git response hashes retained. All included files carry SHA256+bytes in inventory; no new runtime tests during ledger packaging."
+  }
+}

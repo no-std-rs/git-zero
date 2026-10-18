@@ -1,0 +1,57 @@
+{
+  "code_commit": "5a7f74f58336b5474dc9920cd20857ab8e573910",
+  "files": {
+    "examples/repository-host/cloudflare/src/index.js": {
+      "bytes": 89194,
+      "sha256": "bd42e9b9fc4039688b554c97a47d89202df4422fa5b91e008ec892811bb39f17"
+    },
+    "examples/repository-host/cloudflare/src/first-read.js": {
+      "bytes": 11501,
+      "sha256": "2dcc11b30a6bb5628dbc1ee50eff336f65de134d89402b94aec86345e704bbf3"
+    },
+    "examples/repository-host/src/first_read.rs": {
+      "bytes": 22426,
+      "sha256": "5b60215cd3201e466ecdcd23ff7bb28a1def5275eb90889471fbffcabc5c6e37"
+    },
+    "examples/repository-host/src/cloudflare.rs": {
+      "bytes": 100246,
+      "sha256": "e36fe507b12858da91f5145cacddf4359fd454a30c3391017361118cd24f6a94"
+    },
+    "examples/repository-host/src/native.rs": {
+      "bytes": 103312,
+      "sha256": "838ff4672d8ceabbb0a04c4d8efc40f6fe60aa1153c25f008eef2e2604780874"
+    },
+    "examples/repository-host/src/native/history.rs": {
+      "bytes": 21101,
+      "sha256": "b30f3432e3d6b09d872fd0d10271c90b9398d75a335bb1a1775a1c7449e66d93"
+    },
+    "examples/repository-host/src/lib.rs": {
+      "bytes": 49221,
+      "sha256": "e6a3db9353ee0ed6505bd8abd7adf74eee87330d55a4823578df9aa871c8071b"
+    },
+    "examples/repository-host/src/bin/repository-host.rs": {
+      "bytes": 5241,
+      "sha256": "d432cb6cf0a8d8ae4e00e9516248f4f020e00f13146c1e3955b0020514a06f1f"
+    },
+    "examples/repository-host/tests/first_read_cloudflare.rs": {
+      "bytes": 43163,
+      "sha256": "84de5a3d07f589acf44fd43d59e9a01c308a15ddd2baa34718b8dd59b3b2fc97"
+    },
+    "examples/repository-host/tests/first_read_warm.rs": {
+      "bytes": 17649,
+      "sha256": "aed8805704c66948538b5423df6d74cfc962d9b605bc27fe191e10956d4837ed"
+    },
+    "examples/repository-host/cloudflare/test/first-read-worker.js": {
+      "bytes": 10542,
+      "sha256": "00be19b572d893b41a3cd06187ebf7a1e750c48e8996130da1b2c59aaf1bf398"
+    },
+    "examples/repository-host/cloudflare/test/first-read.toml": {
+      "bytes": 501,
+      "sha256": "95e51b24846db9547a128a6189964d01f7b4c05bb027e61398b61eca90d0c77b"
+    },
+    "docs/hosting-gateway-first-read.md": {
+      "bytes": 6983,
+      "sha256": "cee195b0babb2203532cddbf1273796a8ab1e5e01e9ba8c379b7fc5170c615dd"
+    }
+  }
+}

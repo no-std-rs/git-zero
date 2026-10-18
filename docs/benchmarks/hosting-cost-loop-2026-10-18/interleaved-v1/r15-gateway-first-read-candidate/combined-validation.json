@@ -1,0 +1,251 @@
+{
+  "source_commit": "5a7f74f58336b5474dc9920cd20857ab8e573910",
+  "kind": "actual correctness topology control, not benchmark",
+  "same_all_source_and_binary_maps": true,
+  "rows": [
+    {
+      "name": "real-no-haves",
+      "candidate": {
+        "worker_requests": 3,
+        "worker_gateway_requests": 2,
+        "worker_service_requests": 0,
+        "do_requests": 3,
+        "r2_class_b": 2,
+        "r2_read_bytes": 9443985,
+        "do_rows_read": 3,
+        "do_rows_written": 0,
+        "consumed": 1,
+        "manifest_get": 2
+      },
+      "control": {
+        "worker_requests": 4,
+        "worker_gateway_requests": 2,
+        "worker_service_requests": 1,
+        "do_requests": 4,
+        "r2_class_b": 2,
+        "r2_read_bytes": 9443985,
+        "do_rows_read": 3,
+        "do_rows_written": 0,
+        "consumed": 0,
+        "manifest_get": 2
+      }
+    },
+    {
+      "name": "real-with-haves",
+      "candidate": {
+        "worker_requests": 3,
+        "worker_gateway_requests": 2,
+        "worker_service_requests": 0,
+        "do_requests": 3,
+        "r2_class_b": 2,
+        "r2_read_bytes": 9443985,
+        "do_rows_read": 3,
+        "do_rows_written": 0,
+        "consumed": 1,
+        "manifest_get": 2
+      },
+      "control": {
+        "worker_requests": 4,
+        "worker_gateway_requests": 2,
+        "worker_service_requests": 1,
+        "do_requests": 4,
+        "r2_class_b": 2,
+        "r2_read_bytes": 9443985,
+        "do_rows_read": 3,
+        "do_rows_written": 0,
+        "consumed": 0,
+        "manifest_get": 2
+      }
+    }
+  ],
+  "identical_response_bodies": [
+    {
+      "name": "latest.body",
+      "bytes": 9442137,
+      "sha256": "2de2b6c3b0185fe088bf1a8049b71a2d3685f6d3648449fda8103b4816e83a55"
+    },
+    {
+      "name": "history-no-haves.body",
+      "bytes": 9440855,
+      "sha256": "40a92075b5b07c902598ce362ab97822c78cf84a05e881bb7b11d54737c48038"
+    },
+    {
+      "name": "history-with-haves.body",
+      "bytes": 338,
+      "sha256": "ce5e1fbbf856feb84a8c97e49d0065d5046ea8dff1becbb728c6cbbce7909441"
+    },
+    {
+      "name": "retirement-5-immediate.body",
+      "bytes": 9441369,
+      "sha256": "0239c55d207180784205cddcaeb099a3427e92f9cf1b0662b37304c67a039fd5"
+    },
+    {
+      "name": "large-latest.body",
+      "bytes": 19931394,
+      "sha256": "4acca74cb75683d09e8bd3ad79647d42589ca679903762ea4ad026b4b633cdb8"
+    }
+  ],
+  "final": {
+    "candidate": {
+      "consumed": 9,
+      "unsupported": 1,
+      "cache_hits": 1,
+      "sql_bytes": 20480,
+      "fetch_phase": {
+        "do_requests": 15,
+        "do_rows_read": 13,
+        "do_rows_written": 0,
+        "r2_class_a": 0,
+        "r2_class_b": 30,
+        "r2_deletes": 0,
+        "r2_read_bytes": 104943319,
+        "r2_written_bytes": 0,
+        "worker_gateway_requests": 13,
+        "worker_observer_requests": 0,
+        "worker_requests": 15,
+        "worker_service_requests": 2
+      },
+      "manifest": 9
+    },
+    "control": {
+      "consumed": 0,
+      "unsupported": 0,
+      "cache_hits": 1,
+      "sql_bytes": 20480,
+      "fetch_phase": {
+        "do_requests": 24,
+        "do_rows_read": 13,
+        "do_rows_written": 0,
+        "r2_class_a": 0,
+        "r2_class_b": 30,
+        "r2_deletes": 0,
+        "r2_read_bytes": 104943319,
+        "r2_written_bytes": 0,
+        "worker_gateway_requests": 13,
+        "worker_observer_requests": 0,
+        "worker_requests": 24,
+        "worker_service_requests": 11
+      },
+      "manifest": 9
+    }
+  },
+  "fault_modes": [
+    {
+      "mode": "normal-full",
+      "status": 200,
+      "first_read_gets_actual_trace": 5
+    },
+    {
+      "mode": "normal-prefix",
+      "status": 200,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "plan-auth",
+      "status": 502,
+      "first_read_gets_actual_trace": 0
+    },
+    {
+      "mode": "plan-response-auth",
+      "status": 502,
+      "first_read_gets_actual_trace": 0
+    },
+    {
+      "mode": "continue-auth",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-corrupt-signed",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-truncate-signed",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-wrong-repo-signed",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-wrong-session-signed",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-wrong-target-signed",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-wrong-body-signed",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-wrong-selection",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-duplicate-signed",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-drop",
+      "status": 500,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-cache-fill",
+      "status": 200,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "continue-local-push",
+      "status": 200,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "generation-change",
+      "status": 200,
+      "first_read_gets_actual_trace": 0
+    },
+    {
+      "mode": "get-failure",
+      "status": 502,
+      "first_read_gets_actual_trace": 1
+    },
+    {
+      "mode": "get-corrupt",
+      "status": 503,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "unknown-sql",
+      "status": 200,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "missing-receipt",
+      "status": 502,
+      "first_read_gets_actual_trace": 2
+    },
+    {
+      "mode": "get-body-failure",
+      "status": 502,
+      "first_read_gets_actual_trace": 1
+    },
+    {
+      "mode": "registry-loss",
+      "status": 502,
+      "first_read_gets_actual_trace": 0
+    }
+  ],
+  "known_full_bill_usd": null,
+  "speed_claim": null
+}
