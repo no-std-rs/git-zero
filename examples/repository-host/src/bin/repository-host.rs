@@ -18,6 +18,7 @@ fn main() -> io::Result<()> {
         let mut gateway_first_read = true;
         let mut gateway_first_receive = true;
         let mut socket_rpc = true;
+        let mut response_cache_admission = git_zero_host::native::ResponseCacheAdmission::Fit;
         let mut protected_chunk = git_zero_host::native::ProtectedChunkMode::Joint;
         loop {
             match arguments.peek().map(String::as_str) {
@@ -73,6 +74,18 @@ fn main() -> io::Result<()> {
                         _ => return Err(io::Error::other("socket RPC must be on or off")),
                     };
                 }
+                Some("--response-cache-admission") => {
+                    arguments.next();
+                    response_cache_admission = match arguments.next().as_deref() {
+                        Some("evict") => git_zero_host::native::ResponseCacheAdmission::Evict,
+                        Some("fit") => git_zero_host::native::ResponseCacheAdmission::Fit,
+                        _ => {
+                            return Err(io::Error::other(
+                                "response cache admission must be evict or fit",
+                            ));
+                        }
+                    };
+                }
                 Some("--protected-chunk") => {
                     arguments.next();
                     protected_chunk = match arguments.next().as_deref() {
@@ -109,6 +122,7 @@ fn main() -> io::Result<()> {
         let mut host =
             NativeHost::open_cloudflare(PathBuf::from(root), &origin, &repo, &token, cold)?;
         host.set_protected_chunk_mode(protected_chunk);
+        host.set_response_cache_admission(response_cache_admission);
         let services = host
             .cloudflare_services()
             .ok_or_else(|| io::Error::other("missing Cloudflare registration services"))?;

@@ -16,6 +16,24 @@ fn run(program: &str, args: &[&str], input: &[u8]) -> Vec<u8> {
         .env("GIT_AUTHOR_DATE", "2001-01-01T00:00:00Z")
         .env("GIT_COMMITTER_DATE", "2001-01-01T00:00:00Z")
         .env("GIT_TERMINAL_PROMPT", "0");
+    if program == "curl" {
+        let output = cmd.output().unwrap();
+        if let Some(at) = args.iter().position(|arg| *arg == "--output") {
+            let body = PathBuf::from(args[at + 1]);
+            fs::write(body.with_extension("status"), &output.stdout).unwrap();
+            fs::write(body.with_extension("stderr"), &output.stderr).unwrap();
+            fs::write(
+                body.with_extension("exit"),
+                format!("{:?}", output.status.code()),
+            )
+            .unwrap();
+        }
+        assert!(
+            output.status.success(),
+            "curl transport failure, all actual output files preserved: {args:?}"
+        );
+        return output.stdout;
+    }
     command(cmd, input)
         .unwrap_or_else(|e| panic!("{program} {args:?}: {e}"))
         .stdout
@@ -42,10 +60,20 @@ impl Drop for Owned {
 }
 fn spawn(root: &Path, program: &str, args: &[&str], log: &str) -> Owned {
     let file = File::create(root.join(log)).unwrap();
+    let mut owned_args: Vec<String> = args.iter().map(|v| (*v).into()).collect();
+    if program == env!("CARGO_BIN_EXE_repository-host") {
+        let at = owned_args.len() - 2;
+        owned_args.splice(
+            at..at,
+            ["--response-cache-admission".into(), response_policy()],
+        );
+    }
     Owned(
         Command::new("setsid")
             .arg(program)
-            .args(args)
+            .args(&owned_args)
+            .env_remove("GIT_EDITOR")
+            .env_remove("GIT_TRACE2_EVENT")
             .current_dir(root)
             .env("WRANGLER_SEND_METRICS", "false")
             .env("X_LOCAL_EXPLORER", "false")
@@ -67,6 +95,7 @@ fn wait(root: &Path, process: &mut Owned, log: &str, needle: &str) {
             root.join(log).display()
         );
         if fs::read_to_string(root.join(log)).unwrap().contains(needle) {
+            runtime_snapshot(root, &format!("ready-{log}"), &[process.0.id()]);
             return;
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -117,6 +146,7 @@ fn request(root: &Path, name: &str, url: &str, body: Option<&[u8]>) -> Vec<u8> {
 fn record_gate_context(root: &Path) {
     let environment: BTreeMap<_, _> = [
         "GIT_TRACE2_EVENT",
+        "GIT_ZERO_FIT_POLICY",
         "GIT_ZERO_MULTI_ARTIFACTS",
         "GIT_ZERO_MULTI_BASE",
         "GIT_ZERO_MULTI_MODE",
@@ -137,7 +167,7 @@ fn record_gate_context(root: &Path) {
 }
 
 fn metrics(root: &Path, name: &str) -> Value {
-    serde_json::from_slice(&request(root, name, "http://127.0.0.1:8846/metrics", None)).unwrap()
+    serde_json::from_slice(&request(root, name, "http://127.0.0.1:8850/metrics", None)).unwrap()
 }
 fn n(value: &Value, key: &str) -> u64 {
     value[key]
@@ -225,12 +255,25 @@ fn read(
     want: &str,
     have: Option<&str>,
 ) -> Value {
+    read_identity(root, source, client, gateway, name, want, have, name)
+}
+#[allow(clippy::too_many_arguments)]
+fn read_identity(
+    root: &Path,
+    source: &Path,
+    client: &Path,
+    gateway: &str,
+    name: &str,
+    want: &str,
+    have: Option<&str>,
+    identity: &str,
+) -> Value {
     let before = metrics(root, &format!("{name}-before"));
     let bytes = request(
         root,
         name,
         &format!("{gateway}/git-upload-pack"),
-        Some(&fetch_body(want, have, name)),
+        Some(&fetch_body(want, have, identity)),
     );
     let after = metrics(root, &format!("{name}-after"));
     check_budget(&after);
@@ -338,7 +381,7 @@ fn sources() -> BTreeMap<String, Value> {
 }
 
 #[test]
-#[ignore = "explicit Rust-owned local production-workerd gate on ports 8845/8846"]
+#[ignore = "explicit Rust-owned local production-workerd gate on ports 8849/8850"]
 fn multi_chunk_production_gate() {
     let root =
         PathBuf::from(std::env::var("GIT_ZERO_MULTI_ARTIFACTS").expect("fresh artifact root"));
@@ -364,7 +407,7 @@ fn multi_chunk_production_gate() {
         .parse::<usize>()
         .unwrap();
     assert!(initial == 16 || initial == 64);
-    for port in [8845, 8846] {
+    for port in [8849, 8850] {
         drop(std::net::TcpListener::bind(("127.0.0.1", port)).expect("owned port free"));
     }
     let worker = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cloudflare");
@@ -409,7 +452,7 @@ fn multi_chunk_production_gate() {
             "--ip",
             "127.0.0.1",
             "--port",
-            "8845",
+            "8849",
             "--local",
             "--persist-to",
             persist.to_str().unwrap(),
@@ -421,7 +464,7 @@ fn multi_chunk_production_gate() {
         &root,
         &mut runtime,
         "wrangler.log",
-        "Ready on http://127.0.0.1:8845",
+        "Ready on http://127.0.0.1:8849",
     );
     let native_root = root.join("native");
     let mut native = spawn(
@@ -429,7 +472,7 @@ fn multi_chunk_production_gate() {
         env!("CARGO_BIN_EXE_repository-host"),
         &[
             "--cloudflare",
-            "http://127.0.0.1:8845",
+            "http://127.0.0.1:8849",
             "--repo",
             "protected-gate",
             "--view-cache",
@@ -441,12 +484,12 @@ fn multi_chunk_production_gate() {
             "--protected-chunk",
             &mode,
             native_root.to_str().unwrap(),
-            "8846",
+            "8850",
         ],
         "host.log",
     );
     wait(&root, &mut native, "host.log", "Git gateway:");
-    let gateway = "http://127.0.0.1:8845/protected-gate/repo.git";
+    let gateway = "http://127.0.0.1:8849/protected-gate/repo.git";
     let source = root.join("source");
     let client = root.join("client.git");
     run(
@@ -530,7 +573,7 @@ fn multi_chunk_production_gate() {
             env!("CARGO_BIN_EXE_repository-host"),
             &[
                 "--cloudflare",
-                "http://127.0.0.1:8845",
+                "http://127.0.0.1:8849",
                 "--repo",
                 "protected-gate",
                 "--view-cache",
@@ -542,7 +585,7 @@ fn multi_chunk_production_gate() {
                 "--protected-chunk",
                 &mode,
                 native_root.to_str().unwrap(),
-                "8846",
+                "8850",
             ],
             "host-restarted.log",
         );
@@ -694,7 +737,7 @@ fn multi_chunk_production_gate() {
     fs::write(
         root.join("cleanup.json"),
         serde_json::to_vec_pretty(
-            &json!({"owned_ports":[8845,8846],"owned_process_groups_stopped":true}),
+            &json!({"owned_ports":[8849,8850],"owned_process_groups_stopped":true}),
         )
         .unwrap(),
     )
@@ -817,11 +860,12 @@ fn direct_push(host: &mut git_zero_host::native::NativeHost, source: &Path, old:
 }
 
 #[test]
-#[ignore = "explicit local production-workerd allocation/pressure gate; owns 8845"]
+#[ignore = "explicit local production-workerd allocation/pressure gate; owns 8849"]
 fn protected_chunk_allocation_pressure_gate() {
     use std::sync::atomic::Ordering::SeqCst;
     let root = PathBuf::from(std::env::var("GIT_ZERO_MULTI_ARTIFACTS").expect("new artifact root"));
     assert!(!root.exists());
+    resource_scope(&root, 1024 * 1024 * 1024);
     fs::create_dir_all(&root).unwrap();
     record_gate_context(&root);
     let base = PathBuf::from(
@@ -843,7 +887,7 @@ fn protected_chunk_allocation_pressure_gate() {
             &format!("main = {:?}", worker.join("src/index.js")),
         );
     fs::write(root.join("wrangler.toml"), cfg).unwrap();
-    drop(std::net::TcpListener::bind("127.0.0.1:8845").unwrap());
+    drop(std::net::TcpListener::bind("127.0.0.1:8849").unwrap());
     let cli = std::env::var("GIT_ZERO_MULTI_WRANGLER").unwrap();
     let cfg = root.join("wrangler.toml");
     let persist = root.join("persist");
@@ -858,7 +902,7 @@ fn protected_chunk_allocation_pressure_gate() {
             "--ip",
             "127.0.0.1",
             "--port",
-            "8845",
+            "8849",
             "--local",
             "--persist-to",
             persist.to_str().unwrap(),
@@ -870,20 +914,30 @@ fn protected_chunk_allocation_pressure_gate() {
         &root,
         &mut runtime,
         "wrangler.log",
-        "Ready on http://127.0.0.1:8845",
+        "Ready on http://127.0.0.1:8849",
     );
     let mut host = git_zero_host::native::NativeHost::open_cloudflare(
         root.join("codec"),
-        "http://127.0.0.1:8845",
+        "http://127.0.0.1:8849",
         "protected-gate",
         "git-zero-local-services",
         true,
     )
     .unwrap();
+    host.set_response_cache_admission(if response_policy() == "fit" {
+        git_zero_host::native::ResponseCacheAdmission::Fit
+    } else {
+        git_zero_host::native::ResponseCacheAdmission::Evict
+    });
     let services = host.cloudflare_services().unwrap();
     services.enable_socket_rpc(true);
-    services.register("http://127.0.0.1:8846").unwrap();
+    services.register("http://127.0.0.1:8850").unwrap();
     drop(services);
+    runtime_snapshot(
+        &root,
+        "in-process-native",
+        &[std::process::id(), runtime.0.id()],
+    );
     let initial = direct_metrics(&mut host);
     assert_eq!(
         n(&initial, "protected_chunk_admissions"),
@@ -951,23 +1005,48 @@ fn protected_chunk_allocation_pressure_gate() {
         )
         .unwrap();
         check_budget(&after);
-        assert_eq!(
-            n(&after, "protected_chunk_bytes"),
-            0,
-            "productive response evicts protected slot before retention"
-        );
-        assert_eq!(n(&after, "cache_entries"), 1);
-        assert!(n(&after, "protected_chunk_evictions") > n(&before, "protected_chunk_evictions"));
+        if response_policy() == "fit" {
+            assert!(n(&after, "protected_chunk_bytes") >= n(&before, "protected_chunk_bytes"));
+            assert_eq!(
+                n(&after, "protected_chunk_pressure_evictions"),
+                n(&before, "protected_chunk_pressure_evictions")
+            );
+            assert_eq!(n(&after, "cache_entries"), n(&before, "cache_entries"));
+            assert!(
+                n(&after, "upload_response_retention_skips")
+                    > n(&before, "upload_response_retention_skips")
+            );
+        } else {
+            assert_eq!(n(&after, "protected_chunk_bytes"), 0);
+            assert_eq!(n(&after, "cache_entries"), 1);
+            assert!(
+                n(&after, "protected_chunk_evictions") > n(&before, "protected_chunk_evictions")
+            );
+        }
         assert!(
             usage(&after, "r2_class_b") > usage(&before, "r2_class_b"),
             "pressure/refill uses actual GETs"
         );
         rows.push(json!({"index":index,"response_bytes":bytes,"live_before":live,"retained_live":retained,"request_peak_live":peak,"before":before,"after":after}));
     }
+    let observer = host.handle(git_zero_host::http::Request {
+        method: "GET".into(),
+        target: "/_object-stats".into(),
+        headers: BTreeMap::new(),
+        body: vec![],
+    });
+    assert_eq!(observer.status, 200);
+    let observer: Value = serde_json::from_slice(&observer.body).unwrap();
+    let final_cumulative = direct_metrics(&mut host);
+    fs::write(
+        root.join("final-after-observer.json"),
+        serde_json::to_vec_pretty(&json!({"observer":observer,"final":final_cumulative})).unwrap(),
+    )
+    .unwrap();
     drop(host);
     let mut reopened = git_zero_host::native::NativeHost::open_cloudflare(
         root.join("reopen"),
-        "http://127.0.0.1:8845",
+        "http://127.0.0.1:8849",
         "protected-gate",
         "git-zero-local-services",
         true,
@@ -988,12 +1067,13 @@ fn protected_chunk_allocation_pressure_gate() {
     drop(runtime);
     fs::write(
         root.join("cleanup.json"),
-        "{\"owned_process_groups_stopped\":true,\"owned_port\":8845}\n",
+        "{\"owned_process_groups_stopped\":true,\"owned_port\":8849}\n",
     )
     .unwrap();
+    resource_scope(&root, 0);
 }
 fn service(root: &Path, name: &str, route: &str, body: Option<&Value>) -> Value {
-    let url = format!("http://127.0.0.1:8845/_services/{route}");
+    let url = format!("http://127.0.0.1:8849/_services/{route}");
     let header = root.join(format!("{name}.headers"));
     let output = root.join(format!("{name}.body"));
     let mut args = vec![
@@ -1483,10 +1563,11 @@ fn protected_plan_pressure(root: &Path, source: &Path, client: &Path, gateway: &
 }
 
 #[test]
-#[ignore = "bounded fresh Native controls from an explicitly copied completed fixture; owns 8845/8846"]
+#[ignore = "bounded fresh Native controls from an explicitly copied completed fixture; owns 8849/8850"]
 fn multi_chunk_copied_controls_gate() {
     let root = PathBuf::from(std::env::var("GIT_ZERO_MULTI_ARTIFACTS").unwrap());
     assert!(!root.exists());
+    resource_scope(&root, 768 * 1024 * 1024);
     fs::create_dir_all(&root).unwrap();
     record_gate_context(&root);
     let base = PathBuf::from(std::env::var("GIT_ZERO_MULTI_BASE").unwrap());
@@ -1503,7 +1584,7 @@ fn multi_chunk_copied_controls_gate() {
     .unwrap();
     copy_tree(&base.join("persist"), &root.join("persist"));
     copy_tree(&base.join("source"), &root.join("source"));
-    for port in [8845, 8846] {
+    for port in [8849, 8850] {
         drop(std::net::TcpListener::bind(("127.0.0.1", port)).expect("owned port free"));
     }
     let worker = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cloudflare");
@@ -1538,7 +1619,7 @@ fn multi_chunk_copied_controls_gate() {
             "--ip",
             "127.0.0.1",
             "--port",
-            "8845",
+            "8849",
             "--local",
             "--persist-to",
             persist.to_str().unwrap(),
@@ -1550,7 +1631,7 @@ fn multi_chunk_copied_controls_gate() {
         &root,
         &mut runtime,
         "wrangler.log",
-        "Ready on http://127.0.0.1:8845",
+        "Ready on http://127.0.0.1:8849",
     );
     let view = if cohort == "warm" { "warm" } else { "cold" };
     let feature = if cohort == "http" { "off" } else { "on" };
@@ -1560,7 +1641,7 @@ fn multi_chunk_copied_controls_gate() {
         env!("CARGO_BIN_EXE_repository-host"),
         &[
             "--cloudflare",
-            "http://127.0.0.1:8845",
+            "http://127.0.0.1:8849",
             "--repo",
             "protected-gate",
             "--view-cache",
@@ -1572,12 +1653,12 @@ fn multi_chunk_copied_controls_gate() {
             "--protected-chunk",
             &std::env::var("GIT_ZERO_MULTI_MODE").unwrap_or_else(|_| "joint".into()),
             native_root.to_str().unwrap(),
-            "8846",
+            "8850",
         ],
         "host.log",
     );
     wait(&root, &mut native, "host.log", "Git gateway:");
-    let gateway = "http://127.0.0.1:8845/protected-gate/repo.git";
+    let gateway = "http://127.0.0.1:8849/protected-gate/repo.git";
     let source = root.join("source");
     let client = root.join("client.git");
     run(
@@ -1596,20 +1677,22 @@ fn multi_chunk_copied_controls_gate() {
     git(&source, &["reset", "--hard", &current], &[]);
     let first = text(&source, &["rev-list", "--max-parents=0", "HEAD"]);
     let mut rows = Vec::new();
-    rows.push(read(
-        &root,
-        &source,
-        &client,
-        gateway,
-        "copied-ordinary-bootstrap",
-        &current,
-        None,
-    ));
+    if cohort != "plan" {
+        rows.push(read(
+            &root,
+            &source,
+            &client,
+            gateway,
+            "copied-ordinary-bootstrap",
+            &current,
+            None,
+        ));
+    }
     let observer_before = metrics(&root, "observer-before");
     let _ = request(
         &root,
         "observer-object-stats",
-        "http://127.0.0.1:8846/_object-stats",
+        "http://127.0.0.1:8850/_object-stats",
         None,
     );
     let observer_after = metrics(&root, "observer-after");
@@ -1623,7 +1706,7 @@ fn multi_chunk_copied_controls_gate() {
     if cohort == "faults" {
         protected_faults(&root, &source, &client, gateway);
     } else if cohort == "plan" {
-        protected_plan_pressure(&root, &source, &client, gateway, &first);
+        fit_plan_fill(&root, &source, &client, gateway, &current);
     } else if cohort == "restart" {
         assert!(n(&observer_after, "protected_chunk_admissions") > 1);
         drop(native);
@@ -1632,7 +1715,7 @@ fn multi_chunk_copied_controls_gate() {
             env!("CARGO_BIN_EXE_repository-host"),
             &[
                 "--cloudflare",
-                "http://127.0.0.1:8845",
+                "http://127.0.0.1:8849",
                 "--repo",
                 "protected-gate",
                 "--view-cache",
@@ -1644,7 +1727,7 @@ fn multi_chunk_copied_controls_gate() {
                 "--protected-chunk",
                 &std::env::var("GIT_ZERO_MULTI_MODE").unwrap_or_else(|_| "joint".into()),
                 native_root.to_str().unwrap(),
-                "8846",
+                "8850",
             ],
             "host-restarted.log",
         );
@@ -1736,6 +1819,14 @@ fn multi_chunk_copied_controls_gate() {
             parent = tip;
         }
     }
+    let final_manifest = service(&root, "bounded-final-manifest", "manifest", None);
+    let final_objects: Value = serde_json::from_slice(&request(
+        &root,
+        "bounded-final-object-stats",
+        "http://127.0.0.1:8850/_object-stats",
+        None,
+    ))
+    .unwrap();
     let final_metrics = metrics(&root, "copied-final");
     if cohort == "faults" {
         fault_bounds(&final_metrics);
@@ -1766,14 +1857,15 @@ fn multi_chunk_copied_controls_gate() {
         serde_json::to_vec_pretty(&after).unwrap(),
     )
     .unwrap();
-    fs::write(root.join("contract.json"),serde_json::to_vec_pretty(&json!({"kind":"bounded actual production local correctness controls, copied fixture, fresh Native","cohort":cohort,"copied_fixture":base,"initial":initial,"rows":rows,"observer_before":observer_before,"observer_after":observer_after,"final":final_metrics,"full_bill_usd":null})).unwrap()).unwrap();
+    fs::write(root.join("contract.json"),serde_json::to_vec_pretty(&json!({"kind":"bounded actual production local correctness controls, copied fixture, fresh Native","cohort":cohort,"copied_fixture":base,"initial":initial,"rows":rows,"observer_before":observer_before,"observer_after":observer_after,"final_manifest":final_manifest,"final_object_stats":final_objects,"final":final_metrics,"full_bill_usd":null})).unwrap()).unwrap();
     drop(native);
     drop(runtime);
     fs::write(
         root.join("cleanup.json"),
-        "{\"owned_ports\":[8845,8846],\"owned_process_groups_stopped\":true}\n",
+        "{\"owned_ports\":[8849,8850],\"owned_process_groups_stopped\":true}\n",
     )
     .unwrap();
+    resource_scope(&root, 0);
 }
 
 fn seal_fixture(root: &Path) -> BTreeMap<String, Value> {
@@ -1804,7 +1896,7 @@ fn seal_fixture(root: &Path) -> BTreeMap<String, Value> {
 }
 
 #[test]
-#[ignore = "explicit same-source Multi/Joint production pair; owns 8845/8846"]
+#[ignore = "explicit same-source Multi/Joint production pair; owns 8849/8850"]
 fn joint_chunk_copied_production_gate() {
     let root = PathBuf::from(std::env::var("GIT_ZERO_MULTI_ARTIFACTS").unwrap());
     assert!(!root.exists(), "preserve every previous attempt");
@@ -1839,7 +1931,7 @@ fn joint_chunk_copied_production_gate() {
         serde_json::to_vec_pretty(&copied).unwrap(),
     )
     .unwrap();
-    for port in [8845, 8846] {
+    for port in [8849, 8850] {
         drop(std::net::TcpListener::bind(("127.0.0.1", port)).expect("owned port free"));
     }
     let worker = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cloudflare");
@@ -1862,7 +1954,7 @@ fn joint_chunk_copied_production_gate() {
             "--ip",
             "127.0.0.1",
             "--port",
-            "8845",
+            "8849",
             "--local",
             "--persist-to",
             root.join("persist").to_str().unwrap(),
@@ -1874,14 +1966,14 @@ fn joint_chunk_copied_production_gate() {
         &root,
         &mut runtime,
         "wrangler.log",
-        "Ready on http://127.0.0.1:8845",
+        "Ready on http://127.0.0.1:8849",
     );
     let mut native = spawn(
         &root,
         env!("CARGO_BIN_EXE_repository-host"),
         &[
             "--cloudflare",
-            "http://127.0.0.1:8845",
+            "http://127.0.0.1:8849",
             "--repo",
             "protected-gate",
             "--view-cache",
@@ -1893,7 +1985,7 @@ fn joint_chunk_copied_production_gate() {
             "--protected-chunk",
             &mode,
             root.join("native").to_str().unwrap(),
-            "8846",
+            "8850",
         ],
         "host.log",
     );
@@ -1910,7 +2002,7 @@ fn joint_chunk_copied_production_gate() {
     let input_stats: Value = serde_json::from_slice(&request(
         &root,
         "input-object-stats",
-        "http://127.0.0.1:8846/_object-stats",
+        "http://127.0.0.1:8850/_object-stats",
         None,
     ))
     .unwrap();
@@ -1944,7 +2036,7 @@ fn joint_chunk_copied_production_gate() {
         .map(|round| history[(round * 7 + 3) % history.len()].clone())
         .collect();
     fs::write(root.join("closed-history-sequence.json"), serde_json::to_vec_pretty(&json!({"input_current":current,"input_first":first,"published_history":history,"chosen":chosen,"selection_scope":"saved request sequence; source-derived manifest descriptor order, not an observed ordered GET timeline"})).unwrap()).unwrap();
-    let gateway = "http://127.0.0.1:8845/protected-gate/repo.git";
+    let gateway = "http://127.0.0.1:8849/protected-gate/repo.git";
     let mut rows = Vec::new();
     rows.push(read(
         &root,
@@ -2064,7 +2156,569 @@ fn joint_chunk_copied_production_gate() {
     drop(runtime);
     fs::write(
         root.join("cleanup.json"),
-        "{\"owned_ports\":[8845,8846],\"owned_process_groups_stopped\":true}\n",
+        "{\"owned_ports\":[8849,8850],\"owned_process_groups_stopped\":true}\n",
     )
     .unwrap();
+}
+
+fn response_policy() -> String {
+    let policy = std::env::var("GIT_ZERO_FIT_POLICY").unwrap_or_else(|_| "fit".into());
+    assert!(matches!(policy.as_str(), "evict" | "fit"));
+    policy
+}
+
+fn runtime_snapshot(root: &Path, name: &str, roots: &[u32]) {
+    fn visit(pid: u32, out: &mut BTreeMap<u32, Value>) {
+        if out.contains_key(&pid) {
+            return;
+        }
+        let proc = PathBuf::from(format!("/proc/{pid}"));
+        let Ok(exe) = fs::read_link(proc.join("exe")) else {
+            return;
+        };
+        let bytes = fs::read(proc.join("exe")).unwrap();
+        let environment = fs::read(proc.join("environ")).unwrap();
+        let git: BTreeMap<_, _> = environment
+            .split(|b| *b == 0)
+            .filter_map(|v| std::str::from_utf8(v).ok()?.split_once('='))
+            .filter(|(k, _)| k.starts_with("GIT_"))
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+        let command = fs::read(proc.join("cmdline")).unwrap();
+        let is_native = exe.file_name().is_some_and(|v| v == "repository-host");
+        if is_native {
+            assert!(!git.contains_key("GIT_EDITOR") && !git.contains_key("GIT_TRACE2_EVENT"));
+        }
+        out.insert(pid, json!({"exe":exe,"elf_bytes":bytes.len(),"elf_sha256":hash(&bytes),
+            "cmdline":String::from_utf8_lossy(&command).replace('\0'," "),
+            "maps":fs::read_to_string(proc.join("maps")).unwrap(),
+            "environment_sha256":hash(&environment),"actual_git_environment":git,"is_native":is_native}));
+        if let Ok(children) = fs::read_to_string(proc.join(format!("task/{pid}/children"))) {
+            for child in children.split_whitespace() {
+                if let Ok(child) = child.parse() {
+                    visit(child, out);
+                }
+            }
+        }
+    }
+    let mut processes = BTreeMap::new();
+    for &pid in roots {
+        visit(pid, &mut processes);
+    }
+    fs::write(
+        root.join(format!("runtime-{name}.json")),
+        serde_json::to_vec_pretty(&processes).unwrap(),
+    )
+    .unwrap();
+}
+
+fn resource_scope(root: &Path, estimate: u64) {
+    use std::os::unix::fs::MetadataExt;
+    fn size(path: &Path) -> (u64, u64) {
+        let m = fs::symlink_metadata(path).unwrap();
+        let mut result = (if m.is_file() { m.len() } else { 0 }, m.blocks() * 512);
+        if m.is_dir() {
+            for entry in fs::read_dir(path).unwrap() {
+                let child = size(&entry.unwrap().path());
+                result.0 += child.0;
+                result.1 += child.1;
+            }
+        }
+        result
+    }
+    let own = Path::new("/dev/shm/git-zero-fit-response-correctness-20261018");
+    assert!(root.parent() == Some(own));
+    let (logical, allocated) = size(own);
+    let memory = fs::read_to_string("/proc/meminfo").unwrap();
+    let available = memory
+        .lines()
+        .find_map(|s| {
+            s.strip_prefix("MemAvailable:")?
+                .split_whitespace()
+                .next()?
+                .parse::<u64>()
+                .ok()
+        })
+        .unwrap()
+        * 1024;
+    let disk = run("df", &["-B1", "--output=avail", "/tmp"], &[]);
+    let disk = String::from_utf8(disk)
+        .unwrap()
+        .lines()
+        .last()
+        .unwrap()
+        .trim()
+        .parse::<u64>()
+        .unwrap();
+    let record = json!({"own_prefix_logical_bytes":logical,"own_prefix_allocated_bytes":allocated,"scope_forecast":estimate,"MemAvailable":available,"tmp_available":disk,"volatile_local_only":true});
+    let stage = if estimate == 0 { "post" } else { "pre" };
+    let path = root.with_extension(format!("resource-{stage}.json"));
+    assert!(!path.exists(), "preserve each original measurement");
+    fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+    assert!(
+        logical.max(allocated) + estimate <= 8 * 1024 * 1024 * 1024
+            && available >= 40 * 1024 * 1024 * 1024
+            && disk >= 2 * 1024 * 1024 * 1024,
+        "actual resource guard: {record}"
+    );
+}
+
+#[test]
+#[ignore = "explicit short same-source fit/evict gate; owns 8849/8850 and bounded root-authorized tmpfs"]
+fn fit_response_short_production_gate() {
+    let root = PathBuf::from(std::env::var("GIT_ZERO_MULTI_ARTIFACTS").unwrap());
+    assert!(!root.exists());
+    let initial: usize = std::env::var("GIT_ZERO_MULTI_INITIAL_MIB")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(matches!(initial, 16 | 64));
+    resource_scope(
+        &root,
+        if initial == 16 {
+            768 * 1024 * 1024
+        } else {
+            1536 * 1024 * 1024
+        },
+    );
+    fs::create_dir_all(&root).unwrap();
+    record_gate_context(&root);
+    let base = PathBuf::from(std::env::var("GIT_ZERO_MULTI_BASE").unwrap());
+    let before = sources();
+    fs::write(
+        root.join("source-before.json"),
+        serde_json::to_vec_pretty(&before).unwrap(),
+    )
+    .unwrap();
+    let seed = seal_fixture(&base);
+    copy_tree(&base.join("source"), &root.join("source"));
+    copy_tree(&base.join("persist"), &root.join("persist"));
+    assert_eq!(seed, seal_fixture(&root));
+    assert_eq!(seed, seal_fixture(&base));
+    fs::write(
+        root.join("fixture-input-seal.json"),
+        serde_json::to_vec_pretty(&seed).unwrap(),
+    )
+    .unwrap();
+    let worker = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cloudflare");
+    let config = fs::read_to_string(worker.join("wrangler.toml"))
+        .unwrap()
+        .replace(
+            "main = \"src/index.js\"",
+            &format!("main = {:?}", worker.join("src/index.js")),
+        );
+    fs::write(root.join("wrangler.toml"), config).unwrap();
+    let cli = std::env::var("GIT_ZERO_MULTI_WRANGLER").unwrap();
+    let mut runtime = spawn(
+        &root,
+        "node",
+        &[
+            &cli,
+            "dev",
+            "--config",
+            root.join("wrangler.toml").to_str().unwrap(),
+            "--ip",
+            "127.0.0.1",
+            "--port",
+            "8849",
+            "--local",
+            "--persist-to",
+            root.join("persist").to_str().unwrap(),
+            "--show-interactive-dev-session=false",
+        ],
+        "wrangler.log",
+    );
+    wait(
+        &root,
+        &mut runtime,
+        "wrangler.log",
+        "Ready on http://127.0.0.1:8849",
+    );
+    let mut native = spawn(
+        &root,
+        env!("CARGO_BIN_EXE_repository-host"),
+        &[
+            "--cloudflare",
+            "http://127.0.0.1:8849",
+            "--repo",
+            "protected-gate",
+            "--view-cache",
+            "cold",
+            "--gateway-first-read",
+            "on",
+            "--socket-rpc",
+            "on",
+            "--protected-chunk",
+            "joint",
+            root.join("native").to_str().unwrap(),
+            "8850",
+        ],
+        "host.log",
+    );
+    wait(&root, &mut native, "host.log", "Git gateway:");
+    runtime_snapshot(&root, "startup", &[runtime.0.id(), native.0.id()]);
+    let startup = metrics(&root, "startup-paid-recovery");
+    check_budget(&startup);
+    assert_eq!(n(&startup, "protected_chunk_admissions"), 0);
+    let input = service(&root, "input-manifest", "manifest", None);
+    let source = root.join("source");
+    let client = root.join("client.git");
+    run(
+        "git",
+        &["init", "-q", "--bare", client.to_str().unwrap()],
+        &[],
+    );
+    let current = input["refs"]["refs/heads/main"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    git(&source, &["reset", "--hard", &current], &[]);
+    let first = text(&source, &["rev-list", "--max-parents=0", "HEAD"]);
+    let history: Vec<_> = input["refs"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k.starts_with("refs/heads/history-"))
+        .map(|(_, v)| v.as_str().unwrap().to_owned())
+        .collect();
+    let gateway = "http://127.0.0.1:8849/protected-gate/repo.git";
+    let mut rows = vec![read_identity(
+        &root,
+        &source,
+        &client,
+        gateway,
+        "initial-full",
+        &current,
+        None,
+        "initial-full",
+    )];
+    rows.push(read_identity(
+        &root,
+        &source,
+        &client,
+        gateway,
+        "initial-exact-repeat",
+        &current,
+        None,
+        "initial-full",
+    ));
+    for round in 0..3 {
+        let generation = 17 + round;
+        if round == 0 {
+            fs::write(
+                source.join("replacement"),
+                fixture(8 * 1024 * 1024, 0x88800 + generation as u64),
+            )
+            .unwrap();
+        }
+        fs::write(
+            source.join("fit-change"),
+            format!("ordinary generation {generation}\n").repeat(100),
+        )
+        .unwrap();
+        let want = commit(&source, generation);
+        let b = metrics(&root, &format!("push-{generation}-before"));
+        push(&source, gateway, generation);
+        let a = metrics(&root, &format!("push-{generation}-after"));
+        check_budget(&a);
+        rows.push(json!({"name":format!("push-{generation}"),"before":b,"after":a}));
+        let identity = format!("latest-{generation}");
+        rows.push(read_identity(
+            &root,
+            &source,
+            &client,
+            gateway,
+            &identity,
+            &want,
+            Some(&first),
+            &identity,
+        ));
+        rows.push(read_identity(
+            &root,
+            &source,
+            &client,
+            gateway,
+            &format!("latest-exact-repeat-{generation}"),
+            &want,
+            Some(&first),
+            &identity,
+        ));
+        let historical = &history[(round * 7 + 3) % history.len()];
+        rows.push(read(
+            &root,
+            &source,
+            &client,
+            gateway,
+            &format!("history-nohave-{generation}"),
+            historical,
+            None,
+        ));
+        rows.push(read(
+            &root,
+            &source,
+            &client,
+            gateway,
+            &format!("history-haves-{generation}"),
+            historical,
+            Some(&first),
+        ));
+    }
+    let (tip, thin) = external_thin(&root, &source, gateway, true);
+    rows.push(thin);
+    rows.push(read(
+        &root,
+        &source,
+        &client,
+        gateway,
+        "after-thin",
+        &tip,
+        Some(&first),
+    ));
+    let final_manifest = service(&root, "final-manifest", "manifest", None);
+    let final_objects: Value = serde_json::from_slice(&request(
+        &root,
+        "final-object-stats",
+        "http://127.0.0.1:8850/_object-stats",
+        None,
+    ))
+    .unwrap();
+    let final_metrics = metrics(&root, "final-after-observers");
+    check_budget(&final_metrics);
+    runtime_snapshot(&root, "final", &[runtime.0.id(), native.0.id()]);
+    let after = sources();
+    assert_eq!(before, after);
+    fs::write(
+        root.join("source-after.json"),
+        serde_json::to_vec_pretty(&after).unwrap(),
+    )
+    .unwrap();
+    fs::write(root.join("contract.json"),serde_json::to_vec_pretty(&json!({"kind":"short same-source response-retention correctness only","policy":response_policy(),"initial_mib":initial,"startup_paid_recovery":startup,"input_manifest":input,"rows":rows,"final_manifest":final_manifest,"final_object_stats":final_objects,"final":final_metrics,"full_bill_usd":null})).unwrap()).unwrap();
+    drop(native);
+    drop(runtime);
+    fs::write(
+        root.join("cleanup.json"),
+        "{\"owned_ports\":[8849,8850],\"owned_process_groups_stopped\":true}\n",
+    )
+    .unwrap();
+    resource_scope(&root, 0);
+}
+
+fn fit_plan_fill(root: &Path, source: &Path, client: &Path, gateway: &str, want: &str) {
+    service(
+        root,
+        "held-mask-arm",
+        "test/first-read-arm",
+        Some(&json!({"mode":"continue-cache-fill"})),
+    );
+    let before = metrics(root, "held-mask-before");
+    assert_eq!(n(&before, "protected_chunk_admissions"), 0);
+    let response = read(
+        root,
+        source,
+        client,
+        gateway,
+        "held-mask-paid-discard",
+        want,
+        None,
+    );
+    let after = metrics(root, "held-mask-after");
+    let trace = service(root, "held-mask-trace", "test/first-read-trace", None);
+    assert_eq!(trace["gateway_hook_fired"], true);
+    assert!(n(&after, "gateway_read_paid_discards") > n(&before, "gateway_read_paid_discards"));
+    assert!(n(&after, "protected_chunk_admissions") > n(&before, "protected_chunk_admissions"));
+    assert_eq!(
+        n(&after, "protected_chunk_prunes"),
+        n(&before, "protected_chunk_prunes")
+    );
+    service(
+        root,
+        "held-mask-disarm",
+        "test/first-read-arm",
+        Some(&json!({"mode":""})),
+    );
+    fs::write(root.join("plan-fill-contract.json"),serde_json::to_vec_pretty(&json!({"kind":"authenticated held missing mask changed by real ordinary verified admission; paid discard plus ordinary fallback","before":before,"response":response,"after":after,"trace":trace,"full_bill_usd":null})).unwrap()).unwrap();
+}
+
+fn start_fit_control(root: &Path) -> (Owned, Owned) {
+    for port in [8849, 8850] {
+        drop(std::net::TcpListener::bind(("127.0.0.1", port)).unwrap());
+    }
+    let worker = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cloudflare");
+    let config = fs::read_to_string(worker.join("wrangler.toml"))
+        .unwrap()
+        .replace(
+            "main = \"src/index.js\"",
+            &format!("main = {:?}", worker.join("src/index.js")),
+        );
+    fs::write(root.join("wrangler.toml"), config).unwrap();
+    let cli = std::env::var("GIT_ZERO_MULTI_WRANGLER").unwrap();
+    let mut runtime = spawn(
+        root,
+        "node",
+        &[
+            &cli,
+            "dev",
+            "--config",
+            root.join("wrangler.toml").to_str().unwrap(),
+            "--ip",
+            "127.0.0.1",
+            "--port",
+            "8849",
+            "--local",
+            "--persist-to",
+            root.join("persist").to_str().unwrap(),
+            "--show-interactive-dev-session=false",
+        ],
+        "wrangler.log",
+    );
+    wait(
+        root,
+        &mut runtime,
+        "wrangler.log",
+        "Ready on http://127.0.0.1:8849",
+    );
+    let mut native = spawn(
+        root,
+        env!("CARGO_BIN_EXE_repository-host"),
+        &[
+            "--cloudflare",
+            "http://127.0.0.1:8849",
+            "--repo",
+            "protected-gate",
+            "--view-cache",
+            "cold",
+            "--gateway-first-read",
+            "on",
+            "--socket-rpc",
+            "on",
+            "--protected-chunk",
+            "joint",
+            root.join("native").to_str().unwrap(),
+            "8850",
+        ],
+        "host.log",
+    );
+    wait(root, &mut native, "host.log", "Git gateway:");
+    (runtime, native)
+}
+
+#[test]
+#[ignore = "explicit productive >14MiB response hit and >16MiB uncached control; owns 8849/8850"]
+fn fit_response_near_limit_control() {
+    let root = PathBuf::from(std::env::var("GIT_ZERO_MULTI_ARTIFACTS").unwrap());
+    assert!(!root.exists());
+    resource_scope(&root, 384 * 1024 * 1024);
+    fs::create_dir_all(&root).unwrap();
+    let before = sources();
+    fs::write(
+        root.join("source-before.json"),
+        serde_json::to_vec_pretty(&before).unwrap(),
+    )
+    .unwrap();
+    let (runtime, native) = start_fit_control(&root);
+    let startup = metrics(&root, "startup-paid-recovery");
+    assert_eq!(n(&startup, "protected_chunk_admissions"), 0);
+    let source = root.join("source");
+    let client = root.join("client.git");
+    for path in [&source, &client] {
+        run("git", &["init", "-q", path.to_str().unwrap()], &[]);
+    }
+    git(&source, &["config", "user.name", "Fit Control"], &[]);
+    git(&source, &["config", "user.email", "fit@localhost"], &[]);
+    fs::write(source.join("payload"), fixture(31 * 1024 * 1024, 0x193719)).unwrap();
+    let tip = commit(&source, 1);
+    let gateway = "http://127.0.0.1:8849/protected-gate/repo.git";
+    push(&source, gateway, 1);
+    let first = read_identity(
+        &root,
+        &source,
+        &client,
+        gateway,
+        "near-limit-first",
+        &tip,
+        None,
+        "near-limit-exact-identity",
+    );
+    let bytes = first["response_bytes"].as_u64().unwrap();
+    assert!(
+        bytes > 14 * 1024 * 1024 && bytes <= 16 * 1024 * 1024,
+        "productive body {bytes}"
+    );
+    assert!(n(&first["after"], "protected_chunk_entries") > 0);
+    assert!(
+        n(&first["after"], "upload_response_retention_admissions")
+            > n(&first["before"], "upload_response_retention_admissions")
+    );
+    let repeat = read_identity(
+        &root,
+        &source,
+        &client,
+        gateway,
+        "near-limit-repeat",
+        &tip,
+        None,
+        "near-limit-exact-identity",
+    );
+    assert_eq!(first["response_sha256"], repeat["response_sha256"]);
+    assert_eq!(
+        n(&repeat["after"], "cache_hits"),
+        n(&repeat["before"], "cache_hits") + 1
+    );
+    assert_eq!(repeat["gets"], 0);
+    fs::write(source.join("larger"), fixture(2 * 1024 * 1024, 0x2918)).unwrap();
+    let larger = commit(&source, 2);
+    push(&source, gateway, 2);
+    let over = read_identity(
+        &root,
+        &source,
+        &client,
+        gateway,
+        "over-limit-first",
+        &larger,
+        None,
+        "over-limit-exact-identity",
+    );
+    assert!(over["response_bytes"].as_u64().unwrap() > 16 * 1024 * 1024);
+    assert_eq!(n(&over["after"], "cache_entries"), 0);
+    let over_repeat = read_identity(
+        &root,
+        &source,
+        &client,
+        gateway,
+        "over-limit-repeat",
+        &larger,
+        None,
+        "over-limit-exact-identity",
+    );
+    assert_eq!(over["response_sha256"], over_repeat["response_sha256"]);
+    assert_eq!(
+        n(&over_repeat["after"], "cache_hits"),
+        n(&over_repeat["before"], "cache_hits")
+    );
+    let manifest = service(&root, "final-manifest", "manifest", None);
+    let objects: Value = serde_json::from_slice(&request(
+        &root,
+        "final-object-stats",
+        "http://127.0.0.1:8850/_object-stats",
+        None,
+    ))
+    .unwrap();
+    let final_metrics = metrics(&root, "final-after-observers");
+    check_budget(&final_metrics);
+    runtime_snapshot(&root, "final", &[native.0.id(), runtime.0.id()]);
+    let after = sources();
+    assert_eq!(before, after);
+    fs::write(
+        root.join("source-after.json"),
+        serde_json::to_vec_pretty(&after).unwrap(),
+    )
+    .unwrap();
+    fs::write(root.join("contract.json"),serde_json::to_vec_pretty(&json!({"kind":"real productive near-limit active-fit response retention/hit and oversized response delivery","startup_paid_recovery":startup,"first":first,"repeat":repeat,"over":over,"over_repeat":over_repeat,"final_manifest":manifest,"final_object_stats":objects,"final":final_metrics,"full_bill_usd":null})).unwrap()).unwrap();
+    drop(native);
+    drop(runtime);
+    for port in [8849, 8850] {
+        drop(std::net::TcpListener::bind(("127.0.0.1", port)).unwrap());
+    }
+    fs::write(root.join("cleanup.json"),"{\"owned_ports\":[8849,8850],\"owned_process_groups_stopped\":true,\"ports_bindable\":true}\n").unwrap();
+    resource_scope(&root, 0);
 }

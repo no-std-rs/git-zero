@@ -460,6 +460,9 @@ pub struct Metrics {
     pub history_projections: u64,
     pub history_full_restores: u64,
     pub cache_evictions: u64,
+    pub upload_response_retention_skips: u64,
+    pub upload_response_retention_admissions: u64,
+    pub upload_response_retention_allocation_failures: u64,
     pub receive_noop_shortcuts: u64,
     pub gateway_receive_plans: u64,
     pub gateway_receive_unsupported: u64,
@@ -632,6 +635,13 @@ pub enum ProtectedChunkMode {
     Joint,
 }
 
+/// Optional upload-response retention, independent of immutable GET admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResponseCacheAdmission {
+    Evict,
+    Fit,
+}
+
 pub struct NativeHost {
     root: PathBuf,
     view: PathBuf,
@@ -642,6 +652,7 @@ pub struct NativeHost {
     cache_bytes: usize,
     protected_chunks: Vec<crate::storage::VerifiedChunk>,
     protected_mode: ProtectedChunkMode,
+    response_cache_admission: ResponseCacheAdmission,
     ordinary_chunk_admission: bool,
     advertisement: Option<advertisement::Certificate>,
     view_dirty: bool,
@@ -721,6 +732,10 @@ impl NativeHost {
         self.trim_cache(0);
     }
 
+    pub fn set_response_cache_admission(&mut self, policy: ResponseCacheAdmission) {
+        self.response_cache_admission = policy;
+    }
+
     fn protected_limit(&self) -> usize {
         match self.protected_mode {
             ProtectedChunkMode::Off => 0,
@@ -751,6 +766,7 @@ impl NativeHost {
             cache_bytes: 0,
             protected_chunks: Vec::new(),
             protected_mode,
+            response_cache_admission: ResponseCacheAdmission::Fit,
             ordinary_chunk_admission: false,
             advertisement: None,
             view_dirty: false,
@@ -1569,7 +1585,7 @@ impl NativeHost {
             let codec_start = Instant::now();
             let response = self.native_read(request)?;
             self.metrics.upload_codec_seconds += codec_start.elapsed().as_secs_f64();
-            self.cache_insert(key, &response);
+            self.cache_upload_response(key, &response);
             return Ok(response);
         }
         if request.method == "GET" && path == "/repo.git/info/refs" {
@@ -1736,22 +1752,120 @@ impl NativeHost {
     }
 
     fn cache_weight(key_capacity: usize, response: &Response) -> usize {
-        key_capacity
-            + response.body.len()
-            + 2 * size_of::<usize>()
-            + response
-                .headers
-                .iter()
-                // A conservative owning-allocation bound for std's opaque
-                // BTree nodes: one maximum-size node per header entry.
-                .map(|(name, value)| {
-                    name.capacity()
-                        + value.capacity()
-                        + 12 * size_of::<(String, String)>()
-                        + 16 * size_of::<usize>()
-                })
-                .sum::<usize>()
-            + 256
+        Self::checked_cache_weight(key_capacity, response).expect("bounded retained response")
+    }
+
+    fn checked_cache_weight(key_capacity: usize, response: &Response) -> Option<usize> {
+        response.headers.iter().try_fold(
+            key_capacity
+                .checked_add(response.body.len())?
+                .checked_add(2 * size_of::<usize>())?
+                .checked_add(256)?,
+            |bytes, (name, value)| {
+                // Same conservative owning bound as eviction accounting: one
+                // maximum-size opaque BTree node per header entry.
+                bytes
+                    .checked_add(name.capacity())?
+                    .checked_add(value.capacity())?
+                    .checked_add(12 * size_of::<(String, String)>())?
+                    .checked_add(16 * size_of::<usize>())
+            },
+        )
+    }
+
+    fn response_ring_growth_bound(capacity: usize) -> Option<usize> {
+        capacity
+            .max(4)
+            .checked_mul(2)?
+            .checked_mul(size_of::<(String, Response)>())
+    }
+
+    fn response_fits(&self, weight: usize, ring_bound: usize) -> bool {
+        self.joint_cache_entries()
+            .checked_add(1)
+            .is_some_and(|entries| entries <= CACHE_ENTRIES)
+            && self
+                .cache_bytes
+                .checked_add(self.metadata_bytes())
+                .and_then(|bytes| bytes.checked_add(weight))
+                .and_then(|bytes| bytes.checked_add(ring_bound))
+                .is_some_and(|bytes| bytes <= CACHE_BYTES)
+    }
+
+    fn cache_upload_response(&mut self, key: String, response: &Response) {
+        if self.response_cache_admission != ResponseCacheAdmission::Fit
+            || self.cloudflare.is_none()
+            || !self.cold_view
+            || self.protected_mode != ProtectedChunkMode::Joint
+            || self.protected_chunks.is_empty()
+        {
+            self.cache_insert(key, response);
+            return;
+        }
+        if response.status != 200
+            || response.body.is_empty()
+            || response.body.len() > CACHE_ENTRY_BYTES
+        {
+            return;
+        }
+        self.cache_fit_response(key, response, |ring| ring.try_reserve(1));
+    }
+
+    fn cache_fit_response(
+        &mut self,
+        key: String,
+        response: &Response,
+        reserve: impl FnOnce(
+            &mut VecDeque<(String, Response)>,
+        ) -> Result<(), std::collections::TryReserveError>,
+    ) {
+        let ring_bound = if self.cache.len() == self.cache.capacity() {
+            Self::response_ring_growth_bound(self.cache.capacity())
+        } else {
+            Some(0)
+        };
+        let Some((upper, ring_bound)) = Self::checked_cache_weight(key.capacity(), response)
+            .zip(ring_bound)
+            .filter(|(weight, ring)| self.response_fits(*weight, *ring))
+        else {
+            self.metrics.upload_response_retention_skips += 1;
+            return;
+        };
+        // String clones retain no more than the original capacity; the body
+        // shares its Arc. No current owner or ring has changed at this point.
+        let retained = response.clone();
+        self.commit_fit_response(key, retained, upper, ring_bound, reserve);
+    }
+
+    fn commit_fit_response(
+        &mut self,
+        key: String,
+        retained: Response,
+        upper: usize,
+        ring_bound: usize,
+        reserve: impl FnOnce(
+            &mut VecDeque<(String, Response)>,
+        ) -> Result<(), std::collections::TryReserveError>,
+    ) {
+        let Some(weight) = Self::checked_cache_weight(key.capacity(), &retained)
+            .filter(|weight| *weight <= upper && self.response_fits(*weight, ring_bound))
+        else {
+            self.metrics.upload_response_retention_skips += 1;
+            return;
+        };
+        if ring_bound != 0 && reserve(&mut self.cache).is_err() {
+            // VecDeque preserves its existing allocation and entries on error.
+            self.metrics.upload_response_retention_skips += 1;
+            self.metrics.upload_response_retention_allocation_failures += 1;
+            return;
+        }
+        // Growth is bounded by the full new backing above, on top of metadata
+        // already charging the old ring. Successful commit cannot allocate or
+        // call an evicting trim. Only the exact final allocations stay charged.
+        self.cache_bytes += weight;
+        self.cache.push_back((key, retained));
+        self.metrics.upload_response_retention_admissions += 1;
+        self.note_joint_retention();
     }
 
     fn cache_insert(&mut self, key: String, response: &Response) {
@@ -1761,7 +1875,9 @@ impl NativeHost {
         {
             return;
         }
-        let upper_weight = Self::cache_weight(key.capacity(), response);
+        let Some(upper_weight) = Self::checked_cache_weight(key.capacity(), response) else {
+            return;
+        };
         if upper_weight + self.metadata_bytes() - self.protected_bytes() > CACHE_BYTES {
             return;
         }
@@ -1774,7 +1890,9 @@ impl NativeHost {
         let weight = Self::cache_weight(key.capacity(), &retained);
         // Charge both old and new rings across a possible growth allocation.
         if self.cache.len() == self.cache.capacity() {
-            let ring_bound = (self.cache.capacity().max(4) * 2) * size_of::<(String, Response)>();
+            let Some(ring_bound) = Self::response_ring_growth_bound(self.cache.capacity()) else {
+                return;
+            };
             if !self.trim_cache(weight + ring_bound) {
                 return;
             }
@@ -1806,6 +1924,7 @@ impl NativeHost {
             + 2 * size_of::<usize>()
             + size_of::<Vec<crate::storage::VerifiedChunk>>()
             + size_of::<ProtectedChunkMode>()
+            + size_of::<ResponseCacheAdmission>()
             + 2 * size_of::<bool>()
             + self.protected_bytes()
             + self.cloudflare.as_ref().map_or(0, |services| {
@@ -2224,7 +2343,7 @@ impl NativeHost {
             let start = Instant::now();
             let response = self.native_read(&logical)?;
             self.metrics.upload_codec_seconds += start.elapsed().as_secs_f64();
-            self.cache_insert(key, &response);
+            self.cache_upload_response(key, &response);
             self.metrics.output_bytes += response.body.len() as u64;
             Ok(response)
         }
@@ -2309,6 +2428,11 @@ impl NativeHost {
                 self.metrics.joint_cache_entries = self.joint_cache_entries() as u64;
                 self.metrics.cache_entry_limit = CACHE_ENTRIES as u64;
                 let mut value = serde_json::to_value(&self.metrics)?;
+                value["response_cache_admission"] =
+                    serde_json::json!(match self.response_cache_admission {
+                        ResponseCacheAdmission::Evict => "evict",
+                        ResponseCacheAdmission::Fit => "fit",
+                    });
                 value["native_view_policy"] = serde_json::json!(if self.cold_view {
                     "strict-v0-lineage-selection-on-cold-cache-miss"
                 } else {
@@ -2390,6 +2514,180 @@ mod tests {
             .into_handles(std::slice::from_ref(&descriptor))
             .unwrap()
             .remove(0)
+    }
+
+    fn fit_host(root: PathBuf) -> NativeHost {
+        let mut host = NativeHost::open(root).unwrap();
+        host.cloudflare = Some(Arc::new(
+            HttpServices::new("http://127.0.0.1:1", "fit-unit", "token").unwrap(),
+        ));
+        host.cold_view = true;
+        host.protected_mode = ProtectedChunkMode::Joint;
+        host.ordinary_chunk_admission = true;
+        host
+    }
+
+    // Pointer identities, order, weights and both backing capacities: a rejected
+    // optional insertion must not even rebuild a logically equivalent owner.
+    fn retained_identity(
+        host: &NativeHost,
+    ) -> (usize, usize, usize, Vec<usize>, Vec<(String, usize)>) {
+        (
+            host.cache_bytes,
+            host.cache.capacity(),
+            host.protected_chunks.capacity(),
+            host.protected_chunks
+                .iter()
+                .map(|v| v.descriptor() as *const crate::storage::Chunk as usize)
+                .collect(),
+            host.cache
+                .iter()
+                .map(|(key, response)| (key.clone(), response.body.as_ptr() as usize))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn fit_upload_skips_byte_pressure_without_touching_existing_owners() {
+        let root = std::env::temp_dir().join(format!("git-zero-fit-bytes-{}", std::process::id()));
+        let mut host = fit_host(root.clone());
+        host.admit_protected_chunk(verified_payload(vec![1; CACHE_ENTRY_BYTES]));
+        let small = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Arc::from([2u8]),
+        };
+        host.cache_upload_response("existing-response".into(), &small);
+        let before = retained_identity(&host);
+        let large = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Arc::from(vec![3; CACHE_ENTRY_BYTES]),
+        };
+        let refs = Arc::strong_count(&large.body);
+        host.cache_upload_response("new-response".into(), &large);
+        assert_eq!(retained_identity(&host), before);
+        assert_eq!(Arc::strong_count(&large.body), refs);
+        assert_eq!(host.metrics.upload_response_retention_skips, 1);
+        assert_eq!(host.metrics.protected_chunk_pressure_evictions, 0);
+        assert_eq!(host.metrics.cache_evictions, 0);
+        host.set_response_cache_admission(ResponseCacheAdmission::Evict);
+        host.cache_upload_response("legacy-response".into(), &large);
+        assert!(host.protected_chunks.is_empty());
+        assert_eq!(host.metrics.protected_chunk_pressure_evictions, 1);
+        assert_eq!(host.cache.len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fit_upload_exact_boundary_header_capacity_and_ring_overlap_are_charged() {
+        let root = std::env::temp_dir().join(format!("git-zero-fit-ring-{}", std::process::id()));
+        let mut host = fit_host(root.clone());
+        host.admit_protected_chunk(verified_payload(vec![1; 1024]));
+        let mut name = String::with_capacity(1000);
+        name.push_str("Content-Type");
+        let mut value = String::with_capacity(2000);
+        value.push_str("application/x-git-upload-pack-result");
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::from([(name, value)]),
+            body: Arc::from(vec![4; CACHE_ENTRY_BYTES]),
+        };
+        let key = String::from("exact-16m");
+        let upper = NativeHost::cache_weight(key.capacity(), &response);
+        let ring_bound = NativeHost::response_ring_growth_bound(0).unwrap();
+        let before = host.cache_bytes + host.metadata_bytes();
+        host.cache_upload_response(key, &response);
+        assert_eq!(host.cache.len(), 1);
+        let (key, retained) = &host.cache[0];
+        assert!(Arc::ptr_eq(&retained.body, &response.body));
+        assert!(NativeHost::cache_weight(key.capacity(), retained) < upper);
+        assert!(host.cache.capacity() * size_of::<(String, Response)>() <= ring_bound);
+        assert!(host.cache_bytes + host.metadata_bytes() <= before + upper + ring_bound);
+        assert_eq!(
+            host.cache_bytes,
+            NativeHost::cache_weight(key.capacity(), retained)
+        );
+        assert_eq!(host.metrics.upload_response_retention_admissions, 1);
+        let before = retained_identity(&host);
+        host.cache_upload_response(
+            "too-large".into(),
+            &Response {
+                status: 200,
+                headers: BTreeMap::new(),
+                body: Arc::from(vec![5; CACHE_ENTRY_BYTES + 1]),
+            },
+        );
+        assert_eq!(retained_identity(&host), before);
+        assert!(NativeHost::checked_cache_weight(usize::MAX, &response).is_none());
+        assert!(NativeHost::response_ring_growth_bound(usize::MAX).is_none());
+        assert!(!host.response_fits(usize::MAX, 0));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fit_upload_entry_limit_and_actual_reserve_error_preserve_ring() {
+        let root =
+            std::env::temp_dir().join(format!("git-zero-fit-entries-{}", std::process::id()));
+        let mut host = fit_host(root.clone());
+        host.admit_protected_chunk(verified_payload(vec![1; 100]));
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Arc::from([2u8]),
+        };
+        // Actual VecDeque capacity-overflow failure after preflight/clone.
+        let before = retained_identity(&host);
+        host.cache_fit_response("allocation-failure".into(), &response, |ring| {
+            ring.try_reserve(usize::MAX)
+        });
+        assert_eq!(retained_identity(&host), before);
+        assert_eq!(
+            host.metrics.upload_response_retention_allocation_failures,
+            1
+        );
+        for i in 0..255 {
+            host.cache_upload_response(i.to_string(), &response);
+        }
+        assert_eq!(host.joint_cache_entries(), CACHE_ENTRIES);
+        let before = retained_identity(&host);
+        host.cache_upload_response("entry-pressure".into(), &response);
+        assert_eq!(retained_identity(&host), before);
+        assert_eq!(host.metrics.protected_chunk_pressure_evictions, 0);
+        // Mandatory pressure and discovery keep the original eviction authority.
+        host.cache_insert("discovery".into(), &response);
+        assert_eq!(host.metrics.protected_chunk_pressure_evictions, 1);
+        assert_eq!(host.joint_cache_entries(), CACHE_ENTRIES);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fit_exact_recheck_rejects_changed_metadata_or_clone_charge_without_eviction() {
+        let root =
+            std::env::temp_dir().join(format!("git-zero-fit-recheck-{}", std::process::id()));
+        let mut host = fit_host(root.clone());
+        host.admit_protected_chunk(verified_payload(vec![1; 100]));
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Arc::from([2u8]),
+        };
+        let key = String::from("recheck");
+        let upper = NativeHost::cache_weight(key.capacity(), &response);
+        let ring = NativeHost::response_ring_growth_bound(0).unwrap();
+        assert!(host.response_fits(upper, ring));
+        let before = retained_identity(&host);
+        host.commit_fit_response(key.clone(), response.clone(), upper - 1, ring, |v| {
+            v.try_reserve(1)
+        });
+        assert_eq!(retained_identity(&host), before);
+        // Deliberate metadata fault, not allocated-space or production evidence.
+        host.pending_lineage_bytes = CACHE_BYTES;
+        host.commit_fit_response(key, response, upper, ring, |v| v.try_reserve(1));
+        assert_eq!(retained_identity(&host), before);
+        assert_eq!(host.metrics.upload_response_retention_skips, 2);
+        host.pending_lineage_bytes = 0;
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
