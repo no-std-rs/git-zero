@@ -1518,6 +1518,26 @@ mod tests {
             0
         );
         assert!(refs(&host.view).unwrap().is_empty());
+        // A same-length corrupt later pack also rejects the entire snapshot
+        // before materializing the valid first pack or either index.
+        host.repository
+            .blobs
+            .put(&manifest.packs[1].pack[0].key, b"missinh")
+            .unwrap();
+        assert!(
+            host.rebuild_view(&manifest)
+                .unwrap_err()
+                .to_string()
+                .contains("corrupt chunk")
+        );
+        assert!(host.view_dirty);
+        assert_eq!(
+            fs::read_dir(host.view.join("objects/pack"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(refs(&host.view).unwrap().is_empty());
         host.rebuild_view(&Manifest::default()).unwrap();
         assert!(!host.view_dirty);
         fs::remove_dir_all(root).unwrap();

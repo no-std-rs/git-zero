@@ -156,13 +156,7 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
                 chunks.push(chunk.clone());
             }
         }
-        let data = self.blobs.get_many(&chunks)?;
-        if data.len() != chunks.len() {
-            return Err(io::Error::other("incomplete snapshot chunks"));
-        }
-        for (chunk, data) in chunks.iter().zip(&data) {
-            verify_chunk(chunk, data)?;
-        }
+        let data = self.blobs.get_many_verified(&chunks)?.into_data(&chunks)?;
         let mut data = data.into_iter();
         let mut files = Vec::with_capacity(manifest.packs.len());
         for pack in &manifest.packs {
@@ -341,6 +335,70 @@ mod tests {
         fn compare_and_swap(&self, _: u64, _: &Manifest) -> io::Result<bool> {
             unreachable!("file reconstruction does not publish state")
         }
+    }
+
+    struct VerifiedBlobs {
+        chunks: Vec<Chunk>,
+        data: Vec<Vec<u8>>,
+        reads: AtomicUsize,
+    }
+
+    impl BlobStore for VerifiedBlobs {
+        fn get(&self, _: &str) -> io::Result<Vec<u8>> {
+            unreachable!("snapshot reads must use the verified batch override")
+        }
+        fn get_many(&self, _: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+            unreachable!("snapshot reads must use the verified batch override")
+        }
+        fn get_many_verified(&self, _: &[Chunk]) -> io::Result<storage::VerifiedChunks> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            storage::VerifiedChunks::verify(&self.chunks, self.data.clone())
+        }
+        fn put(&self, _: &str, _: &[u8]) -> io::Result<()> {
+            unreachable!()
+        }
+        fn delete(&self, _: &str) -> io::Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn snapshot_consumes_verified_override_and_rejects_valid_proof_substitution() {
+        let chunk = |bytes: &[u8]| Chunk {
+            key: format!("chunks/{}", hash(bytes)),
+            len: bytes.len() as u64,
+        };
+        let chunks = vec![chunk(b"abc"), chunk(b"def")];
+        let manifest = Manifest {
+            packs: vec![StoredPack {
+                bundle: chunks.clone(),
+                pack_bytes: 3,
+                index_bytes: 3,
+                ..StoredPack::default()
+            }],
+            ..Manifest::default()
+        };
+        let mut repository = Repository::new(
+            VerifiedBlobs {
+                chunks,
+                data: vec![b"abc".to_vec(), b"def".to_vec()],
+                reads: AtomicUsize::new(0),
+            },
+            UnusedState,
+        );
+        assert_eq!(
+            repository.read_snapshot_files(&manifest).unwrap(),
+            vec![(b"abc".to_vec(), b"def".to_vec())]
+        );
+        // These bytes remain individually valid for their own metadata, but
+        // swapping equal-sized chunks must not substitute a different snapshot.
+        repository.blobs.chunks.reverse();
+        repository.blobs.data.reverse();
+        assert!(repository.read_snapshot_files(&manifest).is_err());
+        repository.blobs.chunks[0] = chunk(b"xyz");
+        repository.blobs.data[0] = b"xyz".to_vec();
+        assert!(repository.read_snapshot_files(&manifest).is_err());
+        assert_eq!(repository.blobs.reads.load(Ordering::Relaxed), 3);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use crate::http::{Request, Response};
 use crate::storage::{
     BlobStore, Chunk, CloudflareBindings, DurableStateStore, LocalBlobStore, LocalStateStore,
-    Manifest, R2BlobStore, RetirementReceipt, RetiringCas, StateStore,
+    Manifest, R2BlobStore, RetirementReceipt, RetiringCas, StateStore, VerifiedChunks,
 };
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
@@ -192,7 +192,7 @@ fn bulk_batch_len(chunks: &[Chunk]) -> usize {
     count
 }
 
-fn decode_bulk_response(chunks: &[Chunk], bytes: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+fn decode_bulk_response(chunks: &[Chunk], bytes: &[u8]) -> io::Result<VerifiedChunks> {
     let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid bulk blob response");
     if chunks.is_empty()
         || chunks.len() > MAX_BULK_KEYS
@@ -223,14 +223,13 @@ fn decode_bulk_response(chunks: &[Chunk], bytes: &[u8]) -> io::Result<Vec<Vec<u8
             .filter(|end| *end <= bytes.len())
             .ok_or_else(invalid)?;
         let data = &bytes[offset..end];
-        crate::verify_chunk(chunk, data)?;
         result.push(data.to_vec());
         offset = end;
     }
     if offset != bytes.len() {
         return Err(invalid());
     }
-    Ok(result)
+    VerifiedChunks::verify(chunks, result)
 }
 
 const WITNESS_HEADER: &str = "x-git-zero-internal-generation-witness";
@@ -576,17 +575,22 @@ impl CloudflareBindings for HttpServices {
             .to_vec())
     }
     fn r2_get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+        self.r2_get_many_verified(chunks)?.into_data(chunks)
+    }
+    fn r2_get_many_verified(&self, chunks: &[Chunk]) -> io::Result<VerifiedChunks> {
         // Validate the complete request before issuing even its first read.
         validate_bulk_chunks(chunks)?;
-        let mut result = Vec::with_capacity(chunks.len());
+        let mut result = VerifiedChunks::verify(&[], Vec::with_capacity(chunks.len()))?;
         let mut offset = 0;
         while offset < chunks.len() {
             let count = bulk_batch_len(&chunks[offset..]);
             if count == 0 {
                 let chunk = &chunks[offset];
                 let data = self.r2_get(&chunk.key)?;
-                crate::verify_chunk(chunk, &data)?;
-                result.push(data);
+                result.append(VerifiedChunks::verify(
+                    std::slice::from_ref(chunk),
+                    vec![data],
+                )?);
                 offset += 1;
                 continue;
             }
@@ -599,7 +603,7 @@ impl CloudflareBindings for HttpServices {
                 ));
             }
             let response = self.call("POST", "blobs/read", &body, None)?;
-            result.extend(decode_bulk_response(batch, &response.body)?);
+            result.append(decode_bulk_response(batch, &response.body)?);
             offset += count;
         }
         Ok(result)
@@ -701,6 +705,12 @@ impl BlobStore for HostBlobs {
         match self {
             Self::Local(b) => b.get_many(chunks),
             Self::Cloudflare(b, _) => b.get_many(chunks),
+        }
+    }
+    fn get_many_verified(&self, chunks: &[Chunk]) -> io::Result<VerifiedChunks> {
+        match self {
+            Self::Local(b) => b.get_many_verified(chunks),
+            Self::Cloudflare(b, _) => b.get_many_verified(chunks),
         }
     }
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
@@ -1095,6 +1105,14 @@ mod tests {
         }
         let services = HttpServices::new("http://127.0.0.1:1", "unused", "token").unwrap();
         assert!(services.r2_get_many(&[]).unwrap().is_empty());
+        assert!(
+            services
+                .r2_get_many_verified(&[])
+                .unwrap()
+                .into_data(&[])
+                .unwrap()
+                .is_empty()
+        );
         for bad in [
             "chunks/../escape".into(),
             format!("chunks/{}", "A".repeat(64)),
@@ -1126,7 +1144,10 @@ mod tests {
         assert!(valid.len() > MAX_BULK_PAYLOAD);
         assert!(valid.len() <= MAX_BULK_RESPONSE);
         assert_eq!(
-            decode_bulk_response(&chunks, &valid).unwrap(),
+            decode_bulk_response(&chunks, &valid)
+                .unwrap()
+                .into_data(&chunks)
+                .unwrap(),
             vec![full.clone(), full.clone()]
         );
 
@@ -1146,7 +1167,10 @@ mod tests {
         let chunks = [chunk(b"abc"), chunk(b"defgh"), chunk(b"abc")];
         let valid = frame(&[b"abc", b"defgh", b"abc"]);
         assert_eq!(
-            decode_bulk_response(&chunks, &valid).unwrap(),
+            decode_bulk_response(&chunks, &valid)
+                .unwrap()
+                .into_data(&chunks)
+                .unwrap(),
             vec![b"abc".to_vec(), b"defgh".to_vec(), b"abc".to_vec()]
         );
         for end in 0..valid.len() {
@@ -1268,7 +1292,11 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            services.r2_get_many(&chunks).unwrap(),
+            services
+                .r2_get_many_verified(&chunks)
+                .unwrap()
+                .into_data(&chunks)
+                .unwrap(),
             vec![full, b"d".to_vec()]
         );
         server.join().unwrap();
@@ -1304,19 +1332,139 @@ mod tests {
                 200,
                 frame(&[b"a"]),
             ),
+            (
+                "POST /_services/blobs/read ".into(),
+                vec![chunk(b"a")],
+                200,
+                frame(&[b"a"]),
+            ),
         ];
         let (services, server) = fake_services(expected);
         assert!(services.r2_get_many(&[]).unwrap().is_empty());
         let mut request = chunks.clone();
         request.push(legacy_chunk);
+        request.push(chunk(b"a"));
         assert_eq!(
-            services.r2_get_many(&request).unwrap(),
-            [vec![b"a".to_vec(); chunks.len()], vec![legacy]].concat()
+            services
+                .r2_get_many_verified(&request)
+                .unwrap()
+                .into_data(&request)
+                .unwrap(),
+            [
+                vec![b"a".to_vec(); chunks.len()],
+                vec![legacy, b"a".to_vec()]
+            ]
+            .concat()
         );
         // A later call performs another RPC; no chunk cache survives the call.
         assert_eq!(
             services.r2_get_many(&[chunk(b"a")]).unwrap(),
             vec![b"a".to_vec()]
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn bulk_bridge_rejects_corrupt_first_batch_before_any_later_read() {
+        let chunks = vec![chunk(b"a"); MAX_BULK_KEYS + 1];
+        let mut corrupt = frame(&vec![b"a".as_slice(); MAX_BULK_KEYS]);
+        *corrupt.last_mut().unwrap() ^= 1;
+        for verified in [false, true] {
+            let (services, server) = fake_services(vec![
+                (
+                    "POST /_services/blobs/read ".into(),
+                    chunks[..MAX_BULK_KEYS].to_vec(),
+                    200,
+                    corrupt.clone(),
+                ),
+                (
+                    "POST /_services/blobs/read ".into(),
+                    vec![chunk(b"z")],
+                    200,
+                    frame(&[b"z"]),
+                ),
+            ]);
+            let result = if verified {
+                services
+                    .r2_get_many_verified(&chunks)
+                    .and_then(|proof| proof.into_data(&chunks))
+            } else {
+                services.r2_get_many(&chunks)
+            };
+            assert!(result.unwrap_err().to_string().contains("corrupt chunk"));
+            // The server's next expected request is this independent read,
+            // proving no later batch was requested after the corrupt first one.
+            assert_eq!(
+                services.r2_get_many(&[chunk(b"z")]).unwrap(),
+                vec![b"z".to_vec()]
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn bulk_bridge_rejects_corrupt_scalar_fallback_before_resuming_bulk_reads() {
+        let mut corrupt = vec![0x62; MAX_BULK_CHUNK_BYTES + 1];
+        let legacy = chunk(&corrupt);
+        corrupt[0] ^= 1;
+        let chunks = [legacy.clone(), chunk(b"a")];
+        for verified in [false, true] {
+            let (services, server) = fake_services(vec![
+                (
+                    format!("GET /_services/blob/{} ", legacy.key),
+                    vec![],
+                    200,
+                    corrupt.clone(),
+                ),
+                (
+                    "POST /_services/blobs/read ".into(),
+                    vec![chunk(b"z")],
+                    200,
+                    frame(&[b"z"]),
+                ),
+            ]);
+            let result = if verified {
+                services
+                    .r2_get_many_verified(&chunks)
+                    .and_then(|proof| proof.into_data(&chunks))
+            } else {
+                services.r2_get_many(&chunks)
+            };
+            assert!(result.unwrap_err().to_string().contains("corrupt chunk"));
+            assert_eq!(
+                services.r2_get_many(&[chunk(b"z")]).unwrap(),
+                vec![b"z".to_vec()]
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn host_blob_wrapper_reads_verified_http_snapshot_in_order() {
+        let chunks = vec![chunk(b"abc"), chunk(b"def")];
+        let (services, server) = fake_services(vec![(
+            "POST /_services/blobs/read ".into(),
+            chunks.clone(),
+            200,
+            frame(&[b"abc", b"def"]),
+        )]);
+        let services = Arc::new(services);
+        let repository = crate::Repository::new(
+            HostBlobs::Cloudflare(R2BlobStore::new(services.clone()), services.clone()),
+            DurableStateStore::new(services),
+        );
+        let manifest = Manifest {
+            packs: vec![crate::storage::StoredPack {
+                bundle: chunks,
+                pack_bytes: 3,
+                index_bytes: 3,
+                ..crate::storage::StoredPack::default()
+            }],
+            ..Manifest::default()
+        };
+        assert_eq!(
+            repository.read_snapshot_files(&manifest).unwrap(),
+            vec![(b"abc".to_vec(), b"def".to_vec())]
         );
         server.join().unwrap();
     }

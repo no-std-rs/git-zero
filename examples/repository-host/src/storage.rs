@@ -135,6 +135,48 @@ pub struct Chunk {
     pub len: u64,
 }
 
+/// Owned, ordered chunk bytes whose lengths and content addresses were verified.
+/// Payloads remain private until consumed against the exact requested metadata.
+pub struct VerifiedChunks {
+    chunks: Vec<Chunk>,
+    data: Vec<Vec<u8>>,
+}
+
+impl VerifiedChunks {
+    /// Verify every ordered payload before constructing a complete proof.
+    pub fn verify(chunks: &[Chunk], data: Vec<Vec<u8>>) -> io::Result<Self> {
+        if chunks.len() != data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "incomplete verified chunks",
+            ));
+        }
+        for (chunk, bytes) in chunks.iter().zip(&data) {
+            crate::verify_chunk(chunk, bytes)?;
+        }
+        Ok(Self {
+            chunks: chunks.to_vec(),
+            data,
+        })
+    }
+
+    /// Release bytes only for the exact key, length and order that was verified.
+    pub fn into_data(self, expected: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+        if self.chunks.as_slice() != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "verified chunk request mismatch",
+            ));
+        }
+        Ok(self.data)
+    }
+
+    pub(crate) fn append(&mut self, mut other: Self) {
+        self.chunks.append(&mut other.chunks);
+        self.data.append(&mut other.data);
+    }
+}
+
 /// Published blobs are immutable: repeated equal puts succeed, conflicts fail.
 /// A successful put must make bytes durable before a manifest can reference them.
 pub trait BlobStore: Send + Sync {
@@ -143,6 +185,10 @@ pub trait BlobStore: Send + Sync {
     /// preserves scalar store semantics, including repeated keys and failures.
     fn get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
         chunks.iter().map(|chunk| self.get(&chunk.key)).collect()
+    }
+    /// Read and verify content-addressed chunks, preserving custom batch reads.
+    fn get_many_verified(&self, chunks: &[Chunk]) -> io::Result<VerifiedChunks> {
+        VerifiedChunks::verify(chunks, self.get_many(chunks)?)
     }
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()>;
     /// Delete durably; absent keys succeed so recovery can retry partial work.
@@ -431,6 +477,9 @@ pub trait CloudflareBindings: Send + Sync {
     fn r2_get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
         chunks.iter().map(|chunk| self.r2_get(&chunk.key)).collect()
     }
+    fn r2_get_many_verified(&self, chunks: &[Chunk]) -> io::Result<VerifiedChunks> {
+        VerifiedChunks::verify(chunks, self.r2_get_many(chunks)?)
+    }
     fn r2_put(&self, key: &str, bytes: &[u8]) -> io::Result<()>;
     fn r2_delete(&self, key: &str) -> io::Result<()>;
     fn manifest_load(&self) -> io::Result<Manifest>;
@@ -465,6 +514,13 @@ impl<T: CloudflareBindings> BlobStore for R2BlobStore<T> {
             validate_key(&chunk.key)?;
         }
         self.bindings.r2_get_many(chunks)
+    }
+
+    fn get_many_verified(&self, chunks: &[Chunk]) -> io::Result<VerifiedChunks> {
+        for chunk in chunks {
+            validate_key(&chunk.key)?;
+        }
+        self.bindings.r2_get_many_verified(chunks)
     }
 
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
@@ -599,6 +655,177 @@ fn durable_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chunk(bytes: &[u8]) -> Chunk {
+        Chunk {
+            key: format!("chunks/{}", crate::hash(bytes)),
+            len: bytes.len() as u64,
+        }
+    }
+
+    #[test]
+    fn verified_chunks_require_complete_ordered_content_and_exact_consumption() {
+        let chunks = [chunk(b"abc"), chunk(b"def"), chunk(b"abc")];
+        let data = vec![b"abc".to_vec(), b"def".to_vec(), b"abc".to_vec()];
+        assert_eq!(
+            VerifiedChunks::verify(&chunks, data.clone())
+                .unwrap()
+                .into_data(&chunks)
+                .unwrap(),
+            data
+        );
+        assert!(
+            VerifiedChunks::verify(&[], vec![])
+                .unwrap()
+                .into_data(&[])
+                .unwrap()
+                .is_empty()
+        );
+        for invalid in [
+            vec![],
+            data[..2].to_vec(),
+            [data.clone(), vec![b"extra".to_vec()]].concat(),
+            vec![b"ab".to_vec(), b"def".to_vec(), b"abc".to_vec()],
+            vec![b"abd".to_vec(), b"def".to_vec(), b"abc".to_vec()],
+            vec![b"def".to_vec(), b"abc".to_vec(), b"abc".to_vec()],
+        ] {
+            assert!(VerifiedChunks::verify(&chunks, invalid).is_err());
+        }
+        let mut wrong_length = chunks.to_vec();
+        wrong_length[0].len += 1;
+        let mut wrong_key = chunks.to_vec();
+        wrong_key[0] = chunk(b"xyz");
+        for expected in [
+            chunks[..2].to_vec(),
+            vec![chunks[1].clone(), chunks[0].clone(), chunks[2].clone()],
+            wrong_length,
+            wrong_key,
+        ] {
+            assert!(
+                VerifiedChunks::verify(&chunks, data.clone())
+                    .unwrap()
+                    .into_data(&expected)
+                    .is_err()
+            );
+        }
+        let mut combined = VerifiedChunks::verify(&chunks[..1], data[..1].to_vec()).unwrap();
+        combined.append(VerifiedChunks::verify(&chunks[1..], data[1..].to_vec()).unwrap());
+        assert_eq!(combined.into_data(&chunks).unwrap(), data);
+    }
+
+    struct BatchReads {
+        data: Vec<Vec<u8>>,
+        batches: Mutex<Vec<Vec<Chunk>>>,
+    }
+
+    impl BlobStore for BatchReads {
+        fn get(&self, _: &str) -> io::Result<Vec<u8>> {
+            unreachable!("verified default must preserve the custom batch getter")
+        }
+        fn get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+            self.batches.lock().unwrap().push(chunks.to_vec());
+            Ok(self.data.clone())
+        }
+        fn put(&self, _: &str, _: &[u8]) -> io::Result<()> {
+            unreachable!()
+        }
+        fn delete(&self, _: &str) -> io::Result<()> {
+            unreachable!()
+        }
+    }
+
+    impl CloudflareBindings for BatchReads {
+        fn r2_get(&self, _: &str) -> io::Result<Vec<u8>> {
+            unreachable!("verified default must preserve the custom batch getter")
+        }
+        fn r2_get_many(&self, chunks: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+            self.get_many(chunks)
+        }
+        fn r2_put(&self, _: &str, _: &[u8]) -> io::Result<()> {
+            unreachable!()
+        }
+        fn r2_delete(&self, _: &str) -> io::Result<()> {
+            unreachable!()
+        }
+        fn manifest_load(&self) -> io::Result<Manifest> {
+            unreachable!()
+        }
+        fn manifest_cas(&self, _: u64, _: &Manifest) -> io::Result<bool> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn verified_defaults_preserve_batch_calls_and_reject_untrusted_results() {
+        let chunks = [chunk(b"abc"), chunk(b"abc")];
+        for (data, valid) in [
+            (vec![b"abc".to_vec(); 2], true),
+            (vec![b"abc".to_vec()], false),
+            (vec![b"abc".to_vec(); 3], false),
+            (vec![b"abc".to_vec(), b"abd".to_vec()], false),
+            (vec![b"abc".to_vec(), b"ab".to_vec()], false),
+        ] {
+            let reads = BatchReads {
+                data,
+                batches: Mutex::default(),
+            };
+            let blobs: &dyn BlobStore = &reads;
+            let bindings: &dyn CloudflareBindings = &reads;
+            assert_eq!(blobs.get_many_verified(&chunks).is_ok(), valid);
+            assert_eq!(bindings.r2_get_many_verified(&chunks).is_ok(), valid);
+            assert_eq!(*reads.batches.lock().unwrap(), vec![chunks.to_vec(); 2]);
+        }
+    }
+
+    struct VerifiedBindings {
+        reads: Mutex<usize>,
+    }
+
+    impl CloudflareBindings for VerifiedBindings {
+        fn r2_get(&self, _: &str) -> io::Result<Vec<u8>> {
+            unreachable!("verified reads must be forwarded")
+        }
+        fn r2_get_many(&self, _: &[Chunk]) -> io::Result<Vec<Vec<u8>>> {
+            unreachable!("verified reads must be forwarded")
+        }
+        fn r2_get_many_verified(&self, chunks: &[Chunk]) -> io::Result<VerifiedChunks> {
+            *self.reads.lock().unwrap() += 1;
+            VerifiedChunks::verify(chunks, vec![b"abc".to_vec(); chunks.len()])
+        }
+        fn r2_put(&self, _: &str, _: &[u8]) -> io::Result<()> {
+            unreachable!()
+        }
+        fn r2_delete(&self, _: &str) -> io::Result<()> {
+            unreachable!()
+        }
+        fn manifest_load(&self) -> io::Result<Manifest> {
+            unreachable!()
+        }
+        fn manifest_cas(&self, _: u64, _: &Manifest) -> io::Result<bool> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn r2_wrapper_forwards_verified_reads_after_validating_every_key() {
+        let bindings = Arc::new(VerifiedBindings {
+            reads: Mutex::new(0),
+        });
+        let blobs = R2BlobStore::new(bindings.clone());
+        let chunks = [chunk(b"abc"), chunk(b"abc")];
+        assert_eq!(
+            blobs
+                .get_many_verified(&chunks)
+                .unwrap()
+                .into_data(&chunks)
+                .unwrap(),
+            vec![b"abc".to_vec(); 2]
+        );
+        let mut invalid = chunks.to_vec();
+        invalid[1].key = "../escape".into();
+        assert!(blobs.get_many_verified(&invalid).is_err());
+        assert_eq!(*bindings.reads.lock().unwrap(), 1);
+    }
 
     struct MockBindings(LocalServices);
     impl CloudflareBindings for MockBindings {

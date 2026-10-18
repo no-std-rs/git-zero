@@ -50,6 +50,18 @@ implemented and tested.
   Recovery first stabilizes a visible manifest after an ambiguous publication
   error, before it may reclaim older chunks. The loopback runner serves
   requests serially with one writer.
+- Snapshot batch reads return an opaque, owned `VerifiedChunks` proof. Its safe
+  constructor checks every ordered payload's declared length and SHA-256 key;
+  consuming it requires exact requested keys, lengths and order. The HTTP bridge
+  validates complete framing and each batch before later requests, then forwards
+  proofs through both storage wrappers without another hash pass. Default trait
+  methods verify untrusted/local results using their existing batch getter.
+  Every chunk is verified before the first native pack/index is materialized,
+  including repeated keys and oversized legacy scalar reads. This changes native
+  CPU work only: read operations, bytes, limits and cache behavior stay fixed.
+  The observed 27.8 ms cold preparation increase motivated this bounded change
+  but does not establish causation or recovered latency. Warm tails with zero R2
+  reads are unrelated; known cloud dollars and receipts are unchanged.
 - A push can run one inline compaction job selecting the four smallest packs at
   a level when their combined input is at most 8 MiB. Rust validates pack/index
   checksums, entry CRCs and delta dependencies, copies compressed payloads without
