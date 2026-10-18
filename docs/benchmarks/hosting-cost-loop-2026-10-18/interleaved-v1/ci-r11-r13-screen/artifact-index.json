@@ -1,0 +1,105 @@
+{
+  "total_count": 5,
+  "artifacts": [
+    {
+      "id": 12126730818,
+      "node_id": "MDg6QXJ0aWZhY3QxMjEyNjczMDgxOA==",
+      "name": "hosting-screen-64mib-cold-1",
+      "size_in_bytes": 1717526,
+      "url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12126730818",
+      "archive_download_url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12126730818/zip",
+      "expired": false,
+      "digest": "sha256:3c5bc21d9bb7cd475d1057632d14d5a6970cdce631c6748363e661bbfe1f7807",
+      "created_at": "2026-10-18T05:34:17Z",
+      "updated_at": "2026-10-18T05:34:17Z",
+      "expires_at": "2026-10-19T05:34:16Z",
+      "workflow_run": {
+        "id": 39097951585,
+        "repository_id": 1413060570,
+        "head_repository_id": 1413060570,
+        "head_branch": "perf/hosting-isolated-ci-20261018",
+        "head_sha": "5c616c23469fff9c7f64789dc29dc640bbc0dfc1"
+      }
+    },
+    {
+      "id": 12126293605,
+      "node_id": "MDg6QXJ0aWZhY3QxMjEyNjI5MzYwNQ==",
+      "name": "hosting-scores-screen-1",
+      "size_in_bytes": 311642,
+      "url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12126293605",
+      "archive_download_url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12126293605/zip",
+      "expired": false,
+      "digest": "sha256:bf525a9907aff8a074134676032e1c1e1b6b64b1dc6ae53e96209134f13ec078",
+      "created_at": "2026-10-18T05:34:59Z",
+      "updated_at": "2026-10-18T05:34:59Z",
+      "expires_at": "2026-10-19T05:34:58Z",
+      "workflow_run": {
+        "id": 39097951585,
+        "repository_id": 1413060570,
+        "head_repository_id": 1413060570,
+        "head_branch": "perf/hosting-isolated-ci-20261018",
+        "head_sha": "5c616c23469fff9c7f64789dc29dc640bbc0dfc1"
+      }
+    },
+    {
+      "id": 12126256472,
+      "node_id": "MDg6QXJ0aWZhY3QxMjEyNjI1NjQ3Mg==",
+      "name": "hosting-screen-16mib-warm-1",
+      "size_in_bytes": 1441118,
+      "url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12126256472",
+      "archive_download_url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12126256472/zip",
+      "expired": false,
+      "digest": "sha256:df23b3a4d71919932bad70281e0378d8d9f2f49b4a27fe85bd146ae696b519be",
+      "created_at": "2026-10-18T05:13:53Z",
+      "updated_at": "2026-10-18T05:13:53Z",
+      "expires_at": "2026-10-19T05:13:51Z",
+      "workflow_run": {
+        "id": 39097951585,
+        "repository_id": 1413060570,
+        "head_repository_id": 1413060570,
+        "head_branch": "perf/hosting-isolated-ci-20261018",
+        "head_sha": "5c616c23469fff9c7f64789dc29dc640bbc0dfc1"
+      }
+    },
+    {
+      "id": 12125924431,
+      "node_id": "MDg6QXJ0aWZhY3QxMjEyNTkyNDQzMQ==",
+      "name": "hosting-screen-64mib-warm-1",
+      "size_in_bytes": 1460958,
+      "url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12125924431",
+      "archive_download_url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12125924431/zip",
+      "expired": false,
+      "digest": "sha256:19269d9ab7a1f431ee2778a504b557d9fe9d2d025b7a7c585bb2e9cc8b799397",
+      "created_at": "2026-10-18T05:26:07Z",
+      "updated_at": "2026-10-18T05:26:07Z",
+      "expires_at": "2026-10-19T05:26:05Z",
+      "workflow_run": {
+        "id": 39097951585,
+        "repository_id": 1413060570,
+        "head_repository_id": 1413060570,
+        "head_branch": "perf/hosting-isolated-ci-20261018",
+        "head_sha": "5c616c23469fff9c7f64789dc29dc640bbc0dfc1"
+      }
+    },
+    {
+      "id": 12125129696,
+      "node_id": "MDg6QXJ0aWZhY3QxMjEyNTEyOTY5Ng==",
+      "name": "hosting-screen-16mib-cold-1",
+      "size_in_bytes": 1682426,
+      "url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12125129696",
+      "archive_download_url": "https://api.github.com/repos/no-std-rs/git-zero/actions/artifacts/12125129696/zip",
+      "expired": false,
+      "digest": "sha256:20bd1822ad645caa56781f7594742e56516e6cbdebc4a0117de81fc79b4a5834",
+      "created_at": "2026-10-18T05:15:29Z",
+      "updated_at": "2026-10-18T05:15:29Z",
+      "expires_at": "2026-10-19T05:15:28Z",
+      "workflow_run": {
+        "id": 39097951585,
+        "repository_id": 1413060570,
+        "head_repository_id": 1413060570,
+        "head_branch": "perf/hosting-isolated-ci-20261018",
+        "head_sha": "5c616c23469fff9c7f64789dc29dc640bbc0dfc1"
+      }
+    }
+  ]
+}

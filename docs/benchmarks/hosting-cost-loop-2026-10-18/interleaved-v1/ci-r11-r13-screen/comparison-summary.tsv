@@ -1,0 +1,7 @@
+comparison	baseline_known_usd	candidate_known_usd	known_reduction_fraction	separated_at_least_1pct_dollar_reduction	resource_failures	profile_cost_failures	latency_group_failures	decision	plateau_eligible
+r111-vs-r11	1.94097593618	1.88455293618	0.029069396971013073	True	0	0	5	inconclusive	False
+r12-vs-r11	1.94097593618	1.8326444361799998	0.055812902149217525	True	0	0	5	inconclusive	False
+r12-vs-r111	1.88455293618	1.8326444361799998	0.027544198416213805	True	0	0	5	inconclusive	False
+r13-vs-r11	1.94097593618	1.8046184361799997	0.07025203015569736	True	0	0	4	inconclusive	False
+r13-vs-r111	1.88455293618	1.8046184361799997	0.042415629970059654	True	0	0	4	inconclusive	False
+r13-vs-r12	1.8326444361799998	1.8046184361799997	0.015292655491000895	True	0	0	6	inconclusive	False

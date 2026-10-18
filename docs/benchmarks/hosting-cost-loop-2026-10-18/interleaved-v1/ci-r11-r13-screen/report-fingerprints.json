@@ -1,0 +1,114 @@
+[
+  {
+    "provider": "r11",
+    "profile": "16mib-cold",
+    "original_file_bytes_sha256": "029f0e559a11e7d8b0e5efdbfc38eeef0159e6518e8a5546bcf6312fb9e3ef82",
+    "scorer_serde_json_canonical_sha256": "e518acfbfa763d1bf5f6097ae0d5a1b9e839468d170d3a03ae33af7146732e52",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r11",
+    "profile": "16mib-warm",
+    "original_file_bytes_sha256": "505bc929f67150e1313d03d03e351a9bf96bb774602a484dcd41d7c758cff4e2",
+    "scorer_serde_json_canonical_sha256": "96f3fc52b06605bc6f7f9bb61e6bd3e14ddd3b09aeeb51ab9f10ad1d306c58de",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r11",
+    "profile": "64mib-cold",
+    "original_file_bytes_sha256": "fd49ad9568389299bef6b485b0781d418f0c8a845b2858eed6a7f94624d53d87",
+    "scorer_serde_json_canonical_sha256": "576599811cf0d5eab7625fdb7aea546496e2d09326906978b6bc32de6e186164",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r11",
+    "profile": "64mib-warm",
+    "original_file_bytes_sha256": "22cf8b5c4c7d72e6162f7d0f27da21874859dc862cf9e03b69d469c90357b54f",
+    "scorer_serde_json_canonical_sha256": "ddf72d761bc9bfdc3c0539bf95857904413ce2a1928c0a2f32959328b8729f44",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r111",
+    "profile": "16mib-cold",
+    "original_file_bytes_sha256": "77994918beb2b9723f2e28fa1c75c53bdb97b39832d3414c3df866df2ead5f33",
+    "scorer_serde_json_canonical_sha256": "78b08f01028cf89e3efb8a80336bec175960158bebc2079ce126bb6a7f19cfff",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r111",
+    "profile": "16mib-warm",
+    "original_file_bytes_sha256": "86155ce6be9787ace8345a7230c3dc6a370f0aeabebe490c872235cefd4650a6",
+    "scorer_serde_json_canonical_sha256": "dcdb9e8d97ffc57a6d938cd08a651b1ddfb8861e42ed24e58dcd8e22b5fecc7d",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r111",
+    "profile": "64mib-cold",
+    "original_file_bytes_sha256": "c58f13fc63fbba2bc0ab2a759e663d24f411f0622226ec2a8b7e08e62006161e",
+    "scorer_serde_json_canonical_sha256": "34dae2e7fbc9a49e64397c4301b987cf42bf267c4aa51ef4476f75bddfdc4dc7",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r111",
+    "profile": "64mib-warm",
+    "original_file_bytes_sha256": "ae63958d7179ede28f09982521f600b03362210672f7c3e81f6abd4df9c69d3a",
+    "scorer_serde_json_canonical_sha256": "1144af435cafe9ff8130d5889ad9e6a6cbd9a1d631a7e54d17b432a92cf42395",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r12",
+    "profile": "16mib-cold",
+    "original_file_bytes_sha256": "21c422c98c260d156aa4722958e866993fff69be68bef49ac7719094db7ff5ca",
+    "scorer_serde_json_canonical_sha256": "4e4afcbe61a76bfa316e3643a7083b951325e6a06b05c0b277b04a3cde90e8a8",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r12",
+    "profile": "16mib-warm",
+    "original_file_bytes_sha256": "bfe8c2e52007f25ce560fadb41eebf36d58fe46bac86cfdb15574dd74eb02f2e",
+    "scorer_serde_json_canonical_sha256": "9bad3e9b78bbe518761ab355991b239353088e32a078164b8555c94930c6114d",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r12",
+    "profile": "64mib-cold",
+    "original_file_bytes_sha256": "d02521beee5d2c51c776dd3afa4a8206f7f9c362dcfe1f5f89ac96a002ad28eb",
+    "scorer_serde_json_canonical_sha256": "74b0d556b60ef04e2e471ff817e1f2f5807458ae14043a27c6c77246dc8df9f7",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r12",
+    "profile": "64mib-warm",
+    "original_file_bytes_sha256": "f38f659eb4d8f1417f58368fbb7c8796573ef07cdc23b55ae95a15fae5c61e5d",
+    "scorer_serde_json_canonical_sha256": "165f5e99b846cae192ef312a980c41999af6f99ff42b5bf916225acaa6913954",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r13",
+    "profile": "16mib-cold",
+    "original_file_bytes_sha256": "e88ece8e28b93d930a72b3af1a7a7ef4911cb6731b50b81fcec61274bf613fc2",
+    "scorer_serde_json_canonical_sha256": "7b0da18279b30c101e5500131897e073313f5fce447f29ae2c1fc5353851c9b2",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r13",
+    "profile": "16mib-warm",
+    "original_file_bytes_sha256": "528d34e139530aa58942c86a0d34987de18e92745942d1959062003ba39fe908",
+    "scorer_serde_json_canonical_sha256": "cee823c9243bdd433e8ad58219a3f1d63865e9e59d401108c19dbbfb2a0daef8",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r13",
+    "profile": "64mib-cold",
+    "original_file_bytes_sha256": "70b4602dea6b2ea9e1b404c1276d2a2de69428da6bb43e6dbe6612660c802877",
+    "scorer_serde_json_canonical_sha256": "f877b5d32b2378f64bb6b6745957fda25105f6b43280d73bde139a6cdbaecdb9",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  },
+  {
+    "provider": "r13",
+    "profile": "64mib-warm",
+    "original_file_bytes_sha256": "45e300f996d3d4a7edd4be2ce0cc202eb7400e10289dfc69d48a1bf526c92633",
+    "scorer_serde_json_canonical_sha256": "747d2885d625aac9ae7e66c7743d095daf4e70cb67d82af943d3c2e5fea2f880",
+    "fingerprint_scopes": "Original file bytes and the scorer's parsed serde_json representation are distinct identities; neither substitutes for the other."
+  }
+]

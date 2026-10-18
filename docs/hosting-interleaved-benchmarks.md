@@ -124,7 +124,7 @@ The [isolated workflow](../.github/workflows/hosting-isolated.yml) runs only on 
 `perf/hosting-isolated-ci-20261018`, or dispatches selecting that branch. Each of the four profiles gets
 a standard `ubuntu-24.04` VM. A screen freshly measures its declared ordered native providers on
 the same VM, once each with two measured pairs and an excluded warmup per backend. The completed
-R2–R5, R5–R8 and R8–R11 batches each used four providers. Every provider gets a fresh local
+R2–R5, R5–R8, R8–R11 and R11–R13 batches each used four providers. Every provider gets a fresh local
 Wrangler process and persistent-state directory. No reports from an earlier
 workflow attempt or local workstation may substitute for any provider's measurements.
 
@@ -139,7 +139,7 @@ requirements remain enforced by the existing runner and scorer.
 
 Before pushing each batch, validate the common final Worker's backward compatibility and pin its
 complete source tree and index hash alongside every actual pushed source ref.
-The next workflow records SHA256s for every tracked Worker source module,
+The workflow records SHA256s for every tracked Worker source module,
 checks them again after timing and compares that manifest across profile VMs.
 For the earlier R2–R5 batch, generation
 witnesses were gated by registration capability so R2/R3 incurred no extra DO checks, and 16 MiB chunk
@@ -327,7 +327,7 @@ plateau claim. The [reviewed implementation](benchmarks/hosting-cost-loop-2026-1
 now has actual mixed-format, maximum-debt, numeric-corruption, partial-failure
 and same-Native recovery checks. All realistic normal/GC/reopen shapes remain
 at 24,576 SQLite bytes. A combined real-Git production-Worker check passes;
-this is correctness evidence, with no replay saving measured yet.
+the fresh R11–R13 screen below measures its net effect after actual schema work.
 
 The next [deferred-update proposal](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/deferred-catalog-design/README.md)
 would fold an all-success retirement's page update into a following upload.
@@ -338,13 +338,17 @@ The [reviewed implementation](benchmarks/hosting-cost-loop-2026-10-18/interleave
 now passes seven final actual contracts, four Native fault cases and the combined
 real-Git check. Review corrected a supported >256-key scalar-fallback wedge;
 actual interrupted cleanup, reopen and GC now succeed. Normal realistic storage
-remains 24,576 bytes. These checks establish no replay cost or latency saving.
+remains 24,576 bytes. Those controls are separate from the fresh cost measurements below and establish no latency win.
 
-A separate [residual-cost audit](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/post-deferral-design-audit/README.md)
-finds no further concrete 1% saving within the retained Native Git views,
-chunk/read limits and per-upload/publication barriers. Its conditional bound
-uses unmeasured projections and must be recomputed from final actual receipts
-before it can support stopping. It establishes no global pack-selection optimum.
+An earlier [residual-cost audit](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/post-deferral-design-audit/README.md)
+conditions its bound on separate upload/catalog-sync and publication writes.
+The [reviewed atomic-coupling candidate](hosting-inline-metadata.md) changes
+that persistence protocol while retaining a durable catalog/peak for every
+winning manifest and syncing before retirement. Its
+[local correctness record](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r14-inline-metadata-candidate/README.md)
+passes realistic storage, fault, legacy and real-Git gates. It still needs a
+fresh cost/performance screen. The old bound establishes no stopping result
+for this new candidate and no global pack-selection optimum.
 
 ## Completed R8–R11 screen: upload, historical selection and catalog peak
 
@@ -397,9 +401,9 @@ known-cost comparison anchor. The corrected history path and later catalog
 changes need their own fresh, prospectively pinned screen. Final validation
 still requires five fresh original-R1/final pairs across all four profiles.
 
-## Next declared screen: corrected history and catalog updates
+## Completed R11–R13 screen: corrected history and catalog updates
 
-After the complete R8–R11 review, this fresh two-pair batch compares these
+After the complete R8–R11 review, this fresh two-pair batch measured these
 prospectively pinned providers in order:
 
 | Label | Change | Pushed source commit | Native source tree |
@@ -433,3 +437,35 @@ work retained separately. No projected saving substitutes for a receipt.
 The original scalar reference remains `556b9ecd2aa79197f86b3db2d546eee81696e899`.
 After actual screen review and a substantiated stopping condition, final
 validation still requires five fresh original-R1/final pairs on all profiles.
+
+[Run 39097951585](https://github.com/no-std-rs/git-zero/actions/runs/39097951585)
+completed all four profiles and scoring at `5c616c2`. Fresh known fixed
+objectives are R11 **$1.94097593618**, R11.1 **$1.88455293618**, R12
+**$1.83264443618** and R13 **$1.80461843618**. R13 is 7.025203% below R11
+and 1.529266% below R12. All six conservative separated cost envelopes,
+216 resource checks and 24 profile-cost guards pass. Actual SQLite stays
+24,576 bytes and R2 peak/storage/transfer guards pass.
+
+Historical selection now activates on real clients: each corrected cold trial
+has 16 timed projections and seven full restores. GETs fall 494→425 at 16 MiB
+and 654→585 at 64 MiB. Final cold observer restoration really reads another
+11/13 chunks; its actual receipt remains outside the fixed workload and inside
+complete physical scope. Every HEAD count is zero. SQL writes fall 86→73→66
+at 16 MiB and 88→75→68 at 64 MiB, with actual first-push migrations included.
+
+All comparisons remain inconclusive and plateau-ineligible. The detailed
+comparison table retains every failed latency group. R13
+versus R11 passes medians but fails four p95 groups; its worst sample is
+57.956 seconds versus paired Git's 0.383 seconds. No speed or all-guard
+promotion is established. All 2,816 individual ratios, 128 selected tails and
+29 failed groups are retained.
+
+[Published evidence and analysis](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r11-r13-screen/README.md)
+contains the five unchanged CI archives, all actual receipt/scope tables,
+source/VM/binary checks, independent 379-file inventory and byte-exact frozen
+Rust reproduction of four scores and six comparisons. After complete guard
+and tail review, R13 is only the next provisional known-cost anchor. Atomic
+metadata and any gateway callback fusion remain unmeasured candidates. No
+stopping condition is established; final validation still requires five fresh
+original-R1/final pairs on every profile. Unknown cloud and Native compute
+keep the full bill null.

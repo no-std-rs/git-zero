@@ -1,0 +1,226 @@
+{
+  "run_url": "https://github.com/no-std-rs/git-zero/actions/runs/39097951585",
+  "head": "5c616c23469fff9c7f64789dc29dc640bbc0dfc1",
+  "profiles": [
+    {
+      "profile": "16mib-cold",
+      "run_id": "39097951585",
+      "attempt": "1",
+      "boot_id": "4a7c1231-76a0-4922-a25c-bf76bbaa4faa",
+      "same_vm_all_providers": true,
+      "providers": [
+        {
+          "provider": "r11",
+          "source_commit": "26e3d61c6fecbf92a709a089ed2f1270182ae625",
+          "source_tree": "643665744a8ddcb5196d6a35a9d616d9a97d47d9",
+          "native_sha": "fc70494744f21535afc22f82502fa59287504376e2a9dc5b6d4d2810c80b2e6c",
+          "raw_sha256": "029f0e559a11e7d8b0e5efdbfc38eeef0159e6518e8a5546bcf6312fb9e3ef82",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r111",
+          "source_commit": "d27848bda5f1089814839a276ee320739afcfc92",
+          "source_tree": "ac6d60ac613eac218b21cb5beb5ea6a5bb9f318e",
+          "native_sha": "e5bb3d6f700eb1d6c1b846599e4fa59c22b642f864c54b2daad25b4a023d73f4",
+          "raw_sha256": "77994918beb2b9723f2e28fa1c75c53bdb97b39832d3414c3df866df2ead5f33",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r12",
+          "source_commit": "134fad2b20f6e7d50ff215f08341deacbe786137",
+          "source_tree": "be2308ce3c36999a11ba27ae31d211b3ee27b366",
+          "native_sha": "27f04a2f69ca73f77c9bc35c3de2bc33cfffa9d586a45003246a58844a7130ab",
+          "raw_sha256": "21c422c98c260d156aa4722958e866993fff69be68bef49ac7719094db7ff5ca",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r13",
+          "source_commit": "774adce8795577f4ed7f4a21c3239106abeb21e0",
+          "source_tree": "dffb7c5c2b119ead4c7b620b361da778e642cdee",
+          "native_sha": "1d33c8b4f29f69bb2554a51fb41750972a8f78e610daa45d8fea44ae39318c81",
+          "raw_sha256": "e88ece8e28b93d930a72b3af1a7a7ef4911cb6731b50b81fcec61274bf613fc2",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        }
+      ]
+    },
+    {
+      "profile": "16mib-warm",
+      "run_id": "39097951585",
+      "attempt": "1",
+      "boot_id": "cb79afd6-83be-4bdf-a818-e524c2338ac3",
+      "same_vm_all_providers": true,
+      "providers": [
+        {
+          "provider": "r11",
+          "source_commit": "26e3d61c6fecbf92a709a089ed2f1270182ae625",
+          "source_tree": "643665744a8ddcb5196d6a35a9d616d9a97d47d9",
+          "native_sha": "fc70494744f21535afc22f82502fa59287504376e2a9dc5b6d4d2810c80b2e6c",
+          "raw_sha256": "505bc929f67150e1313d03d03e351a9bf96bb774602a484dcd41d7c758cff4e2",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r111",
+          "source_commit": "d27848bda5f1089814839a276ee320739afcfc92",
+          "source_tree": "ac6d60ac613eac218b21cb5beb5ea6a5bb9f318e",
+          "native_sha": "e5bb3d6f700eb1d6c1b846599e4fa59c22b642f864c54b2daad25b4a023d73f4",
+          "raw_sha256": "86155ce6be9787ace8345a7230c3dc6a370f0aeabebe490c872235cefd4650a6",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r12",
+          "source_commit": "134fad2b20f6e7d50ff215f08341deacbe786137",
+          "source_tree": "be2308ce3c36999a11ba27ae31d211b3ee27b366",
+          "native_sha": "27f04a2f69ca73f77c9bc35c3de2bc33cfffa9d586a45003246a58844a7130ab",
+          "raw_sha256": "bfe8c2e52007f25ce560fadb41eebf36d58fe46bac86cfdb15574dd74eb02f2e",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r13",
+          "source_commit": "774adce8795577f4ed7f4a21c3239106abeb21e0",
+          "source_tree": "dffb7c5c2b119ead4c7b620b361da778e642cdee",
+          "native_sha": "1d33c8b4f29f69bb2554a51fb41750972a8f78e610daa45d8fea44ae39318c81",
+          "raw_sha256": "528d34e139530aa58942c86a0d34987de18e92745942d1959062003ba39fe908",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        }
+      ]
+    },
+    {
+      "profile": "64mib-cold",
+      "run_id": "39097951585",
+      "attempt": "1",
+      "boot_id": "7b80ad22-d39a-4c39-bc60-21b600943331",
+      "same_vm_all_providers": true,
+      "providers": [
+        {
+          "provider": "r11",
+          "source_commit": "26e3d61c6fecbf92a709a089ed2f1270182ae625",
+          "source_tree": "643665744a8ddcb5196d6a35a9d616d9a97d47d9",
+          "native_sha": "fc70494744f21535afc22f82502fa59287504376e2a9dc5b6d4d2810c80b2e6c",
+          "raw_sha256": "fd49ad9568389299bef6b485b0781d418f0c8a845b2858eed6a7f94624d53d87",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r111",
+          "source_commit": "d27848bda5f1089814839a276ee320739afcfc92",
+          "source_tree": "ac6d60ac613eac218b21cb5beb5ea6a5bb9f318e",
+          "native_sha": "e5bb3d6f700eb1d6c1b846599e4fa59c22b642f864c54b2daad25b4a023d73f4",
+          "raw_sha256": "c58f13fc63fbba2bc0ab2a759e663d24f411f0622226ec2a8b7e08e62006161e",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r12",
+          "source_commit": "134fad2b20f6e7d50ff215f08341deacbe786137",
+          "source_tree": "be2308ce3c36999a11ba27ae31d211b3ee27b366",
+          "native_sha": "27f04a2f69ca73f77c9bc35c3de2bc33cfffa9d586a45003246a58844a7130ab",
+          "raw_sha256": "d02521beee5d2c51c776dd3afa4a8206f7f9c362dcfe1f5f89ac96a002ad28eb",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r13",
+          "source_commit": "774adce8795577f4ed7f4a21c3239106abeb21e0",
+          "source_tree": "dffb7c5c2b119ead4c7b620b361da778e642cdee",
+          "native_sha": "1d33c8b4f29f69bb2554a51fb41750972a8f78e610daa45d8fea44ae39318c81",
+          "raw_sha256": "70b4602dea6b2ea9e1b404c1276d2a2de69428da6bb43e6dbe6612660c802877",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        }
+      ]
+    },
+    {
+      "profile": "64mib-warm",
+      "run_id": "39097951585",
+      "attempt": "1",
+      "boot_id": "db0d8d93-04e3-46fe-84bd-f472082e1eda",
+      "same_vm_all_providers": true,
+      "providers": [
+        {
+          "provider": "r11",
+          "source_commit": "26e3d61c6fecbf92a709a089ed2f1270182ae625",
+          "source_tree": "643665744a8ddcb5196d6a35a9d616d9a97d47d9",
+          "native_sha": "fc70494744f21535afc22f82502fa59287504376e2a9dc5b6d4d2810c80b2e6c",
+          "raw_sha256": "22cf8b5c4c7d72e6162f7d0f27da21874859dc862cf9e03b69d469c90357b54f",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r111",
+          "source_commit": "d27848bda5f1089814839a276ee320739afcfc92",
+          "source_tree": "ac6d60ac613eac218b21cb5beb5ea6a5bb9f318e",
+          "native_sha": "e5bb3d6f700eb1d6c1b846599e4fa59c22b642f864c54b2daad25b4a023d73f4",
+          "raw_sha256": "ae63958d7179ede28f09982521f600b03362210672f7c3e81f6abd4df9c69d3a",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r12",
+          "source_commit": "134fad2b20f6e7d50ff215f08341deacbe786137",
+          "source_tree": "be2308ce3c36999a11ba27ae31d211b3ee27b366",
+          "native_sha": "27f04a2f69ca73f77c9bc35c3de2bc33cfffa9d586a45003246a58844a7130ab",
+          "raw_sha256": "f38f659eb4d8f1417f58368fbb7c8796573ef07cdc23b55ae95a15fae5c61e5d",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        },
+        {
+          "provider": "r13",
+          "source_commit": "774adce8795577f4ed7f4a21c3239106abeb21e0",
+          "source_tree": "dffb7c5c2b119ead4c7b620b361da778e642cdee",
+          "native_sha": "1d33c8b4f29f69bb2554a51fb41750972a8f78e610daa45d8fea44ae39318c81",
+          "raw_sha256": "45e300f996d3d4a7edd4be2ce0cc202eb7400e10289dfc69d48a1bf526c92633",
+          "complete_validated_32push_56fetch_both_samples_backends": true,
+          "warmup_validated": true,
+          "full_cost_null": true
+        }
+      ]
+    }
+  ],
+  "native_sha_by_provider": {
+    "r11": "fc70494744f21535afc22f82502fa59287504376e2a9dc5b6d4d2810c80b2e6c",
+    "r111": "e5bb3d6f700eb1d6c1b846599e4fa59c22b642f864c54b2daad25b4a023d73f4",
+    "r12": "27f04a2f69ca73f77c9bc35c3de2bc33cfffa9d586a45003246a58844a7130ab",
+    "r13": "1d33c8b4f29f69bb2554a51fb41750972a8f78e610daa45d8fea44ae39318c81"
+  },
+  "common_hashes": {
+    "/home/runner/work/git-zero/git-zero/../hosting-interleaved/bin/common/hosting-bench": "ed387fabf84a4bb6221ce32a83bf6c125b0ee8e0a2fb6539f309ed947292fe0f",
+    "/home/runner/work/git-zero/git-zero/../hosting-interleaved/bin/common/hosting-cost": "c28841b7ec20ccf6170c4c246090da31e251a8119189d4354df6c9fcf9c497e3",
+    "/home/runner/work/git-zero/git-zero/../hosting-interleaved/bin/common/reference-host": "80d60e64884827159ee1c6e208fd23d7b9d270c3eb44dc0e3d085bb5e263c875",
+    "examples/repository-host/cloudflare/src/index.js": "dfa5d305b6dc511cdb85eb8b7ee717d09f70e7a0435160f29cecf75126c865c1",
+    "examples/repository-host/cloudflare/wrangler.toml": "4d35c7af5e0725605b99801be715e53405689036a53c9df2682eba411cea353d",
+    "examples/repository-host/cloudflare/package-lock.json": "c68ee57e4922151c5b6c0e34eeb6042ed405633e1e249881b2dedef9b2b1d7cd",
+    "examples/repository-host/cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+    "examples/repository-host/cloudflare/src/retirement-proof.js": "3ce5c71f08af064d65c712c38d64bf1c2ad75fbf861708d882f8bb14348a182c"
+  },
+  "common_runtime_hashes": {
+    "/home/runner/work/git-zero/git-zero/../hosting-interleaved/reference-git/bin/git": "ab2222cca1a1d19b721229ffae0feedd89d727587c35291ce6c5e628fd5190a1",
+    "/home/runner/work/git-zero/git-zero/../hosting-interleaved/reference-git/libexec/git-core/git-http-backend": "77e6590ebaecf8b128ae2380e33187a451ac46074bead26b5d630c3add3b4e03",
+    "/home/runner/work/git-zero/git-zero/../hosting-interleaved/reference-git/libexec/git-core/git-remote-http": "1be5ef30289436200f4678dbdb07698cd465ecb009449714bd41fe47230bbebf",
+    "/opt/hostedtoolcache/node/22.23.3/x64/bin/node": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+    "/usr/bin/time": "3b11dec50514a8473e9f6efa7a34d584d0657538c09988f61b72d38ad4991a10"
+  },
+  "common_workerd_provenance": "workerd 2026-10-06\n3ee1cc5b09497de8f47f513b5c5c485da99a9fc8b188b5618cb05de63f3b4b64  examples/repository-host/cloudflare/node_modules/@cloudflare/workerd-linux-64/bin/workerd\nworkerd 2026-10-06\n3ee1cc5b09497de8f47f513b5c5c485da99a9fc8b188b5618cb05de63f3b4b64  examples/repository-host/cloudflare/node_modules/workerd/bin/workerd\n"
+}

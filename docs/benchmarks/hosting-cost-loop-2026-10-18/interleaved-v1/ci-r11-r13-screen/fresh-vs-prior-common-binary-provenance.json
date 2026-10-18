@@ -1,0 +1,21 @@
+{
+  "prior_common_binary_sha256": {
+    "hosting-bench": "a749c22d36b9a21d20f62878b126743ba07dc8d4f325a81f8e1c3dbc55ac92d8",
+    "hosting-cost": "73aca6387c79d29f7c0ba950d034484822d3d796da1d1fee36bc6fc860321a58",
+    "reference-host": "80d60e64884827159ee1c6e208fd23d7b9d270c3eb44dc0e3d085bb5e263c875"
+  },
+  "fresh_common_binary_sha256": {
+    "hosting-bench": "ed387fabf84a4bb6221ce32a83bf6c125b0ee8e0a2fb6539f309ed947292fe0f",
+    "hosting-cost": "c28841b7ec20ccf6170c4c246090da31e251a8119189d4354df6c9fcf9c497e3",
+    "reference-host": "80d60e64884827159ee1c6e208fd23d7b9d270c3eb44dc0e3d085bb5e263c875"
+  },
+  "changed_binary_names": [
+    "hosting-bench",
+    "hosting-cost"
+  ],
+  "scorer_source_changed": false,
+  "runner_source_changed": false,
+  "reference_source_changed": false,
+  "provider_library_source_changed": true,
+  "interpretation": "Fresh common runner/scorer binaries changed while their exact source files, Cargo manifests/lockfile, pricing source and scalar reference identity remain fixed. Provider library code intentionally differs at the new frozen head; do not substitute any old binary hash. Cross-profile fresh binary hashes are checked independently; frozen evaluator output must match CI byte for byte before trust."
+}

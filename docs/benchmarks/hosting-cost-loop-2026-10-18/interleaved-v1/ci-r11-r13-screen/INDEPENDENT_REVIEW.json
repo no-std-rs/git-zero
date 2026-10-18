@@ -1,0 +1,94 @@
+{
+  "run_id": 39097951585,
+  "attempt": 1,
+  "head": "5c616c23469fff9c7f64789dc29dc640bbc0dfc1",
+  "run_url": "https://github.com/no-std-rs/git-zero/actions/runs/39097951585",
+  "benchmark_execution": "Free standard ubuntu-24.04 GitHub-hosted VMs; local workerd/R2/SQLite only; no local measurements or paid production deployment by verifier.",
+  "raw_reports": 16,
+  "profile_vms": 4,
+  "providers_per_shared_vm": 4,
+  "pairs_per_provider_profile": 2,
+  "warmups_per_backend": 1,
+  "fixed_pushes_per_trial": 32,
+  "verified_fetches_per_trial": 56,
+  "internal_checksums_verified": 268,
+  "source_binary_runtime_identity": "Pinned full provider commit and tree refs, four distinct native source trees and native binary hashes, common runner/scorer/Worker/reference Git, strict report binary and source SHA256 ties.",
+  "fresh_state": "All providers share a profile VM but use distinct Worker PIDs, state directories and report namespaces. All warmup and measured first pushes start generation 0. All sources clean after measurements.",
+  "receipts": "Complete accounting, no binding failures, complete 32-push/56-fetch schedules and backend verification; fetches retain nonempty packs with strict fsck, archive and tree/want verification. Every original report and full tail retained.",
+  "counter_scope": "Fixed objective prices exactly summed measured push/fetch row receipts. Whole observed workload counters also include startup and are separately labelled. No whole counter is paired with the fixed objective.",
+  "offline_reproduction": "Frozen evaluator 01b36df2f5f2019eeb09ebe79eb8ae80e9f86d0cdf39667c9fec9b0584e61fb8 has unchanged evaluator source; all four scores and all six comparisons match CI byte for byte.",
+  "correlation": "Intermediate suites were freshly measured once in this prospectively declared batch and are shared across all six comparisons; they are correlated observations, not additional independent pairs.",
+  "formal_result": "All two-pair screen comparisons are inconclusive; no formal plateau or speed claim. Full five-pair validation is separate.",
+  "full_hosting_cost_usd": null,
+  "unknown_billing_dimensions": [
+    "Worker CPU-ms",
+    "Durable Object duration",
+    "monthly SQLite storage",
+    "native codec compute"
+  ],
+  "timing_limit": "Client elapsed time is never inferred as billed CPU. Workerd header timing does not establish full HTTP completion.",
+  "measured_result": {
+    "result": "All six two-pair comparisons are INCONCLUSIVE and plateau-ineligible. Every comparison has latency guard failures. No all-guard promotion or speed claim.",
+    "known_fixed_monthly_objective_usd": {
+      "r11": {
+        "known_fixed_usd": 1.94097593618,
+        "envelope": [
+          1.94096343618,
+          1.9409884361799998
+        ],
+        "total_estimate_usd": null
+      },
+      "r111": {
+        "known_fixed_usd": 1.88455293618,
+        "envelope": [
+          1.88454943618,
+          1.8845564361799998
+        ],
+        "total_estimate_usd": null
+      },
+      "r12": {
+        "known_fixed_usd": 1.8326444361799998,
+        "envelope": [
+          1.8326414361799999,
+          1.8326474361799998
+        ],
+        "total_estimate_usd": null
+      },
+      "r13": {
+        "known_fixed_usd": 1.8046184361799997,
+        "envelope": [
+          1.8046154361799998,
+          1.8046214361799997
+        ],
+        "total_estimate_usd": null
+      }
+    },
+    "all_216_resource_and_24_profile_cost_guards_pass": true,
+    "failed_latency_group_count_by_comparison": {
+      "r111-vs-r11": 5,
+      "r12-vs-r11": 5,
+      "r12-vs-r111": 5,
+      "r13-vs-r11": 4,
+      "r13-vs-r111": 4,
+      "r13-vs-r12": 6
+    },
+    "all_corrected_cold_warmups_and_measured_trials_activate_history_projection": true,
+    "all_actual_fixed_HEAD_attempts_in_all_48_trials": 0,
+    "actual_observed_DO_epoch_changes": 81,
+    "joint_cache": {
+      "all_4224_observed_operation_gauges_within_33554432_bytes": true,
+      "largest_actual_reconstructed_gauge_bytes": 12825772.0,
+      "entry_cap": 256,
+      "single_cached_response_bytes_cap": 16777216,
+      "method": "The frozen source's final full-view observer restores objects without changing response cache or valid same-manifest lineage allocation. Final actual gauges anchor the contiguous per-operation numeric deltas. Final response bytes/entries and zero observer eviction are independently checked, and initial gauges must agree across all same-provider/cache profiles and trials."
+    },
+    "coordinator_decision": {
+      "source": "Root message after independent reconstruction of all 216 resource, 24 cost, 144 latency groups and 2816 ratios",
+      "selection": "R13 only as provisional known-cost comparison anchor",
+      "formal_acceptance": false,
+      "plateau_eligible": false,
+      "pending": "Separate mandatory five fresh original R1/final pairs; this screen does not satisfy them."
+    },
+    "lifecycle_observability_limit": "Exact HEAD/SQL/binding counters and observed DO epochs are retained. Individual proof decisions, every reopen, specific GC service routes, and physical high_water rows/page_count are not separately recorded by the frozen runner; no unobserved cause, query result or hypothetical charge is inferred."
+  }
+}

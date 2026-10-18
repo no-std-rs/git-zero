@@ -1,0 +1,395 @@
+{
+  "scores": {
+    "r11": {
+      "known_fixed_usd": 1.94097593618,
+      "envelope": [
+        1.94096343618,
+        1.9409884361799998
+      ],
+      "total_estimate_usd": null
+    },
+    "r111": {
+      "known_fixed_usd": 1.88455293618,
+      "envelope": [
+        1.88454943618,
+        1.8845564361799998
+      ],
+      "total_estimate_usd": null
+    },
+    "r12": {
+      "known_fixed_usd": 1.8326444361799998,
+      "envelope": [
+        1.8326414361799999,
+        1.8326474361799998
+      ],
+      "total_estimate_usd": null
+    },
+    "r13": {
+      "known_fixed_usd": 1.8046184361799997,
+      "envelope": [
+        1.8046154361799998,
+        1.8046214361799997
+      ],
+      "total_estimate_usd": null
+    }
+  },
+  "comparisons": [
+    {
+      "name": "r111-vs-r11",
+      "comparison": {
+        "decision": "inconclusive",
+        "eligible_rejected_candidate_for_plateau": false,
+        "known_cost_reduction_fraction": 0.029069396971013073,
+        "plateau_requires_independent_rejected_candidates": 2,
+        "reasons": [
+          "16mib-warm/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-cold/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-cold/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-warm/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "screening only; full five-pair validation required"
+        ]
+      },
+      "failed_profile_cost_guards": [],
+      "resource_guard_failures": 0,
+      "latency_guard_failures": [
+        {
+          "profile": "16mib-warm",
+          "workload": "history_with_haves",
+          "median_change_fraction": 0.01632825486678602,
+          "p95_change_fraction": 44.248795861498984,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-cold",
+          "workload": "history_with_haves",
+          "median_change_fraction": -0.10001494172712988,
+          "p95_change_fraction": 16.572334717013618,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-cold",
+          "workload": "large_push",
+          "median_change_fraction": 0.014690806936775047,
+          "p95_change_fraction": 0.9354336625893886,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-warm",
+          "workload": "history_no_haves",
+          "median_change_fraction": -0.01711582118204169,
+          "p95_change_fraction": 134.1157275446045,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-warm",
+          "workload": "large_push",
+          "median_change_fraction": 0.0320355066782827,
+          "p95_change_fraction": 0.4424172533448776,
+          "median_passed": true,
+          "p95_passed": false
+        }
+      ]
+    },
+    {
+      "name": "r12-vs-r11",
+      "comparison": {
+        "decision": "inconclusive",
+        "eligible_rejected_candidate_for_plateau": false,
+        "known_cost_reduction_fraction": 0.055812902149217525,
+        "plateau_requires_independent_rejected_candidates": 2,
+        "reasons": [
+          "16mib-cold/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-cold/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-warm/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-warm/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "screening only; full five-pair validation required"
+        ]
+      },
+      "failed_profile_cost_guards": [],
+      "resource_guard_failures": 0,
+      "latency_guard_failures": [
+        {
+          "profile": "16mib-cold",
+          "workload": "history_with_haves",
+          "median_change_fraction": -0.06569397616655315,
+          "p95_change_fraction": 25.890380753099727,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-cold",
+          "workload": "large_push",
+          "median_change_fraction": 0.340201002334537,
+          "p95_change_fraction": 0.16358002640978886,
+          "median_passed": false,
+          "p95_passed": true
+        },
+        {
+          "profile": "16mib-warm",
+          "workload": "history_with_haves",
+          "median_change_fraction": 0.00292558413739763,
+          "p95_change_fraction": 41.08024438783247,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-warm",
+          "workload": "history_no_haves",
+          "median_change_fraction": 0.009310332439852687,
+          "p95_change_fraction": 173.34719065002847,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-warm",
+          "workload": "large_push",
+          "median_change_fraction": 0.026409896526013776,
+          "p95_change_fraction": 1.4767787997675117,
+          "median_passed": true,
+          "p95_passed": false
+        }
+      ]
+    },
+    {
+      "name": "r12-vs-r111",
+      "comparison": {
+        "decision": "inconclusive",
+        "eligible_rejected_candidate_for_plateau": false,
+        "known_cost_reduction_fraction": 0.027544198416213805,
+        "plateau_requires_independent_rejected_candidates": 2,
+        "reasons": [
+          "16mib-cold/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-cold/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-warm/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-warm/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "screening only; full five-pair validation required"
+        ]
+      },
+      "failed_profile_cost_guards": [],
+      "resource_guard_failures": 0,
+      "latency_guard_failures": [
+        {
+          "profile": "16mib-cold",
+          "workload": "history_with_haves",
+          "median_change_fraction": -0.00827514269603169,
+          "p95_change_fraction": 33.18708980644426,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-cold",
+          "workload": "large_push",
+          "median_change_fraction": 0.35425155653118146,
+          "p95_change_fraction": 0.31255864062076855,
+          "median_passed": false,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-warm",
+          "workload": "history_no_haves",
+          "median_change_fraction": -0.044251645850643784,
+          "p95_change_fraction": 0.3150589920694975,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-warm",
+          "workload": "history_no_haves",
+          "median_change_fraction": 0.02688633532963669,
+          "p95_change_fraction": 0.29035452658516636,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-warm",
+          "workload": "large_push",
+          "median_change_fraction": -0.005450985083231941,
+          "p95_change_fraction": 0.7171028660562764,
+          "median_passed": true,
+          "p95_passed": false
+        }
+      ]
+    },
+    {
+      "name": "r13-vs-r11",
+      "comparison": {
+        "decision": "inconclusive",
+        "eligible_rejected_candidate_for_plateau": false,
+        "known_cost_reduction_fraction": 0.07025203015569736,
+        "plateau_requires_independent_rejected_candidates": 2,
+        "reasons": [
+          "16mib-cold/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-warm/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-warm/latest_fetch: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "screening only; full five-pair validation required"
+        ]
+      },
+      "failed_profile_cost_guards": [],
+      "resource_guard_failures": 0,
+      "latency_guard_failures": [
+        {
+          "profile": "16mib-cold",
+          "workload": "history_with_haves",
+          "median_change_fraction": -0.04719320911940095,
+          "p95_change_fraction": 36.5103662123553,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-warm",
+          "workload": "history_with_haves",
+          "median_change_fraction": 0.007035101025949064,
+          "p95_change_fraction": 41.78721523781208,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-warm",
+          "workload": "latest_fetch",
+          "median_change_fraction": 0.010654897011840747,
+          "p95_change_fraction": 0.36173375681507713,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-warm",
+          "workload": "large_push",
+          "median_change_fraction": -0.00435207372241464,
+          "p95_change_fraction": 1.3209598079193974,
+          "median_passed": true,
+          "p95_passed": false
+        }
+      ]
+    },
+    {
+      "name": "r13-vs-r111",
+      "comparison": {
+        "decision": "inconclusive",
+        "eligible_rejected_candidate_for_plateau": false,
+        "known_cost_reduction_fraction": 0.042415629970059654,
+        "plateau_requires_independent_rejected_candidates": 2,
+        "reasons": [
+          "16mib-cold/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-warm/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-warm/latest_fetch: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "screening only; full five-pair validation required"
+        ]
+      },
+      "failed_profile_cost_guards": [],
+      "resource_guard_failures": 0,
+      "latency_guard_failures": [
+        {
+          "profile": "16mib-cold",
+          "workload": "history_with_haves",
+          "median_change_fraction": 0.011362609915870125,
+          "p95_change_fraction": 46.6888099930151,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-warm",
+          "workload": "history_no_haves",
+          "median_change_fraction": -0.017123171172719,
+          "p95_change_fraction": 149.93246206289325,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-warm",
+          "workload": "latest_fetch",
+          "median_change_fraction": 0.00770928603588783,
+          "p95_change_fraction": 0.3845857289411492,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-warm",
+          "workload": "large_push",
+          "median_change_fraction": -0.035258070255561935,
+          "p95_change_fraction": 0.6090765709694843,
+          "median_passed": true,
+          "p95_passed": false
+        }
+      ]
+    },
+    {
+      "name": "r13-vs-r12",
+      "comparison": {
+        "decision": "inconclusive",
+        "eligible_rejected_candidate_for_plateau": false,
+        "known_cost_reduction_fraction": 0.015292655491000895,
+        "plateau_requires_independent_rejected_candidates": 2,
+        "reasons": [
+          "16mib-cold/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-cold/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-warm/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "16mib-warm/latest_fetch: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "64mib-cold/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+          "screening only; full five-pair validation required"
+        ]
+      },
+      "failed_profile_cost_guards": [],
+      "resource_guard_failures": 0,
+      "latency_guard_failures": [
+        {
+          "profile": "16mib-cold",
+          "workload": "history_no_haves",
+          "median_change_fraction": -0.009931190254000688,
+          "p95_change_fraction": 41.048553884377625,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-cold",
+          "workload": "history_with_haves",
+          "median_change_fraction": 0.019801613791639472,
+          "p95_change_fraction": 0.39493622484432,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-warm",
+          "workload": "history_no_haves",
+          "median_change_fraction": 0.028384537164147128,
+          "p95_change_fraction": 113.77238889897409,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-warm",
+          "workload": "large_push",
+          "median_change_fraction": 0.04779507310911457,
+          "p95_change_fraction": 0.3251517824860808,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "16mib-warm",
+          "workload": "latest_fetch",
+          "median_change_fraction": -0.006676131325632051,
+          "p95_change_fraction": 0.32938021472900303,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "profile": "64mib-cold",
+          "workload": "history_no_haves",
+          "median_change_fraction": -0.000953209924674403,
+          "p95_change_fraction": 0.49273248129115954,
+          "median_passed": true,
+          "p95_passed": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "scope": "Offline preservation of candidate correctness only; no benchmark or cost result",
+  "candidate_head": "822e032ea78857a0378e6fd5535a18f31e0dd416",
+  "production_code_commit": "5759726b0a4545f6613553e1f2303f303eb65384",
+  "ledger_sha256": "e61b1377f037538f0534f943ebf9c1aff89a80668d8f7b33127caec8400fb36e",
+  "raw_files_verified": 992,
+  "raw_bytes_verified": 25928421,
+  "archive_member_prefix": "raw/ followed by original absolute artifact path relative to /tmp",
+  "ledger_continuity": "Independently approved clean822e032; all992rawfiles,17legacy source maps and37 production gateway source records verified; no speed/netcost claim.",
+  "archive_reread_verification": "All992 tar members sizes and SHA256 match exact ledger"
+}
