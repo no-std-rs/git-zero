@@ -26,3 +26,19 @@ plans remain unexecuted. Root authorized the bounded executor implementation
 and a tiny same-path proof; large replay still requires frozen-source review
 and a separate resource decision. The two [sealed plans](stage2-case-plans.json)
 keep fixture reconstruction unverified/null.
+
+[Stage-three original review](stage3-original-blocked-review.md) found two
+blocking gaps: controller resource helpers escaped the watchdog and fetched
+packs lacked explicit strict indexing. The [correction review](stage3-correction-independent-review.md)
+approves isolated source `e41159b7` and its corrected cheap proof. Both the
+blocked-helper cleanup control and nine-operation real-Git proof used the same
+actual executable; six new fetched packs pass explicit strict indexing after
+the original observer. The failed first helper control and original tiny proof
+remain disclosed. Exact original-byte mappings are in
+[publication scope](stage3-correction-publication-scope.json).
+
+Neither large diagnostic case has run. Its fixture reconstruction, timings and
+costs remain null; resource planning is separate from source approval. These
+isolated hooks and executor are absent from the priced R19/R20 screen and do
+not establish a performance fix. Raw Git/R2/SQLite state and executables remain
+local-only.

@@ -1,0 +1,114 @@
+{
+  "source": "e41159b7fcd3fc9ef16b189464fd6c54189af13b",
+  "parent": "d2cab05869a7b932a910857fdd4e43bc02d79b7a",
+  "source_scope": "isolated branch, not integrated into production or priced screen",
+  "decision": "independently approved corrected executor/source and cheap proof only",
+  "supervisor_actual_ELF_SHA256": "b36f7564ca6b83f4d316f617b0eaae728028296caf3f9020f4fac315362ad182",
+  "large_fixture_generation": null,
+  "large_runtime": null,
+  "CPU": null,
+  "DO_duration": null,
+  "full_bill": null,
+  "large_replay_resource_approval": false,
+  "original_failures_preserved": true,
+  "payloads": [
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-handoff-20261018/HANDOFF.md",
+      "source_bytes": 4496,
+      "source_sha256": "5af8f440c65342eda64fc0cc81d4552818ef671458b6b8f244cf9151c0a3639b",
+      "published_path": "stage3-original-handoff.md",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-independent-review/REVIEW.md",
+      "source_bytes": 12312,
+      "source_sha256": "1bb8465ebd8f78fbdb4aa06916085e4c23c3752000a8ff19faa95aad433ed4b1",
+      "published_path": "stage3-original-blocked-review.md",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-independent-review/REVIEW.json",
+      "source_bytes": 19326,
+      "source_sha256": "ec398732603fda68e1ecd3f3d3369dda1fe78f9d51d7a303e3ec28e949372679",
+      "published_path": "stage3-original-blocked-review.json.gz",
+      "encoding": "deterministic gzip of exact original"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-correction-handoff-20261018/HANDOFF.md",
+      "source_bytes": 5572,
+      "source_sha256": "5dab5ed40710a96ca40e76537d1fabe039ea516c4408a2eb6e9c09a68c1a964f",
+      "published_path": "stage3-correction-handoff.md",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-correction-handoff-20261018/inputs.sha256",
+      "source_bytes": 4296,
+      "source_sha256": "a57cf03619cc4b21c804250b388b08a5e4a951c0f54a847ffb223b882d66a56e",
+      "published_path": "stage3-correction-handoff-inputs.sha256.gz",
+      "encoding": "deterministic gzip of exact original"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-correction-handoff-20261018/final-integrity-check.json",
+      "source_bytes": 1895,
+      "source_sha256": "4e5cae9f02b6c36a88389a3dcebd5b17b13354628cb1318984752ece67e80643",
+      "published_path": "stage3-correction-integrity.json.gz",
+      "encoding": "deterministic gzip of exact original"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-correction-handoff-20261018/before-correction-history.json",
+      "source_bytes": 1239,
+      "source_sha256": "8a75a865d4679cfd8f26892f7a39c98f6ab6eccd6400529887909db8432b9a01",
+      "published_path": "stage3-correction-history.json.gz",
+      "encoding": "deterministic gzip of exact original"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-correction-independent-review-20261018/REVIEW.md",
+      "source_bytes": 9196,
+      "source_sha256": "40212fa993f379001f620e02715ca976e3dd93684ad0630735bf29644538c1b7",
+      "published_path": "stage3-correction-independent-review.md",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-correction-independent-review-20261018/REVIEW.json",
+      "source_bytes": 27608,
+      "source_sha256": "1424ec41c765ba89458d453dc459be906b3a89f4966d9670f0aac83246d2108f",
+      "published_path": "stage3-correction-independent-review.json.gz",
+      "encoding": "deterministic gzip of exact original"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-correction-independent-review-20261018/inputs.sha256",
+      "source_bytes": 1598558,
+      "source_sha256": "0f7406b54f6aa50ec0dac4f7ae454e35871b85d14e482e1fe78f59f9c8710c7d",
+      "published_path": "stage3-correction-review-inputs.sha256.gz",
+      "encoding": "deterministic gzip of exact original"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-01/proof.json",
+      "source_bytes": 34851,
+      "source_sha256": "5dbdfc0c65584e6435384961261349337b3f70b8d66cf12743b746cf049c32f0",
+      "published_path": "stage3-tiny01-proof.json.gz",
+      "encoding": "deterministic gzip of exact original"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/proof.json",
+      "source_bytes": 39391,
+      "source_sha256": "977be245167554340675f2a3e1d8951c86b77d739adcbba604a87ac542194738",
+      "published_path": "stage3-tiny02-proof.json.gz",
+      "encoding": "deterministic gzip of exact original"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-stage3-blocked-preflight-20261018-02/proof.json",
+      "source_bytes": 2487,
+      "source_sha256": "65c3557278a3dc4e44287813669b7a5cd5450fb514636aeadddf262022f55302",
+      "published_path": "stage3-blocked-preflight02-proof.json.gz",
+      "encoding": "deterministic gzip of exact original"
+    },
+    {
+      "source_path": "/tmp/git-zero-fetch-diagnostics-immutable/stage3-correction-e41159b7fcd3fc9ef16b189464fd6c54189af13b-v1/relocation-map.json",
+      "source_bytes": 322707,
+      "source_sha256": "c8178955e1ac7c1d5f0decdad44919b417354bc7e9590de14b7ba9a0e9513814",
+      "published_path": "stage3-correction-relocation-map.json.gz",
+      "encoding": "deterministic gzip of exact original"
+    }
+  ]
+}

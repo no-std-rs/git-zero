@@ -881,7 +881,7 @@ After this complete review, R19 is only the provisional known-cost comparison
 anchor. Five fresh original-R1/final pairs across all four profiles remain
 mandatory.
 
-The isolated Joint-only admission candidate remains under local correctness
+The isolated Joint-only admission candidate completed local correctness
 validation. Its first16 pair reduces actual GETs with unchanged mutation and
 storage totals; one response has proven identical decoded objects with a
 17-byte pack-encoding difference. The clean64 pair also passes: 375→282 ordinary
@@ -893,7 +893,7 @@ it does not establish optimized-path performance. Correctness controls use
 separately scoped volatile temporary storage; their timings are not performance
 measurements. Exact Joint source `b74c917` and all six bounded controls have
 passed independent review. The [corrected ledger](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r20-joint-chunk-candidate/ledger-review-final.md)
-also passed independent review; only the fresh priced screen remains. Its
+also passed independent review; the fresh priced screen follows below. Its
 bounded small synthetic wire samples are explicitly disclosed alongside the
 local-only large payloads and state.
 
@@ -901,8 +901,10 @@ The next [response-retention design](benchmarks/hosting-cost-loop-2026-10-18/int
 would skip optional upload response retention when it would evict existing
 owners. Its conditional replay saves 70 GETs ($0.0252); a larger-pressure
 counterexample regresses three GETs. Actual ownership and a fresh screen must
-settle the result. Isolated implementation has begun from approved Joint source;
-there is no candidate result or integration yet.
+settle the result. Its isolated implementation and completed short controls have
+received preliminary source review. Allocator verification now passes, while
+fault, restart, warm and HTTP controls remain pending. Final source approval,
+integration and priced measurements have not occurred.
 The fresh-schema proposal is deferred. None enters this completed screen.
 
 A [read-only fetch phase audit](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/fetch-latency-audit/AUDIT.md)
@@ -913,14 +915,16 @@ diagnostic proof has independently approved phase records, including actual
 failed HTTP bodies and partial-write stages. Its first runner had a cooperative
 deadline; a [separate hard supervisor](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/fetch-latency-audit/stage2-independent-review.md)
 has passed independent review and tiny stall/cleanup controls. The bounded
-executor and a tiny same-path proof come next; neither large case has run.
+executor and corrected tiny same-path proof have also passed independent review.
+Every newly fetched pack receives explicit strict indexing, and resource helpers
+run inside its supervised budget. Neither large case has run.
 Diagnostic timings cannot replace the unchanged benchmark.
 
 ## Declared R19/R20 screen
 
-The next screen compares approved Joint source with the provisional R19
+The declared screen compares approved Joint source with the provisional R19
 known-cost anchor. Source and corrected-ledger reviews are complete; the workflow
-pins only these two providers. There are no R20 priced measurements yet.
+pins only these two providers. Its fresh results follow below.
 
 | Provider | Exact source commit | Native source tree |
 | --- | --- | --- |
@@ -940,3 +944,47 @@ profiles must be reviewed before selecting another provisional cost anchor.
 This screen cannot establish a plateau. The separate response-retention
 implementation and diagnostic executor are excluded. Five fresh original-R1
 versus final pairs across all four profiles remain required.
+
+## Completed R19/R20 screen
+
+Fresh [run 39128927970](https://github.com/no-std-rs/git-zero/actions/runs/39128927970)
+at `d5cdefe` completed all four profiles and scoring. The frozen Rust evaluator
+reproduces both scores and their comparison byte for byte. This objective repeats
+each profile's 32 pushes and 56 fetches 1,000 times, retaining observed R2 peak
+storage once for 30 days; unknown compute keeps the full bill null.
+
+| Provider | Known subtotal | Change |
+| --- | ---: | ---: |
+| R19 | $1.29245543618 | baseline |
+| R20: joint verified-chunk ownership | $1.21247143618 | −6.1885% |
+
+Cold16 GETs fall 153→85 and bytes read 569,108,040→219,786,498. Cold64 GETs fall
+354→229 and bytes read 2,449,962,286→1,849,065,488. Warm payload GETs remain zero.
+Across the four profile means, 193 fewer GETs, 62 fewer DO dispatches, four fewer
+Worker requests and four fewer SQL rows read account for the $0.079984 saving.
+All named physical writes, live/peak storage, SQLite and compaction observations
+agree for all 1,056 paired operations, including warmups. All 36 resource and
+four profile-cost guards pass.
+
+All 24 paired Git-normalized median guards pass, but five p95 groups fail:
+warm16 historical reads without haves and latest rechecks; cold64 historical
+reads with haves; warm64 latest and historical reads without haves. R20's worst
+fetch is cold64 `history_no_haves_24`, sample 1: 159,373.757 ms against Git's
+1,095.949 ms. These failures remain in the results. The formal screen is
+**inconclusive and plateau-ineligible**; it establishes no speed win or stopping
+condition.
+
+The [evidence publication](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r19-r20-fresh-screen/README.md)
+contains all five exact original archives, source/runtime identities, separate
+startup/observer scopes, every ratio and tail, and all failed-group pairs. Root
+independently reconstructed pricing, 156 source identities, 162,888 service-scope
+checks, 2,112 cache states and all guards/tails/publication bytes. Actual retained
+cache ownership peaks at 31,048,069 bytes within 32 MiB. Joint incurs 28/29
+pressure evictions per cold trial versus Multi's zero; it is not a resident
+superset.
+
+After complete review, the [coordinator decision](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r19-r20-fresh-screen/ROOT-REVIEW.md)
+selects R20 only as the provisional known-cost comparison anchor. Response
+retention, fresh-schema bootstrap and phase diagnostics do not enter these
+measurements. Five fresh original-R1/final pairs on every profile remain
+mandatory and have not run.

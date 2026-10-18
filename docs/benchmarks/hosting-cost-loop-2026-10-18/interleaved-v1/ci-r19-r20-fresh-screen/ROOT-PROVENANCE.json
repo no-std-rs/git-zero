@@ -1,0 +1,435 @@
+{
+  "run": 39128927970,
+  "attempt": 1,
+  "head": "d5cdefe53fc24f34114292b7d19563e73afea293",
+  "recorded_at": "2026-10-18T13:29:43.808155+00:00",
+  "author_publication_all_files": {
+    "README.md": {
+      "bytes": 5708,
+      "sha256": "147a510ece68db0bcf68b1e65c8b0ef3e5bd76803be2cc442024e07012f9ff39"
+    },
+    "ARTIFACT_MAP.json": {
+      "bytes": 49029,
+      "sha256": "661790ffb71bd9322e79057cd9d5cd3f6114abd415368fa77366be0fcd955836"
+    },
+    "SHA256SUMS": {
+      "bytes": 11240,
+      "sha256": "fae8cb5ddacd998e2e7f1a3c318fe33d5d37ef7938aea93a83f01af9a86263df"
+    },
+    "original-archives/hosting-64mib-cold.tar.gz": {
+      "bytes": 974987,
+      "sha256": "5567d833d96fb8f41687ea6534ac385441c67e02df728b99670ef0bd469265d4"
+    },
+    "original-archives/hosting-scores.tar.gz": {
+      "bytes": 93685,
+      "sha256": "bbbedc5c8c207a8a914b24dbc259086f359e519e39bfb0ffbf25aecd2848df6e"
+    },
+    "original-archives/hosting-64mib-warm.tar.gz": {
+      "bytes": 790620,
+      "sha256": "f489078cd18e6063314707e9d2eb3146a6cd2d8d674c0a37e4bfb2b5e7eaea61"
+    },
+    "original-archives/hosting-16mib-warm.tar.gz": {
+      "bytes": 781879,
+      "sha256": "fce2acc88f778fc14f2b78c1f0209527ec36d76f398563561614c40eb5146fe6"
+    },
+    "original-archives/hosting-16mib-cold.tar.gz": {
+      "bytes": 880450,
+      "sha256": "9acabbb0f990f758b86ce9be16b2332250f725d31ab719b23b915cc400143fc6"
+    },
+    "review/INDEPENDENT_REVIEW.json.gz": {
+      "bytes": 3219,
+      "sha256": "d46d070f152f72c31df8d6baed09ba2ec4c532d210119ca601126c24c786c517"
+    },
+    "review/INDEPENDENT_REVIEW.md.gz": {
+      "bytes": 2850,
+      "sha256": "b5f8fdc9ec015e255f91f8810c99c138124fd2af19db63c468f6865d658048b0"
+    },
+    "review/RAW_SHA256SUMS.gz": {
+      "bytes": 410,
+      "sha256": "d759a393568a78b260c1e86d231b9b1efe57c551172313bc588633c68ff7e5d3"
+    },
+    "review/activation-review.json.gz": {
+      "bytes": 699,
+      "sha256": "6adc2656581f5779742dd0e313417254d239993de154eece11ad2bf8bc0f3693"
+    },
+    "review/actual-data-write-space-equivalence-review.json.gz": {
+      "bytes": 64225,
+      "sha256": "0d46372d7e5b0c8004cbf80a59cfc77d0027a0d084ceff501119a6361be4efa0"
+    },
+    "review/actual-selected-packs-and-reads.tsv.gz": {
+      "bytes": 7445,
+      "sha256": "4796642ee1b74f62fa3027bdc77848bc18016b9312f630831ddbb3f7140ca810"
+    },
+    "review/all-48-latency-group-maxima.json.gz": {
+      "bytes": 9994,
+      "sha256": "42d7182c4fec8491bb3c82a839fc57cb30a4d5eed5d53b935d5035f7d0380288"
+    },
+    "review/all-four-outcomes.json.gz": {
+      "bytes": 1489,
+      "sha256": "fa4a3824c0a1e753170758265fa1019d39d7d822d586f89a60c1cf67f05665f1"
+    },
+    "review/all-individual-ratio-extremes.json.gz": {
+      "bytes": 6098,
+      "sha256": "37db170a1209bde7ca92fc78f7769ce2f483988df580a24c2f7cb9e777aee59e"
+    },
+    "review/all-native-operation-metrics.json.gz": {
+      "bytes": 137103,
+      "sha256": "2c073a48301df28a2adea897a7ef392c29fa343387478ca7e51b90d55d25a602"
+    },
+    "review/analysis.json.gz": {
+      "bytes": 1431,
+      "sha256": "480ada502ecf93e59f5246ef6d7e80ff894ec466f3f27269b4189ec1d5832330"
+    },
+    "review/archive-validation.json.gz": {
+      "bytes": 553,
+      "sha256": "d497ccd5b10b210238be193d8196fcad0914f333e31944099ee4d84e1489b3cc"
+    },
+    "review/artifact-index.json.gz": {
+      "bytes": 883,
+      "sha256": "3ab4708c4a74ca473bde8d4d82bac93a256308342fce1cad8b4690695353a5e1"
+    },
+    "review/binary-and-order-provenance-review.json.gz": {
+      "bytes": 1984,
+      "sha256": "d4e6ab4c05d92ea2db8aa6b72aa378a0352206a21613154d59923ef8acc49fbb"
+    },
+    "review/comparison-summary.tsv.gz": {
+      "bytes": 223,
+      "sha256": "8bafb0f3eef4f689885a7b5f1b4052f4cabcbd642d199c3fb99c3e14b09c78d7"
+    },
+    "review/complete-service-phase-category-and-API-review.json.gz": {
+      "bytes": 10734,
+      "sha256": "5f683a8e7b6f10d7e82fb86047b4fcbbfe59d422ca656b10b96e54f87b5638b5"
+    },
+    "review/counter-scopes.json.gz": {
+      "bytes": 901,
+      "sha256": "c12a45b3a0a53a4b52cfc54ad0158a962b941516dd2f0b28140f23a9277dab66"
+    },
+    "review/discovery-shortcut-metrics.json.gz": {
+      "bytes": 1148,
+      "sha256": "8f8971b9490ef2fcc560f4a912e58695decd96159e9c063610e511a9e004e7d0"
+    },
+    "review/distribution-review.json.gz": {
+      "bytes": 179,
+      "sha256": "27e02ad2f1c9a97fb16134500c37711dbf815661666ef57093809e2d03ef2416"
+    },
+    "review/expected-source-identities.json.gz": {
+      "bytes": 1694,
+      "sha256": "be47d7423baccea81eecd0cee5062777ba822815affce82aed683f3fb67b6820"
+    },
+    "review/failure-log-export-review.json.gz": {
+      "bytes": 419,
+      "sha256": "1488c02da895b71ce2a98483db177b4fb4edf331522eff2da2e73d8467b94686"
+    },
+    "review/failure-only-runner-source-audit.json.gz": {
+      "bytes": 281,
+      "sha256": "95612e9a0cb0e23a90133b32aa451922f9f0b9c75735e80effa6ef8f13a8c2b8"
+    },
+    "review/fresh-state-validation.json.gz": {
+      "bytes": 381,
+      "sha256": "e16da80f6ca80c9f4b119d6b8664a0d59dc242e20cd1e8198f90eb21dd9e917c"
+    },
+    "review/guard-report.json.gz": {
+      "bytes": 12641,
+      "sha256": "81870964635f82ad586026bec4cdf74a150a43a792ea29f20e6e50a7ba0db363"
+    },
+    "review/hardware-by-profile.json.gz": {
+      "bytes": 738,
+      "sha256": "4670b2054272c20ab714cce411a67376d11e1d2ce6993db98e9ff23a3cbbd957"
+    },
+    "review/history-selection-metrics.json.gz": {
+      "bytes": 9311,
+      "sha256": "e4d79904016e32bff3f2854e60d75033bc48866414480cdc6d4d742d017a7df3"
+    },
+    "review/independent-scorer-reason-reconciliation.json.gz": {
+      "bytes": 285,
+      "sha256": "756378244d2198e3787ede118e445f15c3c6c20b5711f9d9943ef01526a1df4b"
+    },
+    "review/independent-validation.json.gz": {
+      "bytes": 2133,
+      "sha256": "a23f7ad7a501f94566a4512dcbb6ae2f990f946baf91dd23d6509b8147c54b84"
+    },
+    "review/jobs.json.gz": {
+      "bytes": 1605,
+      "sha256": "024e334aeae4676c11548e64bfdf18f8ed0df184f4b5f6b57a9e72be145b2733"
+    },
+    "review/joint-cache-operation-gauges.json.gz": {
+      "bytes": 49752,
+      "sha256": "6070d6fafc5f46947b8dc6cf06e3607e41b8ef1fc54aab77402a652b9ffd1f52"
+    },
+    "review/joint-cache-review.json.gz": {
+      "bytes": 1415,
+      "sha256": "8cb98d8cf3a7dcd90abed83dada8abd84a2e1c92a329724ecfbf174f0450b84f"
+    },
+    "review/latency-failure-pair-details.json.gz": {
+      "bytes": 53848,
+      "sha256": "76a1a8f61cf595f968552db47b854e9e77303c240458a493ddd5652d55dc6ba7"
+    },
+    "review/latency-ratios.tsv.gz": {
+      "bytes": 3074,
+      "sha256": "d4da50ec64511b30637069a57d9ea2ccffebc9974d3100593f958ef59b4859de"
+    },
+    "review/monitor-history.json.gz": {
+      "bytes": 41082,
+      "sha256": "fb6e2d4f63b4e875d5909153c29a6b7b39613db6ed288f32067a4486d25b51c6"
+    },
+    "review/monitor-state.json.gz": {
+      "bytes": 556,
+      "sha256": "8d754d98f4b044c64ac68737b6117077807e6d7b2ce94337d5c9231b216bd2bb"
+    },
+    "review/observable-lifecycle-review.json.gz": {
+      "bytes": 70849,
+      "sha256": "4c2f8d08df7f249020ff52865c1098cde8621100bffe562c8f5f5a7260a490b1"
+    },
+    "review/observer-physical-restore-metrics.json.gz": {
+      "bytes": 1595,
+      "sha256": "72f5acbe9882d422fac10064df88911b6382c6c35cabeff79ee870d157001e37"
+    },
+    "review/operation-metrics.json.gz": {
+      "bytes": 2790,
+      "sha256": "12db97964e4642010b8d72fb15ad932369a440aed84e2141fe0e5abee20b9258"
+    },
+    "review/operation-resource-receipts.tsv.gz": {
+      "bytes": 24100,
+      "sha256": "39db8d1dd3368f5f217f7a0bc9b3320f80c609e5127288339b8a458d5749ce6f"
+    },
+    "review/operation-row-ratios.tsv.gz": {
+      "bytes": 37133,
+      "sha256": "f7b59d92c937e6ae87b2d66968c9b01471931767d158e0ed108662134c247bde"
+    },
+    "review/original-artifact-final-reverification.json.gz": {
+      "bytes": 1278,
+      "sha256": "ec20f956994b28888394055edc8ac81826021e6f2d300160056b07d9d46066eb"
+    },
+    "review/peak-migration-metrics.json.gz": {
+      "bytes": 7745,
+      "sha256": "cfb3a704cbbe1561c9152fe1e8237a62a4677cec7c248b23b52284b0f0b95b27"
+    },
+    "review/per-rpc-accounting-and-selected-packs.json.gz": {
+      "bytes": 120931,
+      "sha256": "a2ccee9aa9f6189ca1faa4e75d4c9c122266ccf7679072257078b7d21c253383"
+    },
+    "review/prospective-source-identities.json.gz": {
+      "bytes": 1223,
+      "sha256": "f5bae698da8013b579b4d1c62adb682c310674723a4007f9c2bfd428e3c6f2a8"
+    },
+    "review/protected-chunk-activation-and-scope-review.json.gz": {
+      "bytes": 3658,
+      "sha256": "54930a6aff12551268b0035aa1613165e71b02d5f2dd9cb2ea20cf5673158c27"
+    },
+    "review/protected-chunk-every-operation-receipts.json.gz": {
+      "bytes": 210861,
+      "sha256": "1e5f1b074a166818772623efd4813c373825652bd399a531ba98f2468f26aa13"
+    },
+    "review/provider-profile-resources.json.gz": {
+      "bytes": 1612,
+      "sha256": "83bdcff58f755171d1d2a6c13b17537f3adf614aeddc9ee6de8e951399b1ad7d"
+    },
+    "review/provider-profile-resources.tsv.gz": {
+      "bytes": 1250,
+      "sha256": "238923ad624f50049e6370c6f433447377e8132894483918d013de60f691dcd9"
+    },
+    "review/r19-r20-every-operation-physical-transport-differences.json.gz": {
+      "bytes": 416685,
+      "sha256": "da3dbb476d8b941a07bb2809a7f7a479a11cf09800bdcce667721020b66cd7ad"
+    },
+    "review/r19-r20-fixed-workload-transport-differences.json.gz": {
+      "bytes": 702,
+      "sha256": "aecc731a3e102e75f99de2ef945aa882ad8e9aaba9fd6bed1bcbc3a76b4a2a12"
+    },
+    "review/r19-r20-socket-upgrade-rotation-frames-cache-and-scopes.json.gz": {
+      "bytes": 3752,
+      "sha256": "67228848c988da8c227d18716e7388dac7d12f099c49460d98b339be5e3af2c5"
+    },
+    "review/r19-r20-trial-activation-physical-SQL-receipts.json.gz": {
+      "bytes": 3154,
+      "sha256": "9af5d38fb672850f26ca052e7e234333d3a2a625ae3e9e794c5a4afd59a97886"
+    },
+    "review/rebuilt-latency-distributions.json.gz": {
+      "bytes": 6796,
+      "sha256": "0f56c887b80af0f49eaf5ed9d9d3a1fd0103969f6d1eae0d8ab7e32966ffa576"
+    },
+    "review/rebuilt-resource-distributions.json.gz": {
+      "bytes": 1557,
+      "sha256": "186e5b2d66364394c8d8b3ec1745df5efa904c2315039df2ebb6130625abbba1"
+    },
+    "review/reconstructed-64-published-top8-tails.json.gz": {
+      "bytes": 4614,
+      "sha256": "7f2cb81d43e5da5e8eb1af1d20e283bd889b003a01765890369bd34383563133"
+    },
+    "review/report-fingerprints.json.gz": {
+      "bytes": 919,
+      "sha256": "c217e031392c2edcdc0da6a26fff94d50309d6f1f8745112eb870d37e96d7b6e"
+    },
+    "review/resource-guards.tsv.gz": {
+      "bytes": 675,
+      "sha256": "dad65738c66767b0754ab7e42559c370ce67cacf7b6fecf6a26371daa15d6529"
+    },
+    "review/retained-tail-summary.json.gz": {
+      "bytes": 14186,
+      "sha256": "4b5dc8d544c24d47ed0bfe29ed7cf2dda020a371d375bb55e6fba819dd44065a"
+    },
+    "review/run.json.gz": {
+      "bytes": 1790,
+      "sha256": "2c65243e1c60d5c9116e2e0d8b154af7f8acde7e72da7f79e026e5774d615f56"
+    },
+    "review/strict-receipt-review.json.gz": {
+      "bytes": 1137,
+      "sha256": "95ebf2a670d2198d7230c67836edf7fd23ae6bc0bd4eb3a98f6478e3e9439993"
+    },
+    "review/summary-console.json.gz": {
+      "bytes": 760,
+      "sha256": "9333f26164845d167abc5e0f0d455a9bcc623acf03149dcdac677f80154ec457"
+    },
+    "review/summary.json.gz": {
+      "bytes": 1264,
+      "sha256": "534647647b7f1497a8a1124c5d5be86f72b2f9aa8ca9497af10d0934ff77a948"
+    },
+    "review/tail-completeness-review.json.gz": {
+      "bytes": 781,
+      "sha256": "5000680d25c06528dff9abaaf5da8819c4cfcabdff33ae5ea552eae90af30485"
+    },
+    "review/transport-activation-checks.json.gz": {
+      "bytes": 210,
+      "sha256": "3b626e59bd81986899a03f93592edc5e512bcac0a4c5d1b7e4c47c24d309d113"
+    },
+    "review/transport-archive-index.json.gz": {
+      "bytes": 1041,
+      "sha256": "0263240ec26e29663a71f88454eedd1a364896f9598d4a0a8b1ac1b7b129ed65"
+    },
+    "review/warmup-first-DDL-and-SQLite-review.json.gz": {
+      "bytes": 660,
+      "sha256": "527b39fb3d15dcb1242776d7aae98db07fb915ee8328be3e27165796ab13d7ed"
+    },
+    "review/whole-source-and-cache-policy-review.json.gz": {
+      "bytes": 3666,
+      "sha256": "76aebf903ab96e5ce3262a9b19b5f7de4a0a45107d1e04101feb7f8bc08111c9"
+    },
+    "offline/evaluator-provenance.json.gz": {
+      "bytes": 453,
+      "sha256": "68f61688e4dd9ac99ee791cf48bad8ee93fe50280a44cb188db125078b99024a"
+    },
+    "offline/frozen-evaluator-original-SHA256SUMS.gz": {
+      "bytes": 313,
+      "sha256": "9baecd8a8a53fb53feadf77dec7731bfde65606b37d245bea249bdeba06ce2bf"
+    },
+    "offline/frozen-evaluator-original-built-source-commit.txt.gz": {
+      "bytes": 60,
+      "sha256": "5a30e16a979781ad5e1fe4c3e2631a5aee130b92a10539873e966d1661aad608"
+    },
+    "offline/frozen-evaluator-source-comparison.json.gz": {
+      "bytes": 669,
+      "sha256": "97bafce1fa62060629ce0b4fb1e73344916499d6f220b52a0be10d41266b8998"
+    },
+    "offline/r19-score.json.gz": {
+      "bytes": 30303,
+      "sha256": "b3cf4763af085fc1ebe3ecf1e2193a063cd7d375f5b98f6c1d602a1ec40807b9"
+    },
+    "offline/r20-score.json.gz": {
+      "bytes": 30257,
+      "sha256": "42696893ee058f9f4e04efffc382cc93f78ea7b4e6586ed43b7a78fe68de2040"
+    },
+    "offline/r20-vs-r19.json.gz": {
+      "bytes": 30761,
+      "sha256": "e8aefc6d06d9b149f5890506cfaa9a156deb4059250fdf29433a25516f28f42d"
+    },
+    "verifier-source/ADAPTATION_PROVENANCE.json.gz": {
+      "bytes": 1251,
+      "sha256": "078b26cc513d48db87578817e2235f556278195b55b6e20ca0a819174ac8bc4d"
+    },
+    "verifier-source/LOCATION.json.gz": {
+      "bytes": 292,
+      "sha256": "9bc7152352be7c80e9b158004c0c1929d63a4ab622872e0a1273cc8a4da2a972"
+    },
+    "verifier-source/binary-and-order-audit.py.gz": {
+      "bytes": 1502,
+      "sha256": "381af10c63558d3e16ce901e44ca2582a883c557e259d7edca033d822336883d"
+    },
+    "verifier-source/cache-joint-review.py.gz": {
+      "bytes": 1965,
+      "sha256": "686cd93792aa958d72d268d9864e1130dcb1367573332ee1fef024c4b9552ff5"
+    },
+    "verifier-source/detailed-metrics.py.gz": {
+      "bytes": 2957,
+      "sha256": "5bccd7447b89ef5d5e27717d1de8819b601fe4ecc16f9cdc40ce5cdccdce997f"
+    },
+    "verifier-source/distribution-review.py.gz": {
+      "bytes": 2342,
+      "sha256": "9dccecb97e82227a1805d1677b419e8ed6f68cb572804a81842f3d6af5f62515"
+    },
+    "verifier-source/evaluator-source-provenance.py.gz": {
+      "bytes": 989,
+      "sha256": "0b639ab6a9ee93a2da07645fdd467375b21cdf2f4379186cf48d81afcebbdaca"
+    },
+    "verifier-source/failed-latency-pair-review.py.gz": {
+      "bytes": 792,
+      "sha256": "9beef5502a2022827d533388ad0a046202c3f87f60686c9c4d22186726955699"
+    },
+    "verifier-source/failure-log-review.py.gz": {
+      "bytes": 1100,
+      "sha256": "467d58ed6107a9f227ed978b1cd33773a6daa24dd30bc6730646eb838d6fa360"
+    },
+    "verifier-source/finalize-evidence.py.gz": {
+      "bytes": 1977,
+      "sha256": "138fc8e4aaf274ac0f5aa7ebd28c188976427b064a07a0523a576c24eefd6ad9"
+    },
+    "verifier-source/lifecycle-review.py.gz": {
+      "bytes": 2018,
+      "sha256": "6fa4a54662d85c78537c9dfcf8cfb9a6e8aff87901c0bffb13939d707078d92a"
+    },
+    "verifier-source/monitor-once.py.gz": {
+      "bytes": 2350,
+      "sha256": "e064454e1385855fc947efea63183ca0a4946e07feb2ae5b6274ac2d92ee8a45"
+    },
+    "verifier-source/prepare-r19-r20-independent-audit.py.gz": {
+      "bytes": 1405,
+      "sha256": "2dab4ec724cc1e2f76af957a2d5a67b3f8136a34a239e739792176af68795aff"
+    },
+    "verifier-source/protected-chunk-review.py.gz": {
+      "bytes": 2981,
+      "sha256": "e91155c50397fc22feb49709f6d23f7f8fdbcba33be4859c12c327c4ab38284a"
+    },
+    "verifier-source/receipt-review.py.gz": {
+      "bytes": 3958,
+      "sha256": "5a40b356b82907acce8193c2a7c14543a8101b405af42d465cfd7399c1784c04"
+    },
+    "verifier-source/score-offline.py.gz": {
+      "bytes": 2069,
+      "sha256": "8070d6329089f642ab46cf608fff8fccfe2331252ff088f65e3953011410408e"
+    },
+    "verifier-source/seal-screen.py.gz": {
+      "bytes": 8318,
+      "sha256": "6e251c1f3363a16a385c8b11cb6df1b58af5320150a55368debed47ee556a3dc"
+    },
+    "verifier-source/service-and-physical-closure-review.py.gz": {
+      "bytes": 3012,
+      "sha256": "90cf8a66ac1a655f50d63adddbc152fb2675d9306e5d07610a79beed9fd4c389"
+    },
+    "verifier-source/source-policy-review.py.gz": {
+      "bytes": 2810,
+      "sha256": "19e984248b1387087587a70ae7b69cbeaac9be075fd14695d0224ba6495b01ea"
+    },
+    "verifier-source/summarize-chain.py.gz": {
+      "bytes": 2715,
+      "sha256": "67f801268200ec1cd782984d9f905c0819715a03a0060f673302af07d4f91f12"
+    },
+    "verifier-source/summarize-resources.py.gz": {
+      "bytes": 1977,
+      "sha256": "e85c38432ffaf6107d83adce75f4cb0f603874b4230c073ebc6d40a8251c93bb"
+    },
+    "verifier-source/tail-completeness-review.py.gz": {
+      "bytes": 1754,
+      "sha256": "22e785b48ef0f1335f070935cdb05e2e4a0ce72b9a2cabf7ea26d141d4fd80ed"
+    },
+    "verifier-source/transport-activation-review.py.gz": {
+      "bytes": 3514,
+      "sha256": "bb4419d9f366541f9f18ddc81c8171308e095de2c41f501631eea3ad6212a5e2"
+    },
+    "verifier-source/validate-profiles.py.gz": {
+      "bytes": 5256,
+      "sha256": "57c4220c58a3fc17caebe92cdafb5d02fd1e7b71dcd4432dce469c7e670588bc"
+    }
+  },
+  "author_original_SHA256SUMS_exact_text": "661790ffb71bd9322e79057cd9d5cd3f6114abd415368fa77366be0fcd955836  ARTIFACT_MAP.json\n147a510ece68db0bcf68b1e65c8b0ef3e5bd76803be2cc442024e07012f9ff39  README.md\n68f61688e4dd9ac99ee791cf48bad8ee93fe50280a44cb188db125078b99024a  offline/evaluator-provenance.json.gz\n9baecd8a8a53fb53feadf77dec7731bfde65606b37d245bea249bdeba06ce2bf  offline/frozen-evaluator-original-SHA256SUMS.gz\n5a30e16a979781ad5e1fe4c3e2631a5aee130b92a10539873e966d1661aad608  offline/frozen-evaluator-original-built-source-commit.txt.gz\n97bafce1fa62060629ce0b4fb1e73344916499d6f220b52a0be10d41266b8998  offline/frozen-evaluator-source-comparison.json.gz\nb3cf4763af085fc1ebe3ecf1e2193a063cd7d375f5b98f6c1d602a1ec40807b9  offline/r19-score.json.gz\n42696893ee058f9f4e04efffc382cc93f78ea7b4e6586ed43b7a78fe68de2040  offline/r20-score.json.gz\ne8aefc6d06d9b149f5890506cfaa9a156deb4059250fdf29433a25516f28f42d  offline/r20-vs-r19.json.gz\n9acabbb0f990f758b86ce9be16b2332250f725d31ab719b23b915cc400143fc6  original-archives/hosting-16mib-cold.tar.gz\nfce2acc88f778fc14f2b78c1f0209527ec36d76f398563561614c40eb5146fe6  original-archives/hosting-16mib-warm.tar.gz\n5567d833d96fb8f41687ea6534ac385441c67e02df728b99670ef0bd469265d4  original-archives/hosting-64mib-cold.tar.gz\nf489078cd18e6063314707e9d2eb3146a6cd2d8d674c0a37e4bfb2b5e7eaea61  original-archives/hosting-64mib-warm.tar.gz\nbbbedc5c8c207a8a914b24dbc259086f359e519e39bfb0ffbf25aecd2848df6e  original-archives/hosting-scores.tar.gz\nd46d070f152f72c31df8d6baed09ba2ec4c532d210119ca601126c24c786c517  review/INDEPENDENT_REVIEW.json.gz\nb5f8fdc9ec015e255f91f8810c99c138124fd2af19db63c468f6865d658048b0  review/INDEPENDENT_REVIEW.md.gz\nd759a393568a78b260c1e86d231b9b1efe57c551172313bc588633c68ff7e5d3  review/RAW_SHA256SUMS.gz\n6adc2656581f5779742dd0e313417254d239993de154eece11ad2bf8bc0f3693  review/activation-review.json.gz\n0d46372d7e5b0c8004cbf80a59cfc77d0027a0d084ceff501119a6361be4efa0  review/actual-data-write-space-equivalence-review.json.gz\n4796642ee1b74f62fa3027bdc77848bc18016b9312f630831ddbb3f7140ca810  review/actual-selected-packs-and-reads.tsv.gz\n42d7182c4fec8491bb3c82a839fc57cb30a4d5eed5d53b935d5035f7d0380288  review/all-48-latency-group-maxima.json.gz\nfa4a3824c0a1e753170758265fa1019d39d7d822d586f89a60c1cf67f05665f1  review/all-four-outcomes.json.gz\n37db170a1209bde7ca92fc78f7769ce2f483988df580a24c2f7cb9e777aee59e  review/all-individual-ratio-extremes.json.gz\n2c073a48301df28a2adea897a7ef392c29fa343387478ca7e51b90d55d25a602  review/all-native-operation-metrics.json.gz\n480ada502ecf93e59f5246ef6d7e80ff894ec466f3f27269b4189ec1d5832330  review/analysis.json.gz\nd497ccd5b10b210238be193d8196fcad0914f333e31944099ee4d84e1489b3cc  review/archive-validation.json.gz\n3ab4708c4a74ca473bde8d4d82bac93a256308342fce1cad8b4690695353a5e1  review/artifact-index.json.gz\nd4e6ab4c05d92ea2db8aa6b72aa378a0352206a21613154d59923ef8acc49fbb  review/binary-and-order-provenance-review.json.gz\n8bafb0f3eef4f689885a7b5f1b4052f4cabcbd642d199c3fb99c3e14b09c78d7  review/comparison-summary.tsv.gz\n5f683a8e7b6f10d7e82fb86047b4fcbbfe59d422ca656b10b96e54f87b5638b5  review/complete-service-phase-category-and-API-review.json.gz\nc12a45b3a0a53a4b52cfc54ad0158a962b941516dd2f0b28140f23a9277dab66  review/counter-scopes.json.gz\n8f8971b9490ef2fcc560f4a912e58695decd96159e9c063610e511a9e004e7d0  review/discovery-shortcut-metrics.json.gz\n27e02ad2f1c9a97fb16134500c37711dbf815661666ef57093809e2d03ef2416  review/distribution-review.json.gz\nbe47d7423baccea81eecd0cee5062777ba822815affce82aed683f3fb67b6820  review/expected-source-identities.json.gz\n1488c02da895b71ce2a98483db177b4fb4edf331522eff2da2e73d8467b94686  review/failure-log-export-review.json.gz\n95612e9a0cb0e23a90133b32aa451922f9f0b9c75735e80effa6ef8f13a8c2b8  review/failure-only-runner-source-audit.json.gz\ne16da80f6ca80c9f4b119d6b8664a0d59dc242e20cd1e8198f90eb21dd9e917c  review/fresh-state-validation.json.gz\n81870964635f82ad586026bec4cdf74a150a43a792ea29f20e6e50a7ba0db363  review/guard-report.json.gz\n4670b2054272c20ab714cce411a67376d11e1d2ce6993db98e9ff23a3cbbd957  review/hardware-by-profile.json.gz\ne4d79904016e32bff3f2854e60d75033bc48866414480cdc6d4d742d017a7df3  review/history-selection-metrics.json.gz\n756378244d2198e3787ede118e445f15c3c6c20b5711f9d9943ef01526a1df4b  review/independent-scorer-reason-reconciliation.json.gz\na23f7ad7a501f94566a4512dcbb6ae2f990f946baf91dd23d6509b8147c54b84  review/independent-validation.json.gz\n024e334aeae4676c11548e64bfdf18f8ed0df184f4b5f6b57a9e72be145b2733  review/jobs.json.gz\n6070d6fafc5f46947b8dc6cf06e3607e41b8ef1fc54aab77402a652b9ffd1f52  review/joint-cache-operation-gauges.json.gz\n8cb98d8cf3a7dcd90abed83dada8abd84a2e1c92a329724ecfbf174f0450b84f  review/joint-cache-review.json.gz\n76a1a8f61cf595f968552db47b854e9e77303c240458a493ddd5652d55dc6ba7  review/latency-failure-pair-details.json.gz\nd4da50ec64511b30637069a57d9ea2ccffebc9974d3100593f958ef59b4859de  review/latency-ratios.tsv.gz\nfb6e2d4f63b4e875d5909153c29a6b7b39613db6ed288f32067a4486d25b51c6  review/monitor-history.json.gz\n8d754d98f4b044c64ac68737b6117077807e6d7b2ce94337d5c9231b216bd2bb  review/monitor-state.json.gz\n4c2f8d08df7f249020ff52865c1098cde8621100bffe562c8f5f5a7260a490b1  review/observable-lifecycle-review.json.gz\n72f5acbe9882d422fac10064df88911b6382c6c35cabeff79ee870d157001e37  review/observer-physical-restore-metrics.json.gz\n12db97964e4642010b8d72fb15ad932369a440aed84e2141fe0e5abee20b9258  review/operation-metrics.json.gz\n39db8d1dd3368f5f217f7a0bc9b3320f80c609e5127288339b8a458d5749ce6f  review/operation-resource-receipts.tsv.gz\nf7b59d92c937e6ae87b2d66968c9b01471931767d158e0ed108662134c247bde  review/operation-row-ratios.tsv.gz\nec20f956994b28888394055edc8ac81826021e6f2d300160056b07d9d46066eb  review/original-artifact-final-reverification.json.gz\ncfb3a704cbbe1561c9152fe1e8237a62a4677cec7c248b23b52284b0f0b95b27  review/peak-migration-metrics.json.gz\na2ccee9aa9f6189ca1faa4e75d4c9c122266ccf7679072257078b7d21c253383  review/per-rpc-accounting-and-selected-packs.json.gz\nf5bae698da8013b579b4d1c62adb682c310674723a4007f9c2bfd428e3c6f2a8  review/prospective-source-identities.json.gz\n54930a6aff12551268b0035aa1613165e71b02d5f2dd9cb2ea20cf5673158c27  review/protected-chunk-activation-and-scope-review.json.gz\n1e5f1b074a166818772623efd4813c373825652bd399a531ba98f2468f26aa13  review/protected-chunk-every-operation-receipts.json.gz\n83bdcff58f755171d1d2a6c13b17537f3adf614aeddc9ee6de8e951399b1ad7d  review/provider-profile-resources.json.gz\n238923ad624f50049e6370c6f433447377e8132894483918d013de60f691dcd9  review/provider-profile-resources.tsv.gz\nda3dbb476d8b941a07bb2809a7f7a479a11cf09800bdcce667721020b66cd7ad  review/r19-r20-every-operation-physical-transport-differences.json.gz\naecc731a3e102e75f99de2ef945aa882ad8e9aaba9fd6bed1bcbc3a76b4a2a12  review/r19-r20-fixed-workload-transport-differences.json.gz\n67228848c988da8c227d18716e7388dac7d12f099c49460d98b339be5e3af2c5  review/r19-r20-socket-upgrade-rotation-frames-cache-and-scopes.json.gz\n9af5d38fb672850f26ca052e7e234333d3a2a625ae3e9e794c5a4afd59a97886  review/r19-r20-trial-activation-physical-SQL-receipts.json.gz\n0f56c887b80af0f49eaf5ed9d9d3a1fd0103969f6d1eae0d8ab7e32966ffa576  review/rebuilt-latency-distributions.json.gz\n186e5b2d66364394c8d8b3ec1745df5efa904c2315039df2ebb6130625abbba1  review/rebuilt-resource-distributions.json.gz\n7f2cb81d43e5da5e8eb1af1d20e283bd889b003a01765890369bd34383563133  review/reconstructed-64-published-top8-tails.json.gz\nc217e031392c2edcdc0da6a26fff94d50309d6f1f8745112eb870d37e96d7b6e  review/report-fingerprints.json.gz\ndad65738c66767b0754ab7e42559c370ce67cacf7b6fecf6a26371daa15d6529  review/resource-guards.tsv.gz\n4b5dc8d544c24d47ed0bfe29ed7cf2dda020a371d375bb55e6fba819dd44065a  review/retained-tail-summary.json.gz\n2c65243e1c60d5c9116e2e0d8b154af7f8acde7e72da7f79e026e5774d615f56  review/run.json.gz\n95ebf2a670d2198d7230c67836edf7fd23ae6bc0bd4eb3a98f6478e3e9439993  review/strict-receipt-review.json.gz\n9333f26164845d167abc5e0f0d455a9bcc623acf03149dcdac677f80154ec457  review/summary-console.json.gz\n534647647b7f1497a8a1124c5d5be86f72b2f9aa8ca9497af10d0934ff77a948  review/summary.json.gz\n5000680d25c06528dff9abaaf5da8819c4cfcabdff33ae5ea552eae90af30485  review/tail-completeness-review.json.gz\n3b626e59bd81986899a03f93592edc5e512bcac0a4c5d1b7e4c47c24d309d113  review/transport-activation-checks.json.gz\n0263240ec26e29663a71f88454eedd1a364896f9598d4a0a8b1ac1b7b129ed65  review/transport-archive-index.json.gz\n527b39fb3d15dcb1242776d7aae98db07fb915ee8328be3e27165796ab13d7ed  review/warmup-first-DDL-and-SQLite-review.json.gz\n76aebf903ab96e5ce3262a9b19b5f7de4a0a45107d1e04101feb7f8bc08111c9  review/whole-source-and-cache-policy-review.json.gz\n078b26cc513d48db87578817e2235f556278195b55b6e20ca0a819174ac8bc4d  verifier-source/ADAPTATION_PROVENANCE.json.gz\n9bc7152352be7c80e9b158004c0c1929d63a4ab622872e0a1273cc8a4da2a972  verifier-source/LOCATION.json.gz\n381af10c63558d3e16ce901e44ca2582a883c557e259d7edca033d822336883d  verifier-source/binary-and-order-audit.py.gz\n686cd93792aa958d72d268d9864e1130dcb1367573332ee1fef024c4b9552ff5  verifier-source/cache-joint-review.py.gz\n5bccd7447b89ef5d5e27717d1de8819b601fe4ecc16f9cdc40ce5cdccdce997f  verifier-source/detailed-metrics.py.gz\n9dccecb97e82227a1805d1677b419e8ed6f68cb572804a81842f3d6af5f62515  verifier-source/distribution-review.py.gz\n0b639ab6a9ee93a2da07645fdd467375b21cdf2f4379186cf48d81afcebbdaca  verifier-source/evaluator-source-provenance.py.gz\n9beef5502a2022827d533388ad0a046202c3f87f60686c9c4d22186726955699  verifier-source/failed-latency-pair-review.py.gz\n467d58ed6107a9f227ed978b1cd33773a6daa24dd30bc6730646eb838d6fa360  verifier-source/failure-log-review.py.gz\n138fc8e4aaf274ac0f5aa7ebd28c188976427b064a07a0523a576c24eefd6ad9  verifier-source/finalize-evidence.py.gz\n6fa4a54662d85c78537c9dfcf8cfb9a6e8aff87901c0bffb13939d707078d92a  verifier-source/lifecycle-review.py.gz\ne064454e1385855fc947efea63183ca0a4946e07feb2ae5b6274ac2d92ee8a45  verifier-source/monitor-once.py.gz\n2dab4ec724cc1e2f76af957a2d5a67b3f8136a34a239e739792176af68795aff  verifier-source/prepare-r19-r20-independent-audit.py.gz\ne91155c50397fc22feb49709f6d23f7f8fdbcba33be4859c12c327c4ab38284a  verifier-source/protected-chunk-review.py.gz\n5a40b356b82907acce8193c2a7c14543a8101b405af42d465cfd7399c1784c04  verifier-source/receipt-review.py.gz\n8070d6329089f642ab46cf608fff8fccfe2331252ff088f65e3953011410408e  verifier-source/score-offline.py.gz\n6e251c1f3363a16a385c8b11cb6df1b58af5320150a55368debed47ee556a3dc  verifier-source/seal-screen.py.gz\n90cf8a66ac1a655f50d63adddbc152fb2675d9306e5d07610a79beed9fd4c389  verifier-source/service-and-physical-closure-review.py.gz\n19e984248b1387087587a70ae7b69cbeaac9be075fd14695d0224ba6495b01ea  verifier-source/source-policy-review.py.gz\n67f801268200ec1cd782984d9f905c0819715a03a0060f673302af07d4f91f12  verifier-source/summarize-chain.py.gz\ne85c38432ffaf6107d83adce75f4cb0f603874b4230c073ebc6d40a8251c93bb  verifier-source/summarize-resources.py.gz\n22e785b48ef0f1335f070935cdb05e2e4a0ce72b9a2cabf7ea26d141d4fd80ed  verifier-source/tail-completeness-review.py.gz\nbb4419d9f366541f9f18ddc81c8171308e095de2c41f501631eea3ad6212a5e2  verifier-source/transport-activation-review.py.gz\n57c4220c58a3fc17caebe92cdafb5d02fd1e7b71dcd4432dce469c7e670588bc  verifier-source/validate-profiles.py.gz\n",
+  "author_payloads_unchanged_except_extended_root_checksums": true,
+  "root_decision": "R20 provisional known-cost anchor only; formal inconclusive; no speed/plateau/stop; mandatory final5eachall4 not done"
+}
