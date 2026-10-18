@@ -1019,3 +1019,37 @@ storage, transfer and Git-normalized latency guards remain unchanged.
 No new measured benefit is claimed. The isolated bootstrap and diagnostic
 changes are excluded. Review all four fresh profiles before selecting another
 provisional cost anchor; final five-pair validation remains separate and pending.
+
+## Completed R20/R21 screen
+
+Fresh [run39145424189](https://github.com/no-std-rs/git-zero/actions/runs/39145424189)
+completed all four profiles and scoring at `f76e32b`. The frozen Rust evaluator
+reproduces both scores and comparison byte for byte.
+
+| Provider | Known objective subtotal | Change |
+| --- | ---: | ---: |
+| R20 | $1.21247743618 | baseline |
+| R21: preserve owners during optional response retention | $1.18547343618 | −2.2272% |
+
+This repeats each profile's32 pushes and56 interleaved verified fetches1,000
+times, plus observed R2 peak once for30 days. Unknown compute keeps the full
+bill NULL. Cold16 GETs fall85→53 and read bytes219,786,498→131,883,773; cold64
+GETs fall229→191 and read bytes1,849,065,488→1,734,213,513. Warm payload GETs stay
+zero. Across profile means,70 fewer GETs,12 fewer DO calls and4 fewer SQL rows
+read account for the $0.027004 saving. All actual write/space/compaction and
+physical inventories match, including warmups; all36 resource and4 profile-cost
+guards pass.
+
+Five latency limits fail: cold16 historical-no-have p95; warm16 historical-no-have
+and large-push medians; warm16 latest-fetch and latest-recheck p95. R21's worst
+operation is warm16 `history_no_haves_20`, sample0:35,840.450ms versus Git179.567ms.
+The screen is **inconclusive and plateau-ineligible**, with no speed win or
+stopping result. [All original evidence](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r20-r21-fresh-screen/README.md)
+and the [coordinator review](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r20-r21-fresh-screen/ROOT-REVIEW.md)
+retain every ratio/tail/failure, source/runtime and paid startup/observer scope.
+After complete review, R21 becomes only the provisional known-cost anchor.
+
+The separately implemented bootstrap is excluded and awaits a strict nested
+manifest decoder correction and bounded-test/accounting updates before broader
+controls. Linux repository-scale support is not established. Mandatory five
+fresh original-R1/final pairs on every profile remain unrun.
