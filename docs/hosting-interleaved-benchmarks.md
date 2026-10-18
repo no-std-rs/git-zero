@@ -923,8 +923,10 @@ cold64's selected fetch took 4,698.999 ms and warm16's 103.216 ms; no operation
 reached ten seconds. The historical tails did not reproduce. These runs used
 different source and temporary storage from the historical GitHub VM evidence;
 they establish no cause, fix or speed result. Cold actual environment capture
-is incomplete. Independent result review remains pending. Diagnostic timings
-cannot replace the unchanged benchmark.
+is incomplete. The [independent result review](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/fetch-latency-audit/reviewed-batch02/independent-REVIEW.md)
+verifies the retained execution with that material limit. A capture/portability
+correction is being prepared for a separate standard-VM disk replay. Diagnostic
+timings cannot replace the unchanged benchmark.
 
 ## Declared R19/R20 screen
 
