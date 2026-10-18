@@ -1,0 +1,68 @@
+{
+  "all_12_recursive_artifact_roots_inventoried": true,
+  "all_retained_files_rehashed": {
+    "bytes": 1667363419,
+    "files": 4271
+  },
+  "audited_dependency_source_files_verified": 10,
+  "capsule": {
+    "bytes": 2236102,
+    "name": "correctness-evidence.tar.gz",
+    "sha256": "c3d3b0dd039388d5a79bb2e889ad8691f66ed300453584a39621811e7295da03"
+  },
+  "capsule_all_members_read_verified": {
+    "bytes": 17968149,
+    "files": 2731
+  },
+  "capsule_member_set_exact": true,
+  "dependency_license_files_retained": 3,
+  "duplicates_or_unsafe_paths": false,
+  "fresh_final_top_level_files_rehashed": 956,
+  "full_bill": null,
+  "historical_original_files_rehashed": 479,
+  "independent_ledger_review": "pending",
+  "kind": "Documentation packaging verification only; no runtime/build/test/benchmark performed",
+  "large_local_only_files": {
+    "bytes": 1655343945,
+    "files": 1870
+  },
+  "source": "c128197cc2cf1761e93832c63eec4c25c1268249",
+  "source_maps_verified": [
+    {
+      "before_after_current_and_capsule_match": true,
+      "bytes": 4857,
+      "entries": 34,
+      "name": "production-first-gate",
+      "path": "/tmp/git-zero-socket-first-proof-final-02/production/source-before.json",
+      "sha256": "200929a74eb5e437cc688a12cf00fb140d3bd2770191d7223fdaaef926461582"
+    },
+    {
+      "before_after_current_and_capsule_match": true,
+      "bytes": 5317,
+      "entries": 37,
+      "name": "on",
+      "path": "/tmp/git-zero-socket-final-c128-git-on-01/source-before.json",
+      "sha256": "96a1f225a73002048be51de1b756ce06536b7ed38f10389035ea85001b09db42"
+    },
+    {
+      "before_after_current_and_capsule_match": true,
+      "bytes": 5317,
+      "entries": 37,
+      "name": "off",
+      "path": "/tmp/git-zero-socket-final-c128-git-off-01/source-before.json",
+      "sha256": "96a1f225a73002048be51de1b756ce06536b7ed38f10389035ea85001b09db42"
+    },
+    {
+      "before_after_current_and_capsule_match": true,
+      "bytes": 5317,
+      "entries": 37,
+      "name": "faults",
+      "path": "/tmp/git-zero-socket-final-c128-receiving-faults-01/source-before.json",
+      "sha256": "96a1f225a73002048be51de1b756ce06536b7ed38f10389035ea85001b09db42"
+    }
+  ],
+  "tracked_source_capsule": {
+    "bytes": 3729485,
+    "files": 312
+  }
+}
