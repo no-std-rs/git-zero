@@ -11,3 +11,6 @@ routing, peak-witness unions, failure/recovery, Native operation and process
 reopen. The [validation ledger](validation.json) records raw local artifacts. All realistic shapes
 must remain within the 24,576-byte SQLite guard. This is preparation evidence,
 not promotion, a cost-screen result, latency acceptance or a plateau claim.
+
+The [review correction](review-correction.json) retains the later malformed
+numeric-metadata recovery and same-Native ambiguous-retirement evidence.
