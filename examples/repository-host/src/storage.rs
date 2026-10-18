@@ -207,6 +207,43 @@ pub struct VerifiedChunks {
     data: Vec<Vec<u8>>,
 }
 
+/// Private immutable ownership of one already verified content-addressed chunk.
+/// The Arc owns this Vec alone, never a slice retaining a bulk response frame.
+#[derive(Clone)]
+pub(crate) struct VerifiedChunk(std::sync::Arc<VerifiedChunkData>);
+
+struct VerifiedChunkData {
+    chunk: Chunk,
+    bytes: Vec<u8>,
+}
+
+impl VerifiedChunk {
+    pub(crate) fn descriptor(&self) -> &Chunk {
+        &self.0.chunk
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.0.bytes
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        // Include capacities, Arc counters and a conservative allocator/header
+        // allowance, in addition to the separately charged Native slot state.
+        self.0.bytes.capacity()
+            + self.0.chunk.key.capacity()
+            + size_of::<VerifiedChunkData>()
+            + 2 * size_of::<usize>()
+            + 256
+    }
+
+    pub(crate) fn try_into_bytes(self) -> Result<Vec<u8>, Self> {
+        match std::sync::Arc::try_unwrap(self.0) {
+            Ok(data) => Ok(data.bytes),
+            Err(data) => Err(Self(data)),
+        }
+    }
+}
+
 impl VerifiedChunks {
     /// Verify every ordered payload before constructing a complete proof.
     pub fn verify(chunks: &[Chunk], data: Vec<Vec<u8>>) -> io::Result<Self> {
@@ -234,6 +271,17 @@ impl VerifiedChunks {
             ));
         }
         Ok(self.data)
+    }
+
+    pub(crate) fn into_handles(self, expected: &[Chunk]) -> io::Result<Vec<VerifiedChunk>> {
+        let chunks = self.chunks.clone();
+        Ok(chunks
+            .into_iter()
+            .zip(self.into_data(expected)?)
+            .map(|(chunk, bytes)| {
+                VerifiedChunk(std::sync::Arc::new(VerifiedChunkData { chunk, bytes }))
+            })
+            .collect())
     }
 
     pub(crate) fn append(&mut self, mut other: Self) {
@@ -761,6 +809,48 @@ mod tests {
             key: format!("chunks/{}", crate::hash(bytes)),
             len: bytes.len() as u64,
         }
+    }
+
+    #[test]
+    fn immutable_verified_handle_moves_and_charges_the_entire_original_allocation() {
+        let mut bytes = Vec::with_capacity(1024 * 1024);
+        bytes.extend_from_slice(b"abc");
+        let pointer = bytes.as_ptr();
+        let capacity = bytes.capacity();
+        let descriptor = chunk(&bytes);
+        let handle = VerifiedChunks::verify(std::slice::from_ref(&descriptor), vec![bytes])
+            .unwrap()
+            .into_handles(std::slice::from_ref(&descriptor))
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            handle.bytes().as_ptr(),
+            pointer,
+            "admission does not copy payload"
+        );
+        assert!(
+            handle.retained_bytes() > capacity,
+            "short length does not hide backing capacity"
+        );
+        let shared = handle.clone();
+        assert_eq!(shared.bytes().as_ptr(), pointer);
+        let handle = match handle.try_into_bytes() {
+            Err(handle) => handle,
+            Ok(_) => panic!("shared cached bytes cannot become mutable"),
+        };
+        drop(shared);
+        let bytes = match handle.try_into_bytes() {
+            Ok(bytes) => bytes,
+            Err(_) => panic!("unique request-local bytes can be consumed"),
+        };
+        assert_eq!(bytes.as_ptr(), pointer);
+        assert_eq!(bytes.capacity(), capacity);
+        assert_eq!(bytes, b"abc");
+        assert!(
+            VerifiedChunks::verify(std::slice::from_ref(&descriptor), vec![b"abd".to_vec()])
+                .is_err(),
+            "corrupt bytes never create an immutable proof"
+        );
     }
 
     #[test]

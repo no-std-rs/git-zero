@@ -18,6 +18,7 @@ fn main() -> io::Result<()> {
         let mut gateway_first_read = true;
         let mut gateway_first_receive = true;
         let mut socket_rpc = true;
+        let mut protected_chunk = true;
         loop {
             match arguments.peek().map(String::as_str) {
                 Some("--repo") => {
@@ -72,6 +73,14 @@ fn main() -> io::Result<()> {
                         _ => return Err(io::Error::other("socket RPC must be on or off")),
                     };
                 }
+                Some("--protected-chunk") => {
+                    arguments.next();
+                    protected_chunk = match arguments.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err(io::Error::other("protected chunk must be on or off")),
+                    };
+                }
                 _ => break,
             }
         }
@@ -93,6 +102,7 @@ fn main() -> io::Result<()> {
         }
         let mut host =
             NativeHost::open_cloudflare(PathBuf::from(root), &origin, &repo, &token, cold)?;
+        host.enable_protected_chunk(protected_chunk);
         let services = host
             .cloudflare_services()
             .ok_or_else(|| io::Error::other("missing Cloudflare registration services"))?;

@@ -470,6 +470,14 @@ pub struct Metrics {
     pub gateway_read_generation_changed: u64,
     pub gateway_read_paid_discards: u64,
     pub gateway_read_errors: u64,
+    pub protected_chunk_admissions: u64,
+    pub protected_chunk_hits: u64,
+    pub protected_chunk_hit_bytes: u64,
+    pub protected_chunk_evictions: u64,
+    pub protected_chunk_bytes: u64,
+    pub protected_chunk_owning_bytes: u64,
+    pub joint_cache_entries: u64,
+    pub joint_cache_retained_peak_bytes: u64,
 }
 
 struct CandidatePack {
@@ -534,7 +542,7 @@ struct AuthorityFingerprint {
 struct ValidatedFullReceive {
     authority: AuthorityFingerprint,
     request_hash: String,
-    selection: String,
+    stable_selection: String,
     key: crate::first_read::Key,
     nonce: String,
     prepare_start: Instant,
@@ -618,6 +626,9 @@ pub struct NativeHost {
     cold_view: bool,
     cache: VecDeque<(String, Response)>,
     cache_bytes: usize,
+    protected_chunk: Option<crate::storage::VerifiedChunk>,
+    protected_enabled: bool,
+    ordinary_chunk_admission: bool,
     advertisement: Option<advertisement::Certificate>,
     view_dirty: bool,
     scope: ViewScope,
@@ -675,6 +686,15 @@ impl NativeHost {
         self.cloudflare.clone()
     }
 
+    /// Generic production cache policy; disabling releases its retained owner.
+    pub fn enable_protected_chunk(&mut self, enabled: bool) {
+        self.protected_enabled = enabled && self.cloudflare.is_some();
+        if !self.protected_enabled {
+            self.evict_protected_chunk();
+        }
+        self.trim_cache(0);
+    }
+
     fn with_services(
         root: PathBuf,
         repository: Repository<HostBlobs, HostState>,
@@ -682,6 +702,7 @@ impl NativeHost {
         cold_view: bool,
     ) -> io::Result<Self> {
         let view = root.join("view/repo.git");
+        let protected_enabled = cloudflare.is_some();
         let mut host = Self {
             root,
             view,
@@ -690,6 +711,9 @@ impl NativeHost {
             cold_view,
             cache: VecDeque::new(),
             cache_bytes: 0,
+            protected_chunk: None,
+            protected_enabled,
+            ordinary_chunk_admission: false,
             advertisement: None,
             view_dirty: false,
             scope: ViewScope::Invalid,
@@ -706,6 +730,15 @@ impl NativeHost {
     }
 
     fn recover(&mut self) -> io::Result<()> {
+        // Startup/observer/dirty-state reconciliation must never warm the slot.
+        let admission = std::mem::replace(&mut self.ordinary_chunk_admission, false);
+        let result = self.recover_inner();
+        self.ordinary_chunk_admission = admission;
+        self.trim_cache(0);
+        result
+    }
+
+    fn recover_inner(&mut self) -> io::Result<()> {
         self.authority_fingerprint = None;
         // Recovery includes ambiguous publications and external generations.
         // A later full native advertisement must certify this state afresh.
@@ -759,8 +792,9 @@ impl NativeHost {
                     .all(|name| name.starts_with("refs/heads/"))
                 && advertisement::branch_commits(&self.view, manifest)
             {
-                self.reserve_metadata(bound);
-                self.lineage = history::Certificate::bootstrap(manifest, identity);
+                if self.reserve_metadata(bound) {
+                    self.lineage = history::Certificate::bootstrap(manifest, identity);
+                }
                 self.trim_cache(0);
             }
         }
@@ -779,7 +813,7 @@ impl NativeHost {
         &mut self,
         manifest: &Manifest,
         projection: Option<&history::Projection>,
-        prefetched: Option<(usize, crate::storage::VerifiedChunks)>,
+        prefetched: Option<(Vec<Chunk>, crate::storage::VerifiedChunks)>,
     ) -> io::Result<()> {
         self.view_dirty = true;
         self.scope = ViewScope::Invalid;
@@ -796,9 +830,21 @@ impl NativeHost {
         if self.view.exists() {
             fs::remove_dir_all(&self.view)?;
         }
-        let files = self
-            .repository
-            .read_snapshot_selection_prefetched(manifest, selected, prefetched)?;
+        let resolved = self.repository.read_snapshot_selection_resolved(
+            manifest,
+            selected,
+            self.protected_chunk.clone(),
+            prefetched,
+            self.protected_enabled
+                && self.ordinary_chunk_admission
+                && self.protected_chunk.is_none(),
+        )?;
+        self.metrics.protected_chunk_hits += resolved.cache_hits as u64;
+        self.metrics.protected_chunk_hit_bytes += resolved.cache_hit_bytes;
+        if let Some(candidate) = resolved.admission {
+            self.admit_protected_chunk(candidate);
+        }
+        let files = resolved.files;
         init(&self.view)?;
         for (pack, (data, index)) in selected.iter().map(|i| &manifest.packs[*i]).zip(files) {
             let directory = self.view.join("objects/pack");
@@ -878,8 +924,8 @@ impl NativeHost {
             .as_ref()
             .and_then(|proof| proof.plan(request, &self.manifest, identity));
         if let Some(plan) = plan {
-            // Even the identical existing projection is read from R2 anew on
-            // every cold miss. This is selection, never an object byte cache.
+            // Always reconstruct a cold miss using the verified immutable slot
+            // and ordinary verified GETs for all missing selected chunks.
             self.materialize_view(&self.manifest.clone(), Some(&plan))?;
             self.metrics.cloud_view_rehydrates += 1;
             self.metrics.history_projections += 1;
@@ -1092,11 +1138,7 @@ impl NativeHost {
             }
         }
         if let Some(prepared) = &prepared
-            && self
-                .gateway_plan(request)?
-                .is_none_or(|(plan, projection)| {
-                    projection.is_some() || plan.selection != prepared.selection
-                })
+            && self.stable_full_selection()? != prepared.stable_selection
         {
             return Err(io::Error::other("prepared receive selection changed"));
         }
@@ -1105,7 +1147,10 @@ impl NativeHost {
                 && proof.matches(&self.manifest, advertisement::identity(&self.view))
         });
         self.pending_lineage_bytes = lineage.as_ref().map_or(0, |proof| proof.weight());
-        self.trim_cache(0);
+        if !self.trim_cache(0) {
+            self.pending_lineage_bytes = 0;
+            return Err(io::Error::other("receive metadata exceeds cache budget"));
+        }
         self.publication_active = true;
         let result = self.receive_transaction(request, lineage, prepared);
         self.publication_active = false;
@@ -1232,6 +1277,11 @@ impl NativeHost {
             .collect::<io::Result<Vec<_>>>()?;
         let plan_capacity = previous.packs.len() + incoming_paths.len();
         let plan_floor_bytes = plan_capacity * size_of::<u64>();
+        if !self.reserve_metadata(plan_floor_bytes) {
+            return Err(io::Error::other(
+                "publication metadata exceeds cache budget",
+            ));
+        }
         self.pending_lineage_bytes += plan_floor_bytes;
         self.trim_cache(0);
         let mut packs = Vec::with_capacity(plan_capacity);
@@ -1282,7 +1332,8 @@ impl NativeHost {
         };
         let lineage_bound = lineage
             .as_ref()
-            .and_then(|_| history::Certificate::allocation_bound(packs.len(), next.refs.len()));
+            .and_then(|_| history::Certificate::allocation_bound(packs.len(), next.refs.len()))
+            .filter(|bound| self.reserve_metadata(*bound));
         if let Some(bound) = lineage_bound {
             self.pending_lineage_bytes += bound;
             self.trim_cache(0);
@@ -1537,7 +1588,9 @@ impl NativeHost {
             && eligible
             && Some(identity) == advertisement::identity(&self.view)
         {
-            self.reserve_metadata(advertisement::Certificate::allocation_bound());
+            if !self.reserve_metadata(advertisement::Certificate::allocation_bound()) {
+                return Ok(response);
+            }
             let certificate =
                 advertisement::Certificate::learn(&self.manifest, &response, identity);
             if certificate.is_some() {
@@ -1649,23 +1702,30 @@ impl NativeHost {
             return;
         }
         let upper_weight = Self::cache_weight(key.capacity(), response);
-        if upper_weight + self.metadata_bytes() > CACHE_BYTES {
+        if upper_weight + self.metadata_bytes() - self.protected_bytes() > CACHE_BYTES {
             return;
         }
         // Reserve against original capacities before cloning; then charge the
         // exact cloned allocations that eviction will later subtract.
-        self.trim_cache(upper_weight);
+        if !self.trim_cache(upper_weight) {
+            return;
+        }
         let retained = response.clone();
         let weight = Self::cache_weight(key.capacity(), &retained);
         // Charge both old and new rings across a possible growth allocation.
         if self.cache.len() == self.cache.capacity() {
             let ring_bound = (self.cache.capacity().max(4) * 2) * size_of::<(String, Response)>();
-            self.trim_cache(weight + ring_bound);
+            if !self.trim_cache(weight + ring_bound) {
+                return;
+            }
             self.cache.reserve(1);
         }
-        self.trim_cache(weight);
+        if !self.trim_cache(weight) {
+            return;
+        }
         self.cache_bytes += weight;
         self.cache.push_back((key, retained));
+        self.note_joint_retention();
     }
 
     fn lineage_bytes(&self) -> usize {
@@ -1684,6 +1744,9 @@ impl NativeHost {
             + size_of::<Option<advertisement::Certificate>>()
             + size_of::<Option<history::Certificate>>()
             + 2 * size_of::<usize>()
+            + size_of::<Option<crate::storage::VerifiedChunk>>()
+            + 2 * size_of::<bool>()
+            + self.protected_bytes()
             + self.cloudflare.as_ref().map_or(0, |services| {
                 HttpServices::retirement_proof_storage_bytes()
                     + services.socket_storage_bytes()
@@ -1692,28 +1755,75 @@ impl NativeHost {
             })
     }
 
-    fn reserve_metadata(&mut self, incoming: usize) {
-        while self.cache_bytes + self.metadata_bytes() + incoming > CACHE_BYTES {
-            if let Some((key, response)) = self.cache.pop_front() {
-                self.cache_bytes -= Self::cache_weight(key.capacity(), &response);
-                self.metrics.cache_evictions += 1;
-            } else {
-                break;
-            }
+    fn protected_bytes(&self) -> usize {
+        self.protected_chunk
+            .as_ref()
+            .map_or(0, |v| v.retained_bytes())
+    }
+
+    fn joint_cache_entries(&self) -> usize {
+        self.cache.len() + usize::from(self.protected_chunk.is_some())
+    }
+
+    fn note_joint_retention(&mut self) {
+        self.metrics.joint_cache_retained_peak_bytes = self
+            .metrics
+            .joint_cache_retained_peak_bytes
+            .max((self.cache_bytes + self.metadata_bytes()) as u64);
+    }
+
+    fn evict_protected_chunk(&mut self) {
+        if self.protected_chunk.take().is_some() {
+            self.metrics.protected_chunk_evictions += 1;
         }
     }
 
-    fn trim_cache(&mut self, incoming: usize) {
+    fn admit_protected_chunk(&mut self, candidate: crate::storage::VerifiedChunk) {
+        if !self.protected_enabled
+            || !self.ordinary_chunk_admission
+            || self.protected_chunk.is_some()
+            || candidate.bytes().len() > CACHE_ENTRY_BYTES
+        {
+            return;
+        }
+        if self.trim_joint(candidate.retained_bytes(), true) {
+            self.protected_chunk = Some(candidate);
+            self.metrics.protected_chunk_admissions += 1;
+            self.note_joint_retention();
+        }
+    }
+
+    fn reserve_metadata(&mut self, incoming: usize) -> bool {
+        self.trim_joint(incoming, false)
+    }
+
+    fn trim_cache(&mut self, incoming: usize) -> bool {
+        self.trim_joint(incoming, incoming != 0)
+    }
+
+    fn trim_joint(&mut self, incoming: usize, entry: bool) -> bool {
         while self.cache_bytes + self.metadata_bytes() + incoming > CACHE_BYTES
-            || (incoming != 0 && self.cache.len() >= CACHE_ENTRIES)
+            || self.joint_cache_entries() + usize::from(entry) > CACHE_ENTRIES
         {
             if let Some((old_key, old)) = self.cache.pop_front() {
                 self.cache_bytes -= Self::cache_weight(old_key.capacity(), &old);
                 self.metrics.cache_evictions += 1;
+            } else if self.protected_chunk.is_some() {
+                self.evict_protected_chunk();
             } else {
-                break;
+                return false;
             }
         }
+        self.note_joint_retention();
+        true
+    }
+
+    fn stable_full_selection(&self) -> io::Result<String> {
+        let chunks = crate::snapshot_chunks(&self.manifest)?;
+        let selected: Vec<_> = (0..self.manifest.packs.len()).collect();
+        Ok(crate::first_read::stable_selection_hash(
+            &selected, None, &chunks,
+        ))
     }
 
     fn gateway_plan(
@@ -1758,11 +1868,22 @@ impl NativeHost {
             .iter()
             .flat_map(|i| self.manifest.packs[*i].chunks().cloned())
             .collect();
-        let count = crate::cloudflare::bulk_batch_len(&chunks);
+        let cached = self.protected_chunk.as_ref().map(|v| v.descriptor());
+        let missing: Vec<_> = chunks
+            .iter()
+            .filter(|c| cached != Some(*c))
+            .cloned()
+            .collect();
+        let count = crate::cloudflare::bulk_batch_len(&missing);
         if count == 0 {
             return Ok(None);
         }
-        let first = chunks[..count].to_vec();
+        let first = missing[..count].to_vec();
+        let stable = crate::first_read::stable_selection_hash(
+            &selected,
+            projection.as_ref().map(|p| (p.cutoff, p.binding)),
+            &chunks,
+        );
         Ok(Some((
             crate::first_read::Plan {
                 generation: self.manifest.generation,
@@ -1771,10 +1892,8 @@ impl NativeHost {
                     .iter()
                     .map(|b| format!("{b:02x}"))
                     .collect(),
-                selection: crate::first_read::selection_hash(
-                    &selected,
-                    projection.as_ref().map(|p| (p.cutoff, p.binding)),
-                    &first,
+                selection: crate::first_read::cached_selection_hash(
+                    &stable, &chunks, cached, &first,
                 ),
                 first,
             },
@@ -1914,13 +2033,14 @@ impl NativeHost {
             self.metrics.requests += 1;
             self.metrics.input_bytes += logical.body.len() as u64;
             self.metrics.generation_witness_hits += 1;
+            self.ordinary_chunk_admission = true;
             if receive {
                 services.set_phase("push")?;
                 let was_projection = matches!(self.scope, ViewScope::Projection { .. });
                 self.materialize_view_prefetched(
                     &self.manifest.clone(),
                     None,
-                    Some((plan.first.len(), verified)),
+                    Some((plan.first.clone(), verified)),
                 )?;
                 self.metrics.cloud_view_rehydrates += 1;
                 self.metrics.history_full_restores += u64::from(was_projection);
@@ -1929,7 +2049,7 @@ impl NativeHost {
                         .authority_fingerprint
                         .ok_or_else(|| io::Error::other("missing prepared authority"))?,
                     request_hash: fr::request_hash(&logical),
-                    selection: plan.selection,
+                    stable_selection: self.stable_full_selection()?,
                     key,
                     nonce: meta.nonce,
                     prepare_start,
@@ -1946,7 +2066,7 @@ impl NativeHost {
             self.materialize_view_prefetched(
                 &self.manifest.clone(),
                 projection.as_ref(),
-                Some((plan.first.len(), verified)),
+                Some((plan.first, verified)),
             )?;
             self.metrics.cloud_view_rehydrates += 1;
             self.metrics.history_projections += u64::from(projection.is_some());
@@ -1964,6 +2084,8 @@ impl NativeHost {
     fn request_error_cleanup(&mut self) {
         self.advertisement = None;
         self.lineage = None;
+        self.evict_protected_chunk();
+        self.trim_cache(0);
         if self.view_dirty || !matches!(self.scope, ViewScope::Full { .. }) {
             self.view_dirty = true;
             self.scope = ViewScope::Invalid;
@@ -1971,6 +2093,23 @@ impl NativeHost {
     }
 
     pub fn handle(&mut self, request: Request) -> Response {
+        let previous = self.ordinary_chunk_admission;
+        self.ordinary_chunk_admission = request.method == "POST"
+            && matches!(
+                request.target.as_str(),
+                "/repo.git/git-upload-pack" | "/repo.git/git-receive-pack"
+            )
+            || request.method == "GET" && request.target.starts_with("/repo.git/info/refs?");
+        // HttpServices can change registration/socket policy between calls.
+        // Re-evaluate its reservation before any new cross-request owner.
+        self.trim_cache(0);
+        let response = self.handle_inner(request);
+        self.ordinary_chunk_admission = previous;
+        self.trim_cache(0);
+        response
+    }
+
+    fn handle_inner(&mut self, request: Request) -> Response {
         if matches!(
             request.target.as_str(),
             crate::first_read::PLAN_PATH | crate::first_read::CONTINUE_PATH
@@ -2011,6 +2150,12 @@ impl NativeHost {
                     (self.cache_bytes + self.metadata_bytes()) as u64;
                 self.metrics.cache_budget_bytes = CACHE_BYTES as u64;
                 self.metrics.cache_entries = self.cache.len() as u64;
+                self.metrics.protected_chunk_bytes = self
+                    .protected_chunk
+                    .as_ref()
+                    .map_or(0, |v| v.bytes().len() as u64);
+                self.metrics.protected_chunk_owning_bytes = self.protected_bytes() as u64;
+                self.metrics.joint_cache_entries = self.joint_cache_entries() as u64;
                 self.metrics.cache_entry_limit = CACHE_ENTRIES as u64;
                 let mut value = serde_json::to_value(&self.metrics)?;
                 value["native_view_policy"] = serde_json::json!(if self.cold_view {
@@ -2081,6 +2226,84 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn verified_payload(bytes: Vec<u8>) -> crate::storage::VerifiedChunk {
+        // Give a short payload a larger backing allocation to prove charging
+        // follows capacity rather than length or a logical view.
+        let descriptor = Chunk {
+            key: format!("chunks/{}", hash(&bytes)),
+            len: bytes.len() as u64,
+        };
+        crate::storage::VerifiedChunks::verify(std::slice::from_ref(&descriptor), vec![bytes])
+            .unwrap()
+            .into_handles(std::slice::from_ref(&descriptor))
+            .unwrap()
+            .remove(0)
+    }
+
+    #[test]
+    fn protected_payload_is_get_only_and_pressure_evicts_it_for_a_productive_response() {
+        let root =
+            std::env::temp_dir().join(format!("git-zero-protected-budget-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        host.protected_enabled = true;
+        let payload = verified_payload(vec![7; CACHE_ENTRY_BYTES]);
+        host.admit_protected_chunk(payload.clone());
+        assert!(host.protected_chunk.is_none(), "setup cannot admit");
+        host.ordinary_chunk_admission = true;
+        host.admit_protected_chunk(payload);
+        assert_eq!(host.metrics.protected_chunk_admissions, 1);
+        assert!(host.protected_bytes() > CACHE_ENTRY_BYTES);
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Arc::from(vec![9; CACHE_ENTRY_BYTES]),
+        };
+        host.cache_insert("max-response".into(), &response);
+        assert!(
+            host.protected_chunk.is_none(),
+            "slot is evictable under the same budget"
+        );
+        assert_eq!(host.cache.len(), 1);
+        assert_eq!(host.metrics.protected_chunk_evictions, 1);
+        assert!(host.cache_bytes + host.metadata_bytes() <= CACHE_BYTES);
+        assert!(host.metrics.joint_cache_retained_peak_bytes <= CACHE_BYTES as u64);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn protected_slot_consumes_one_entry_and_full_token_identity_ignores_admission() {
+        let root =
+            std::env::temp_dir().join(format!("git-zero-protected-entry-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        host.protected_enabled = true;
+        host.ordinary_chunk_admission = true;
+        let stable = host.stable_full_selection().unwrap();
+        host.admit_protected_chunk(verified_payload(vec![7; 100]));
+        for index in 0..300 {
+            host.cache_insert(
+                index.to_string(),
+                &Response {
+                    status: 200,
+                    headers: BTreeMap::new(),
+                    body: Arc::from([1u8]),
+                },
+            );
+            assert!(host.joint_cache_entries() <= CACHE_ENTRIES);
+            assert!(host.cache_bytes + host.metadata_bytes() <= CACHE_BYTES);
+        }
+        assert!(host.protected_chunk.is_some());
+        assert_eq!(host.cache.len(), 255);
+        assert_eq!(stable, host.stable_full_selection().unwrap());
+        host.cache = VecDeque::new();
+        host.cache_bytes = 0;
+        assert_eq!(host.joint_cache_entries(), 1);
+        host.request_error_cleanup();
+        assert!(host.protected_chunk.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn small_receive_classifier_only_prepares_supported_nonempty_command_pack_requests() {

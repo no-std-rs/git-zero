@@ -34,6 +34,13 @@ pub struct Repository<B, S> {
     pub chunk_bytes: usize,
 }
 
+pub(crate) struct ResolvedSnapshot {
+    pub files: Vec<(Vec<u8>, Vec<u8>)>,
+    pub admission: Option<storage::VerifiedChunk>,
+    pub cache_hits: usize,
+    pub cache_hit_bytes: u64,
+}
+
 impl<B: BlobStore, S: StateStore> Repository<B, S> {
     pub fn new(blobs: B, state: S) -> Self {
         Self {
@@ -307,6 +314,113 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
             });
         }
         Ok(files)
+    }
+
+    /// Resolve an authenticated selection with one immutable cached chunk and
+    /// an exact first *missing* batch. All proofs precede native file writes.
+    pub(crate) fn read_snapshot_selection_resolved(
+        &self,
+        manifest: &Manifest,
+        selected: &[usize],
+        cached: Option<storage::VerifiedChunk>,
+        prefetched: Option<(Vec<Chunk>, storage::VerifiedChunks)>,
+        admit: bool,
+    ) -> io::Result<ResolvedSnapshot> {
+        snapshot_chunks(manifest)?;
+        if selected.iter().any(|i| *i >= manifest.packs.len())
+            || selected.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(io::Error::other("invalid ordered pack selection"));
+        }
+        let chunks: Vec<_> = selected
+            .iter()
+            .flat_map(|i| manifest.packs[*i].chunks().cloned())
+            .collect();
+        let hit = |chunk: &Chunk| cached.as_ref().is_some_and(|v| v.descriptor() == chunk);
+        let missing: Vec<_> = chunks.iter().filter(|c| !hit(c)).cloned().collect();
+        let mut fresh = if let Some((first, verified)) = prefetched {
+            if first.is_empty() || first.len() > missing.len() || first != missing[..first.len()] {
+                return Err(io::Error::other("invalid prefetched missing batch"));
+            }
+            let mut fresh = verified.into_handles(&first)?;
+            if first.len() < missing.len() {
+                let rest = &missing[first.len()..];
+                fresh.extend(self.blobs.get_many_verified(rest)?.into_handles(rest)?);
+            }
+            fresh
+        } else {
+            self.blobs
+                .get_many_verified(&missing)?
+                .into_handles(&missing)?
+        }
+        .into_iter();
+        let mut admission = None;
+        let mut cache_hits = 0;
+        let mut cache_hit_bytes = 0;
+        let mut handles = Vec::with_capacity(chunks.len());
+        for chunk in &chunks {
+            let value = if hit(chunk) {
+                cache_hits += 1;
+                cache_hit_bytes += chunk.len;
+                cached.as_ref().unwrap().clone()
+            } else {
+                let value = fresh
+                    .next()
+                    .ok_or_else(|| io::Error::other("missing verified chunk"))?;
+                if admit && admission.is_none() && chunk.len <= 16 * 1024 * 1024 {
+                    admission = Some(value.clone());
+                }
+                value
+            };
+            if value.descriptor() != chunk {
+                return Err(io::Error::other("resolved chunk identity mismatch"));
+            }
+            handles.push(value);
+        }
+        if fresh.next().is_some() {
+            return Err(io::Error::other("extra verified chunks"));
+        }
+        let mut handles = handles.into_iter();
+        let mut files = Vec::with_capacity(selected.len());
+        for pack in selected.iter().map(|i| &manifest.packs[*i]) {
+            let mut read = |count: usize, size: u64| {
+                if count == 0 {
+                    return Vec::new();
+                }
+                let first = handles.next().expect("verified chunk count");
+                let mut file = match first.try_into_bytes() {
+                    Ok(mut owned) => {
+                        owned.reserve_exact(size as usize - owned.len());
+                        owned
+                    }
+                    Err(shared) => {
+                        let mut file = Vec::with_capacity(size as usize);
+                        file.extend_from_slice(shared.bytes());
+                        file
+                    }
+                };
+                for chunk in handles.by_ref().take(count - 1) {
+                    file.extend_from_slice(chunk.bytes());
+                }
+                file
+            };
+            files.push(if pack.bundle.is_empty() {
+                (
+                    read(pack.pack.len(), pack.pack_bytes),
+                    read(pack.index.len(), pack.index_bytes),
+                )
+            } else {
+                let mut bytes = read(pack.bundle.len(), pack.pack_bytes + pack.index_bytes);
+                let index = bytes.split_off(pack.pack_bytes as usize);
+                (bytes, index)
+            });
+        }
+        Ok(ResolvedSnapshot {
+            files,
+            admission,
+            cache_hits,
+            cache_hit_bytes,
+        })
     }
 
     pub fn read_chunks(&self, chunks: &[Chunk], expected: u64) -> io::Result<Vec<u8>> {
@@ -1109,6 +1223,222 @@ mod tests {
                 .is_err()
         );
         assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn cached_snapshot_merges_an_interior_missing_batch_and_rejects_prefix_substitution() {
+        use std::sync::atomic::Ordering;
+        let repository = Repository::new(MemoryBlobs::default(), UnusedState);
+        let first = repository
+            .store_pack("first".into(), b"pack", b"index", 0)
+            .unwrap();
+        let last = repository
+            .store_bundled_pack("last".into(), b"tail", b"idx", 0)
+            .unwrap();
+        let manifest = Manifest {
+            packs: vec![first, last],
+            ..Manifest::default()
+        };
+        let chunks = snapshot_chunks(&manifest).unwrap();
+        let cached = storage::VerifiedChunks::verify(&chunks[..1], vec![b"pack".to_vec()])
+            .unwrap()
+            .into_handles(&chunks[..1])
+            .unwrap()
+            .remove(0);
+        let paid = storage::VerifiedChunks::verify(&chunks[1..2], vec![b"index".to_vec()]).unwrap();
+        let result = repository
+            .read_snapshot_selection_resolved(
+                &manifest,
+                &[0, 1],
+                Some(cached.clone()),
+                Some((chunks[1..2].to_vec(), paid)),
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            result.files,
+            vec![
+                (b"pack".to_vec(), b"index".to_vec()),
+                (b"tail".to_vec(), b"idx".to_vec())
+            ]
+        );
+        assert_eq!(result.cache_hits, 1);
+        assert_eq!(result.cache_hit_bytes, 4);
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            *repository.blobs.batches.lock().unwrap(),
+            vec![chunks[2..].to_vec()]
+        );
+        let wrong = storage::VerifiedChunks::verify(&chunks[..1], vec![b"pack".to_vec()]).unwrap();
+        assert!(
+            repository
+                .read_snapshot_selection_resolved(
+                    &manifest,
+                    &[0, 1],
+                    Some(cached),
+                    Some((chunks[..1].to_vec(), wrong)),
+                    false,
+                )
+                .is_err()
+        );
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn all_cached_snapshot_checks_metadata_and_never_reads_or_readmits() {
+        use std::sync::atomic::Ordering;
+        let repository = Repository::new(MemoryBlobs::default(), UnusedState);
+        let pack = repository
+            .store_bundled_pack("one".into(), b"pack", b"index", 0)
+            .unwrap();
+        let mut manifest = Manifest {
+            packs: vec![pack],
+            ..Manifest::default()
+        };
+        let chunks = snapshot_chunks(&manifest).unwrap();
+        let cached = storage::VerifiedChunks::verify(&chunks, vec![b"packindex".to_vec()])
+            .unwrap()
+            .into_handles(&chunks)
+            .unwrap()
+            .remove(0);
+        let result = repository
+            .read_snapshot_selection_resolved(&manifest, &[0], Some(cached.clone()), None, true)
+            .unwrap();
+        assert_eq!(result.files, vec![(b"pack".to_vec(), b"index".to_vec())]);
+        assert_eq!(result.cache_hits, 1);
+        assert!(result.admission.is_none());
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 0);
+        manifest.packs[0].bundle[0].len += 1;
+        assert!(
+            repository
+                .read_snapshot_selection_resolved(&manifest, &[0], Some(cached), None, true)
+                .is_err()
+        );
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn cached_middle_chunk_merges_noncontiguous_missing_batch_and_rejects_forged_partitions() {
+        use std::sync::atomic::Ordering;
+        let repository = Repository::new(MemoryBlobs::default(), UnusedState);
+        let first = repository
+            .store_pack("first".into(), b"pack", b"index", 0)
+            .unwrap();
+        let last = repository
+            .store_bundled_pack("last".into(), b"tail", b"idx", 0)
+            .unwrap();
+        let manifest = Manifest {
+            packs: vec![first, last],
+            ..Manifest::default()
+        };
+        let chunks = snapshot_chunks(&manifest).unwrap();
+        let middle = storage::VerifiedChunks::verify(&chunks[1..2], vec![b"index".to_vec()])
+            .unwrap()
+            .into_handles(&chunks[1..2])
+            .unwrap()
+            .remove(0);
+        let missing = vec![chunks[0].clone(), chunks[2].clone()];
+        let proof =
+            storage::VerifiedChunks::verify(&missing, vec![b"pack".to_vec(), b"tailidx".to_vec()])
+                .unwrap();
+        let result = repository
+            .read_snapshot_selection_resolved(
+                &manifest,
+                &[0, 1],
+                Some(middle.clone()),
+                Some((missing.clone(), proof)),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            result.files,
+            vec![
+                (b"pack".to_vec(), b"index".to_vec()),
+                (b"tail".to_vec(), b"idx".to_vec())
+            ]
+        );
+        assert_eq!(result.cache_hits, 1);
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 0);
+        let foreign = Chunk {
+            key: format!("chunks/{}", hash(b"foreign")),
+            len: 7,
+        };
+        let verify = |descriptors: &[Chunk], data: Vec<Vec<u8>>| {
+            storage::VerifiedChunks::verify(descriptors, data).unwrap()
+        };
+        let mut wrong_length = chunks[0].clone();
+        wrong_length.len += 1;
+        let cases = vec![
+            (vec![], verify(&[], vec![])),
+            (
+                vec![chunks[0].clone(), chunks[0].clone()],
+                verify(
+                    &[chunks[0].clone(), chunks[0].clone()],
+                    vec![b"pack".to_vec(), b"pack".to_vec()],
+                ),
+            ),
+            (
+                vec![chunks[2].clone(), chunks[0].clone()],
+                verify(
+                    &[chunks[2].clone(), chunks[0].clone()],
+                    vec![b"tailidx".to_vec(), b"pack".to_vec()],
+                ),
+            ),
+            (
+                missing.clone(),
+                verify(
+                    &[chunks[0].clone(), foreign.clone()],
+                    vec![b"pack".to_vec(), b"foreign".to_vec()],
+                ),
+            ),
+            (
+                vec![foreign.clone()],
+                verify(std::slice::from_ref(&foreign), vec![b"foreign".to_vec()]),
+            ),
+            (
+                vec![wrong_length],
+                verify(&chunks[..1], vec![b"pack".to_vec()]),
+            ),
+        ];
+        for (first, proof) in cases {
+            assert!(
+                repository
+                    .read_snapshot_selection_resolved(
+                        &manifest,
+                        &[0, 1],
+                        Some(middle.clone()),
+                        Some((first, proof)),
+                        false
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                repository.blobs.gets.load(Ordering::Relaxed),
+                0,
+                "invalid partition performs no suffix reads"
+            );
+        }
+        let foreign_cache = verify(std::slice::from_ref(&foreign), vec![b"foreign".to_vec()])
+            .into_handles(std::slice::from_ref(&foreign))
+            .unwrap()
+            .remove(0);
+        let proof = verify(&missing, vec![b"pack".to_vec(), b"tailidx".to_vec()]);
+        assert!(
+            repository
+                .read_snapshot_selection_resolved(
+                    &manifest,
+                    &[0, 1],
+                    Some(foreign_cache),
+                    Some((missing, proof)),
+                    false
+                )
+                .is_err()
+        );
+        assert_eq!(
+            repository.blobs.gets.load(Ordering::Relaxed),
+            0,
+            "foreign cached descriptor cannot remove a selected missing chunk"
+        );
     }
 
     #[test]

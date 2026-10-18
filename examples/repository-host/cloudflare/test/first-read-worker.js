@@ -45,6 +45,13 @@ globalThis.fetch = async (input,init) => {
     const headers = new Headers(meta.request.headers);headers.set("x-git-zero-internal-generation-witness",meta.witness);
     const filled = await originalFetch(new Request(new URL(meta.request.target,request.url),{method:"POST",headers,body:data.slice(20+metaLength,20+metaLength+bodyLength)}));
     if (!filled.ok) throw new Error("test real cache-fill fetch failed");await filled.arrayBuffer();
+  } else if (hook.mode === "continue-cache-pressure") {
+    if (!Array.isArray(hook.pressure) || hook.pressure.length > 128 * 1024) throw new Error("invalid bounded test pressure request");
+    const headers = new Headers(meta.request.headers);
+    // A distinct real request obtains its own ordinary fresh authority. Its
+    // productive response can evict the slot before the paid continuation.
+    const filled = await originalFetch(new Request(new URL(meta.request.target,request.url),{method:"POST",headers,body:Uint8Array.from(hook.pressure)}));
+    if (!filled.ok) throw new Error("test real pressure fetch failed");await filled.arrayBuffer();
   } else if (hook.mode === "continue-local-push") {
     const pushed=await originalFetch(new Request(new URL("/repo.git/git-receive-pack",request.url),{method:"POST",headers:{"content-type":"application/x-git-receive-pack-request"},body:Uint8Array.from(hook.push)}));
     const result = new TextDecoder().decode(await pushed.arrayBuffer());

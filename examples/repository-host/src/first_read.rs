@@ -491,6 +491,44 @@ pub(crate) fn selection_hash(
     hex(&h.finalize())
 }
 
+/// Stable identity of the entire ordered selection, independent of cache state
+/// or batching. This is the identity carried by a one-use Full receive token.
+pub(crate) fn stable_selection_hash(
+    selected: &[usize],
+    projection: Option<(u64, [u8; 32])>,
+    chunks: &[Chunk],
+) -> String {
+    let mut h = Sha256::new();
+    h.update(b"git-zero-stable-selection-v1");
+    field(
+        &mut h,
+        selection_hash(selected, projection, chunks).as_bytes(),
+    );
+    hex(&h.finalize())
+}
+
+/// The existing Worker treats this authenticated field as opaque. Bind both
+/// the stable selection and the exact cache/missing partition without changing
+/// its nonempty first-batch framing or authority semantics.
+pub(crate) fn cached_selection_hash(
+    stable: &str,
+    chunks: &[Chunk],
+    cached: Option<&Chunk>,
+    first: &[Chunk],
+) -> String {
+    let mut h = Sha256::new();
+    h.update(b"git-zero-cached-selection-v1");
+    field(&mut h, stable.as_bytes());
+    h.update((chunks.len() as u64).to_le_bytes());
+    for chunk in chunks {
+        h.update([u8::from(cached == Some(chunk))]);
+        field(&mut h, chunk.key.as_bytes());
+        h.update(chunk.len.to_le_bytes());
+    }
+    field(&mut h, selection_hash(&[], None, first).as_bytes());
+    hex(&h.finalize())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
