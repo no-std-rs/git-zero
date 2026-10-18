@@ -528,6 +528,104 @@ fn metrics_added_fields_default_when_reading_old_binaries() {
 }
 
 #[test]
+fn workflow_git_environment_certifies_only_without_config_injection() {
+    const CASE: &str = "GIT_ZERO_ADVERTISEMENT_ENVIRONMENT_CHILD";
+    const TEST: &str = "native::advertisement_tests::workflow_git_environment_certifies_only_without_config_injection";
+    if let Ok(case) = std::env::var(CASE) {
+        if case == "workflow" {
+            let fixture = Fixture::new();
+            let mut host = fixture.host();
+            let first = host.handle(discovery());
+            assert_eq!(first.status, 200);
+            assert_eq!(host.metrics.upload_advertisement_certificates, 1);
+            let mut request = discovery();
+            request
+                .headers
+                .insert("git-protocol".into(), "version=0".into());
+            assert_eq!(host.handle(request).body, first.body);
+            assert_eq!(host.metrics.upload_advertisement_shortcuts, 1);
+            assert_eq!(host.metrics.cloud_view_rehydrates, 1);
+        } else {
+            // Invalid counted configuration can make Git itself refuse to run.
+            // Test policy recognition with only the fixed filesystem view.
+            let root = std::env::temp_dir()
+                .join(format!("git-zero-advertisement-env-{}", std::process::id()));
+            init(&root).unwrap();
+            assert!(advertisement::identity(&root).is_none(), "{case}");
+            fs::remove_dir_all(root).unwrap();
+            if matches!(
+                case.as_str(),
+                "injected-counted-policy" | "keys-with-zero-count" | "injected-parameters"
+            ) {
+                let fixture = Fixture::new();
+                let mut host = fixture.host();
+                let first = host.handle(discovery());
+                assert_eq!(first.status, 200);
+                let mut request = discovery();
+                request
+                    .headers
+                    .insert("git-protocol".into(), "version=0".into());
+                assert_eq!(host.handle(request).body, first.body);
+                assert_eq!(host.metrics.upload_advertisement_certificates, 0);
+                assert_eq!(host.metrics.upload_advertisement_shortcuts, 0);
+                assert_eq!(host.metrics.cloud_view_rehydrates, 2);
+            }
+        }
+        return;
+    }
+    for (case, count, injection) in [
+        ("workflow", "0", None),
+        ("nonzero-count", "1", None),
+        ("noncanonical-count", "00", None),
+        ("negative-count", "-1", None),
+        ("injected-counted-policy", "1", Some("counted")),
+        ("keys-with-zero-count", "0", Some("counted")),
+        ("injected-parameters", "0", Some("parameters")),
+        ("unknown-policy", "0", Some("unknown")),
+    ] {
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child.args(["--exact", TEST, "--nocapture"]);
+        for (name, _) in std::env::vars_os() {
+            if name.as_encoded_bytes().starts_with(b"GIT_") {
+                child.env_remove(name);
+            }
+        }
+        child
+            .env("GIT_CONFIG_COUNT", count)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("LC_ALL", "C")
+            .env(CASE, case);
+        match injection {
+            Some("counted") => {
+                child
+                    .env("GIT_CONFIG_KEY_0", "uploadpack.hideRefs")
+                    .env("GIT_CONFIG_VALUE_0", "refs/heads/future");
+            }
+            Some("parameters") => {
+                child.env(
+                    "GIT_CONFIG_PARAMETERS",
+                    "'uploadpack.hideRefs=refs/heads/future'",
+                );
+            }
+            Some("unknown") => {
+                child.env("GIT_NAMESPACE", "future");
+            }
+            None => {}
+            _ => unreachable!(),
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{case}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn legacy_noncommit_unborn_missing_main_tags_and_unknown_objects_keep_full_fallback() {
     let fixture = Fixture::new();
     let mut host = fixture.host();

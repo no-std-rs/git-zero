@@ -5,7 +5,7 @@ use crate::http::{Request, Response};
 use crate::storage::Manifest;
 use git_zero_core::pktline::{self, Packet};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, io, path::Path, process::Command};
+use std::{collections::BTreeMap, ffi::OsStr, fs, io, path::Path, process::Command};
 
 const MAIN: &str = "refs/heads/main";
 const CONTENT_TYPE: &str = "application/x-git-upload-pack-advertisement";
@@ -77,7 +77,12 @@ fn eligible_refs(manifest: &Manifest) -> bool {
 /// Refuse configuration injection even if it happens not to affect the first
 /// ref set: a hideRefs rule could otherwise affect a subsequently added branch.
 /// The wrapper overwrites its own listed variables, and GIT_ZERO_* is host-only.
-fn fixed_environment(name: &str) -> bool {
+fn fixed_environment(name: &str, value: &OsStr) -> bool {
+    // The CI workflow explicitly disables counted configuration and prompting.
+    // Counted keys/values remain unrecognized even when the count is zero.
+    if matches!(name, "GIT_CONFIG_COUNT" | "GIT_TERMINAL_PROMPT") {
+        return value == "0";
+    }
     !name.starts_with("GIT_")
         || name.starts_with("GIT_ZERO_")
         || matches!(
@@ -105,7 +110,7 @@ pub(super) fn identity(view: &Path) -> Option<[u8; 32]> {
     environment.sort();
     let mut digest = Sha256::new();
     for (name, value) in environment {
-        if !fixed_environment(name.to_str()?) {
+        if !fixed_environment(name.to_str()?, &value) {
             return None;
         }
         for part in [name.as_encoded_bytes(), value.as_encoded_bytes()] {
@@ -285,8 +290,9 @@ mod tests {
     #[test]
     fn configuration_environment_is_not_trusted_as_publication_policy() {
         for name in [
-            "GIT_CONFIG_COUNT",
             "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
             "GIT_CONFIG",
             "GIT_NAMESPACE",
             "GIT_COMMON_DIR",
@@ -295,7 +301,7 @@ mod tests {
             "GIT_SHALLOW_FILE",
             "GIT_REPLACE_REF_BASE",
         ] {
-            assert!(!fixed_environment(name), "{name}");
+            assert!(!fixed_environment(name, OsStr::new("injected")), "{name}");
         }
         for name in [
             "GIT_USER_AGENT",
@@ -303,7 +309,16 @@ mod tests {
             "GIT_ZERO_CLOUDFLARE_ORIGIN",
             "GIT_CONFIG_GLOBAL",
         ] {
-            assert!(fixed_environment(name), "{name}");
+            assert!(fixed_environment(name, OsStr::new("value")), "{name}");
+        }
+        for name in ["GIT_CONFIG_COUNT", "GIT_TERMINAL_PROMPT"] {
+            assert!(fixed_environment(name, OsStr::new("0")), "{name}");
+            for value in ["", "00", "+0", " 0", "0\n", "-1", "1", "invalid"] {
+                assert!(
+                    !fixed_environment(name, OsStr::new(value)),
+                    "{name}={value:?}"
+                );
+            }
         }
     }
 
