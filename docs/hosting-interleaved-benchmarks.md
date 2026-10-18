@@ -469,3 +469,46 @@ metadata and any gateway callback fusion remain unmeasured candidates. No
 stopping condition is established; final validation still requires five fresh
 original-R1/final pairs on every profile. Unknown cloud and Native compute
 keep the full bill null.
+
+## Next declared screen: atomic metadata and first fetch batch
+
+After the complete R11–R13 receipt, resource and latency review, this fresh
+three-provider two-pair screen will compare:
+
+| Label | Change | Source commit | Native source tree |
+| --- | --- | --- | --- |
+| r13 | Provisional known-cost anchor: deferred catalog | `774adce8795577f4ed7f4a21c3239106abeb21e0` | `47b1a58dd852fe1492b58c739dd32d35fe529fd7` |
+| r14 | Atomic bounded catalog/manifest metadata | `5759726b0a4545f6613553e1f2303f303eb65384` | `bfc7e5dbf7e7f244572e5d0f40e79f3190ad1707` |
+| r15 | Same-gateway authority and first fetch batch | `5a7f74f58336b5474dc9920cd20857ab8e573910` | `f6c9a339159083a06531dd4982cc201ec46c13de` |
+
+All three run freshly on the same standard GitHub VM within each 16/64 MiB ×
+cold/warm profile. Each has one excluded warmup and two measured pairs with
+stock Git's MIDX bitmap and commit-graph maintenance. Every trial has 32 pushes
+and 56 verified fetches. No earlier raw report or score supplies a sample.
+Compared providers use the common final Worker source tree
+`2944d3ecf512c09452e9d4487bd8bfc0b3815f91`, index SHA256
+`bd42e9b9fc4039688b554c97a47d89202df4422fa5b91e008ec892811bb39f17`.
+The workflow freezes all five tracked Worker modules, including inline catalog
+and first-read code, before and after timing and across profile VMs.
+
+R14's reviewed local controls preserve actual 24,576-byte realistic SQLite
+layouts, durable catalog/peak publication and sync-before-retirement. R15's
+final-source on/off control removes one service Worker and one DO callback per
+activated cold fetch, with the same real GETs, bytes and SQL work. Its whole
+fetch phase changes 24→15 Worker/DO requests, with 30 GETs/104,943,319 bytes,
+13 SQL reads and no writes. These are local correctness/topology results;
+net cost and latency still require the fresh screen. Legacy, boundary,
+corruption, concurrent-state and ambiguous-publication controls remain separate
+from performance samples.
+
+The original scalar reference stays `556b9ecd2aa79197f86b3db2d546eee81696e899`.
+The fixed objective, dated rates, strict receipts, cold-read/owning-cache/storage
+limits and complete latency guards remain unchanged. Actual startup, observer
+traffic and final restoration stay separately visible. Worker CPU, DO duration,
+monthly SQLite retention and Native compute remain unknown; full bill is null.
+Every two-pair screen is formally inconclusive and plateau-ineligible. Any
+provisional cost choice requires all four profiles and every guard/tail to be
+reviewed first. Final validation still requires five fresh original-R1/final
+pairs on all four profiles. Prepared receiving and any socket service transport
+are separate unmeasured candidates; this batch enables neither for its Native
+providers.

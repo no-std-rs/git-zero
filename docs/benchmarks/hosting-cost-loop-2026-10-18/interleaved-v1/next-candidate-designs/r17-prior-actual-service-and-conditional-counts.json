@@ -1,0 +1,162 @@
+{
+  "kind": "actual_R13_receipt_opportunity_plus_explicit_unmeasured_transport_projection",
+  "official_docs_checked_UTC_date": "2026-10-18",
+  "price_snapshot_unchanged": "cost.rs 2026-10-17",
+  "input_replay_sha256": "aa232fef2ea687b400cefb33f4da13be8af9ef71a13b3aa7ea1cf9f9457cd7de",
+  "run": 39097951585,
+  "source_R15_path": "/tmp/git-zero-hosting-gateway-first-read",
+  "source_R15_base": "5759726b0a4545f6613553e1f2303f303eb65384",
+  "profiles": {
+    "16mib-cold": {
+      "report_sha256": "e88ece8e28b93d930a72b3af1a7a7ef4911cb6731b50b81fcec61274bf613fc2",
+      "samples": [
+        {
+          "sample": 0,
+          "actual_R13_fixed_service_HTTP_callbacks": 191,
+          "actual_R13_fixed_bulk_HTTP_callbacks": 159,
+          "actual_R13_fixed_upload_publication_HTTP_callbacks": 32,
+          "actual_R13_fixed_gateway_requests": 176,
+          "actual_R13_fixed_DO_requests": 367,
+          "R15_unmeasured_first_fetch_cohort": 48,
+          "R16_unmeasured_small_receive_cohort": 24,
+          "conditional_remaining_service_callbacks": 119,
+          "R17_R13_gross_Worker_request_opportunity_usd_at_1000": 0.0573,
+          "R17_after_R15_R16_conditional_gross_Worker_request_opportunity_usd_at_1000": 0.035699999999999996
+        },
+        {
+          "sample": 1,
+          "actual_R13_fixed_service_HTTP_callbacks": 191,
+          "actual_R13_fixed_bulk_HTTP_callbacks": 159,
+          "actual_R13_fixed_upload_publication_HTTP_callbacks": 32,
+          "actual_R13_fixed_gateway_requests": 176,
+          "actual_R13_fixed_DO_requests": 367,
+          "R15_unmeasured_first_fetch_cohort": 48,
+          "R16_unmeasured_small_receive_cohort": 24,
+          "conditional_remaining_service_callbacks": 119,
+          "R17_R13_gross_Worker_request_opportunity_usd_at_1000": 0.0573,
+          "R17_after_R15_R16_conditional_gross_Worker_request_opportunity_usd_at_1000": 0.035699999999999996
+        }
+      ]
+    },
+    "16mib-warm": {
+      "report_sha256": "528d34e139530aa58942c86a0d34987de18e92745942d1959062003ba39fe908",
+      "samples": [
+        {
+          "sample": 0,
+          "actual_R13_fixed_service_HTTP_callbacks": 32,
+          "actual_R13_fixed_bulk_HTTP_callbacks": 0,
+          "actual_R13_fixed_upload_publication_HTTP_callbacks": 32,
+          "actual_R13_fixed_gateway_requests": 176,
+          "actual_R13_fixed_DO_requests": 208,
+          "R15_unmeasured_first_fetch_cohort": 0,
+          "R16_unmeasured_small_receive_cohort": 0,
+          "conditional_remaining_service_callbacks": 32,
+          "R17_R13_gross_Worker_request_opportunity_usd_at_1000": 0.0096,
+          "R17_after_R15_R16_conditional_gross_Worker_request_opportunity_usd_at_1000": 0.0096
+        },
+        {
+          "sample": 1,
+          "actual_R13_fixed_service_HTTP_callbacks": 32,
+          "actual_R13_fixed_bulk_HTTP_callbacks": 0,
+          "actual_R13_fixed_upload_publication_HTTP_callbacks": 32,
+          "actual_R13_fixed_gateway_requests": 176,
+          "actual_R13_fixed_DO_requests": 208,
+          "R15_unmeasured_first_fetch_cohort": 0,
+          "R16_unmeasured_small_receive_cohort": 0,
+          "conditional_remaining_service_callbacks": 32,
+          "R17_R13_gross_Worker_request_opportunity_usd_at_1000": 0.0096,
+          "R17_after_R15_R16_conditional_gross_Worker_request_opportunity_usd_at_1000": 0.0096
+        }
+      ]
+    },
+    "64mib-cold": {
+      "report_sha256": "70b4602dea6b2ea9e1b404c1276d2a2de69428da6bb43e6dbe6612660c802877",
+      "samples": [
+        {
+          "sample": 0,
+          "actual_R13_fixed_service_HTTP_callbacks": 316,
+          "actual_R13_fixed_bulk_HTTP_callbacks": 282,
+          "actual_R13_fixed_upload_publication_HTTP_callbacks": 34,
+          "actual_R13_fixed_gateway_requests": 176,
+          "actual_R13_fixed_DO_requests": 492,
+          "R15_unmeasured_first_fetch_cohort": 48,
+          "R16_unmeasured_small_receive_cohort": 24,
+          "conditional_remaining_service_callbacks": 244,
+          "R17_R13_gross_Worker_request_opportunity_usd_at_1000": 0.0948,
+          "R17_after_R15_R16_conditional_gross_Worker_request_opportunity_usd_at_1000": 0.07319999999999999
+        },
+        {
+          "sample": 1,
+          "actual_R13_fixed_service_HTTP_callbacks": 316,
+          "actual_R13_fixed_bulk_HTTP_callbacks": 282,
+          "actual_R13_fixed_upload_publication_HTTP_callbacks": 34,
+          "actual_R13_fixed_gateway_requests": 176,
+          "actual_R13_fixed_DO_requests": 492,
+          "R15_unmeasured_first_fetch_cohort": 48,
+          "R16_unmeasured_small_receive_cohort": 24,
+          "conditional_remaining_service_callbacks": 244,
+          "R17_R13_gross_Worker_request_opportunity_usd_at_1000": 0.0948,
+          "R17_after_R15_R16_conditional_gross_Worker_request_opportunity_usd_at_1000": 0.07319999999999999
+        }
+      ]
+    },
+    "64mib-warm": {
+      "report_sha256": "45e300f996d3d4a7edd4be2ce0cc202eb7400e10289dfc69d48a1bf526c92633",
+      "samples": [
+        {
+          "sample": 0,
+          "actual_R13_fixed_service_HTTP_callbacks": 34,
+          "actual_R13_fixed_bulk_HTTP_callbacks": 0,
+          "actual_R13_fixed_upload_publication_HTTP_callbacks": 34,
+          "actual_R13_fixed_gateway_requests": 176,
+          "actual_R13_fixed_DO_requests": 210,
+          "R15_unmeasured_first_fetch_cohort": 0,
+          "R16_unmeasured_small_receive_cohort": 0,
+          "conditional_remaining_service_callbacks": 34,
+          "R17_R13_gross_Worker_request_opportunity_usd_at_1000": 0.010199999999999999,
+          "R17_after_R15_R16_conditional_gross_Worker_request_opportunity_usd_at_1000": 0.010199999999999999
+        },
+        {
+          "sample": 1,
+          "actual_R13_fixed_service_HTTP_callbacks": 34,
+          "actual_R13_fixed_bulk_HTTP_callbacks": 0,
+          "actual_R13_fixed_upload_publication_HTTP_callbacks": 34,
+          "actual_R13_fixed_gateway_requests": 176,
+          "actual_R13_fixed_DO_requests": 210,
+          "R15_unmeasured_first_fetch_cohort": 0,
+          "R16_unmeasured_small_receive_cohort": 0,
+          "conditional_remaining_service_callbacks": 34,
+          "R17_R13_gross_Worker_request_opportunity_usd_at_1000": 0.010199999999999999,
+          "R17_after_R15_R16_conditional_gross_Worker_request_opportunity_usd_at_1000": 0.010199999999999999
+        }
+      ]
+    }
+  },
+  "actual_R13_service_callbacks_per_four_profile_replay": 573,
+  "conditional_after_R15_R16_service_callbacks_per_four_profile_replay": 429,
+  "gross_Worker_request_opportunity_R13_usd": 0.1719,
+  "conditional_gross_Worker_request_opportunity_after_R15_R16_usd": 0.1287,
+  "illustrative_four_upgrades_complete_physical_scope_usd": 0.0012,
+  "net_if_exactly_four_upgrades_and_no_other_overhead_R13_usd": 0.1707,
+  "conditional_net_if_exactly_four_upgrades_and_no_other_overhead_after_R15_R16_usd": 0.1275,
+  "mandatory_DO_HTTP_dispatches_removed_by_R17": 0,
+  "mandatory_R2_or_SQL_operations_removed_by_R17": 0,
+  "all_CPU_duration_SQLite_retention_Native_full_bill_known": false,
+  "official_incoming_Worker_WS_message_limit_bytes": 33554432,
+  "existing_first_read_frame_limit_bytes": 18410368,
+  "scorer_accepts_unequal_Worker_and_DO_counts_if_actual_categories_reconcile": true,
+  "official_sources": [
+    "https://developers.cloudflare.com/workers/platform/pricing/",
+    "https://developers.cloudflare.com/workers/runtime-apis/websockets/",
+    "https://developers.cloudflare.com/workers/platform/limits/",
+    "https://developers.cloudflare.com/workers/testing/miniflare/core/web-sockets/",
+    "https://docs.rs/tungstenite/latest/tungstenite/client/index.html",
+    "https://docs.rs/tungstenite/latest/tungstenite/protocol/struct.WebSocketConfig.html"
+  ],
+  "claims": [
+    "No R17 implementation, first runtime control, fresh net score or acceptance exists.",
+    "429 is conditional on all R15/R16 structural cohort optimizations activating; new complete traces must replace it.",
+    "Upgrade and reconnection timing belongs to actual triggering phase; startup and observer remain separately visible and are never treated as free.",
+    "Existing HTTP scalar legacy reads whose response cannot be bounded below the WS limit remain HTTP before I/O."
+  ]
+}

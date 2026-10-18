@@ -25,16 +25,14 @@ env:
   # Full validation always compares the original scalar baseline with current HEAD.
   BASELINE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
   # Ordered providers, measured once each per VM; adjacent comparisons share suites.
-  SCREEN_PROVIDERS: r11 r111 r12 r13
-  # R11.1 corrects real Git capability classification; R12 pages; R13 deferral.
-  # Duplicate refs or native source trees fail closed before any build or timing.
-  SCREEN_R11_COMMIT: 26e3d61c6fecbf92a709a089ed2f1270182ae625
-  SCREEN_R111_COMMIT: d27848bda5f1089814839a276ee320739afcfc92
-  SCREEN_R12_COMMIT: 134fad2b20f6e7d50ff215f08341deacbe786137
+  # R14 couples catalog/publication; R15 combines authority and the first fetch batch.
+  # Duplicate refs or native source trees fail closed before build/timing.
+  SCREEN_PROVIDERS: r13 r14 r15
   SCREEN_R13_COMMIT: 774adce8795577f4ed7f4a21c3239106abeb21e0
-  # Index hash plus the complete tracked Worker source tree, including imported modules.
-  EXPECTED_WORKER_SOURCE_TREE: 22902cf4688aa7ee5da3705adceaaee0a2f08caa
-  EXPECTED_WORKER_SHA256: dfa5d305b6dc511cdb85eb8b7ee717d09f70e7a0435160f29cecf75126c865c1
+  SCREEN_R14_COMMIT: 5759726b0a4545f6613553e1f2303f303eb65384
+  SCREEN_R15_COMMIT: 5a7f74f58336b5474dc9920cd20857ab8e573910
+  EXPECTED_WORKER_SOURCE_TREE: 2944d3ecf512c09452e9d4487bd8bfc0b3815f91
+  EXPECTED_WORKER_SHA256: bd42e9b9fc4039688b554c97a47d89202df4422fa5b91e008ec892811bb39f17
   REFERENCE_GIT_VERSION: 2.53.0
   # Four profile archives plus one score archive: at most 20 MiB per run.
   ARTIFACT_MAX_BYTES: '4194304'

@@ -1,0 +1,14 @@
+{
+  "scope": "Preparation and independently reviewed designs; no achieved cost, acceptance, stopping or benchmark claim. The R14 early actual gates have separately recorded implementation evidence. R15 is read/preparation only, pending reviewed R14 source and root GO.",
+  "files": {
+    "r14-independent-design-review.md": "/tmp/git-zero-fused-metadata-design-review.md",
+    "r14-preparation-and-residual-audit.md": "/tmp/git-zero-post-deferral-final-audit-prep.md",
+    "prior-measured-final-manifest-sizes.json": "/tmp/git-zero-r14-prior-measured-final-manifest-sizes.json",
+    "r15-independent-design-review.md": "/tmp/git-zero-gateway-first-read-design-review.md",
+    "r15-implementation-preparation.md": "/tmp/git-zero-gateway-first-read-implementation-prep.md",
+    "r15-prior-trace-hypothetical-miss-counts.json": "/tmp/git-zero-gateway-first-read-hypothesis-counts.json"
+  },
+  "fresh_r13_audit": "Actual704rows/GETs/bytes/SQLreplayed; fixed1.80461843618; allcomparisonsinconclusive.",
+  "r16": "Conditional independent design approval ONLY;48structuralcallbacks$.0216gross, originalHTTPheaders/bodyclassification requiresfreshcontrols. No implementation GO until reviewedR15SHA.",
+  "r17": "Design and independent review conditionally viable; read/prep complete; no source implementation or measured saving. Code GO requires exact reviewed R16 predecessor."
+}
