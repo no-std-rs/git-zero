@@ -61,20 +61,69 @@ fn footprint(root: &Path) -> io::Result<u64> {
     }
     Ok(bytes)
 }
+// Every call is made by the supervised executor. Both df and prefix traversal
+// belong to that case group/work deadline; the controller never performs them.
 fn capacity(root: &Path, cap: u64, min_memory: u64) -> Result<Value> {
-    let mut value = resource_preflight(root)?;
-    value["large_fixture_bytes"] = Value::Null;
-    value["preflight_scope"] = json!("capacity only; fixture size is not measured here");
-    let bytes = footprint(root)?;
-    if bytes > cap
-        || value["available_memory_bytes"]
-            .as_u64()
-            .is_none_or(|n| n < min_memory)
-    {
-        return Err("case capacity bound failed; stop".into());
+    capacity_with_helper(root, cap, min_memory, false)
+}
+fn capacity_with_helper(
+    root: &Path,
+    cap: u64,
+    min_memory: u64,
+    blocked_proof: bool,
+) -> Result<Value> {
+    let prefix = root.parent().ok_or("case prefix")?;
+    let id = COMMAND.load(Ordering::Relaxed);
+    let name = format!("resource-boundary-{id:04}");
+    save(
+        root,
+        &format!("{name}.started.json"),
+        &json!({"prefix":prefix,"complete":false,"after_counters":null,"case_pgid":process(std::process::id()as i32)?.group,"blocked_proof":blocked_proof}),
+    )?;
+    let mut helper = if blocked_proof {
+        // Fixed control-only wrapper; no payload or user text enters shell code.
+        // exec preserves the helper PID, inherited case PGID and ignored TERM.
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", "trap '' TERM; exec \"$@\"", "blocked-preflight-proof"])
+            .arg(std::env::current_exe()?)
+            .arg("--internal-blocked-resource-helper")
+            .arg(root);
+        c
+    } else {
+        let mut c = Command::new("df");
+        c.args(["-B1", "--output=avail"]).arg(prefix);
+        c
+    };
+    let df = command(root, "resource-preflight-helper", &mut helper)?;
+    if df.bytes > OUTPUT_CAP as u64 {
+        return Err("disk capacity helper output exceeds text cap".into());
     }
-    value["case_logical_bytes"] = json!(bytes);
-    value["case_byte_cap"] = json!(cap);
+    let available = String::from_utf8(df.prefix)?
+        .lines()
+        .last()
+        .ok_or("disk capacity missing")?
+        .trim()
+        .parse::<u64>()?;
+    let mem = fs::read_to_string("/proc/meminfo")?
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("MemAvailable:")
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .ok_or("memory capacity missing")?
+        * 1024;
+    let bytes = footprint(prefix)?;
+    let pass = available >= 2 * 1024 * 1024 * 1024 + 16 * 1024 * 1024
+        && mem >= 128 * 1024 * 1024
+        && mem >= min_memory
+        && bytes <= cap;
+    let value = json!({"available_disk_bytes":available,"disk_reserve_bytes":2147483648u64,"available_memory_bytes":mem,"proof_output_cap_bytes_per_stream":OUTPUT_CAP,
+        "large_fixture_bytes":null,"preflight_scope":"capacity only; fixture size is not measured here","aggregate_prefix":prefix,"aggregate_logical_bytes":bytes,"case_logical_bytes":footprint(root)?,"case_byte_cap":cap,"minimum_memory_bytes":min_memory,"complete":true,"capacity_pass":pass});
+    save(root, &format!("{name}.json"), &value)?;
+    if !pass {
+        return Err("case/aggregate capacity bound failed; actual receipt retained; stop".into());
+    }
     Ok(value)
 }
 fn verify_sources() -> Result<Value> {
@@ -353,7 +402,7 @@ fn fixture(root: &Path, plan: &Value) -> Result<PathBuf> {
         )?;
     }
     capacity(
-        root.parent().ok_or("case prefix")?,
+        root,
         plan["raw_byte_cap"].as_u64().unwrap_or(RAW_CAP),
         plan["minimum_memory_bytes"].as_u64().unwrap_or(RAW_CAP),
     )?;
@@ -400,7 +449,7 @@ fn fixture(root: &Path, plan: &Value) -> Result<PathBuf> {
             return Err("reconstructed want/tree mismatch; no relabel or replay".into());
         }
         capacity(
-            root.parent().ok_or("case prefix")?,
+            root,
             plan["raw_byte_cap"].as_u64().unwrap_or(RAW_CAP),
             plan["minimum_memory_bytes"].as_u64().unwrap_or(RAW_CAP),
         )?;
@@ -924,13 +973,34 @@ fn operation(root: &Path, source: &Path, latest: &Path, op: &Value, plan: &Value
         row["post_check"] = checked;
     } else {
         let after_packs = packs(&client)?;
-        let new = after_packs
+        let mut new = after_packs
             .iter()
             .filter(|(name, _)| !before_packs.contains_key(*name))
             .map(|(name, (len, sha))| json!({"name":name,"bytes":len,"sha256":sha}))
             .collect::<Vec<_>>();
         if new.is_empty() {
             return Err("fetch installed no nonempty pack".into());
+        }
+        for (index, pack) in new.iter_mut().enumerate() {
+            let path = client
+                .join("objects/pack")
+                .join(pack["name"].as_str().ok_or("pack name")?);
+            let name = format!("{key}-strict-index-{index}");
+            let arguments = ["index-pack", "--strict", path.to_str().ok_or("pack path")?];
+            let mut validation = json!({"pack_path":path,"pack_bytes":pack["bytes"],"pack_sha256":pack["sha256"],"git_arguments":arguments,"command_label":name,"complete":false,"success":null});
+            save(root, &format!("{name}.json"), &validation)?;
+            // Offline validation of the actual newly installed fetch pack. The
+            // original gateway command and service-observer order are unchanged.
+            let checked = git(root, &name, &client, &arguments);
+            validation["complete"] = json!(true);
+            validation["success"] = json!(checked.is_ok());
+            validation["error"] = json!(checked.as_ref().err().map(|e| e.to_string()));
+            save(root, &format!("{name}.json"), &validation)?;
+            let checked = checked?;
+            if stream_hash(&path)? != pack["sha256"] {
+                return Err("strict indexing changed fetched pack bytes".into());
+            }
+            pack["strict_index_pack"] = json!({"success":true,"receipt":root.join(format!("{name}.json")),"stdout_sha256":checked.sha256,"stdout_bytes":checked.bytes});
         }
         if text(
             root,
@@ -993,7 +1063,7 @@ fn operation(root: &Path, source: &Path, latest: &Path, op: &Value, plan: &Value
         fs::remove_dir_all(client)?;
     }
     capacity(
-        root.parent().ok_or("case prefix")?,
+        root,
         plan["raw_byte_cap"].as_u64().unwrap_or(RAW_CAP),
         plan["minimum_memory_bytes"].as_u64().unwrap_or(RAW_CAP),
     )?;
@@ -1152,7 +1222,16 @@ pub(super) fn worker(root: &Path) -> Result<()> {
     if plan["tiny"] != true && plan["root_runtime_go"] != true {
         return Err("large fixture generation requires separate root runtime GO".into());
     }
-    let result = execute_case(root, &plan);
+    let result = if plan["resource_check_only"] == true {
+        capacity_with_helper(
+            root,
+            plan["raw_byte_cap"].as_u64().ok_or("resource cap")?,
+            plan["minimum_memory_bytes"].as_u64().ok_or("resource memory floor")?,
+            plan["blocked_resource_helper_control"] == true,
+        ).map(|receipt|json!({"pass":true,"resource_only":true,"receipt":receipt,"counter_receipts_complete":false,"after_counters":null,"cpu_ms":null}))
+    } else {
+        execute_case(root, &plan)
+    };
     match result {
         Ok(value) => {
             save(root, "case-result.json", &value)?;
@@ -1168,10 +1247,86 @@ pub(super) fn worker(root: &Path) -> Result<()> {
         }
     }
 }
+fn resource_check(root: &Path, blocked: bool) -> Result<Value> {
+    fs::create_dir(root)?;
+    save(
+        root,
+        "active-plan.json",
+        &json!({"tiny":true,"resource_check_only":true,"blocked_resource_helper_control":blocked,"raw_byte_cap":16777216,"minimum_memory_bytes":134217728}),
+    )?;
+    linux::subreaper()?;
+    supervise(
+        &root.join("case"),
+        "executor",
+        Duration::from_secs(if blocked { 2 } else { 5 }),
+        Duration::from_secs(5),
+    )
+}
+pub(super) fn supervised_resource_receipt(root: &Path, name: &str) -> Result<Value> {
+    let container = root.join(name);
+    let supervision = resource_check(&container, false)?;
+    if supervision["deadline_expired"] != false || supervision["leader_exit_code"] != 0 {
+        return Err("supervised cheap resource preflight failed; stop".into());
+    }
+    let result = json_from(container.join("case/case-result.json"))?;
+    if result["pass"] != true {
+        return Err("cheap resource receipt incomplete; stop".into());
+    }
+    Ok(result["receipt"].clone())
+}
+pub(super) fn blocked_resource_helper(root: &Path) -> Result<()> {
+    let listener = TcpListener::bind(("127.0.0.1", 8853))?;
+    save(
+        root,
+        "blocked-resource-helper-live.json",
+        &process_row(&process(std::process::id() as i32)?),
+    )?;
+    io::stdout().write_all(b"owned resource helper blocked before capacity result\n")?;
+    io::stdout().flush()?;
+    // No cooperative timeout: this deliberately blocked resource helper must
+    // be terminated and reaped by the outside owned-group watchdog.
+    let _ = listener.accept()?;
+    Err("blocked resource helper unexpectedly accepted a connection".into())
+}
+pub(super) fn blocked_resource_proof(root: &Path) -> Result<()> {
+    let ports = [
+        TcpListener::bind(("127.0.0.1", 8853))?,
+        TcpListener::bind(("127.0.0.1", 8854))?,
+    ];
+    drop(ports);
+    let row = resource_check(root, true)?;
+    let helper = json_from(root.join("case/blocked-resource-helper-live.json"))?;
+    if row["deadline_expired"] != true
+        || row["kill_sent"] != true
+        || row["orphan_adoption_observed"] != true
+        || helper["term_ignored"] != true
+        || helper["pgid"] != row["owned_pgid"]
+        || row["elapsed_ms"].as_u64().is_none_or(|n| n > 7500)
+        || row["reaped_adopted_descendants"]
+            .as_array()
+            .is_none_or(|rows| !rows.iter().any(|r| r["pid"] == helper["pid"]))
+        || row["remaining_owned_processes"]
+            .as_array()
+            .is_none_or(|rows| !rows.is_empty())
+    {
+        return Err("blocked resource helper ownership/deadline/reaping not proven".into());
+    }
+    let ports = [
+        TcpListener::bind(("127.0.0.1", 8853))?,
+        TcpListener::bind(("127.0.0.1", 8854))?,
+    ];
+    drop(ports);
+    save(
+        root,
+        "proof.json",
+        &json!({"pass":true,"kind":"blocked preflight through actual supervised resource command path","supervision":row,"helper":helper,"ports_free":true,"counter_receipts_complete":false,"after_counters":null,"cpu_ms":null,"large_fixtures_generated":0,"large_replays_run":0}),
+    )?;
+    println!("blocked resource preflight proof PASS: {}", root.display());
+    Ok(())
+}
 pub(super) fn tiny(root: &Path) -> Result<()> {
     fs::create_dir(root)?;
     let root = root.canonicalize()?;
-    resource_preflight(&root)?;
     let ports = [
         TcpListener::bind(("127.0.0.1", 8853))?,
         TcpListener::bind(("127.0.0.1", 8854))?,
@@ -1270,7 +1425,6 @@ pub(super) fn batch(config: &Path) -> Result<()> {
     }
     fs::create_dir(&root)?;
     save(&root, "approved-batch-config.json", &config)?;
-    resource_preflight(&root)?;
     linux::subreaper()?;
     let mut results = Vec::new();
     for mut plan in plans {
@@ -1302,7 +1456,6 @@ pub(super) fn batch(config: &Path) -> Result<()> {
                 return Err("case failed/timed out; batch stopped without retry".into());
             }
             results.push(json!({"case":case,"result":result,"supervision":supervision}));
-            capacity(&root, RAW_CAP, RAW_CAP)?;
         }
     }
     save(

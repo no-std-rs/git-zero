@@ -1,0 +1,265 @@
+{
+  "stage": "3 correction B1+B2",
+  "parent_source": "d2cab05869a7b932a910857fdd4e43bc02d79b7a",
+  "review_status": "pending fresh independent correction review",
+  "previous_review": {
+    "path": "/tmp/git-zero-fetch-stage3-independent-review/REVIEW.md",
+    "sha256": "1bb8465ebd8f78fbdb4aa06916085e4c23c3752000a8ff19faa95aad433ed4b1",
+    "decision": "BLOCKED",
+    "findings": [
+      "B1 controller df and aggregate-capacity work outside supervisor",
+      "B2 no explicit strict-index-pack validation of actual newly fetched packs"
+    ]
+  },
+  "fixes": {
+    "B1": "all df, memory, full aggregate prefix traversal and boundary work moved inside supervised worker, including initial and cumulative boundaries; helpers use existing bounded capture/owned PGID",
+    "B2": "explicit offline git index-pack --strict per actual newly installed pack after timed fetch/after-observer and before want/tree/fsck/archive; pack and command/status/hash receipts retained"
+  },
+  "historical_tiny01_explicit_strict_index_performed": false,
+  "historical_receipts_rewritten": false,
+  "failed_control01": {
+    "root": "/tmp/git-zero-fetch-stage3-blocked-preflight-20261018-01",
+    "deadline_expired_before_helper": true,
+    "elapsed_diagnostic_ms": 2217,
+    "work_deadline_ms": 2000,
+    "cleanup_grace_ms": 5000,
+    "helper_started": false,
+    "case_result_available": false,
+    "after_counters": null,
+    "cpu_ms": null,
+    "archive": "/tmp/git-zero-fetch-diagnostics-immutable/stage3-correction-tested-v1",
+    "archive_map_sha256": "43c553132a4100b69ccc1eef33f4524684277eceea8647dbc1e702cf5c61815f",
+    "actual_elf_sha256": "f62bf5c015a27fb7b3a652a5b46530f960c902d38854d67be5c484ac688f12a2",
+    "disclosed_followup_change": "remove unrelated full Native/Worker source-runtime audit only from resource-only worker; production audit and deadline/grace unchanged"
+  },
+  "successful_frozen_runtime": {
+    "archive": "/tmp/git-zero-fetch-diagnostics-immutable/stage3-correction-tested-v2",
+    "entries": 689,
+    "map_sha256": "895d7be639e38ff79674e6de186e5ece3a322fc43f19c1092950f31141d8082a",
+    "exact_runtime_identities": [
+      {
+        "kind": "pre-runtime_source_copy",
+        "historical_original_path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/src/bin/fetch-phase-supervisor.rs",
+        "immutable_path": "/tmp/git-zero-fetch-diagnostics-immutable/stage3-correction-tested-v2/source/examples/repository-host/src/bin/fetch-phase-supervisor.rs",
+        "sha256": "ae6489863dd71259a5050d7c01b1cf4e8909c883a2d762f86a0b87fe9bdf6c48"
+      },
+      {
+        "kind": "pre-runtime_source_copy",
+        "historical_original_path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/src/bin/fetch-phase-supervisor/replay.rs",
+        "immutable_path": "/tmp/git-zero-fetch-diagnostics-immutable/stage3-correction-tested-v2/source/examples/repository-host/src/bin/fetch-phase-supervisor/replay.rs",
+        "sha256": "8d8a1f8de582c1f77fbc905cdbd7563a2b49f816171a228f1cd1e6004750341c"
+      },
+      {
+        "kind": "actual_runtime_elf_copy",
+        "historical_original_path": "/tmp/git-zero-fetch-diagnostics-target-j2/debug/fetch-phase-supervisor",
+        "immutable_path": "/tmp/git-zero-fetch-diagnostics-immutable/stage3-correction-tested-v2/elf/fetch-phase-supervisor",
+        "sha256": "b36f7564ca6b83f4d316f617b0eaae728028296caf3f9020f4fac315362ad182"
+      }
+    ],
+    "source_edits_after_freeze_allowed": false,
+    "only_source_change_from_v1": "remove full Native/Worker verify_sources from resource-only control worker before helper; production audit and work/grace unchanged"
+  },
+  "blocked_preflight02": {
+    "root": "/tmp/git-zero-fetch-stage3-blocked-preflight-20261018-02",
+    "proof_sha256": "65c3557278a3dc4e44287813669b7a5cd5450fb514636aeadddf262022f55302",
+    "pass": true,
+    "helper": {
+      "parent": 1454685,
+      "pgid": 1454685,
+      "pid": 1454688,
+      "start_ticks": 56569200,
+      "state": "R",
+      "term_ignored": true
+    },
+    "work_deadline_ms": 2000,
+    "fixed_cleanup_grace_ms": 5000,
+    "elapsed_diagnostic_ms": 2462,
+    "helper_adopted_killed_reaped": true,
+    "counter_receipts_complete": false,
+    "after_counters": null,
+    "cpu_ms": null
+  },
+  "tiny02": {
+    "root": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02",
+    "proof_sha256": "977be245167554340675f2a3e1d8951c86b77d739adcbba604a87ac542194738",
+    "pass": true,
+    "tiny_plan_sha256": "cb98865a65c1d714fb56b9424a2ec81f19198d18fd13ef1a13fcde774f978547",
+    "generation_count": 3,
+    "working_tree_bytes_including_attributes": 32790,
+    "fixture_reconstruction_verified": true,
+    "operations": 9,
+    "strict_index_pack_checks": 6,
+    "strict_pack_receipts": [
+      {
+        "receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/latest_fetch_01-strict-index-0.json",
+        "command_receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/cmd-0034-latest_fetch_01-strict-index-0.json",
+        "pack_sha256": "f6804c3ffce738f6297a7ac8d7377aa0309df8426f175e2e4be0d94613815d35",
+        "pack_bytes": 17482,
+        "pid": 1464818,
+        "pgid": 1457548,
+        "strict_exit": 0
+      },
+      {
+        "receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/latest_fetch_02-strict-index-0.json",
+        "command_receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/cmd-0045-latest_fetch_02-strict-index-0.json",
+        "pack_sha256": "353c2ed14a85958fef596e5efb7ef0554a77eecc6b7ee54310642e719d4ecd1f",
+        "pack_bytes": 2728,
+        "pid": 1465391,
+        "pgid": 1457548,
+        "strict_exit": 0
+      },
+      {
+        "receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/latest_fetch_03-strict-index-0.json",
+        "command_receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/cmd-0056-latest_fetch_03-strict-index-0.json",
+        "pack_sha256": "54eb06bc131e11f88c238208f1913192f4b24f07d2f85e6bfcb29fdaa97ce07d",
+        "pack_bytes": 2728,
+        "pid": 1465605,
+        "pgid": 1457548,
+        "strict_exit": 0
+      },
+      {
+        "receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/tiny_history_no_haves_03-strict-index-0.json",
+        "command_receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/cmd-0068-tiny_history_no_haves_03-strict-index-0.json",
+        "pack_sha256": "f6804c3ffce738f6297a7ac8d7377aa0309df8426f175e2e4be0d94613815d35",
+        "pack_bytes": 17482,
+        "pid": 1465700,
+        "pgid": 1457548,
+        "strict_exit": 0
+      },
+      {
+        "receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/tiny_history_with_haves_03-strict-index-0.json",
+        "command_receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/cmd-0081-tiny_history_with_haves_03-strict-index-0.json",
+        "pack_sha256": "353c2ed14a85958fef596e5efb7ef0554a77eecc6b7ee54310642e719d4ecd1f",
+        "pack_bytes": 2728,
+        "pid": 1465811,
+        "pgid": 1457548,
+        "strict_exit": 0
+      },
+      {
+        "receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/tiny_latest_recheck_03-strict-index-0.json",
+        "command_receipt": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02/case/cmd-0094-tiny_latest_recheck_03-strict-index-0.json",
+        "pack_sha256": "54eb06bc131e11f88c238208f1913192f4b24f07d2f85e6bfcb29fdaa97ce07d",
+        "pack_bytes": 2728,
+        "pid": 1466292,
+        "pgid": 1457548,
+        "strict_exit": 0
+      }
+    ],
+    "actual_commands": 104,
+    "resource_helper_completions": 15,
+    "full_prefix_boundary_receipts": 15,
+    "work_deadline_ms": 120000,
+    "fixed_cleanup_grace_ms": 5000,
+    "elapsed_diagnostic_ms": 85529,
+    "actual_native_environment": {
+      "git_environment_names": [
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_TERMINAL_PROMPT",
+        "GIT_ZERO_PHASE_LEDGER"
+      ],
+      "identity_environment_eligible": true,
+      "invalid_git_names": [],
+      "pid": 1461520,
+      "source": "/proc/1461520/environ",
+      "values_recorded": false
+    },
+    "native_ledger_records": 127,
+    "actual_request_hash_records": 61,
+    "boot_clock_uncertainty_ns": 10030457,
+    "paid_scope_closure_complete": true,
+    "counter_phase_checks": 12,
+    "native_cpu_ms": null,
+    "child_cpu_ms": null,
+    "worker_cpu_ms": null,
+    "do_gb_seconds": null,
+    "full_bill_usd": null,
+    "resources_before": {
+      "aggregate_logical_bytes": 7953,
+      "aggregate_prefix": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02",
+      "available_disk_bytes": 8569131008,
+      "available_memory_bytes": 40672022528,
+      "capacity_pass": true,
+      "case_byte_cap": 16777216,
+      "case_logical_bytes": 887,
+      "complete": true,
+      "disk_reserve_bytes": 2147483648,
+      "large_fixture_bytes": null,
+      "minimum_memory_bytes": 134217728,
+      "preflight_scope": "capacity only; fixture size is not measured here",
+      "proof_output_cap_bytes_per_stream": 131072
+    },
+    "resources_after": {
+      "aggregate_logical_bytes": 1702794,
+      "aggregate_prefix": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02",
+      "available_disk_bytes": 10194923520,
+      "available_memory_bytes": 57289621504,
+      "capacity_pass": true,
+      "case_byte_cap": 16777216,
+      "case_logical_bytes": 1695728,
+      "complete": true,
+      "disk_reserve_bytes": 2147483648,
+      "large_fixture_bytes": null,
+      "minimum_memory_bytes": 134217728,
+      "preflight_scope": "capacity only; fixture size is not measured here",
+      "proof_output_cap_bytes_per_stream": 131072
+    }
+  },
+  "protected_sources_and_policy": {
+    "native_hooks_source": "a827df032e87374737b1ac7e36fb518b507e8411",
+    "provider_base_source": "f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5",
+    "historical_r18_provider_reused": false,
+    "native_actual_elf_sha256": "3ccf43bb5cca872294191fef57df9d4469ddd5dad41e9b5abf4cd6e270d1f060",
+    "stage1_runner_actual_elf_sha256": "d2e21856771f7fb3b8bb0e15517c4ab150645dc623255880d90699663a1db943",
+    "worker_tree": "7f41db4407963ed04e6cbe19556b1416633caf18",
+    "source_dependency_lock_benchmark_or_policy_changes": false,
+    "new_unsafe": false,
+    "new_dependency": false
+  },
+  "evidence_manifests": [
+    {
+      "name": "tiny02",
+      "root": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-02",
+      "files": 669,
+      "manifest": "/tmp/git-zero-fetch-stage3-correction-handoff-20261018/tiny02.inputs.sha256",
+      "sha256": "c69cbdb71be1f01500bc515d61b02aa2f1f3a3cd02dc32e9828717ae729574aa"
+    },
+    {
+      "name": "blocked-preflight01",
+      "root": "/tmp/git-zero-fetch-stage3-blocked-preflight-20261018-01",
+      "files": 4,
+      "manifest": "/tmp/git-zero-fetch-stage3-correction-handoff-20261018/blocked-preflight01.inputs.sha256",
+      "sha256": "fcca11f54ab63e7a38202275eae13163bb74db3ea234f168893386e1ca5e435c"
+    },
+    {
+      "name": "blocked-preflight02",
+      "root": "/tmp/git-zero-fetch-stage3-blocked-preflight-20261018-02",
+      "files": 10,
+      "manifest": "/tmp/git-zero-fetch-stage3-correction-handoff-20261018/blocked-preflight02.inputs.sha256",
+      "sha256": "365cce5395885779bc8b6a3bff191f026bd5c3814abb6cdb33e0b7b8f8e55062"
+    }
+  ],
+  "large_runtime": {
+    "authorized": false,
+    "generated_fixtures": 0,
+    "replays": 0,
+    "fixture_reconstruction_verified": null,
+    "actual_requests": null,
+    "actual_packs": null,
+    "maximum_cases": 4,
+    "maximum_replicas_each": 2,
+    "work_seconds_each": 1200,
+    "additional_fixed_cleanup_grace_seconds": 5,
+    "raw_cap_bytes": 8589934592,
+    "minimum_memory_bytes": 8589934592,
+    "raw_cap_is_boundary_sample_not_quota": true,
+    "new_raw_or_tmpfs_prefix_authorized": false,
+    "mandatory_final5_executed": false
+  },
+  "performance_claim": false,
+  "full_bill_usd": null,
+  "final_clean_source_and_archive_receipt": "/tmp/git-zero-fetch-stage3-correction-handoff-20261018/final-source-receipt.json",
+  "next_action": "STOP for independent correction review; large runtime/resource GO and mandatory final5 remain separate",
+  "rust_source_edits_or_rebuilds_after_successful_runtime_gates": false
+}

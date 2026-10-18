@@ -609,40 +609,14 @@ fn internal_worker(root: &Path, mode: &str) -> Result<()> {
     socket.read_to_end(&mut Vec::new())?;
     Err("stalled socket unexpectedly completed".into())
 }
-fn resource_preflight(root: &Path) -> Result<Value> {
-    let df = Command::new("df")
-        .args(["-B1", "--output=avail"])
-        .arg(root)
-        .output()?;
-    if !df.status.success() {
-        return Err("disk capacity unavailable".into());
-    }
-    let available = String::from_utf8(df.stdout)?
-        .lines()
-        .last()
-        .ok_or("disk capacity missing")?
-        .trim()
-        .parse::<u64>()?;
-    let mem = fs::read_to_string("/proc/meminfo")?
-        .lines()
-        .find_map(|l| {
-            l.strip_prefix("MemAvailable:")
-                .and_then(|s| s.split_whitespace().next())
-                .and_then(|s| s.parse::<u64>().ok())
-        })
-        .ok_or("memory capacity missing")?
-        * 1024;
-    if available < 2 * 1024 * 1024 * 1024 + 16 * 1024 * 1024 || mem < 128 * 1024 * 1024 {
-        return Err("insufficient cheap-proof reserve".into());
-    }
-    Ok(
-        json!({"available_disk_bytes":available,"disk_reserve_bytes":2147483648u64,"available_memory_bytes":mem,"proof_output_cap_bytes_per_stream":OUTPUT_CAP,"large_fixture_bytes":0}),
-    )
-}
 fn cheap_proof(root: &Path) -> Result<()> {
     fs::create_dir(root)?;
     let root = root.canonicalize()?;
-    save(&root, "resources-before.json", &resource_preflight(&root)?)?;
+    save(
+        &root,
+        "resources-before.json",
+        &replay::supervised_resource_receipt(&root, "preflight-before")?,
+    )?;
     let ports = [
         TcpListener::bind(("127.0.0.1", 8853))?,
         TcpListener::bind(("127.0.0.1", 8854))?,
@@ -725,7 +699,11 @@ fn cheap_proof(root: &Path) -> Result<()> {
         &json!({"pass":true,"linux_only":true,"stage":"supervision only; no Git fixture/replay","stage1_source":STAGE1,
         "cases":rows,"expected_supervisor_error_cleanup":error_cleanup,"owned_ports":[8853,8854],"ports_free":true,"expensive_replays":0,"performance_claim":false,"cpu_ms":null}),
     )?;
-    save(&root, "resources-after.json", &resource_preflight(&root)?)?;
+    save(
+        &root,
+        "resources-after.json",
+        &replay::supervised_resource_receipt(&root, "preflight-after")?,
+    )?;
     println!("hard-supervisor cheap proof PASS: {}", root.display());
     Ok(())
 }
@@ -851,6 +829,12 @@ fn main() -> Result<()> {
         .ok_or("use --cheap-supervisor-proof NEW_DIR or --seal-case-plans NEW_DIR")?;
     let root = PathBuf::from(args.get(1).ok_or("missing output directory")?);
     match mode {
+        "--blocked-resource-preflight-proof" if args.len() == 2 => {
+            replay::blocked_resource_proof(&root)
+        }
+        "--internal-blocked-resource-helper" if args.len() == 2 => {
+            replay::blocked_resource_helper(&root)
+        }
         "--tiny-production-proof" if args.len() == 2 => replay::tiny(&root),
         "--execute-reviewed-batch" if args.len() == 2 => replay::batch(&root),
         "--internal-executor" if args.len() == 2 => replay::worker(&root),
