@@ -16,6 +16,8 @@ const MAX_BULK_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const BULK_HEADER_BYTES = 12;
 const BULK_LENGTH_BYTES = 8;
 const MAX_BULK_RESPONSE_BYTES = MAX_BULK_PAYLOAD_BYTES + BULK_HEADER_BYTES + BULK_LENGTH_BYTES * MAX_BULK_KEYS;
+const UPLOAD_CAPABILITY = { version: 1, wire_bytes: MAX_BULK_RESPONSE_BYTES,
+  metadata_bytes: MAX_MANIFEST_BYTES, chunk_bytes: MAX_BLOB_BYTES, retirement_keys: MAX_RETIREMENT_KEYS };
 const WITNESS_PREFIX = "x-git-zero-internal-";
 const WITNESS_HEADER = `${WITNESS_PREFIX}generation-witness`;
 const WITNESS_DOMAIN = "git-zero-generation-witness";
@@ -159,6 +161,86 @@ function retirementKeys(body) {
   return garbage.filter((key) => !live.has(key));
 }
 
+function exactFields(value, required, optional = []) {
+  return plainObject(value) && required.every((key) => Object.hasOwn(value, key))
+    && Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
+}
+
+// JSON.parse alone discards duplicate object members. Scan already-valid JSON
+// tokens as well, including decoded/escaped names, before accepting metadata.
+function strictJson(data) {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
+    const value = JSON.parse(text);
+    const tokens = text.match(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\],:]|[^\s{}\[\],:]+/g) ?? [];
+    let position = 0;
+    const scan = (depth) => {
+      if (depth > 32) fail(400, "metadata nesting too deep");
+      const token = tokens[position++];
+      if (token === "{") {
+        const names = new Set();
+        if (tokens[position] !== "}") for (;;) {
+          const name = JSON.parse(tokens[position++]);
+          if (names.has(name)) fail(400, "duplicate metadata field");
+          names.add(name);
+          position++; // colon, already checked by JSON.parse
+          scan(depth + 1);
+          if (tokens[position++] === "}") return;
+        }
+        position++;
+      } else if (token === "[") {
+        if (tokens[position] !== "]") for (;;) {
+          scan(depth + 1);
+          if (tokens[position++] === "]") return;
+        }
+        position++;
+      }
+    };
+    scan(0);
+    if (position !== tokens.length) fail(400, "invalid metadata tokens");
+    return value;
+  } catch (error) { if (error.status) throw error; fail(400, "invalid upload JSON"); }
+}
+
+async function uploadFrame(request) {
+  const frame = await bytes(request, MAX_BULK_RESPONSE_BYTES);
+  if (frame.byteLength < 12 || frame[0] !== 0x47 || frame[1] !== 0x5a || frame[2] !== 0x55 || frame[3] !== 0x50) fail(400, "invalid upload header");
+  const header = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+  const metadataBytes = header.getUint32(8, true);
+  if (header.getUint32(4, true) !== 1 || metadataBytes > MAX_MANIFEST_BYTES
+      || metadataBytes > frame.byteLength - 12) fail(400, "invalid upload metadata bound");
+  const body = strictJson(frame.subarray(12, 12 + metadataBytes));
+  if (!exactFields(body, ["version", "expected", "next", "chunk"])
+      || !exactFields(body.chunk, ["key", "len"])
+      || !exactFields(body.next, ["generation", "refs", "packs"], ["garbage"])) fail(400, "invalid upload fields");
+  const keys = retirementKeys(body);
+  const chunk = body.chunk;
+  if (typeof chunk.key !== "string" || chunk.key.length !== 71 || !BLOB.test(chunk.key)
+      || !Number.isSafeInteger(chunk.len) || chunk.len <= 0 || chunk.len > MAX_BLOB_BYTES
+      || frame.byteLength !== 12 + metadataBytes + chunk.len) fail(400, "invalid upload payload bound");
+  let member = false;
+  for (const pack of body.next.packs) {
+    if (!exactFields(pack, ["id", "pack", "index", "pack_bytes", "index_bytes", "level"], ["bundle"])) fail(400, "unknown upload pack field");
+    for (const item of [...pack.pack, ...pack.index, ...(pack.bundle ?? [])]) {
+      if (!exactFields(item, ["key", "len"])) fail(400, "unknown upload chunk field");
+      if (item.key === chunk.key) {
+        if (item.len !== chunk.len) fail(400, "upload member length mismatch");
+        member = true;
+      }
+    }
+  }
+  if (!member) fail(400, "upload is not a manifest member");
+  const refs = Object.entries(body.next.refs);
+  if (refs.length > 16 * 1024 || refs.reduce((sum, [name, id]) => sum + new TextEncoder().encode(name + id).byteLength, 0) > 4 * 1024 * 1024
+      || refs.some(([name, id]) => new TextEncoder().encode(name).byteLength > 65520 - 4 - 40 - 2 || !name.startsWith("refs/") || name.endsWith("/") || name.endsWith(".")
+        || name.includes("..") || name.includes("@{") || /[\x00-\x20\x7f~^:?*\[\\]/.test(name)
+        || name.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock"))
+        || !/^[0-9a-fA-F]{40}$/.test(id) || /^0{40}$/.test(id))) fail(400, "invalid upload refs");
+  const data = frame.subarray(12 + metadataBytes);
+  if (chunk.key !== `chunks/${hex(new Uint8Array(await crypto.subtle.digest("SHA-256", data)))}`) fail(409, "upload content does not match key");
+  return { body, keys, data };
+}
+
 function validCount(value, nullable = false) {
   return (nullable && value === null) || (Number.isSafeInteger(value) && value >= 0);
 }
@@ -263,7 +345,7 @@ async function dispatchService(env, repo, request, requireReceipt = false) {
   try { acceptReceipt(repo, response.headers.get(USAGE_HEADER)); }
   catch {
     incomplete(repo, "missing or invalid Durable Object usage receipt");
-    if (requireReceipt) fail(502, "generation read has no valid usage receipt");
+    if (requireReceipt) fail(502, "service call has no valid usage receipt");
   }
   const headers = new Headers(response.headers);
   headers.delete(USAGE_HEADER);
@@ -330,6 +412,7 @@ export default {
           registry.set(repo, { origin, witness: witness?.private });
           return json({ registered: true, repository: repo, codec_origin: origin,
             ...(body.manifest_retire === 1 ? { manifest_retire: { version: 1 } } : {}),
+            ...(body.manifest_upload_retire === 1 ? { manifest_upload_retire: UPLOAD_CAPABILITY } : {}),
             ...(witness ? { generation_witness: witness.response } : {}) });
         }
         if (url.pathname === "/_services/unregister" && request.method === "POST") {
@@ -342,10 +425,12 @@ export default {
         // Bound and finish this small JSON upload before entering the DO gate.
         // Returning a DO error while its forwarded upload is still active can
         // leave workerd's request pump holding the repository gate indefinitely.
-        const serviceRequest = ["/_services/blobs/read", "/_services/manifest/retire"].includes(url.pathname) && request.method === "POST"
-          ? new Request(request.url, { method: request.method, headers, body: await bytes(request, MAX_MANIFEST_BYTES) })
+        const upload = url.pathname === "/_services/manifest/upload-retire";
+        const serviceRequest = (upload || ["/_services/blobs/read", "/_services/manifest/retire"].includes(url.pathname)) && request.method === "POST"
+          ? new Request(request.url, { method: request.method, headers,
+            body: await bytes(request, upload ? MAX_BULK_RESPONSE_BYTES : MAX_MANIFEST_BYTES) })
           : new Request(request, { headers });
-        const clean = await dispatchService(env, repo, serviceRequest);
+        const clean = await dispatchService(env, repo, serviceRequest, upload);
         if (observer && clean.ok) return json(mergeWorkerUsage(await clean.json(), repo));
         return clean;
       }
@@ -490,6 +575,28 @@ export class RepositoryServices {
     }
   }
 
+  async put(key, data, prefix) {
+    const previous = this.exec("SELECT size FROM blob_catalog WHERE key = ?", key)[0];
+    await this.operation("r2_put", () => this.env.BLOBS.put(prefix + key, data), () => 0, data.byteLength, key);
+    this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size", key, data.byteLength);
+    if (!previous) this.liveObjects++;
+    this.liveBytes += data.byteLength - (previous?.size ?? 0);
+    this.updatePeak();
+    // The upload/catalog/high-water barrier always precedes CAS.
+    await this.ctx.storage.sync();
+  }
+
+  async retire(keys, prefix, generation) {
+    const outcomes = [];
+    for (const key of keys) {
+      let deleted = false;
+      try { await this.remove(key, prefix); deleted = true; } catch { /* Durable debt remains retryable. */ }
+      outcomes.push({ key, deleted });
+    }
+    await this.ctx.storage.sync();
+    return { generation, outcomes };
+  }
+
   async publishManifest(expected, next) {
     return this.operation("manifest_cas", async () => {
       const published = this.ctx.storage.transactionSync(() => {
@@ -576,13 +683,7 @@ export class RepositoryServices {
         const sha = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
         const hex = Array.from(sha, (byte) => byte.toString(16).padStart(2, "0")).join("");
         if (key !== `chunks/${hex}`) fail(409, "content does not match immutable blob key");
-        const previous = this.exec("SELECT size FROM blob_catalog WHERE key = ?", key)[0];
-        await this.operation("r2_put", () => this.env.BLOBS.put(prefix + key, data), () => 0, data.byteLength, key);
-        this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size", key, data.byteLength);
-        if (!previous) this.liveObjects++;
-        this.liveBytes += data.byteLength - (previous?.size ?? 0);
-        this.updatePeak();
-        await this.ctx.storage.sync();
+        await this.put(key, data, prefix);
         return new Response(null, { status: 204 });
       }
       if (request.method === "DELETE") {
@@ -592,21 +693,24 @@ export class RepositoryServices {
       }
       return json({ error: "method not allowed" }, 405);
     }
+    if (path === "/_services/manifest/upload-retire" && request.method === "POST") {
+      const { body, keys, data } = await uploadFrame(request);
+      await this.put(body.chunk.key, data, prefix);
+      const published = await this.publishManifest(body.expected, body.next);
+      // A stale upload is a durable orphan; a winning manifest may share it.
+      // Only generation-checked recovery may decide whether to reclaim it.
+      const retirement = published ? await this.retire(keys, prefix, body.next.generation) : null;
+      return json({ version: 1, uploaded: body.chunk, published, retirement });
+    }
     if (path === "/_services/manifest/retire" && request.method === "POST") {
       const body = await parseJson(request, MAX_MANIFEST_BYTES);
       const keys = retirementKeys(body);
       const published = await this.publishManifest(body.expected, body.next);
       if (!published) return json({ version: 1, published: false, retirement: null });
-      // CAS success is complete before retirement starts. Failed R2 operations
-      // keep their genuine failure accounting without relabeling durable CAS.
-      const outcomes = [];
-      for (const key of keys) {
-        let deleted = false;
-        try { await this.remove(key, prefix); deleted = true; } catch { /* Durable debt remains retryable. */ }
-        outcomes.push({ key, deleted });
-      }
-      await this.ctx.storage.sync();
-      return json({ version: 1, published: true, retirement: { generation: body.next.generation, outcomes } });
+      // CAS success is complete before retirement starts. Real failures keep
+      // their accounting and durable debt, without relabeling successful CAS.
+      return json({ version: 1, published: true,
+        retirement: await this.retire(keys, prefix, body.next.generation) });
     }
     if (path === "/_services/manifest") {
       if (request.method === "GET") {

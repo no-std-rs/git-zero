@@ -3,7 +3,8 @@
 use crate::http::{Request, Response};
 use crate::storage::{
     BlobStore, Chunk, CloudflareBindings, DurableStateStore, LocalBlobStore, LocalStateStore,
-    Manifest, R2BlobStore, RetirementReceipt, RetiringCas, StateStore, VerifiedChunks,
+    Manifest, PendingChunk, R2BlobStore, RetirementReceipt, RetiringCas, StateStore, UploadReceipt,
+    UploadRetiringCas, VerifiedChunks,
 };
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
@@ -32,7 +33,106 @@ const BULK_HEADER_BYTES: usize = 12;
 const BULK_LENGTH_BYTES: usize = 8;
 const MAX_BULK_RESPONSE: usize =
     MAX_BULK_PAYLOAD + BULK_HEADER_BYTES + BULK_LENGTH_BYTES * MAX_BULK_KEYS;
+const UPLOAD_MAGIC: &[u8; 4] = b"GZUP";
 const BULK_MAGIC: &[u8; 4] = b"GZBR";
+
+fn upload_supported(value: &Value) -> bool {
+    value.get("manifest_upload_retire")
+        == Some(&json!({
+            "version": 1, "wire_bytes": MAX_BULK_RESPONSE,
+            "metadata_bytes": MAX_MANIFEST_BYTES, "chunk_bytes": MAX_BULK_CHUNK_BYTES,
+            "retirement_keys": MAX_RETIREMENT_KEYS,
+        }))
+}
+
+/// None is a bounds/capability fallback decided before sending any request.
+fn upload_frame(
+    expected: u64,
+    next: &Manifest,
+    pending: &PendingChunk,
+) -> io::Result<Option<Vec<u8>>> {
+    if next.garbage.len() > MAX_RETIREMENT_KEYS {
+        return Ok(None);
+    }
+    if expected.checked_add(1) != Some(next.generation) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid upload generation",
+        ));
+    }
+    validate_retiring_manifest(next)?;
+    crate::validate_staged_manifest(next, pending)?;
+    let metadata = serde_json::to_vec(
+        &json!({"version": 1, "expected": expected, "next": next, "chunk": pending.chunk()}),
+    )?;
+    let Some(size) = BULK_HEADER_BYTES
+        .checked_add(metadata.len())
+        .and_then(|n| n.checked_add(pending.bytes().len()))
+        .filter(|size| {
+            *size <= MAX_BULK_RESPONSE
+                && metadata.len() <= MAX_MANIFEST_BYTES
+                && pending.bytes().len() <= MAX_BULK_CHUNK_BYTES
+        })
+    else {
+        return Ok(None);
+    };
+    let mut frame = Vec::with_capacity(size);
+    frame.extend_from_slice(UPLOAD_MAGIC);
+    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&metadata);
+    frame.extend_from_slice(pending.bytes());
+    Ok(Some(frame))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UploadResponse {
+    version: u32,
+    uploaded: UploadReceipt,
+    published: bool,
+    #[serde(deserialize_with = "deserialize_retirement")]
+    retirement: Option<RetirementReceipt>,
+}
+
+fn decode_upload_response(
+    next: &Manifest,
+    pending: &PendingChunk,
+    bytes: &[u8],
+) -> io::Result<UploadRetiringCas> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid upload response");
+    if bytes.len() > MAX_RETIREMENT_RESPONSE {
+        return Err(invalid());
+    }
+    let reply: UploadResponse = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    if reply.version != 1
+        || reply.uploaded.key != pending.chunk().key
+        || reply.uploaded.len != pending.chunk().len
+    {
+        return Err(invalid());
+    }
+    match (reply.published, reply.retirement) {
+        (false, None) => Ok(UploadRetiringCas::Stale(reply.uploaded)),
+        (true, Some(retirement)) => {
+            let keys = next.retirement_keys();
+            if retirement.generation != next.generation
+                || retirement.outcomes.len() != keys.len()
+                || retirement
+                    .outcomes
+                    .iter()
+                    .zip(keys)
+                    .any(|(outcome, key)| outcome.key != key)
+            {
+                return Err(invalid());
+            }
+            Ok(UploadRetiringCas::Published {
+                upload: reply.uploaded,
+                retirement,
+            })
+        }
+        _ => Err(invalid()),
+    }
+}
 
 fn retirement_supported(value: &Value) -> bool {
     value
@@ -316,6 +416,7 @@ pub struct HttpServices {
     phase: Mutex<String>,
     generation_witness: Mutex<Option<GenerationWitness>>,
     manifest_retire: AtomicBool,
+    manifest_upload_retire: AtomicBool,
 }
 
 impl HttpServices {
@@ -346,6 +447,7 @@ impl HttpServices {
             phase: Mutex::new("startup".into()),
             generation_witness: Mutex::new(None),
             manifest_retire: AtomicBool::new(false),
+            manifest_upload_retire: AtomicBool::new(false),
         })
     }
 
@@ -366,7 +468,7 @@ impl HttpServices {
     ) -> io::Result<Response> {
         let maximum = if route == "blobs/read" {
             MAX_BULK_RESPONSE
-        } else if route == "manifest/retire" {
+        } else if matches!(route, "manifest/retire" | "manifest/upload-retire") {
             MAX_RETIREMENT_RESPONSE
         } else {
             MAX_RESPONSE
@@ -505,12 +607,20 @@ impl HttpServices {
     }
 
     pub fn register(&self, codec_origin: &str) -> io::Result<()> {
+        // Reset before all validation/I/O: failed registration cannot retain
+        // capabilities or witnesses from an earlier session.
+        self.manifest_retire.store(false, Ordering::Release);
+        self.manifest_upload_retire.store(false, Ordering::Release);
+        *self
+            .generation_witness
+            .lock()
+            .map_err(|_| io::Error::other("witness config lock poisoned"))? = None;
         // Reuse strict loopback validation so registration cannot enable SSRF.
         Self::new(codec_origin, &self.repo, &self.token)?;
         let response = self.json(
             "POST",
             "register",
-            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1})),
+            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1})),
             Some("stats"),
         )?;
         *self
@@ -520,6 +630,8 @@ impl HttpServices {
             GenerationWitness::from_registration(&response);
         self.manifest_retire
             .store(retirement_supported(&response), Ordering::Release);
+        self.manifest_upload_retire
+            .store(upload_supported(&response), Ordering::Release);
         Ok(())
     }
 
@@ -538,6 +650,12 @@ impl HttpServices {
     }
 
     pub fn unregister(&self) -> io::Result<()> {
+        self.manifest_retire.store(false, Ordering::Release);
+        self.manifest_upload_retire.store(false, Ordering::Release);
+        *self
+            .generation_witness
+            .lock()
+            .map_err(|_| io::Error::other("witness config lock poisoned"))? = None;
         self.json("POST", "unregister", Some(&json!({})), Some("stats"))?;
         Ok(())
     }
@@ -659,6 +777,22 @@ impl CloudflareBindings for HttpServices {
         // follow a committed CAS, and must never trigger scalar fallback.
         decode_retirement_response(next, &response.body)
     }
+
+    fn try_compare_and_swap_upload_retiring(
+        &self,
+        expected: u64,
+        next: &Manifest,
+        pending: &PendingChunk,
+    ) -> io::Result<UploadRetiringCas> {
+        if !self.manifest_upload_retire.load(Ordering::Acquire) {
+            return Ok(UploadRetiringCas::Unsupported);
+        }
+        let Some(body) = upload_frame(expected, next, pending)? else {
+            return Ok(UploadRetiringCas::Unsupported);
+        };
+        let response = self.call("POST", "manifest/upload-retire", &body, None)?;
+        decode_upload_response(next, pending, &response.body)
+    }
 }
 
 pub(crate) enum HostBlobs {
@@ -759,6 +893,18 @@ impl StateStore for HostState {
         match self {
             Self::Local(s) => s.try_compare_and_swap_retiring(expected, next),
             Self::Cloudflare(s) => s.try_compare_and_swap_retiring(expected, next),
+        }
+    }
+
+    fn try_compare_and_swap_upload_retiring(
+        &self,
+        expected: u64,
+        next: &Manifest,
+        pending: &PendingChunk,
+    ) -> io::Result<UploadRetiringCas> {
+        match self {
+            Self::Local(s) => s.try_compare_and_swap_upload_retiring(expected, next, pending),
+            Self::Cloudflare(s) => s.try_compare_and_swap_upload_retiring(expected, next, pending),
         }
     }
 }
@@ -877,6 +1023,193 @@ mod tests {
             key: format!("chunks/{}", crate::hash(data)),
             len: data.len() as u64,
         }
+    }
+
+    fn staged_upload(bytes: Vec<u8>) -> (Manifest, PendingChunk) {
+        let pending = PendingChunk::new(bytes).unwrap();
+        (
+            Manifest {
+                generation: 1,
+                packs: vec![crate::storage::StoredPack {
+                    id: "upload".into(),
+                    bundle: vec![pending.chunk().clone()],
+                    pack_bytes: pending.chunk().len,
+                    ..crate::storage::StoredPack::default()
+                }],
+                ..Manifest::default()
+            },
+            pending,
+        )
+    }
+
+    #[test]
+    fn upload_frame_respects_exact_wire_metadata_and_chunk_bounds_before_io() {
+        let (mut next, pending) = staged_upload(vec![b'x'; MAX_BULK_CHUNK_BYTES]);
+        let body = upload_frame(0, &next, &pending).unwrap().unwrap();
+        assert_eq!(&body[..4], b"GZUP");
+        assert_eq!(u32::from_le_bytes(body[4..8].try_into().unwrap()), 1);
+        let metadata_len = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+        let metadata: Value = serde_json::from_slice(&body[12..12 + metadata_len]).unwrap();
+        assert_eq!(metadata["chunk"], json!(pending.chunk()));
+        assert_eq!(&body[12 + metadata_len..], pending.bytes());
+        // Find the exact whole-wire ceiling with valid, bounded debt. The
+        // metadata JSON grows one byte at a time with its string value.
+        next.refs.insert("refs/tags/padding".into(), "a".repeat(40));
+        let baseline = upload_frame(0, &next, &pending).unwrap().unwrap().len();
+        let padding = MAX_BULK_RESPONSE - baseline;
+        // Pack IDs are opaque immutable codec identifiers at this boundary.
+        next.packs[0].id.push_str(&"p".repeat(padding));
+        assert_eq!(
+            upload_frame(0, &next, &pending).unwrap().unwrap().len(),
+            MAX_BULK_RESPONSE
+        );
+        next.packs[0].id.push('p');
+        assert!(upload_frame(0, &next, &pending).unwrap().is_none());
+        let (mut next, pending) = staged_upload(vec![b'x']);
+        next.packs[0].id = "x".repeat(MAX_MANIFEST_BYTES);
+        assert!(upload_frame(0, &next, &pending).unwrap().is_none());
+        next.packs[0].id.clear();
+        next.garbage = (0..=MAX_RETIREMENT_KEYS)
+            .map(|i| format!("chunks/{i:064x}"))
+            .collect();
+        assert!(upload_frame(0, &next, &pending).unwrap().is_none());
+        assert!(PendingChunk::new(vec![0; MAX_BULK_CHUNK_BYTES + 1]).is_err());
+        assert!(PendingChunk::new(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn upload_receipts_require_exact_uploaded_member_and_complete_ordered_retirement() {
+        let (mut next, pending) = staged_upload(b"tail".to_vec());
+        next.garbage = vec![chunk(b"a").key, chunk(b"b").key];
+        let valid = json!({"version":1, "uploaded":pending.chunk(), "published":true,
+            "retirement":{"generation":1,"outcomes":[{"key":next.garbage[0],"deleted":true},{"key":next.garbage[1],"deleted":false}]}});
+        assert!(matches!(
+            decode_upload_response(&next, &pending, &serde_json::to_vec(&valid).unwrap()).unwrap(),
+            UploadRetiringCas::Published { .. }
+        ));
+        let stale =
+            json!({"version":1,"uploaded":pending.chunk(),"published":false,"retirement":null});
+        assert!(matches!(
+            decode_upload_response(&next, &pending, &serde_json::to_vec(&stale).unwrap()).unwrap(),
+            UploadRetiringCas::Stale(_)
+        ));
+        for (pointer, value) in [
+            ("/version", json!(2)),
+            ("/uploaded", Value::Null),
+            ("/uploaded/key", json!(chunk(b"different").key)),
+            ("/uploaded/len", json!(5)),
+            ("/published", json!(false)),
+            ("/retirement", Value::Null),
+            ("/retirement/generation", json!(2)),
+            ("/retirement/outcomes", json!([])),
+            ("/retirement/outcomes/0/key", json!(next.garbage[1])),
+            ("/retirement/outcomes/1/key", json!(next.garbage[0])),
+            ("/retirement/outcomes/0/deleted", json!(1)),
+        ] {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                decode_upload_response(&next, &pending, &serde_json::to_vec(&changed).unwrap())
+                    .is_err(),
+                "{changed}"
+            );
+        }
+        for field in ["version", "uploaded", "published", "retirement"] {
+            let mut changed = stale.clone();
+            changed.as_object_mut().unwrap().remove(field);
+            assert!(
+                decode_upload_response(&next, &pending, &serde_json::to_vec(&changed).unwrap())
+                    .is_err()
+            );
+        }
+        for location in ["", "/uploaded", "/retirement", "/retirement/outcomes/0"] {
+            let mut changed = valid.clone();
+            changed.pointer_mut(location).unwrap()["extra"] = json!(1);
+            assert!(
+                decode_upload_response(&next, &pending, &serde_json::to_vec(&changed).unwrap())
+                    .is_err()
+            );
+        }
+        let encoded = serde_json::to_string(&stale).unwrap();
+        for bytes in [
+            encoded
+                .replacen("\"version\":1", "\"version\":1,\"version\":1", 1)
+                .into_bytes(),
+            encoded
+                .replacen("\"len\":4", "\"len\":4,\"len\":4", 1)
+                .into_bytes(),
+            format!("{encoded}x").into_bytes(),
+            encoded.as_bytes()[..encoded.len() - 1].to_vec(),
+            vec![b' '; MAX_RETIREMENT_RESPONSE + 1],
+        ] {
+            assert!(decode_upload_response(&next, &pending, &bytes).is_err());
+        }
+    }
+
+    #[test]
+    fn unknown_upload_capability_is_side_effect_free_and_attempted_errors_never_fallback() {
+        let (next, pending) = staged_upload(b"tail".to_vec());
+        let services = HttpServices::new("http://127.0.0.1:1", "unused", "token").unwrap();
+        for value in [
+            json!({}),
+            json!({"manifest_upload_retire":null}),
+            json!({"manifest_upload_retire":{"version":1}}),
+            json!({"manifest_upload_retire":{"version":2,"wire_bytes":MAX_BULK_RESPONSE,"metadata_bytes":MAX_MANIFEST_BYTES,"chunk_bytes":MAX_BULK_CHUNK_BYTES,"retirement_keys":MAX_RETIREMENT_KEYS}}),
+        ] {
+            assert!(!upload_supported(&value));
+            assert_eq!(
+                services
+                    .try_compare_and_swap_upload_retiring(0, &next, &pending)
+                    .unwrap(),
+                UploadRetiringCas::Unsupported
+            );
+        }
+        let capability = json!({"manifest_upload_retire":{"version":1,"wire_bytes":MAX_BULK_RESPONSE,"metadata_bytes":MAX_MANIFEST_BYTES,"chunk_bytes":MAX_BULK_CHUNK_BYTES,"retirement_keys":MAX_RETIREMENT_KEYS}});
+        assert!(upload_supported(&capability));
+        for field in [
+            "wire_bytes",
+            "metadata_bytes",
+            "chunk_bytes",
+            "retirement_keys",
+        ] {
+            let mut bad = capability.clone();
+            bad["manifest_upload_retire"][field] = json!(1);
+            assert!(!upload_supported(&bad));
+        }
+        for (status, body) in [
+            (404, b"missing".to_vec()),
+            (500, b"lost committed response".to_vec()),
+            (200, b"{}".to_vec()),
+            (200, vec![0; MAX_RETIREMENT_RESPONSE + 1]),
+        ] {
+            let (services, server) = fake_services(vec![(
+                "POST /_services/manifest/upload-retire ".into(),
+                Vec::new(),
+                status,
+                body,
+            )]);
+            services
+                .manifest_upload_retire
+                .store(true, Ordering::Release);
+            assert!(
+                services
+                    .try_compare_and_swap_upload_retiring(0, &next, &pending)
+                    .is_err()
+            );
+            server.join().unwrap();
+        }
+        // Invalid re-registration and unregister reset even previously enabled
+        // state before the failed validation/network exchange.
+        services
+            .manifest_upload_retire
+            .store(true, Ordering::Release);
+        assert!(services.register("https://outside.invalid").is_err());
+        assert!(!services.manifest_upload_retire.load(Ordering::Acquire));
+        services
+            .manifest_upload_retire
+            .store(true, Ordering::Release);
+        assert!(services.unregister().is_err());
+        assert!(!services.manifest_upload_retire.load(Ordering::Acquire));
     }
 
     #[test]

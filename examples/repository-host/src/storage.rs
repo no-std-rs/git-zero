@@ -107,6 +107,71 @@ pub enum RetiringCas {
     Published(RetirementReceipt),
 }
 
+/// One explicitly non-durable chunk, bounded to the cloud chunk ceiling. It is
+/// owned only by the current receive operation, never by a durable store/cache.
+pub struct PendingChunk {
+    chunk: Chunk,
+    bytes: Vec<u8>,
+}
+
+impl PendingChunk {
+    pub(crate) fn new(bytes: Vec<u8>) -> io::Result<Self> {
+        if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid pending chunk bound",
+            ));
+        }
+        Ok(Self {
+            chunk: Chunk {
+                key: format!("chunks/{}", crate::hash(&bytes)),
+                len: bytes.len() as u64,
+            },
+            bytes,
+        })
+    }
+
+    pub fn chunk(&self) -> &Chunk {
+        &self.chunk
+    }
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// All chunks except its private pending tail are durable. Consume this value
+/// only into the explicit staged publication path; ordinary stored APIs remain
+/// eager and never return a descriptor for missing bytes.
+pub struct StagedPack {
+    pub(crate) stored: StoredPack,
+    pub(crate) pending: PendingChunk,
+}
+
+impl StagedPack {
+    pub fn into_parts(self) -> (StoredPack, PendingChunk) {
+        (self.stored, self.pending)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UploadReceipt {
+    pub key: String,
+    pub len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UploadRetiringCas {
+    /// Absolutely no I/O or mutation has occurred.
+    Unsupported,
+    /// Upload is durable; losing CAS never authorizes deleting this chunk.
+    Stale(UploadReceipt),
+    Published {
+        upload: UploadReceipt,
+        retirement: RetirementReceipt,
+    },
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoredPack {
     pub id: String,
@@ -209,6 +274,18 @@ pub trait StateStore: Send + Sync {
         _next: &Manifest,
     ) -> io::Result<RetiringCas> {
         Ok(RetiringCas::Unsupported)
+    }
+
+    /// Upload one pending chunk durably before CAS, then retire durable debt.
+    /// Unsupported is side-effect-free; attempted errors must never be retried
+    /// as an eager PUT or another CAS, including a missing/malformed reply.
+    fn try_compare_and_swap_upload_retiring(
+        &self,
+        _expected: u64,
+        _next: &Manifest,
+        _pending: &PendingChunk,
+    ) -> io::Result<UploadRetiringCas> {
+        Ok(UploadRetiringCas::Unsupported)
     }
 }
 
@@ -491,6 +568,18 @@ pub trait CloudflareBindings: Send + Sync {
     ) -> io::Result<RetiringCas> {
         Ok(RetiringCas::Unsupported)
     }
+
+    /// Upload one pending chunk durably before CAS, then retire durable debt.
+    /// Unsupported is side-effect-free; attempted errors must never be retried
+    /// as an eager PUT or another CAS, including a missing/malformed reply.
+    fn try_compare_and_swap_upload_retiring(
+        &self,
+        _expected: u64,
+        _next: &Manifest,
+        _pending: &PendingChunk,
+    ) -> io::Result<UploadRetiringCas> {
+        Ok(UploadRetiringCas::Unsupported)
+    }
 }
 
 pub struct R2BlobStore<T: CloudflareBindings> {
@@ -561,6 +650,17 @@ impl<T: CloudflareBindings> StateStore for DurableStateStore<T> {
     ) -> io::Result<RetiringCas> {
         validate_generation(expected, next)?;
         self.bindings.try_compare_and_swap_retiring(expected, next)
+    }
+
+    fn try_compare_and_swap_upload_retiring(
+        &self,
+        expected: u64,
+        next: &Manifest,
+        pending: &PendingChunk,
+    ) -> io::Result<UploadRetiringCas> {
+        validate_generation(expected, next)?;
+        self.bindings
+            .try_compare_and_swap_upload_retiring(expected, next, pending)
     }
 }
 

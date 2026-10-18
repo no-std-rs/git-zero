@@ -610,16 +610,28 @@ impl NativeHost {
     }
 
     fn import_pack(
-        &self,
+        &mut self,
         pack: &CandidatePack,
         data: &[u8],
         index: &[u8],
         pack_keys: Option<&[String]>,
+        pending: &mut Option<crate::storage::PendingChunk>,
     ) -> io::Result<StoredPack> {
         if self.cloudflare.is_some() {
-            return self
-                .repository
-                .store_bundled_pack(pack.id.clone(), data, index, pack.level);
+            // Only a subsequent new pack flushes the earlier tail. Reusing an
+            // unchanged pack keeps the one fusion candidate pending.
+            if let Some(previous) = pending.take() {
+                let len = previous.chunk().len;
+                self.repository.flush_pending(previous)?;
+                self.metrics.blob_puts += 1;
+                self.metrics.blob_put_bytes += len;
+            }
+            let staged =
+                self.repository
+                    .stage_bundled_pack(pack.id.clone(), data, index, pack.level)?;
+            let (stored, tail) = staged.into_parts();
+            *pending = Some(tail);
+            return Ok(stored);
         }
         let store =
             |source: &Path, bytes: &[u8], keys: Option<&[String]>| -> io::Result<Vec<Chunk>> {
@@ -847,6 +859,7 @@ impl NativeHost {
             packs: Vec::new(),
             garbage: Vec::new(),
         };
+        let mut pending = None;
         for pack in packs {
             let stored = if let Some(stored) = pack.stored.clone() {
                 stored
@@ -865,9 +878,12 @@ impl NativeHost {
                 };
                 let index = fs::read(&pack.index)?;
                 let keys = input.and(input_keys.as_deref());
-                let stored = self.import_pack(&pack, bytes, &index, keys)?;
-                self.metrics.blob_puts += stored.chunks().count() as u64;
-                self.metrics.blob_put_bytes += (bytes.len() + index.len()) as u64;
+                let stored = self.import_pack(&pack, bytes, &index, keys, &mut pending)?;
+                let deferred = pending.as_ref().map(|tail| tail.chunk().len);
+                self.metrics.blob_puts +=
+                    stored.chunks().count() as u64 - u64::from(deferred.is_some());
+                self.metrics.blob_put_bytes +=
+                    (bytes.len() + index.len()) as u64 - deferred.unwrap_or(0);
                 for (source, extension) in [(&pack.pack, "pack"), (&pack.index, "idx")] {
                     let destination = self
                         .view
@@ -886,7 +902,15 @@ impl NativeHost {
         // A manifest write can become visible before an I/O error is reported.
         // Recover from authoritative state before serving any later request.
         self.view_dirty = true;
-        let retirement = match self.repository.publish_retiring(&previous, next.clone())? {
+        let deferred = pending.as_ref().map(|tail| tail.chunk().len);
+        let publication =
+            self.repository
+                .publish_staged_retiring(&previous, next.clone(), pending)?;
+        if let Some(len) = deferred {
+            self.metrics.blob_puts += 1;
+            self.metrics.blob_put_bytes += len;
+        }
+        let retirement = match publication {
             crate::storage::RetiringCas::Published(receipt) => receipt,
             _ => return Err(io::Error::other("concurrent generation update")),
         };

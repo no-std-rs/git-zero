@@ -177,6 +177,685 @@ fn usage(services: &HttpServices) -> ServiceUsage {
 }
 
 #[test]
+#[ignore = "requires local workerd with cloudflare/test/upload-fault.toml"]
+fn faulted_upload_barriers_catalog_partial_retirement_and_lost_receipt_preserve_authority() {
+    for mode in [
+        "put",
+        "catalog",
+        "uploadsync",
+        "cassync",
+        "delete",
+        "lost",
+        "corrupt",
+    ] {
+        let worker = RealWorker::new(&format!("upload-{mode}"));
+        let services = worker.services();
+        services.register("http://127.0.0.1:1").unwrap();
+        let repository = Repository::new(
+            R2BlobStore::new(services.clone()),
+            DurableStateStore::new(services.clone()),
+        );
+        let mut previous = Manifest {
+            generation: 1,
+            ..Manifest::default()
+        };
+        for i in 0..3 {
+            previous.packs.push(
+                repository
+                    .store_bundled_pack(
+                        format!("old-{i}"),
+                        format!("old-{i}").as_bytes(),
+                        b"index",
+                        0,
+                    )
+                    .unwrap(),
+            );
+        }
+        assert!(
+            repository
+                .publish(&Manifest::default(), previous.clone())
+                .unwrap()
+        );
+        let (stored, pending) = repository
+            .stage_bundled_pack("new".into(), b"new-pack", b"new-index", 1)
+            .unwrap()
+            .into_parts();
+        let key = pending.chunk().key.clone();
+        let mut next = Manifest {
+            generation: 2,
+            packs: vec![stored],
+            ..Manifest::default()
+        };
+        next.retire_replaced(&previous);
+        let before = usage(&services);
+        let result = repository.publish_staged_retiring(&previous, next.clone(), Some(pending));
+        if mode == "delete" {
+            let RetiringCas::Published(receipt) = result.unwrap() else {
+                panic!("partial retirement failed publication");
+            };
+            assert_eq!(
+                receipt
+                    .outcomes
+                    .iter()
+                    .map(|o| o.deleted)
+                    .collect::<Vec<_>>(),
+                [true, false, true]
+            );
+        } else {
+            assert!(result.is_err(), "fault {mode} did not fire");
+        }
+        let after = usage(&services);
+        let delta = after.checked_workload_delta(&before).unwrap();
+        assert_eq!(delta.worker_service_requests, 1, "{mode}");
+        assert_eq!(delta.do_requests, 1, "{mode}");
+        let puts = operation(&after, "r2_put");
+        let prior_puts = operation(&before, "r2_put");
+        assert_eq!(puts.attempts - prior_puts.attempts, 1, "{mode}");
+        assert_eq!(
+            puts.failures - prior_puts.failures,
+            u64::from(mode == "put")
+        );
+        let published = !matches!(mode, "put" | "catalog" | "uploadsync");
+        assert_eq!(
+            repository.state.load().unwrap(),
+            if published {
+                next.clone()
+            } else {
+                previous.clone()
+            },
+            "{mode}"
+        );
+        let cas = operation(&after, "manifest_cas");
+        let prior_cas = operation(&before, "manifest_cas");
+        assert_eq!(cas.attempts - prior_cas.attempts, u64::from(published));
+        assert_eq!(
+            cas.failures - prior_cas.failures,
+            u64::from(mode == "cassync")
+        );
+        // CAS errors finish before retirement, including an ambiguous reply to
+        // its own sync; no fallback PUT/CAS or blind orphan delete is issued.
+        assert_eq!(
+            delta.r2_deletes,
+            if matches!(mode, "delete" | "lost" | "corrupt") {
+                3
+            } else {
+                0
+            }
+        );
+        assert_eq!(
+            operation(&after, "r2_delete").failures - operation(&before, "r2_delete").failures,
+            u64::from(mode == "delete")
+        );
+        if mode != "put" {
+            assert!(repository.blobs.get(&key).is_ok());
+        }
+        let authoritative = repository.state.load().unwrap();
+        // This authoritative listing also reconciles a PUT whose catalog
+        // write was interrupted. Live shared chunks remain untouched.
+        let(status,body)=local_request(&worker.origin,"POST","/_services/gc",&[("x-hosting-token",&worker.token),("x-hosting-repo",&worker.namespace)],
+            &serde_json::to_vec(&serde_json::json!({"expected_generation":authoritative.generation,"live_keys":authoritative.packs.iter().flat_map(StoredPack::chunks).map(|c|&c.key).collect::<Vec<_>>()})).unwrap());
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+        for pack in &authoritative.packs {
+            repository.read_pack_files(pack).unwrap();
+        }
+        let reconciled = usage(&services);
+        assert_eq!(reconciled.r2_live_objects, authoritative.packs.len() as u64);
+        assert_eq!(reconciled.accounting_complete, Some(true));
+    }
+}
+
+#[test]
+#[ignore = "requires local workerd with cloudflare/test/upload-fault.toml"]
+fn faulted_native_upload_lost_response_recovers_before_serving_or_accepting_more_git() {
+    let worker = RealWorker::new("upload-lost");
+    let services = worker.services();
+    let directory = Directory(std::env::temp_dir().join(&worker.namespace));
+    let source = directory.0.join("source.git");
+    fs::create_dir_all(&source).unwrap();
+    git(
+        &source,
+        &["init", "--bare", "--quiet", "--object-format=sha1"],
+        &[],
+    );
+    let fixture = native_fixture(&source, 19);
+    let mut host = NativeHost::open_cloudflare(
+        directory.0.join("host"),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        false,
+    )
+    .unwrap();
+    host.cloudflare_services()
+        .unwrap()
+        .register("http://127.0.0.1:1")
+        .unwrap();
+    let mut body = packet(&format!(
+        "{} {} refs/heads/main\0report-status atomic\n",
+        "0".repeat(40),
+        fixture.tip
+    ));
+    body.extend_from_slice(b"0000");
+    body.extend_from_slice(&fixture.pack);
+    let before = usage(&services);
+    let response = host.handle(rpc("receive", body));
+    assert_eq!(response.status, 503);
+    let committed = usage(&services);
+    assert_eq!(
+        operation(&committed, "r2_put").attempts - operation(&before, "r2_put").attempts,
+        1
+    );
+    assert_eq!(
+        operation(&committed, "manifest_cas").attempts
+            - operation(&before, "manifest_cas").attempts,
+        1
+    );
+    let request = Request {
+        method: "GET".into(),
+        target: "/repo.git/info/refs?service=git-upload-pack".into(),
+        headers: BTreeMap::new(),
+        body: Vec::new(),
+    };
+    let response = host.handle(request);
+    assert_eq!(response.status, 200);
+    assert!(String::from_utf8_lossy(&response.body).contains(&fixture.tip));
+    let recovered = usage(&services);
+    assert_eq!(
+        operation(&recovered, "r2_put"),
+        operation(&committed, "r2_put")
+    );
+    assert_eq!(
+        operation(&recovered, "manifest_cas"),
+        operation(&committed, "manifest_cas")
+    );
+    let view = directory.0.join("host/view/repo.git");
+    git(&view, &["fsck", "--strict"], &[]);
+    assert_eq!(
+        git(&view, &["cat-file", "blob", &fixture.blob], &[]),
+        fixture.data
+    );
+}
+
+#[test]
+#[ignore = "requires real local Wrangler R2 and Durable Object bindings"]
+fn real_upload_frame_overflow_falls_back_to_exactly_one_durable_put_then_publication() {
+    let worker = RealWorker::new("upload-overflow");
+    let services = worker.services();
+    services.register("http://127.0.0.1:1").unwrap();
+    let mut repository = Repository::new(
+        R2BlobStore::new(services.clone()),
+        DurableStateStore::new(services.clone()),
+    );
+    repository.chunk_bytes = 16 * 1024 * 1024;
+    let data = vec![0x75; 16 * 1024 * 1024];
+    let (stored, pending) = repository
+        .stage_bundled_pack("x".repeat(3000), &data, b"", 0)
+        .unwrap()
+        .into_parts();
+    let before = usage(&services);
+    let next = Manifest {
+        generation: 1,
+        packs: vec![stored],
+        ..Manifest::default()
+    };
+    assert!(matches!(
+        repository
+            .publish_staged_retiring(&Manifest::default(), next.clone(), Some(pending))
+            .unwrap(),
+        RetiringCas::Published(_)
+    ));
+    let after = usage(&services);
+    let delta = after.checked_workload_delta(&before).unwrap();
+    assert_eq!(delta.worker_service_requests, 2);
+    assert_eq!(delta.do_requests, 2);
+    assert_eq!(delta.r2_class_a, 1);
+    assert_eq!(delta.r2_written_bytes, data.len() as u64);
+    assert_eq!(
+        operation(&after, "manifest_cas").attempts - operation(&before, "manifest_cas").attempts,
+        1
+    );
+    assert_eq!(repository.state.load().unwrap(), next);
+    assert_eq!(repository.read_pack_files(&next.packs[0]).unwrap().0, data);
+}
+
+#[test]
+#[ignore = "two-phase test-only upload-fault runtime: seed catalog interruption, restart, then verify"]
+fn seed_upload_catalog_before_workerd_restart() {
+    let worker = restart_fixture();
+    assert!(worker.namespace.contains("-upload-catalog-"));
+    let services = worker.services();
+    services.register("http://127.0.0.1:1").unwrap();
+    let repository = Repository::new(
+        R2BlobStore::new(services.clone()),
+        DurableStateStore::new(services.clone()),
+    );
+    assert_eq!(repository.state.load().unwrap(), Manifest::default());
+    let (stored, pending) = repository
+        .stage_bundled_pack("catalog-orphan".into(), b"catalog-orphan", b"index", 0)
+        .unwrap()
+        .into_parts();
+    let key = pending.chunk().key.clone();
+    let before = usage(&services);
+    assert!(
+        repository
+            .publish_staged_retiring(
+                &Manifest::default(),
+                Manifest {
+                    packs: vec![stored],
+                    ..Manifest::default()
+                },
+                Some(pending)
+            )
+            .is_err()
+    );
+    let after = usage(&services);
+    assert_eq!(
+        operation(&after, "r2_put").successes - operation(&before, "r2_put").successes,
+        1
+    );
+    assert_eq!(
+        operation(&after, "manifest_cas"),
+        operation(&before, "manifest_cas")
+    );
+    assert_eq!(repository.blobs.get(&key).unwrap(), b"catalog-orphanindex");
+    fs::write(
+        restart_marker(&worker),
+        serde_json::to_vec(&serde_json::json!({"key":key,"counter_epoch":after.counter_epoch}))
+            .unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+#[ignore = "two-phase test-only upload-fault runtime: seed and restart same persist-dir first"]
+fn verify_upload_catalog_after_workerd_restart() {
+    let worker = restart_fixture();
+    let marker: serde_json::Value =
+        serde_json::from_slice(&fs::read(restart_marker(&worker)).unwrap()).unwrap();
+    let services = worker.services();
+    let before = usage(&services);
+    assert_ne!(
+        serde_json::to_value(&before.counter_epoch).unwrap(),
+        marker["counter_epoch"]
+    );
+    let directory =
+        Directory(std::env::temp_dir().join(format!("{}-catalog-recovery", worker.namespace)));
+    let host = NativeHost::open_cloudflare(
+        directory.0.clone(),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        false,
+    )
+    .unwrap();
+    let after = usage(&services);
+    assert_eq!(after.r2_live_objects, 0);
+    assert_eq!(after.r2_live_bytes, 0);
+    assert_eq!(after.accounting_complete, Some(true));
+    assert_eq!(
+        operation(&after, "r2_delete").successes - operation(&before, "r2_delete").successes,
+        1
+    );
+    assert_eq!(
+        operation(&after, "manifest_cas"),
+        operation(&before, "manifest_cas")
+    );
+    assert_eq!(
+        DurableStateStore::new(services.clone()).load().unwrap(),
+        Manifest::default()
+    );
+    assert_eq!(
+        R2BlobStore::new(services)
+            .get(marker["key"].as_str().unwrap())
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    git(
+        &directory.0.join("view/repo.git"),
+        &["fsck", "--strict"],
+        &[],
+    );
+    drop(host);
+    fs::remove_file(restart_marker(&worker)).unwrap();
+}
+
+fn upload_frame_bytes(metadata: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut frame = b"GZUP".to_vec();
+    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+    frame.extend_from_slice(metadata);
+    frame.extend_from_slice(data);
+    frame
+}
+
+fn upload_request(worker: &RealWorker, frame: &[u8]) -> (u16, Vec<u8>) {
+    local_request(
+        &worker.origin,
+        "POST",
+        "/_services/manifest/upload-retire",
+        &[
+            ("x-hosting-token", &worker.token),
+            ("x-hosting-repo", &worker.namespace),
+            ("x-hosting-phase", "push"),
+        ],
+        frame,
+    )
+}
+
+#[test]
+#[ignore = "requires real local Wrangler R2 and Durable Object bindings"]
+fn real_upload_retirement_preserves_binding_sql_bytes_and_removes_one_callback() {
+    let mut deltas = Vec::new();
+    for fused in [false, true] {
+        let worker = RealWorker::new(if fused {
+            "upload-fused"
+        } else {
+            "upload-legacy"
+        });
+        let services = worker.services();
+        // Both paths negotiate ordinary fused retirement. The baseline keeps
+        // the eager import contract and therefore takes two service calls.
+        services.register("http://127.0.0.1:1").unwrap();
+        let repository = Repository::new(
+            R2BlobStore::new(services.clone()),
+            DurableStateStore::new(services.clone()),
+        );
+        let mut previous = Manifest {
+            generation: 1,
+            ..Manifest::default()
+        };
+        for i in 0..3 {
+            previous.packs.push(
+                repository
+                    .store_bundled_pack(
+                        format!("old-{i}"),
+                        format!("old-{i}").as_bytes(),
+                        b"index",
+                        0,
+                    )
+                    .unwrap(),
+            );
+        }
+        assert!(
+            repository
+                .publish(&Manifest::default(), previous.clone())
+                .unwrap()
+        );
+        let before = usage(&services);
+        let (stored, pending) = if fused {
+            let (stored, pending) = repository
+                .stage_bundled_pack("new".into(), b"new-pack", b"new-index", 1)
+                .unwrap()
+                .into_parts();
+            (stored, Some(pending))
+        } else {
+            (
+                repository
+                    .store_bundled_pack("new".into(), b"new-pack", b"new-index", 1)
+                    .unwrap(),
+                None,
+            )
+        };
+        let mut next = Manifest {
+            generation: 2,
+            packs: vec![stored],
+            ..Manifest::default()
+        };
+        next.retire_replaced(&previous);
+        let RetiringCas::Published(receipt) = repository
+            .publish_staged_retiring(&previous, next.clone(), pending)
+            .unwrap()
+        else {
+            panic!("not published");
+        };
+        assert_eq!(receipt.outcomes.len(), 3);
+        assert!(receipt.outcomes.iter().all(|outcome| outcome.deleted));
+        let after = usage(&services);
+        let delta = after.checked_workload_delta(&before).unwrap();
+        assert_eq!(delta.worker_service_requests, if fused { 1 } else { 2 });
+        assert_eq!(delta.do_requests, if fused { 1 } else { 2 });
+        assert_eq!(delta.r2_class_a, 1);
+        assert_eq!(delta.r2_class_b, 0);
+        assert_eq!(delta.r2_deletes, 3);
+        assert_eq!(delta.r2_written_bytes, 17);
+        assert_eq!(
+            operation(&after, "r2_put").successes - operation(&before, "r2_put").successes,
+            1
+        );
+        assert_eq!(
+            operation(&after, "manifest_cas").successes
+                - operation(&before, "manifest_cas").successes,
+            1
+        );
+        assert_eq!(repository.state.load().unwrap(), next);
+        repository.read_pack_files(&next.packs[0]).unwrap();
+        deltas.push(delta);
+    }
+    assert_eq!(deltas[0].do_rows_read, deltas[1].do_rows_read);
+    assert_eq!(deltas[0].do_rows_written, deltas[1].do_rows_written);
+    assert_eq!(deltas[0].r2_read_bytes, deltas[1].r2_read_bytes);
+    assert_eq!(deltas[0].r2_written_bytes, deltas[1].r2_written_bytes);
+}
+
+#[test]
+#[ignore = "requires real local Wrangler R2 and Durable Object bindings"]
+fn real_upload_stale_shared_winner_and_orphan_recovery_never_delete_live_data() {
+    let worker = RealWorker::new("upload-stale");
+    let services = worker.services();
+    services.register("http://127.0.0.1:1").unwrap();
+    let repository = Repository::new(
+        R2BlobStore::new(services.clone()),
+        DurableStateStore::new(services.clone()),
+    );
+    let winner = repository
+        .store_bundled_pack("winner".into(), b"shared", b"index", 0)
+        .unwrap();
+    let next = Manifest {
+        generation: 1,
+        packs: vec![winner.clone()],
+        ..Manifest::default()
+    };
+    assert!(
+        repository
+            .publish(&Manifest::default(), next.clone())
+            .unwrap()
+    );
+    for shared in [true, false] {
+        let (stored, pending) = repository
+            .stage_bundled_pack(
+                "loser".into(),
+                if shared { b"shared" } else { b"orphan" },
+                b"index",
+                0,
+            )
+            .unwrap()
+            .into_parts();
+        let key = pending.chunk().key.clone();
+        let before = usage(&services);
+        assert_eq!(
+            repository
+                .publish_staged_retiring(
+                    &Manifest::default(),
+                    Manifest {
+                        packs: vec![stored],
+                        garbage: winner.chunks().map(|c| c.key.clone()).collect(),
+                        ..Manifest::default()
+                    },
+                    Some(pending)
+                )
+                .unwrap(),
+            RetiringCas::Stale
+        );
+        let after = usage(&services);
+        let delta = after.checked_workload_delta(&before).unwrap();
+        assert_eq!(delta.r2_class_a, 1);
+        assert_eq!(delta.r2_deletes, 0);
+        assert_eq!(delta.worker_service_requests, 1);
+        assert!(repository.blobs.get(&key).is_ok());
+    }
+    assert_eq!(repository.state.load().unwrap(), next);
+    let (status, body) = local_request(&worker.origin, "POST", "/_services/gc", &[("x-hosting-token", &worker.token), ("x-hosting-repo", &worker.namespace)],
+        &serde_json::to_vec(&serde_json::json!({"expected_generation":1,"live_keys":winner.chunks().map(|c| &c.key).collect::<Vec<_>>()})).unwrap());
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["deleted"],
+        1
+    );
+    assert_eq!(
+        repository.read_pack_files(&winner).unwrap(),
+        (b"shared".to_vec(), b"index".to_vec())
+    );
+}
+
+#[test]
+#[ignore = "requires real local Wrangler R2 and Durable Object bindings"]
+fn real_upload_frame_rejects_every_invalid_shape_before_mutation_and_accepts_exact_bounds() {
+    use serde_json::json;
+    let worker = RealWorker::new("upload-frame");
+    let services = worker.services();
+    let key = format!("chunks/{}", hash(b"x"));
+    let next = Manifest {
+        generation: 1,
+        packs: vec![StoredPack {
+            id: "one".into(),
+            bundle: vec![Chunk {
+                key: key.clone(),
+                len: 1,
+            }],
+            pack_bytes: 1,
+            ..StoredPack::default()
+        }],
+        ..Manifest::default()
+    };
+    let base = json!({"version":1,"expected":0,"next":next,"chunk":{"key":key,"len":1}});
+    let metadata = serde_json::to_vec(&base).unwrap();
+    let valid = upload_frame_bytes(&metadata, b"x");
+    let mut invalid = Vec::new();
+    for len in [0, 1, 4, 8, 11, 12, valid.len() - 1] {
+        invalid.push(valid[..len].to_vec());
+    }
+    let mut bad = valid.clone();
+    bad[0] = 0;
+    invalid.push(bad);
+    let mut bad = valid.clone();
+    bad[4..8].copy_from_slice(&2u32.to_le_bytes());
+    invalid.push(bad);
+    for len in [0, u32::MAX, 1_500_001] {
+        let mut bad = valid.clone();
+        bad[8..12].copy_from_slice(&len.to_le_bytes());
+        invalid.push(bad);
+    }
+    let mut bad = valid.clone();
+    bad.push(0);
+    invalid.push(bad);
+    invalid.push(upload_frame_bytes(&metadata, b"y"));
+    invalid.push(upload_frame_bytes(b"{malformed", b"x"));
+    invalid.push(upload_frame_bytes(&[0xff], b"x"));
+    invalid.push(upload_frame_bytes(b"[]", b"x"));
+    invalid.push(upload_frame_bytes(b"null", b"x"));
+    for (pointer, value) in [
+        ("/version", json!(2)),
+        ("/expected", json!(9_007_199_254_740_992u64)),
+        ("/next/generation", json!(2)),
+        ("/chunk/key", json!(format!("chunks/{}", hash(b"other")))),
+        ("/chunk/len", json!(0)),
+        ("/chunk/len", json!(16 * 1024 * 1024 + 1)),
+        ("/chunk/len", json!(u64::MAX)),
+        ("/next/packs/0/bundle/0/len", json!(2)),
+        ("/next/packs/0/pack", json!([{"key":key,"len":1}])),
+        ("/next/packs", json!([])),
+        ("/next/refs", json!({"refs/../bad":"a".repeat(40)})),
+        ("/next/refs", json!({"refs/heads/main":"0".repeat(40)})),
+    ] {
+        let mut value2 = base.clone();
+        *value2.pointer_mut(pointer).unwrap() = value;
+        invalid.push(upload_frame_bytes(
+            &serde_json::to_vec(&value2).unwrap(),
+            b"x",
+        ));
+    }
+    for location in [
+        "",
+        "/next",
+        "/chunk",
+        "/next/packs/0",
+        "/next/packs/0/bundle/0",
+    ] {
+        let mut bad = base.clone();
+        bad.pointer_mut(location).unwrap()["extra"] = json!(1);
+        invalid.push(upload_frame_bytes(&serde_json::to_vec(&bad).unwrap(), b"x"));
+    }
+    for field in ["version", "expected", "next", "chunk"] {
+        let mut bad = base.clone();
+        bad.as_object_mut().unwrap().remove(field);
+        invalid.push(upload_frame_bytes(&serde_json::to_vec(&bad).unwrap(), b"x"));
+    }
+    let text = String::from_utf8(metadata.clone()).unwrap();
+    for text in [
+        text.replacen("\"version\":1", "\"version\":1,\"version\":1", 1),
+        text.replacen("\"len\":1", "\"len\":1,\"l\\u0065n\":1", 1),
+    ] {
+        invalid.push(upload_frame_bytes(text.as_bytes(), b"x"));
+    }
+    let mut debt = base.clone();
+    debt["next"]["garbage"] = json!(
+        (0..257)
+            .map(|i| format!("chunks/{i:064x}"))
+            .collect::<Vec<_>>()
+    );
+    invalid.push(upload_frame_bytes(
+        &serde_json::to_vec(&debt).unwrap(),
+        b"x",
+    ));
+    let mut too_big = metadata.clone();
+    too_big.resize(1_500_001, b' ');
+    invalid.push(upload_frame_bytes(&too_big, b"x"));
+    let before = usage(&services);
+    for (i, bad) in invalid.iter().enumerate() {
+        let (status, body) = upload_request(&worker, bad);
+        assert!(
+            matches!(status, 400 | 409 | 413),
+            "case {i}, status {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    let after = usage(&services);
+    for name in ["r2_put", "manifest_cas", "r2_delete"] {
+        assert_eq!(operation(&before, name), operation(&after, name));
+    }
+    assert_eq!(after.r2_live_objects, 0);
+    // Metadata itself can reach its independent ceiling, with exact EOF.
+    let mut exact = metadata;
+    exact.resize(1_500_000, b' ');
+    let (status, body) = upload_request(&worker, &upload_frame_bytes(&exact, b"x"));
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["published"],
+        true
+    );
+    // A complete 16 MiB payload plus exactly 2,060 bytes framing is legal.
+    let data = vec![0x39; 16 * 1024 * 1024];
+    let key = format!("chunks/{}", hash(&data));
+    let mut full = base;
+    full["expected"] = json!(1);
+    full["next"]["generation"] = json!(2);
+    full["chunk"] = json!({"key":key,"len":data.len()});
+    full["next"]["packs"][0]["bundle"] = json!([full["chunk"].clone()]);
+    full["next"]["packs"][0]["pack_bytes"] = json!(data.len());
+    let mut metadata = serde_json::to_vec(&full).unwrap();
+    metadata.resize(2060 - 12, b' ');
+    let frame = upload_frame_bytes(&metadata, &data);
+    assert_eq!(frame.len(), 16 * 1024 * 1024 + 2060);
+    let mut excessive = frame.clone();
+    excessive.push(0);
+    assert_eq!(upload_request(&worker, &excessive).0, 413);
+    let (status, body) = upload_request(&worker, &frame);
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(usage(&services).r2_live_objects, 2);
+}
+
+#[test]
 #[ignore = "requires real local Wrangler R2 and Durable Object bindings"]
 fn real_fused_retirement_matches_scalar_work_and_removes_three_callbacks() {
     let mut deltas = Vec::new();
@@ -1741,11 +2420,21 @@ fn real_native_bundle_uses_one_put_and_survives_restart_and_fetch() {
         true,
     )
     .unwrap();
+    host.cloudflare_services()
+        .unwrap()
+        .register("http://127.0.0.1:1")
+        .unwrap();
     let before: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
     let response = host.handle(rpc("receive", body));
     assert_eq!(response.status, 200);
     assert!(String::from_utf8_lossy(&response.body).contains("ok refs/tags/bundle-fixture\n"));
     assert_eq!(host.metrics.blob_puts, 1);
+    let uploaded = usage(&services);
+    let callbacks = uploaded.checked_workload_delta(&before).unwrap();
+    // Direct native dispatch needs one manifest read, then exactly one fused
+    // final-upload/publication call. The actual PUT is still present.
+    assert_eq!(callbacks.worker_service_requests, 2);
+    assert_eq!(callbacks.do_requests, 2);
     let state = DurableStateStore::new(services.clone());
     let published = state.load().unwrap();
     assert_eq!(published.packs.len(), 1);
@@ -2125,6 +2814,127 @@ fn seed_before_workerd_restart() {
         serde_json::to_vec(&marker).unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+#[ignore = "two-phase upload-fusion process-restart proof; run seed, restart Wrangler, then verify"]
+fn seed_upload_before_workerd_restart() {
+    let worker = restart_fixture();
+    let services = worker.services();
+    services.register("http://127.0.0.1:1").unwrap();
+    let repository = Repository::new(
+        R2BlobStore::new(services.clone()),
+        DurableStateStore::new(services.clone()),
+    );
+    let previous = repository.state.load().unwrap();
+    assert_eq!(
+        previous,
+        Manifest::default(),
+        "restart proof requires a fresh namespace"
+    );
+    let source = Directory(std::env::temp_dir().join(format!("{}-source", worker.namespace)));
+    fs::create_dir(&source.0).unwrap();
+    git(
+        &source.0,
+        &["init", "--bare", "--quiet", "--object-format=sha1"],
+        &[],
+    );
+    let legacy = native_fixture(&source.0, 11);
+    let current = native_fixture(&source.0, 13);
+    let mut repository = repository;
+    let old = repository
+        .store_bundled_pack(legacy.id.clone(), &legacy.pack, &legacy.index, 0)
+        .unwrap();
+    assert_eq!(old.bundle.len(), 2);
+    assert_eq!(old.bundle[0].len, 8 * 1024 * 1024);
+    repository.chunk_bytes = 16 * 1024 * 1024;
+    let (new, pending) = repository
+        .stage_bundled_pack(current.id.clone(), &current.pack, &current.index, 0)
+        .unwrap()
+        .into_parts();
+    assert_eq!(new.bundle.len(), 1);
+    assert!(new.bundle[0].len > 8 * 1024 * 1024);
+    let mut next = Manifest {
+        generation: 1,
+        refs: BTreeMap::from([
+            ("refs/tags/restart-legacy".into(), legacy.tip.clone()),
+            ("refs/tags/restart-current".into(), current.tip.clone()),
+        ]),
+        packs: vec![old, new],
+        ..Manifest::default()
+    };
+    let RetiringCas::Published(_) = repository
+        .publish_staged_retiring(&previous, next.clone(), Some(pending))
+        .unwrap()
+    else {
+        panic!("upload not published");
+    };
+    let uploaded = repository.state.load().unwrap();
+    next.generation = 2;
+    // Simulate interruption after publication and the first scalar retirement.
+    // Keep the complete durable debt across a real workerd process restart.
+    for data in [
+        b"restart-retired-a".as_slice(),
+        b"restart-retired-b",
+        b"restart-retired-c",
+    ] {
+        let key = format!("chunks/{}", hash(data));
+        repository.blobs.put(&key, data).unwrap();
+        next.garbage.push(key);
+    }
+    next.garbage.push(next.packs[1].bundle[0].key.clone());
+    assert!(repository.publish(&uploaded, next.clone()).unwrap());
+    let (orphan, pending) = repository
+        .stage_bundled_pack("pending-orphan".into(), b"unpublished-tail", b"index", 0)
+        .unwrap()
+        .into_parts();
+    assert_eq!(
+        repository
+            .publish_staged_retiring(
+                &Manifest::default(),
+                Manifest {
+                    packs: vec![orphan],
+                    ..Manifest::default()
+                },
+                Some(pending)
+            )
+            .unwrap(),
+        RetiringCas::Stale
+    );
+    repository.blobs.delete(&next.garbage[0]).unwrap();
+    let usage: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
+    assert_eq!(usage.r2_live_objects, 6);
+    assert_eq!(
+        usage.r2_live_bytes,
+        next.packs
+            .iter()
+            .map(|pack| pack.pack_bytes + pack.index_bytes)
+            .sum::<u64>()
+            + b"restart-retired-b".len() as u64
+            + b"restart-retired-c".len() as u64
+            + b"unpublished-tailindex".len() as u64
+    );
+    let metadata = |fixture: &NativeFixture, seed| {
+        serde_json::json!({
+            "seed":seed, "tip":fixture.tip, "blob":fixture.blob, "tree":fixture.tree,
+            "pack_hash":hash(&fixture.pack), "index_hash":hash(&fixture.index),
+        })
+    };
+    let marker = serde_json::json!({
+        "manifest":next, "fixtures":[metadata(&legacy, 11), metadata(&current, 13)],
+        "counter_epoch":usage.counter_epoch,
+    });
+    fs::write(
+        restart_marker(&worker),
+        serde_json::to_vec(&marker).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+#[ignore = "two-phase upload-fusion process-restart proof; seed and restart same persist-dir first"]
+fn verify_upload_after_workerd_restart() {
+    verify_after_workerd_restart();
 }
 
 #[test]

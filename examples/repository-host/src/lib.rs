@@ -13,8 +13,8 @@ pub mod storage;
 use sha2::{Digest, Sha256};
 use std::io;
 use storage::{
-    BlobStore, Chunk, Manifest, RetirementOutcome, RetirementReceipt, RetiringCas, StateStore,
-    StoredPack,
+    BlobStore, Chunk, Manifest, PendingChunk, RetirementOutcome, RetirementReceipt, RetiringCas,
+    StagedPack, StateStore, StoredPack, UploadRetiringCas,
 };
 
 pub const CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -97,6 +97,116 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
             level,
             ..StoredPack::default()
         })
+    }
+
+    /// Import the virtual concatenation of pack and index, retaining only the
+    /// last chunk. Scratch storage never exceeds one 16 MiB chunk, including
+    /// the chunk which straddles the pack/index boundary.
+    pub fn stage_bundled_pack(
+        &self,
+        id: String,
+        pack: &[u8],
+        index: &[u8],
+        level: u32,
+    ) -> io::Result<StagedPack> {
+        let total = pack_total(pack.len() as u64, index.len() as u64)? as usize;
+        if total == 0 || self.chunk_bytes == 0 || self.chunk_bytes > 16 * 1024 * 1024 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid staged pack bound",
+            ));
+        }
+        let mut bundle = Vec::new();
+        let mut offset = 0usize;
+        loop {
+            let end = offset.saturating_add(self.chunk_bytes).min(total);
+            let mut bytes = Vec::with_capacity(end - offset);
+            if offset < pack.len() {
+                bytes.extend_from_slice(&pack[offset..end.min(pack.len())]);
+            }
+            if end > pack.len() {
+                bytes
+                    .extend_from_slice(&index[offset.saturating_sub(pack.len())..end - pack.len()]);
+            }
+            let pending = PendingChunk::new(bytes)?;
+            bundle.push(pending.chunk().clone());
+            if end == total {
+                return Ok(StagedPack {
+                    stored: StoredPack {
+                        id,
+                        bundle,
+                        pack_bytes: pack.len() as u64,
+                        index_bytes: index.len() as u64,
+                        level,
+                        ..StoredPack::default()
+                    },
+                    pending,
+                });
+            }
+            self.blobs.put(&pending.chunk().key, pending.bytes())?;
+            offset = end;
+        }
+    }
+
+    /// Flush an explicitly staged tail before staging another new pack.
+    pub fn flush_pending(&self, pending: PendingChunk) -> io::Result<()> {
+        self.blobs.put(&pending.chunk().key, pending.bytes())
+    }
+
+    /// An optional final upload is durable before the next manifest is CASed.
+    /// Only a side-effect-free Unsupported result permits one ordinary PUT and
+    /// the existing retiring publication; ambiguous outcomes never republish.
+    pub fn publish_staged_retiring(
+        &self,
+        previous: &Manifest,
+        mut next: Manifest,
+        pending: Option<PendingChunk>,
+    ) -> io::Result<RetiringCas> {
+        let Some(pending) = pending else {
+            return self.publish_retiring(previous, next);
+        };
+        next.generation = previous
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("generation overflow"))?;
+        validate_staged_manifest(&next, &pending)?;
+        let result = self.state.try_compare_and_swap_upload_retiring(
+            previous.generation,
+            &next,
+            &pending,
+        )?;
+        let (upload, retirement) = match result {
+            UploadRetiringCas::Unsupported => {
+                self.flush_pending(pending)?;
+                return self.publish_retiring(previous, next);
+            }
+            UploadRetiringCas::Stale(upload) => (upload, RetiringCas::Stale),
+            UploadRetiringCas::Published { upload, retirement } => {
+                (upload, RetiringCas::Published(retirement))
+            }
+        };
+        if upload.key != pending.chunk().key || upload.len != pending.chunk().len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "upload receipt mismatch",
+            ));
+        }
+        if let RetiringCas::Published(receipt) = &retirement {
+            if receipt.generation != next.generation
+                || receipt.outcomes.len() != next.retirement_keys().len()
+                || receipt
+                    .outcomes
+                    .iter()
+                    .zip(next.retirement_keys())
+                    .any(|(outcome, key)| outcome.key != key)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "retirement receipt mismatch",
+                ));
+            }
+        }
+        Ok(retirement)
     }
 
     /// Reconstruct both files with one pass over a bundle's chunks. Verify
@@ -258,6 +368,75 @@ pub(crate) fn snapshot_chunks(manifest: &Manifest) -> io::Result<Vec<Chunk>> {
     Ok(chunks)
 }
 
+/// Validate the complete descriptor graph and pending membership before any
+/// fast-path or fallback I/O, including repeated/shared chunk lengths.
+fn validate_staged_manifest(next: &Manifest, pending: &PendingChunk) -> io::Result<()> {
+    // PendingChunk's private constructor computes its immutable descriptor
+    // from these exact owned bytes. Reuse that proof without hashing again.
+    if next.refs.len() > 16 * 1024
+        || next
+            .refs
+            .iter()
+            .try_fold(0usize, |n, (name, id)| {
+                n.checked_add(name.len())?.checked_add(id.len())
+            })
+            .is_none_or(|n| n > 4 * 1024 * 1024)
+    {
+        return Err(io::Error::other("prototype ref limit exceeded"));
+    }
+    for (name, id) in &next.refs {
+        git_zero_core::repository::validate_ref_name(name)
+            .map_err(|_| io::Error::other("invalid staged ref name"))?;
+        if id.len() != 40
+            || !id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || id.bytes().all(|byte| byte == b'0')
+        {
+            return Err(io::Error::other("invalid staged ref object ID"));
+        }
+    }
+    let mut lengths = std::collections::BTreeMap::new();
+    let mut ids = std::collections::BTreeSet::new();
+    let mut total = 0u64;
+    for pack in &next.packs {
+        if !ids.insert(&pack.id) {
+            return Err(io::Error::other("duplicate staged pack ID"));
+        }
+        let size = pack_total(pack.pack_bytes, pack.index_bytes)?;
+        total = total
+            .checked_add(size)
+            .filter(|size| *size <= MAX_PACK_BYTES)
+            .ok_or_else(|| io::Error::other("prototype snapshot limit exceeded"))?;
+        if pack.bundle.is_empty() {
+            validate_chunks(&pack.pack, pack.pack_bytes)?;
+            validate_chunks(&pack.index, pack.index_bytes)?;
+        } else {
+            if !pack.pack.is_empty() || !pack.index.is_empty() {
+                return Err(io::Error::other("mixed pack chunk representations"));
+            }
+            validate_chunks(&pack.bundle, size)?;
+        }
+        for chunk in pack.chunks() {
+            if chunk.key.len() != 71
+                || !chunk.key.starts_with("chunks/")
+                || !chunk.key.as_bytes()[7..]
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+                || lengths
+                    .insert(&chunk.key, chunk.len)
+                    .is_some_and(|len| len != chunk.len)
+            {
+                return Err(io::Error::other("invalid staged chunk"));
+            }
+        }
+    }
+    if lengths.get(&pending.chunk().key) != Some(&pending.chunk().len) {
+        return Err(io::Error::other(
+            "pending chunk is not a matching manifest member",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_chunks(chunks: &[Chunk], expected: u64) -> io::Result<()> {
     if chunks.iter().try_fold(0u64, |total, chunk| {
         (chunk.len != 0).then_some(())?;
@@ -341,6 +520,258 @@ mod tests {
 
         fn compare_and_swap(&self, _: u64, _: &Manifest) -> io::Result<bool> {
             unreachable!("file reconstruction does not publish state")
+        }
+    }
+
+    impl BlobStore for std::sync::Arc<MemoryBlobs> {
+        fn get(&self, key: &str) -> io::Result<Vec<u8>> {
+            (**self).get(key)
+        }
+        fn put(&self, key: &str, data: &[u8]) -> io::Result<()> {
+            (**self).put(key, data)
+        }
+        fn delete(&self, key: &str) -> io::Result<()> {
+            (**self).delete(key)
+        }
+    }
+
+    #[test]
+    fn staging_keeps_only_last_virtual_chunk_and_eager_apis_remain_durable() {
+        let mut repository = Repository::new(MemoryBlobs::default(), UnusedState);
+        repository.chunk_bytes = 4;
+        let (stored, pending) = repository
+            .stage_bundled_pack("stage".into(), b"abcdefghij", b"klmnop", 2)
+            .unwrap()
+            .into_parts();
+        assert_eq!(repository.blobs.puts.load(Ordering::Relaxed), 3);
+        assert_eq!(stored.bundle.len(), 4);
+        assert_eq!(stored.level, 2);
+        assert_eq!(pending.bytes(), b"mnop");
+        // The third chunk straddles the original pack/index split.
+        assert_eq!(
+            repository.blobs.get(&stored.bundle[2].key).unwrap(),
+            b"ijkl"
+        );
+        assert!(repository.blobs.get(&stored.bundle[3].key).is_err());
+        repository.flush_pending(pending).unwrap();
+        assert_eq!(
+            repository.read_pack_files(&stored).unwrap(),
+            (b"abcdefghij".to_vec(), b"klmnop".to_vec())
+        );
+        let eager = repository
+            .store_bundled_pack("eager".into(), b"abcd", b"efgh", 0)
+            .unwrap();
+        repository.read_pack_files(&eager).unwrap();
+        let eager = repository
+            .store_pack("eager-split".into(), b"abcd", b"efgh", 0)
+            .unwrap();
+        repository.read_pack_files(&eager).unwrap();
+        assert_eq!(repository.blobs.puts.load(Ordering::Relaxed), 8);
+        assert!(
+            repository
+                .stage_bundled_pack("empty".into(), b"", b"", 0)
+                .is_err()
+        );
+        for chunk_bytes in [0, 16 * 1024 * 1024 + 1, usize::MAX] {
+            repository.chunk_bytes = chunk_bytes;
+            assert!(
+                repository
+                    .stage_bundled_pack("invalid".into(), b"x", b"", 0)
+                    .is_err()
+            );
+        }
+    }
+
+    struct UploadState {
+        blobs: std::sync::Arc<MemoryBlobs>,
+        current: Mutex<Manifest>,
+        cas: AtomicUsize,
+        uploads: AtomicUsize,
+        mode: u8, // 0 fallback, 1 success, 2 stale, 3 lost reply, 4 invalid receipt
+    }
+
+    impl StateStore for UploadState {
+        fn load(&self) -> io::Result<Manifest> {
+            Ok(self.current.lock().unwrap().clone())
+        }
+        fn compare_and_swap(&self, expected: u64, next: &Manifest) -> io::Result<bool> {
+            self.cas.fetch_add(1, Ordering::Relaxed);
+            for chunk in next.packs.iter().flat_map(StoredPack::chunks) {
+                self.blobs.get(&chunk.key)?;
+            }
+            let mut current = self.current.lock().unwrap();
+            if current.generation != expected {
+                return Ok(false);
+            }
+            *current = next.clone();
+            Ok(true)
+        }
+        fn try_compare_and_swap_upload_retiring(
+            &self,
+            _: u64,
+            next: &Manifest,
+            pending: &PendingChunk,
+        ) -> io::Result<UploadRetiringCas> {
+            if self.mode == 0 {
+                return Ok(UploadRetiringCas::Unsupported);
+            }
+            self.uploads.fetch_add(1, Ordering::Relaxed);
+            self.blobs.put(&pending.chunk().key, pending.bytes())?;
+            let mut upload = storage::UploadReceipt {
+                key: pending.chunk().key.clone(),
+                len: pending.chunk().len,
+            };
+            if self.mode == 2 {
+                return Ok(UploadRetiringCas::Stale(upload));
+            }
+            *self.current.lock().unwrap() = next.clone();
+            if self.mode == 3 {
+                return Err(io::Error::other("lost response after durable publication"));
+            }
+            if self.mode == 4 {
+                upload.len += 1;
+            }
+            Ok(UploadRetiringCas::Published {
+                upload,
+                retirement: RetirementReceipt {
+                    generation: next.generation,
+                    outcomes: Vec::new(),
+                },
+            })
+        }
+    }
+
+    #[test]
+    fn staged_publication_uploads_once_before_cas_and_never_replays_ambiguous_results() {
+        for mode in 0..=4 {
+            let blobs = std::sync::Arc::new(MemoryBlobs::default());
+            let repository = Repository::new(
+                blobs.clone(),
+                UploadState {
+                    blobs: blobs.clone(),
+                    current: Mutex::new(Manifest::default()),
+                    cas: AtomicUsize::new(0),
+                    uploads: AtomicUsize::new(0),
+                    mode,
+                },
+            );
+            let (stored, pending) = repository
+                .stage_bundled_pack("tail".into(), b"pack", b"index", 0)
+                .unwrap()
+                .into_parts();
+            assert_eq!(blobs.puts.load(Ordering::Relaxed), 0);
+            let result = repository.publish_staged_retiring(
+                &Manifest::default(),
+                Manifest {
+                    packs: vec![stored.clone()],
+                    ..Manifest::default()
+                },
+                Some(pending),
+            );
+            match mode {
+                0 | 1 => assert!(matches!(result.unwrap(), RetiringCas::Published(_))),
+                2 => assert_eq!(result.unwrap(), RetiringCas::Stale),
+                _ => assert!(result.is_err()),
+            }
+            assert_eq!(blobs.puts.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                repository.state.cas.load(Ordering::Relaxed),
+                usize::from(mode == 0)
+            );
+            assert_eq!(
+                repository.state.uploads.load(Ordering::Relaxed),
+                usize::from(mode != 0)
+            );
+            // Even stale uploads remain intact: the winner may share their key.
+            repository.read_pack_files(&stored).unwrap();
+        }
+    }
+
+    #[test]
+    fn staged_membership_and_complete_shape_are_checked_before_any_mutation() {
+        let blobs = std::sync::Arc::new(MemoryBlobs::default());
+        let repository = Repository::new(
+            blobs.clone(),
+            UploadState {
+                blobs: blobs.clone(),
+                current: Mutex::new(Manifest::default()),
+                cas: AtomicUsize::new(0),
+                uploads: AtomicUsize::new(0),
+                mode: 1,
+            },
+        );
+        for case in 0..5 {
+            let (stored, pending) = repository
+                .stage_bundled_pack("tail".into(), b"pack", b"index", 0)
+                .unwrap()
+                .into_parts();
+            let mut next = Manifest {
+                packs: vec![stored.clone()],
+                ..Manifest::default()
+            };
+            match case {
+                0 => next.packs.clear(),
+                1 => next.packs[0].bundle[0].len += 1,
+                2 => next.packs[0].pack.push(stored.bundle[0].clone()),
+                3 => {
+                    let mut other = stored.clone();
+                    other.bundle[0].len -= 1;
+                    other.index_bytes -= 1;
+                    next.packs.push(other);
+                }
+                _ => next.packs[0].bundle[0].key = "../invalid".into(),
+            }
+            assert!(
+                repository
+                    .publish_staged_retiring(&Manifest::default(), next, Some(pending))
+                    .is_err()
+            );
+        }
+        assert_eq!(blobs.puts.load(Ordering::Relaxed), 0);
+        assert_eq!(repository.state.cas.load(Ordering::Relaxed), 0);
+        assert_eq!(repository.state.uploads.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn several_staged_packs_flush_only_previous_tail_and_preserve_repeated_keys() {
+        let blobs = std::sync::Arc::new(MemoryBlobs::default());
+        let mut repository = Repository::new(
+            blobs.clone(),
+            UploadState {
+                blobs: blobs.clone(),
+                current: Mutex::new(Manifest::default()),
+                cas: AtomicUsize::new(0),
+                uploads: AtomicUsize::new(0),
+                mode: 0,
+            },
+        );
+        repository.chunk_bytes = 4;
+        let (first, pending) = repository
+            .stage_bundled_pack("first".into(), b"abcdabcd", b"ab", 0)
+            .unwrap()
+            .into_parts();
+        assert_eq!(blobs.puts.load(Ordering::Relaxed), 2);
+        repository.flush_pending(pending).unwrap();
+        let (last, pending) = repository
+            .stage_bundled_pack("last".into(), b"abcd", b"ab", 0)
+            .unwrap()
+            .into_parts();
+        assert_eq!(blobs.puts.load(Ordering::Relaxed), 4);
+        let mut next = Manifest {
+            packs: vec![first, last],
+            ..Manifest::default()
+        };
+        // Live repeated keys in durable debt cannot become retirement work.
+        next.garbage.push(pending.chunk().key.clone());
+        assert!(matches!(
+            repository
+                .publish_staged_retiring(&Manifest::default(), next.clone(), Some(pending))
+                .unwrap(),
+            RetiringCas::Published(_)
+        ));
+        assert_eq!(blobs.puts.load(Ordering::Relaxed), 5);
+        for pack in &next.packs {
+            repository.read_pack_files(pack).unwrap();
         }
     }
 

@@ -98,6 +98,7 @@ Registering a different codec origin returns 409 until explicitly unregistered.
 | `blobs/read` | POST | Ordered bulk GET of `{chunks:[{key,len}]}`; binary response, one binding GET per entry |
 | `manifest` | GET / POST | Load state; CAS `{expected,next}` returns `{published}` |
 | `manifest/retire` | POST | Opt-in v1 CAS and bounded ordered retirement, described below |
+| `manifest/upload-retire` | POST | Opt-in v1 binary final-chunk upload, durable CAS, then ordered retirement |
 | `gc` | POST | `{expected_generation,live_keys}`; stale generation returns 409 before deletion |
 | `metrics` | GET | Inventory, actual operation counters and per-phase accounting |
 
@@ -137,6 +138,48 @@ authoritative state before its next request; it never republishes or silently
 falls back after an ambiguous attempt. Startup/dirty recovery still reconciles
 orphans and the catalog while preserving every live representation. The existing
 single Native owner contract, storage/cache budgets and compaction policy apply.
+
+A registration may also request `manifest_upload_retire: 1`. The exact reply is
+`{version:1,wire_bytes:16779276,metadata_bytes:1500000,chunk_bytes:16777216,retirement_keys:256}`
+under that field. Absent/unknown versions or different bounds disable this
+independent capability. Registration failure and unregister clear prior local
+capabilities; no probing request is added to a push.
+
+Cloud import explicitly stages only the final new chunk through `StagedPack`
+and privately constructed `PendingChunk`. Ordinary `BlobStore::put`, `store_pack`
+and `store_bundled_pack` remain eager/durable, and local native hard-link imports
+remain eager. Staging reads a virtual pack/index concatenation into one bounded
+chunk, rather than duplicating a whole bundle. Before importing a subsequent new
+pack, the host durably flushes the prior pending tail; unchanged packs do not
+flush it. There is at most one pending 16 MiB tail per receive operation, and no
+pending payload enters SQLite or the response cache.
+
+`POST manifest/upload-retire` carries `GZUP`, little-endian u32 version 1 and u32
+metadata byte length, then UTF-8 JSON `{version:1,expected,next,chunk:{key,len}}`,
+then exactly `len` raw bytes and EOF. The whole frame retains the existing
+16 MiB + 2,060-byte wire ceiling; metadata is at most 1,500,000 bytes, the nonempty
+chunk at most 16 MiB, and debt at most 256 keys. Metadata consumes wire space.
+A full final chunk with too much metadata therefore uses eager fallback before
+any fused request: exactly one ordinary durable PUT, then `publish_retiring`.
+Unknown capability and out-of-bounds debt likewise select fallback before I/O.
+
+The gateway finishes the bounded upload before the DO gate. The DO consumes and
+validates the complete frame, exact/duplicate JSON fields, manifest shape and
+bounds, refs, matching live chunk membership and SHA-256 before mutation. It
+executes the same real PUT/catalog/inventory/high-water helper and storage sync,
+then the existing transactional CAS and sync, then ordered retirement and final
+sync. It adds no HEAD, generation read or per-reference probe. Stale CAS leaves
+a durable upload and performs zero retirement: only authoritative GC may decide
+whether that upload is an orphan, since a winning manifest can share its key.
+
+The required <=32 KiB response is
+`{version:1,uploaded:{key,len},published,retirement}`. Stale publication requires
+explicit `retirement:null`; success requires the exact generation and complete
+ordered outcomes. Rust rejects unknown, missing, duplicate, malformed or trailing
+fields and mismatching upload metadata. The fused request also requires the
+existing valid per-RPC operation-usage receipt. After issuing the request, every
+HTTP/transport/receipt error remains an ambiguous error: no scalar fallback or
+second publication occurs, and native dirty recovery runs before later Git work.
 
 New codec registrations opt into `generation_witness: 1`. The authenticated
 registration response supplies a private random 32-byte HMAC key and random
@@ -268,3 +311,29 @@ failed binding call, successful durable CAS and retained failed debt/blob. It
 then retries cleanup idempotently. The Native Rust HTTP fixture separately
 verifies partial-outcome handling and a lost reply after committed publication,
 including dirty recovery before the next read and absence of duplicate CAS.
+
+## Final-upload failure and restart contracts
+
+The `real_upload_*` Rust contracts compare the new operation with eager PUT plus
+fused retirement, require identical real R2 bytes and SQL rows, exercise stale
+shared keys and orphan GC, and validate exact framing and eager overflow fallback.
+The registered native bundle and gateway contracts cover publication, fetch,
+compaction, codec restart, archive/objects and strict Git fsck.
+
+`test/upload-fault-worker.js` is a test-only wrapper used with
+`test/upload-fault.toml`. The Rust `faulted_upload_barriers_*` contract checks real
+binding failures, interruption between PUT and catalog upsert, both durability
+barriers, partial deletion and lost/corrupt committed receipts. The separate
+`faulted_native_upload_lost_response_*` contract verifies authoritative recovery
+without another PUT or CAS. The wrapper adds no production fault hook or runner.
+
+For a production-config process restart, run `seed_upload_before_workerd_restart`,
+stop/restart Wrangler with the same persist directory, then run
+`verify_upload_after_workerd_restart`, using one stable
+`GIT_ZERO_CLOUDFLARE_RESTART_REPO`. This combines legacy 8 MiB and new 16 MiB
+layouts, fused publication, a durable stale-upload orphan and shared live debt.
+For catalog interruption across restart, use the upload-fault config, a stable
+namespace containing `-upload-catalog-`, and the two Rust contracts
+`seed_upload_catalog_before_workerd_restart` /
+`verify_upload_catalog_after_workerd_restart` in separate Wrangler processes.
+All contracts are ignored by default and require explicit local endpoint/token.
