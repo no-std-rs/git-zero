@@ -748,5 +748,10 @@
     "included_files": 2122,
     "inventoried_files": 2330,
     "packaging": "Offline SHA256/JSON/tar packaging only, actual production test runners are Rust. Raw generated Git directories/R2/SQLite state and ELF binaries excluded; exact binary and omitted Git response hashes retained. All included files carry SHA256+bytes in inventory; no new runtime tests during ledger packaging."
+  },
+  "known_predecessor_diagnostic_limit": {
+    "scope": "Native failed logical-response diagnostic only; source5a unchanged.",
+    "detail": "Private fetch error wrapper returns HTTP503 without adding those error-response bytes to Native.output_bytes after requests/input/cache-miss were incremented. Failed Native output-byte totals are therefore incomplete on this path. This does not omit actual Worker/DO/R2 receipt charges or change authority/mutation safety; materialization/read failure leaves view dirty/Invalid and the next ordinary operation recovers. Failed benchmark trials are invalid, and this ledger makes no complete failed-Native-output claim.",
+    "followup": "Parent reports R16 will correct common error cleanup/output accounting; no R15 source fix, benchmark acceptance or rerun implied."
   }
 }
