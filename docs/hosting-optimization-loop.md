@@ -186,6 +186,13 @@ The actual cross-pack contract observes one Worker/DO service request containing
 bytes; partial missing-object reads retain complete receipts. Both declared and chunked oversized JSON
 requests are rejected before DO dispatch and a following metrics request completes normally.
 
+The next bounded batching hypothesis separates the 16 MiB payload cap from its framing allowance:
+the wire ceiling increases by only 2,060 bytes to 16,779,276 bytes, so two full 8 MiB chunks can share
+one bridge request. It preserves all actual R2 reads and bytes, including repeated keys, and does not
+change chunk storage, frame version, snapshot limits or cache budgets. Fewer bridge calls may lower
+known Worker/DO request costs on cold reads; the aggregate 1% threshold, latency and total runtime
+memory remain unmeasured until the independent paired screens and final validation.
+
 ### Workload clarification: interleaved large writes and historical reads
 
 The user requested a realistic push/fetch sequence instead of treating one write phase and one read phase

@@ -17,11 +17,13 @@ use std::{
 };
 
 const MAX_RESPONSE: usize = 128 * 1024 * 1024;
-const MAX_BULK_RESPONSE: usize = 16 * 1024 * 1024;
+const MAX_BULK_PAYLOAD: usize = 16 * 1024 * 1024;
 const MAX_BULK_KEYS: usize = 256;
 const MAX_MANIFEST_BYTES: usize = 1_500_000;
 const BULK_HEADER_BYTES: usize = 12;
 const BULK_LENGTH_BYTES: usize = 8;
+const MAX_BULK_RESPONSE: usize =
+    MAX_BULK_PAYLOAD + BULK_HEADER_BYTES + BULK_LENGTH_BYTES * MAX_BULK_KEYS;
 const BULK_MAGIC: &[u8; 4] = b"GZBR";
 
 fn validate_bulk_chunks(chunks: &[Chunk]) -> io::Result<()> {
@@ -47,23 +49,34 @@ fn validate_bulk_chunks(chunks: &[Chunk]) -> io::Result<()> {
     Ok(())
 }
 
-/// Larger legacy chunks retain the scalar route. Every bulk frame includes its
-/// header and all length fields in the same 16 MiB bound as the returned bytes.
+/// Larger legacy chunks retain the scalar route. Payload and framing have
+/// separate bounds so two complete 8 MiB chunks fit in one bulk response.
 fn bulk_batch_len(chunks: &[Chunk]) -> usize {
+    let mut payload = 0usize;
     let mut wire = BULK_HEADER_BYTES;
     let mut count = 0;
     for chunk in chunks.iter().take(MAX_BULK_KEYS) {
         if chunk.len == 0 || chunk.len > crate::CHUNK_BYTES as u64 {
             break;
         }
-        let Some(next) = usize::try_from(chunk.len)
-            .ok()
-            .and_then(|len| wire.checked_add(BULK_LENGTH_BYTES)?.checked_add(len))
+        let Ok(len) = usize::try_from(chunk.len) else {
+            break;
+        };
+        let Some(next_payload) = payload
+            .checked_add(len)
+            .filter(|payload| *payload <= MAX_BULK_PAYLOAD)
+        else {
+            break;
+        };
+        let Some(next_wire) = wire
+            .checked_add(BULK_LENGTH_BYTES)
+            .and_then(|wire| wire.checked_add(len))
             .filter(|wire| *wire <= MAX_BULK_RESPONSE)
         else {
             break;
         };
-        wire = next;
+        payload = next_payload;
+        wire = next_wire;
         count += 1;
     }
     count
@@ -509,13 +522,21 @@ mod tests {
     }
 
     #[test]
-    fn bulk_planning_counts_framing_keys_and_legacy_fallback() {
-        let mut chunks = vec![chunk(b"a"); 2];
+    fn bulk_planning_bounds_payload_framing_keys_and_legacy_fallback() {
+        let mut chunks = vec![chunk(b"a"); 3];
         chunks[0].len = crate::CHUNK_BYTES as u64;
-        chunks[1].len = (crate::CHUNK_BYTES - BULK_HEADER_BYTES - 2 * BULK_LENGTH_BYTES) as u64;
+        chunks[1].len = crate::CHUNK_BYTES as u64;
+        assert_eq!(bulk_batch_len(&chunks[..2]), 2);
         assert_eq!(bulk_batch_len(&chunks), 2);
-        chunks[1].len += 1;
-        assert_eq!(bulk_batch_len(&chunks), 1);
+        assert_eq!(bulk_batch_len(&chunks[2..]), 1);
+        assert_eq!(MAX_BULK_RESPONSE, 16_779_276);
+        let mut exact = vec![chunk(b"a"); MAX_BULK_KEYS];
+        for chunk in &mut exact {
+            chunk.len = (MAX_BULK_PAYLOAD / MAX_BULK_KEYS) as u64;
+        }
+        assert_eq!(bulk_batch_len(&exact), MAX_BULK_KEYS);
+        exact[MAX_BULK_KEYS - 1].len += 1;
+        assert_eq!(bulk_batch_len(&exact), MAX_BULK_KEYS - 1);
         assert_eq!(
             bulk_batch_len(&vec![chunk(b"a"); MAX_BULK_KEYS + 1]),
             MAX_BULK_KEYS
@@ -552,6 +573,29 @@ mod tests {
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn bulk_decoder_accepts_full_payload_and_rejects_excess_within_wire_bound() {
+        let full = vec![0x61; crate::CHUNK_BYTES];
+        let chunks = [chunk(&full), chunk(&full)];
+        let valid = frame(&[&full, &full]);
+        assert!(valid.len() > MAX_BULK_PAYLOAD);
+        assert!(valid.len() <= MAX_BULK_RESPONSE);
+        assert_eq!(
+            decode_bulk_response(&chunks, &valid).unwrap(),
+            vec![full.clone(), full.clone()]
+        );
+
+        let excessive = frame(&[&full, &full, b"z"]);
+        assert!(excessive.len() <= MAX_BULK_RESPONSE);
+        assert!(
+            decode_bulk_response(
+                &[chunks[0].clone(), chunks[1].clone(), chunk(b"z")],
+                &excessive
+            )
+            .is_err()
         );
     }
 
@@ -635,6 +679,32 @@ mod tests {
             }
         });
         (HttpServices::new(&origin, "test", "token").unwrap(), server)
+    }
+
+    #[test]
+    fn bulk_bridge_batches_two_full_chunks_before_the_next_byte() {
+        let first = vec![0x61; crate::CHUNK_BYTES];
+        let second = vec![0x62; crate::CHUNK_BYTES];
+        let chunks = vec![chunk(&first), chunk(&second), chunk(b"c")];
+        let (services, server) = fake_services(vec![
+            (
+                "POST /_services/blobs/read ".into(),
+                chunks[..2].to_vec(),
+                200,
+                frame(&[&first, &second]),
+            ),
+            (
+                "POST /_services/blobs/read ".into(),
+                chunks[2..].to_vec(),
+                200,
+                frame(&[b"c"]),
+            ),
+        ]);
+        assert_eq!(
+            services.r2_get_many(&chunks).unwrap(),
+            vec![first, second, b"c".to_vec()]
+        );
+        server.join().unwrap();
     }
 
     #[test]

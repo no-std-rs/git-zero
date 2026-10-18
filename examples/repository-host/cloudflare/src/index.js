@@ -10,9 +10,10 @@ const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1_500_000;
 const MAX_BULK_KEYS = 256;
 const MAX_BULK_CHUNK_BYTES = 8 * 1024 * 1024;
-const MAX_BULK_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_BULK_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const BULK_HEADER_BYTES = 12;
 const BULK_LENGTH_BYTES = 8;
+const MAX_BULK_RESPONSE_BYTES = MAX_BULK_PAYLOAD_BYTES + BULK_HEADER_BYTES + BULK_LENGTH_BYTES * MAX_BULK_KEYS;
 const USAGE_HEADER = "x-git-zero-service-usage";
 const OPERATIONS = new Set(["r2_get", "r2_head", "r2_put", "r2_list", "r2_delete", "manifest_get", "manifest_cas"]);
 const OP_FIELDS = ["attempts", "successes", "failures", "read_bytes", "written_bytes"];
@@ -389,17 +390,19 @@ export class RepositoryServices {
       const body = await parseJson(request, MAX_MANIFEST_BYTES);
       if (!plainObject(body) || !Array.isArray(body.chunks)
           || body.chunks.length === 0 || body.chunks.length > MAX_BULK_KEYS) fail(400, "invalid bulk read shape");
-      let wireBytes = BULK_HEADER_BYTES;
+      let payloadBytes = 0;
       const lengths = new Map();
-      // Validate the complete batch, including framing, before any binding I/O.
+      // Bound payload and framing separately before any binding I/O.
       for (const chunk of body.chunks) {
         if (!plainObject(chunk) || typeof chunk.key !== "string" || chunk.key.length !== 71 || !BLOB.test(chunk.key)
             || !Number.isSafeInteger(chunk.len) || chunk.len <= 0 || chunk.len > MAX_BULK_CHUNK_BYTES
             || (lengths.has(chunk.key) && lengths.get(chunk.key) !== chunk.len)) fail(400, "invalid bulk read chunk");
         lengths.set(chunk.key, chunk.len);
-        wireBytes += BULK_LENGTH_BYTES + chunk.len;
-        if (!Number.isSafeInteger(wireBytes) || wireBytes > MAX_BULK_RESPONSE_BYTES) fail(413, "bulk read response too large");
+        payloadBytes += chunk.len;
+        if (!Number.isSafeInteger(payloadBytes) || payloadBytes > MAX_BULK_PAYLOAD_BYTES) fail(413, "bulk read payload too large");
       }
+      const wireBytes = BULK_HEADER_BYTES + BULK_LENGTH_BYTES * body.chunks.length + payloadBytes;
+      if (!Number.isSafeInteger(wireBytes) || wireBytes > MAX_BULK_RESPONSE_BYTES) fail(413, "bulk read response too large");
       const parts = [];
       // Preserve scalar binding order and repeated-key semantics. Completed
       // reads are charged before checking their expected length or framing.

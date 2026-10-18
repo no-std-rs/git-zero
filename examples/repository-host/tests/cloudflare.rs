@@ -287,6 +287,53 @@ fn bulk_post_status_framed(worker: &RealWorker, body: &[u8], chunked: bool) -> u
 
 #[test]
 #[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_bulk_read_fits_two_full_chunks_and_charges_each_repeated_get() {
+    let worker = RealWorker::new("bulk-full");
+    let services = worker.services();
+    let blobs = R2BlobStore::new(services.clone());
+    let data = vec![0x61; 8 * 1024 * 1024];
+    let chunk = Chunk {
+        key: format!("chunks/{}", hash(&data)),
+        len: data.len() as u64,
+    };
+    blobs.put(&chunk.key, &data).unwrap();
+    let before = usage(&services);
+    assert_eq!(
+        blobs.get_many(&[chunk.clone(), chunk]).unwrap(),
+        vec![data.clone(), data]
+    );
+    let after = usage(&services);
+    let delta = after
+        .workload_counters()
+        .unwrap()
+        .checked_sub(&before.workload_counters().unwrap())
+        .unwrap();
+    assert_eq!(
+        (
+            delta.worker_service_requests,
+            delta.do_requests,
+            delta.r2_class_b,
+            delta.r2_read_bytes
+        ),
+        (1, 1, 2, 16 * 1024 * 1024)
+    );
+    assert_eq!(
+        (delta.r2_class_a, delta.r2_deletes, delta.r2_written_bytes),
+        (0, 0, 0)
+    );
+    let reads_before = operation(&before, "r2_get");
+    let reads_after = operation(&after, "r2_get");
+    assert_eq!(reads_after.attempts - reads_before.attempts, 2);
+    assert_eq!(reads_after.successes - reads_before.successes, 2);
+    assert_eq!(
+        reads_after.read_bytes - reads_before.read_bytes,
+        16 * 1024 * 1024
+    );
+    assert_eq!(after.accounting_complete, Some(true));
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
 fn real_bulk_read_validates_all_bounds_before_binding_io() {
     let worker = RealWorker::new("bulk-bounds");
     let services = worker.services();
@@ -309,7 +356,11 @@ fn real_bulk_read_validates_all_bounds_before_binding_io() {
             400
         );
     }
-    let too_large = serde_json::json!({"chunks": [{"key": key, "len": 8 * 1024 * 1024}, {"key": key, "len": 8 * 1024 * 1024}]});
+    let too_large = serde_json::json!({"chunks": [
+        {"key": key, "len": 8 * 1024 * 1024},
+        {"key": key, "len": 8 * 1024 * 1024},
+        {"key": format!("chunks/{}", hash(b"extra")), "len": 1}
+    ]});
     assert_eq!(
         bulk_post_status(&worker, &serde_json::to_vec(&too_large).unwrap()),
         413
@@ -327,7 +378,7 @@ fn real_bulk_read_validates_all_bounds_before_binding_io() {
         .unwrap();
     assert_eq!(delta.worker_service_requests, invalid.len() as u64 + 3);
     // Both oversized JSON bodies are rejected by the Worker before DO dispatch;
-    // Invalid chunks within the cap and an oversized response budget reach it.
+    // Invalid chunks within the cap and an oversized payload budget reach it.
     assert_eq!(delta.do_requests, invalid.len() as u64 + 1);
     assert_eq!(
         (

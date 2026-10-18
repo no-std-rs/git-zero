@@ -108,16 +108,23 @@ readable; a pack cannot mix the two representations. Local storage retains separ
 files so single-chunk packs and indexes can share immutable blob inodes.
 Snapshot rehydration batches across packs, with no retained chunk cache. Each batch
 allows at most 256 strict `chunks/<64 lowercase hex>` keys, positive lengths up to
-8 MiB, a 1.5 MB JSON request, and 16 MiB for the complete binary response. The frame
+8 MiB, a 1.5 MB JSON request, and 16 MiB of payload. The separate wire limit is
+16 MiB + 12 + 8 × 256 bytes (16,779,276 bytes). The frame
 is `GZBR`, a little-endian u32 version (`1`), a u32 count, then a u64 byte length and
-raw bytes per requested entry. All framing counts toward the response limit.
+raw bytes per requested entry. Its exact allocation is 12 + 8 × entry count +
+payload bytes, allowing two full 8 MiB chunks without splitting the batch.
 Repeated keys retain one actual R2 GET per occurrence. Valid larger legacy chunks
 use scalar GETs. The Rust reader rejects bad framing, lengths and SHA-256 hashes
 before materializing pack files; a failed read leaves the native view dirty.
 The Worker finishes bounded bulk JSON intake before forwarding to the Durable
 Object; oversized uploads return 413 with one Worker request and no DO dispatch.
 Chunk and reconstructed file payloads each stay within the existing 128 MiB
-snapshot limit, with at most one 16 MiB bridge response in flight. An empty
+snapshot limit, with at most one bounded bridge response in flight. The Worker
+holds up to 16 MiB of chunk payload alongside the exact frame allocation; the
+Rust reader holds the frame alongside verified payload copies. These bounds do
+not measure total runtime memory. Existing view and response cache budgets stay
+unchanged. Frame version 1 is unchanged: older clients work with the newer Worker;
+the newer client requires that Worker before sending full payload batches. An empty
 snapshot issues no blob RPC. Failed batches retain receipts for completed binding
 attempts and their actual bytes; an uncertain partial body read marks accounting
 incomplete through the existing missing-receipt path.
