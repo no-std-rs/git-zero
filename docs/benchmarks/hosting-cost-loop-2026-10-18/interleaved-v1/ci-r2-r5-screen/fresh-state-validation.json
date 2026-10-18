@@ -1,0 +1,90 @@
+[
+  {
+    "profile": "16mib-cold",
+    "distinct_state_directories": [
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r2",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r3",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r4",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r5"
+    ],
+    "distinct_worker_pids": [
+      "9316",
+      "25665",
+      "41970",
+      "58341"
+    ],
+    "distinct_report_run_ids": [
+      "9362-18df798d394e5caf",
+      "25709-18df79db158ee27e",
+      "42014-18df7a31623d2fb4",
+      "58383-18df7ac557ec0cfd"
+    ],
+    "all_three_cloudflare_initial_pushes_start_generation_zero": true
+  },
+  {
+    "profile": "16mib-warm",
+    "distinct_state_directories": [
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r2",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r3",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r4",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r5"
+    ],
+    "distinct_worker_pids": [
+      "9334",
+      "25672",
+      "41968",
+      "58325"
+    ],
+    "distinct_report_run_ids": [
+      "9379-18df798a5a5b3db5",
+      "25715-18df79d1ae46f91b",
+      "42010-18df7a25240f5800",
+      "58367-18df7a9b744429db"
+    ],
+    "all_three_cloudflare_initial_pushes_start_generation_zero": true
+  },
+  {
+    "profile": "64mib-cold",
+    "distinct_state_directories": [
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r2",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r3",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r4",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r5"
+    ],
+    "distinct_worker_pids": [
+      "9099",
+      "25468",
+      "41862",
+      "58162"
+    ],
+    "distinct_report_run_ids": [
+      "9142-18df797e8944cbc1",
+      "25514-18df79e7fb25e86d",
+      "41906-18df7a9692a4770a",
+      "58204-18df7b0c1b320bca"
+    ],
+    "all_three_cloudflare_initial_pushes_start_generation_zero": true
+  },
+  {
+    "profile": "64mib-warm",
+    "distinct_state_directories": [
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r2",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r3",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r4",
+      "/home/runner/work/git-zero/git-zero/../hosting-interleaved/state-r5"
+    ],
+    "distinct_worker_pids": [
+      "9318",
+      "25694",
+      "42077",
+      "58375"
+    ],
+    "distinct_report_run_ids": [
+      "9363-18df798813929d35",
+      "25738-18df7a17ca2b0b92",
+      "42119-18df7ab024f2072b",
+      "58420-18df7b22e095f244"
+    ],
+    "all_three_cloudflare_initial_pushes_start_generation_zero": true
+  }
+]

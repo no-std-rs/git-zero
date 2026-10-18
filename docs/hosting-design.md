@@ -422,3 +422,21 @@ ref updates, malformed/truncated packs, missing delta bases, expansion limits,
 restart after every publication boundary, budget exhaustion, cache isolation and
 reader-versus-GC races. A performance claim requires correct reachable contents
 and comparable durability, not merely a fast successful HTTP response.
+
+## Certified branch discovery
+
+Cold Cloudflare upload discovery can use manifest metadata after one complete
+native protocol-v0 advertisement certifies the exact branch set, fixed main HEAD
+and capability order. A bounded native type check also requires branch targets
+to be commits. The learned native agent and capability template retain no refs
+or objects. Strict native branch publications can advance the certificate;
+recovery, external generations or changed codec/configuration invalidate it.
+Tags, unborn repositories, other protocols and unrecognized requests or policies
+keep the ordinary native path. Fetch POSTs still reconstruct the complete view.
+
+`/metrics` reports advertisement shortcuts, native bootstrap attempts and the
+one-time type-check count/time. `cache_bytes` and `cache_entries` describe the
+existing response cache and clear after publication. The separate
+`upload_advertisement_template_bytes` and `cache_retained_bytes` include the
+bounded certificate in the same 32 MiB allocation budget. No certificate is
+persisted, and eligible discovery writes no authoritative state or blobs.

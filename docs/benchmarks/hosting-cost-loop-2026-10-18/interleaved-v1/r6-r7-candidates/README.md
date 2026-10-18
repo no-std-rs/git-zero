@@ -27,9 +27,9 @@ typed 16 MiB reads, corruption rejection and codec restart rehydration. There
 were no failures or retries. The owned runtime was stopped after verification.
 `combined-validation.txt` records the frozen source, commands and outcomes.
 
-The next declared fresh two-pair batch compares R5, R6 and R7 after review of
-the preceding R2–R5 screen. An intermediate R6 suite is shared by adjacent
-comparisons, so results are correlated. There are no benchmark results for these
+The next declared fresh two-pair batch compares R5, R6, R7 and the separately
+reviewed R8 discovery candidate after review of the preceding R2–R5 screen.
+Intermediate suites are shared by adjacent comparisons, so results are correlated. There are no benchmark results for these
 candidates yet. Final validation still requires five fresh pairs of original
 R1 versus the selected final candidate. No speed win, formal acceptance,
 plateau or complete cloud bill is established here.

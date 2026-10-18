@@ -1,0 +1,6 @@
+{
+  "path": "/tmp/git-zero-hosting-loop-artifacts/interleaved-v1/evaluators/zero-get-fix/hosting-cost",
+  "sha256": "01b36df2f5f2019eeb09ebe79eb8ae80e9f86d0cdf39667c9fec9b0584e61fb8",
+  "same_evaluator_source_as_ci": true,
+  "four_scores_and_six_comparisons_identical_to_ci": true
+}

@@ -124,7 +124,7 @@ The [isolated workflow](../.github/workflows/hosting-isolated.yml) runs only on 
 `perf/hosting-isolated-ci-20261018`, or dispatches selecting that branch. Each of the four profiles gets
 a standard `ubuntu-24.04` VM. A screen freshly measures its declared ordered native providers on
 the same VM, once each with two measured pairs and an excluded warmup per backend. The earlier
-R2–R5 batch used four providers; the next R5–R7 batch uses three. Every provider gets a fresh local
+R2–R5 batch used four providers; the next R5–R8 batch also uses four. Every provider gets a fresh local
 Wrangler process and persistent-state directory. No reports from an earlier
 workflow attempt or local workstation may substitute for any provider's measurements.
 
@@ -148,7 +148,7 @@ Its source remains at `scalar-baseline` and its build at `baseline-target` under
 preserving the reference executable's original build paths and hash. Screen native hosts build from
 their pushed `SCREEN_RN_COMMIT` refs at deterministic `providers/rN` source paths and corresponding
 `provider-targets/rN` build paths. The earlier R2–R5 batch used `providers/r2` through `providers/r5`;
-the next batch retains `providers/r5` and adds `providers/r6` and `providers/r7`. Duplicate refs or
+the next batch retains `providers/r5` and adds `providers/r6`, `providers/r7` and `providers/r8`. Duplicate refs or
 native source trees block the screen.
 Provenance records every label, commit, source tree, manifest path/hash and post-run clean status.
 
@@ -187,7 +187,7 @@ overrides the fallback. Fixture, maintenance, cache budgets and guard policies s
 
 The offline Rust scoring job requires all four profiles for every provider and retains all actual
 resource and latency guards in provider scores and all earlier-to-later `rN-vs-rM.json` comparisons
-(six for four providers, three for the next three-provider batch). Full mode writes
+(six for each four-provider batch). Full mode writes
 `comparison.json`; a screen remains formally inconclusive. A green workflow only means that
 measurement and scoring completed. Inspect the comparison decision and reasons before interpreting it.
 Unknown Worker CPU, DO duration, monthly SQLite storage and native compute remain unknown.
@@ -203,15 +203,16 @@ at `e2a54d69ebcd79a157c77c1979d265fbfd44ee81`, failed workflow validation becaus
 not expose the `runner` context. No jobs started and no measurements were collected. Experiment paths
 now use the available `github.workspace` context at job scope, retaining stable paths outside checkout.
 
-## Next declared screen: retirement and verification
+## Next declared screen: retirement, verification and discovery
 
-After the R2–R5 screen is complete and reviewed, the prepared next batch measures
-R5 (`086229b`), R6 fused retirement (`e4cdb32`) and R7 single verification
-(`50e2fd8`). It uses fresh service state and two pairs per provider on each of
-the same four profile VMs, with one warmup per backend. The one freshly measured
-R6 suite serves both adjacent comparisons; these comparisons are correlated.
-All three earlier-to-later comparisons remain visible. No earlier run's reports
-are substituted. The common Worker is pinned to
+After reviewing the complete R2–R5 screen below, the next batch measures the
+provisional R5 anchor (`086229b`), R6 fused retirement (`e4cdb32`), R7 single
+verification (`50e2fd8`) and R8 certified native discovery (`0f9f62e`). It uses
+fresh service state and two pairs per provider on each of the same four profile
+VMs, with one warmup per backend. Intermediate suites serve both adjacent
+comparisons; these comparisons are correlated. All six earlier-to-later
+comparisons remain visible. No earlier run's reports are substituted. The common
+Worker stays pinned to
 `b5ed0af945a3497d31dfbfb449f52e387ddb1f2821a6cdb750656458cc7528d6`;
 R5 registrations do not negotiate the new retirement capability.
 
@@ -225,7 +226,43 @@ The independent combined correctness record covers 80 package tests, strict
 Clippy, and nine real-workerd contracts, including push/fetch, compaction,
 HMAC/cache invalidation, typed 16 MiB reads and restart rehydration.
 
-Neither candidate has benchmark results yet. R6's callback saving is projected;
-R7's CPU reduction has no known-dollar saving in this model. Warm transport/client
-stalls remain unexplained. Final validation still uses five fresh pairs of the
-original scalar R1 and the selected final candidate across all four profiles.
+R8 learns the exact native protocol-v0 branch advertisement after an existing
+full reconstruction and one bounded native commit-type check. Eligible later
+discovery uses authoritative manifest metadata, with no durable metadata or
+object cache. Strict publications can advance the certificate; recovery,
+external generations, changed policy and unsupported requests fall back.
+Actual workerd checks cover byte/header equivalence, zero eligible discovery R2
+reads, fetch contents, strict publication, external-generation fallback and the
+workflow's exact Git environment. Independent source review found no blocker
+after the safe zero-value environment fix. The existing 32 MiB allocation budget
+includes the bounded template, reported separately from the response cache.
+
+R6's callback saving and R8's discovery saving are projections; neither has
+benchmark results yet. R7's CPU reduction has no known-dollar saving in this
+model. The fresh R5 cold traces support an R8 projection of 444 fewer R2 GETs and
+2,311,388,922 fewer read bytes across the two cold profiles per complete workload,
+retaining the first full bootstrap. These are not measured R8 results. Warm
+transport/client stalls remain unexplained. Final validation still uses five
+fresh pairs of original scalar R1 and the selected final candidate across all
+four profiles.
+
+## Completed R2–R5 screen
+
+[Run 39084173778](https://github.com/no-std-rs/git-zero/actions/runs/39084173778)
+completed all four profiles and scoring. Independent verification reproduced all
+four scores and six comparisons from unchanged raw reports. The known fixed
+objective fell from R2 $2.78119593618 through R3 $2.70602893618 and R4
+$2.49482893618 to R5 $2.33324193618, a 16.106524% reduction within this batch.
+All comparisons pass cost, storage, transfer and read/write resource guards.
+
+Every comparison remains formally inconclusive. Besides the mandatory screen
+reason, R5 versus R4 fails four latency groups: 16 MiB cold large pushes, 16 MiB
+warm historical fetches with haves, 64 MiB cold large pushes and 64 MiB warm
+historical fetches without haves. The last group's 138.5-second p95 is retained.
+R5 is the next provisional known-cost anchor, with no acceptance, speed win or
+plateau claim. Final confirmation remains five fresh original-R1/final pairs.
+
+[Published evidence](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r2-r5-screen/README.md)
+includes compressed profiles/scores, every guard and actual host/Git ratios,
+source/VM/binary checks, and explicitly separate fixed and whole-trace counters.
+Worker CPU, DO duration, monthly SQLite storage and native compute remain unknown.
