@@ -1,0 +1,105 @@
+{
+  "kind": "actual staged publication validation, not ledger approval",
+  "source_commit": "b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0",
+  "worktree_was_clean_source_at_stage": true,
+  "source_review_original_json": {
+    "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0.json",
+    "bytes": 43128,
+    "sha256": "c9f187a936179e6b21cbc1a7eaa9a4058137c9702214dfd9d7f2175b8a5af270"
+  },
+  "source_review_original_md": {
+    "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0.md",
+    "bytes": 3880,
+    "sha256": "48cbc77039e536cabf50f96ae98875369904e096962be765b97defffd88b1f2f"
+  },
+  "capsule": {
+    "path": "/tmp/git-zero-hosting-joint-chunk/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r20-joint-chunk-candidate/raw-evidence.tar.gz",
+    "bytes": 3412997,
+    "sha256": "c73685d787d9b4d31e47b93975a285e76eef36faf0ab9cd00fb4a4a34f6ac64e"
+  },
+  "manifest": {
+    "path": "/tmp/git-zero-joint-docs-stage-v1/capsule/CAPSULE-MANIFEST.json",
+    "bytes": 1779023,
+    "sha256": "3ae4f61cd683e595968cecdb64e1bbd62374c014080c7e46e829df3124cf8ee4"
+  },
+  "all_members_reopened_and_SHA_verified": true,
+  "member_count": 4090,
+  "member_bytes": 34630037,
+  "local_raw_files_all_exist_type_size_rechecked": 7684,
+  "local_raw_SHA_provenance": "Author exhaustive inventories independently rehashed by SOURCE reviewer; raw scopes stopped and unchanged. Not claiming to rehash every raw byte again during packaging.",
+  "current_runtime_map_files_all7_freshly_SHA_verified": {
+    "native_binary": {
+      "path": "/tmp/git-zero-joint-chunk-target-j2/debug/repository-host",
+      "bytes": 33989976,
+      "sha256": "2633e97fa9f50afa3b17fe53bdc39e42b1f0ff011f3bed4084c717afc4ffc507"
+    },
+    "runner_binary": {
+      "path": "/tmp/git-zero-joint-chunk-target-j2/debug/deps/multi_chunk_cloudflare-dcddae24be8f3d8c",
+      "bytes": 38069568,
+      "sha256": "29fa1c4cfb9a9175b505fb3269ea0cdc05e16f6a2c78981f0caeebcc5287b3e3"
+    },
+    "runtime_node": {
+      "path": "/home/pawel/.local/bin/node",
+      "bytes": 129491456,
+      "sha256": "141542ec0c8f73b568cd774ea8df43f23768cb086eb5bf21d2dea33072fb2f56"
+    },
+    "runtime_workerd_binary": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/@cloudflare/workerd-linux-64/bin/workerd",
+      "bytes": 134840256,
+      "sha256": "3ee1cc5b09497de8f47f513b5c5c485da99a9fc8b188b5618cb05de63f3b4b64"
+    },
+    "runtime_workerd_entry": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/workerd/bin/workerd",
+      "bytes": 5770,
+      "sha256": "373ae419539ba6ea40e5d89aec00a6b33ea6894e37e50ed3ff55c281602bde64"
+    },
+    "runtime_wrangler_cli": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/wrangler-dist/cli.js",
+      "bytes": 15017387,
+      "sha256": "31866b9a3686777254819158e60ebe4920d1d91141cde68846c62b52f75d7a66"
+    },
+    "runtime_wrangler_entry": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js",
+      "bytes": 3088,
+      "sha256": "780661a508810f3b65786895b1ca9aacbc4f55d329ae6b8c1e49ec8433569f77"
+    }
+  },
+  "current_supporting_paths_freshly_SHA_verified": 46,
+  "no_unsafe_archive_members": true,
+  "missing_current_actual_files": [],
+  "historical_v1_runner_ELF_is_explicitly_absent": true,
+  "large_ELF_state_pack_payloads_published": false,
+  "stage_program": {
+    "path": "/tmp/git-zero-joint-build-ledger.py",
+    "bytes": 18072,
+    "sha256": "d4fe5b8a56a0f0f9dfaacdfb0693877aaafb1e78447331eaa9ee18abc23fed44"
+  },
+  "ledger_review": "PENDING",
+  "staged_readme_count_correction": "Explicit eighteen-root decomposition: six pair roots +five offline proof attempts +one failed runtime +six bounded controls. Handed-off source/raw evidence unchanged.",
+  "finalize_stage_program": {
+    "path": "/tmp/git-zero-joint-docs-finalize-stage.py",
+    "bytes": 1994,
+    "sha256": "5a3494892ca30db48e13702b4200f734cd6c604da0ebbc4969332ad939b5ba9d"
+  },
+  "all_copied_original_paths_freshly_SHA_verified": true,
+  "copied_original_paths_verified": 4088,
+  "publication_producer_correction": {
+    "preserved_intermediate_capsule": {
+      "path": "/tmp/git-zero-joint-docs-stage-v1/raw-evidence-intermediate-v1.tar.gz",
+      "bytes": 3410030,
+      "sha256": "237796d1c3f1aa0dbb8b99b945a7bb50044f6043c6b99ba65df89781c78e70c2"
+    },
+    "reason": "Initial builder copied its own still-empty redirected log; final complete log recopied and every original path freshly reverified. Source and raw correctness evidence unchanged.",
+    "historical_replaced_capsule_identity": {
+      "original_path_when_created": "/tmp/git-zero-joint-docs-stage-v1/r20-joint-chunk-candidate/raw-evidence.tar.gz",
+      "bytes": 3410030,
+      "sha256": "237796d1c3f1aa0dbb8b99b945a7bb50044f6043c6b99ba65df89781c78e70c2",
+      "scope": "Historical replaced output path, not a fresh actual-file claim; current exact bytes preserved at preserved_intermediate_capsule.path."
+    }
+  },
+  "reseal_program": {
+    "path": "/tmp/git-zero-joint-docs-reseal.py",
+    "bytes": 4185,
+    "sha256": "5df3915ab0c797a177383a6048e680999f61e22408d1fe3073585d727b6543e6"
+  }
+}

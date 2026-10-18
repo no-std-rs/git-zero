@@ -1,0 +1,57 @@
+{
+  "kind": "final owned runtime cleanup and resource snapshot; no deletion or new runtime",
+  "at_utc": "2026-10-18T12:00:10.046648+00:00",
+  "host_namespace": "actual escalated runtime mount, default sandbox hides /dev/shm",
+  "owned_runtime_process_matches": [],
+  "process_visibility_limits": {
+    "unreadable_own_uid_proc_entries": 22,
+    "vanished_during_scan": 33,
+    "scope": "Known Native/runner executables and known runtime roles with owned-artifact cwd; unrelated applications not inspected for FD contents."
+  },
+  "owned_ports": [
+    {
+      "port": 8845,
+      "bind_available": true
+    },
+    {
+      "port": 8846,
+      "bind_available": true
+    }
+  ],
+  "memory": {
+    "MemTotal": 134165352448,
+    "MemAvailable": 53223489536,
+    "Shmem": 17583030272
+  },
+  "tmp_available_bytes": 5559894016,
+  "shm_available_bytes": 48653934592,
+  "volatile_roots_logical_bytes": {
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01": 546059020,
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01": 546075286,
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01": 478135769,
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01": 953843903,
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01": 603189901,
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01": 497334239,
+    "/dev/shm/git-zero-joint-correctness-20261018/canonical64-latest-recheck-24-proof-01": 480463518,
+    "/dev/shm/git-zero-joint-correctness-20261018/canonical64-joint-01": 3339631223,
+    "/dev/shm/git-zero-joint-correctness-20261018/fallback64-body24-proof-01": 472016097,
+    "/dev/shm/git-zero-joint-correctness-20261018/fallback64-body22-proof-01": 472008871,
+    "/dev/shm/git-zero-joint-correctness-20261018/canonical64-multi-01": 3339653225,
+    "/dev/shm/git-zero-joint-correctness-20261018/first64-joint-01": 3341262202,
+    "/dev/shm/git-zero-joint-correctness-20261018/first64-multi-02": 3341423253
+  },
+  "volatile_total_logical_bytes": 18411096507,
+  "artifact_budget_bytes": 25769803776,
+  "active_process_planning_allowance_bytes": 3221225472,
+  "minimum_pre_scope_memavailable_bytes": 42949672960,
+  "per_scope_planning_correction": {
+    "warm_actual_bytes": 546075286,
+    "HTTP_actual_bytes": 546059020,
+    "each_planned_upper_bytes": 536870912,
+    "note": "Both exceeded the per-scope estimate by about9.2MB; all actual totals stayed below authorized24GiB, preflight RAM threshold satisfied, no later runtime scopes planned."
+  },
+  "production_cache_budget_bytes": 33554432,
+  "production_cache_budget_unchanged": true,
+  "evidence_or_source_deleted": false,
+  "compiler_cache_removed": false
+}
