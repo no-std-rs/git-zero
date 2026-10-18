@@ -629,6 +629,7 @@ pub enum ProtectedChunkMode {
     Off,
     One,
     Multi,
+    Joint,
 }
 
 pub struct NativeHost {
@@ -724,7 +725,7 @@ impl NativeHost {
         match self.protected_mode {
             ProtectedChunkMode::Off => 0,
             ProtectedChunkMode::One => 1,
-            ProtectedChunkMode::Multi => 32,
+            ProtectedChunkMode::Multi | ProtectedChunkMode::Joint => 32,
         }
     }
 
@@ -736,7 +737,7 @@ impl NativeHost {
     ) -> io::Result<Self> {
         let view = root.join("view/repo.git");
         let protected_mode = if cloudflare.is_some() && cold_view {
-            ProtectedChunkMode::Multi
+            ProtectedChunkMode::Joint
         } else {
             ProtectedChunkMode::Off
         };
@@ -879,6 +880,7 @@ impl NativeHost {
         } else {
             0
         };
+        let mode = self.protected_mode;
         let chunks = &mut self.protected_chunks;
         let metrics = &mut self.metrics;
         let resolved = self.repository.read_snapshot_selection_cached(
@@ -894,6 +896,7 @@ impl NativeHost {
                     limit,
                     non_chunk_bytes,
                     response_entries,
+                    mode,
                 );
             },
         )?;
@@ -1866,6 +1869,7 @@ impl NativeHost {
             limit,
             non_chunk_bytes,
             self.cache.len(),
+            self.protected_mode,
         );
         self.note_joint_retention();
     }
@@ -1877,6 +1881,7 @@ impl NativeHost {
         limit: usize,
         non_chunk_bytes: usize,
         response_entries: usize,
+        mode: ProtectedChunkMode,
     ) {
         if limit == 0
             || candidate.bytes().len() > CACHE_ENTRY_BYTES
@@ -1900,7 +1905,9 @@ impl NativeHost {
         // Unallocated admission heuristic only: no response cap or owned reserve.
         let secondary_headroom = 15 * 1024 * 1024;
         if non_chunk_bytes + chunk_needed > CACHE_BYTES
-            || (!chunks.is_empty() && chunk_needed > CACHE_BYTES - secondary_headroom)
+            || (mode == ProtectedChunkMode::Multi
+                && !chunks.is_empty()
+                && chunk_needed > CACHE_BYTES - secondary_headroom)
         {
             metrics.protected_chunk_rejections += 1;
             return;
@@ -2520,74 +2527,162 @@ mod tests {
 
     #[test]
     fn multi_chunk_pool_and_joint_entry_limits_reclaim_newest_secondary_first() {
-        let root =
-            std::env::temp_dir().join(format!("git-zero-multi-entries-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        let mut host = NativeHost::open(root.clone()).unwrap();
-        host.protected_mode = ProtectedChunkMode::Multi;
-        host.ordinary_chunk_admission = true;
-        for index in 0..32u8 {
-            host.admit_protected_chunk(verified_payload(vec![index; 100]));
-        }
-        assert_eq!(host.protected_chunks.len(), 32);
-        let anchor = host.protected_chunks[0].descriptor().clone();
-        let newest = host.protected_chunks[31].descriptor().clone();
-        host.admit_protected_chunk(verified_payload(vec![99; 100]));
-        assert_eq!(host.protected_chunks.len(), 32);
-        assert_eq!(host.metrics.protected_chunk_rejections, 1);
-        for index in 0..224 {
+        for mode in [ProtectedChunkMode::Multi, ProtectedChunkMode::Joint] {
+            let root = std::env::temp_dir().join(format!(
+                "git-zero-multi-entries-{}-{mode:?}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            let mut host = NativeHost::open(root.clone()).unwrap();
+            host.protected_mode = mode;
+            host.ordinary_chunk_admission = true;
+            for index in 0..32u8 {
+                host.admit_protected_chunk(verified_payload(vec![index; 100]));
+            }
+            assert_eq!(host.protected_chunks.len(), 32);
+            let anchor = host.protected_chunks[0].descriptor().clone();
+            let newest = host.protected_chunks[31].descriptor().clone();
+            host.admit_protected_chunk(verified_payload(vec![99; 100]));
+            assert_eq!(host.protected_chunks.len(), 32);
+            assert_eq!(host.metrics.protected_chunk_rejections, 1);
+            for index in 0..224 {
+                host.cache_insert(
+                    index.to_string(),
+                    &Response {
+                        status: 200,
+                        headers: BTreeMap::new(),
+                        body: Arc::from([1u8]),
+                    },
+                );
+            }
+            assert_eq!(host.joint_cache_entries(), 256);
+            assert_eq!(host.protected_chunks.len(), 32);
             host.cache_insert(
-                index.to_string(),
+                "pressure-one-more".into(),
                 &Response {
                     status: 200,
                     headers: BTreeMap::new(),
                     body: Arc::from([1u8]),
                 },
             );
+            assert_eq!(host.protected_chunks.len(), 31);
+            assert_eq!(host.protected_chunks[0].descriptor(), &anchor);
+            assert!(
+                !host
+                    .protected_chunks
+                    .iter()
+                    .any(|v| v.descriptor() == &newest)
+            );
+            assert_eq!(host.metrics.protected_chunk_pressure_evictions, 1);
+            assert_eq!(host.joint_cache_entries(), 256);
+            assert!(host.cache_bytes + host.metadata_bytes() <= CACHE_BYTES);
+            fs::remove_dir_all(root).unwrap();
         }
-        assert_eq!(host.joint_cache_entries(), 256);
-        assert_eq!(host.protected_chunks.len(), 32);
-        host.cache_insert(
-            "pressure-one-more".into(),
-            &Response {
-                status: 200,
-                headers: BTreeMap::new(),
-                body: Arc::from([1u8]),
-            },
-        );
-        assert_eq!(host.protected_chunks.len(), 31);
-        assert_eq!(host.protected_chunks[0].descriptor(), &anchor);
-        assert!(
-            !host
-                .protected_chunks
-                .iter()
-                .any(|v| v.descriptor() == &newest)
-        );
-        assert_eq!(host.metrics.protected_chunk_pressure_evictions, 1);
-        assert_eq!(host.joint_cache_entries(), 256);
-        assert!(host.cache_bytes + host.metadata_bytes() <= CACHE_BYTES);
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn observer_full_recovery_cannot_admit_or_prune_the_immutable_pool() {
+        for mode in [ProtectedChunkMode::Multi, ProtectedChunkMode::Joint] {
+            let root = std::env::temp_dir().join(format!(
+                "git-zero-multi-observer-{}-{mode:?}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            let mut host = NativeHost::open(root.clone()).unwrap();
+            host.protected_mode = mode;
+            host.ordinary_chunk_admission = true;
+            host.admit_protected_chunk(verified_payload(vec![1; 100]));
+            host.ordinary_chunk_admission = false;
+            host.recover().unwrap();
+            assert_eq!(host.protected_chunks.len(), 1);
+            assert_eq!(host.metrics.protected_chunk_admissions, 1);
+            assert_eq!(host.metrics.protected_chunk_prunes, 0);
+            host.ordinary_chunk_admission = true;
+            host.recover().unwrap();
+            assert!(host.protected_chunks.is_empty());
+            assert_eq!(host.metrics.protected_chunk_prunes, 1);
+            assert_eq!(host.metrics.protected_chunk_admissions, 1);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn joint_admits_past_multi_headroom_but_preserves_actual_budget_and_response_priority() {
         let root =
-            std::env::temp_dir().join(format!("git-zero-multi-observer-{}", std::process::id()));
+            std::env::temp_dir().join(format!("git-zero-joint-policy-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        let mut host = NativeHost::open(root.clone()).unwrap();
-        host.protected_mode = ProtectedChunkMode::Multi;
-        host.ordinary_chunk_admission = true;
-        host.admit_protected_chunk(verified_payload(vec![1; 100]));
-        host.ordinary_chunk_admission = false;
-        host.recover().unwrap();
-        assert_eq!(host.protected_chunks.len(), 1);
-        assert_eq!(host.metrics.protected_chunk_admissions, 1);
-        assert_eq!(host.metrics.protected_chunk_prunes, 0);
-        host.ordinary_chunk_admission = true;
-        host.recover().unwrap();
-        assert!(host.protected_chunks.is_empty());
-        assert_eq!(host.metrics.protected_chunk_prunes, 1);
-        assert_eq!(host.metrics.protected_chunk_admissions, 1);
+        let mut multi = NativeHost::open(root.join("multi")).unwrap();
+        let mut joint = NativeHost::open(root.join("joint")).unwrap();
+        multi.protected_mode = ProtectedChunkMode::Multi;
+        joint.protected_mode = ProtectedChunkMode::Joint;
+        multi.ordinary_chunk_admission = true;
+        joint.ordinary_chunk_admission = true;
+        let anchor = verified_payload(vec![1; 9 * 1024 * 1024]);
+        let secondary = verified_payload(vec![2; 4 * 1024 * 1024]);
+        let extra = verified_payload(vec![3; 5 * 1024 * 1024]);
+        for candidate in [&anchor, &secondary, &extra] {
+            multi.admit_protected_chunk(candidate.clone());
+            joint.admit_protected_chunk(candidate.clone());
+        }
+        assert_eq!(multi.protected_chunks.len(), 2);
+        assert_eq!(multi.metrics.protected_chunk_rejections, 1);
+        assert_eq!(joint.protected_chunks.len(), 3);
+        assert_eq!(joint.metrics.protected_chunk_rejections, 0);
+        assert!(joint.protected_bytes() > CACHE_BYTES - 15 * 1024 * 1024);
+        let before = joint
+            .protected_chunks
+            .iter()
+            .map(|v| v.descriptor().clone())
+            .collect::<Vec<_>>();
+        joint.admit_protected_chunk(verified_payload(vec![4; CACHE_ENTRY_BYTES]));
+        assert_eq!(
+            joint
+                .protected_chunks
+                .iter()
+                .map(|v| v.descriptor().clone())
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert_eq!(joint.metrics.protected_chunk_rejections, 1);
+        assert_eq!(
+            joint.metrics.protected_chunk_evictions, 0,
+            "admission never replaces an owner"
+        );
+        let later = verified_payload(vec![5; 3 * 1024 * 1024]);
+        joint.admit_protected_chunk(later);
+        assert_eq!(
+            joint.protected_chunks.len(),
+            4,
+            "scan continues after a rejected miss"
+        );
+        assert!(joint.reserve_metadata(12 * 1024 * 1024));
+        assert_eq!(
+            joint.protected_chunks.len(),
+            3,
+            "required control evicts newest secondary first"
+        );
+        assert_eq!(
+            joint.protected_chunks.last().unwrap().descriptor(),
+            extra.descriptor()
+        );
+        joint.cache_insert(
+            "exact-16m-response".into(),
+            &Response {
+                status: 200,
+                headers: BTreeMap::new(),
+                body: Arc::from(vec![6; CACHE_ENTRY_BYTES]),
+            },
+        );
+        assert_eq!(joint.cache.len(), 1);
+        assert_eq!(joint.protected_chunks.len(), 2);
+        assert_eq!(joint.protected_chunks[0].descriptor(), anchor.descriptor());
+        assert_eq!(
+            joint.protected_chunks[1].descriptor(),
+            secondary.descriptor()
+        );
+        assert_eq!(joint.metrics.cache_evictions, 0);
+        assert!(joint.cache_bytes + joint.metadata_bytes() <= CACHE_BYTES);
+        assert!(joint.metrics.joint_cache_retained_peak_bytes <= CACHE_BYTES as u64);
         fs::remove_dir_all(root).unwrap();
     }
 

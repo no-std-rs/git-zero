@@ -1,0 +1,749 @@
+{
+  "kind": "independent exact-SHA SOURCE-only review",
+  "at_utc": "2026-10-18T12:07:08.638703+00:00",
+  "decision": "SOURCE_APPROVED",
+  "source_commit": "b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0",
+  "source_parent": "f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5",
+  "source_worktree": "/tmp/git-zero-hosting-joint-chunk",
+  "worktree_clean_at_final_decision": true,
+  "source_blockers": [],
+  "source_findings": [
+    {
+      "invariant": "Generic Joint/default/control semantics",
+      "result": "PASS",
+      "evidence": "Joint joins Multi's 32-owner limit and bypasses only Multi's 15MiB unallocated secondary-admission heuristic; cold Cloudflare API and CLI default Joint, warm/local Off, off/on=One/one/Multi unchanged.",
+      "source": "examples/repository-host/src/native.rs:625,725,737,1905 and src/bin/repository-host.rs:21,80"
+    },
+    {
+      "invariant": "Actual ownership and required pressure priority",
+      "result": "PASS",
+      "evidence": "Actual 32MiB owning-byte and 256 combined-entry checks remain; pool32, chunk/response16MiB and socket262144 unchanged. Required metadata/response retention evicts newest secondary then anchor before response FIFO. Admission is first-fit and never replaces live owners; allocator and held-plan controls exercise pressure.",
+      "source": "examples/repository-host/src/native.rs:1757,1802,1880,1949"
+    },
+    {
+      "invariant": "Authority, verified bytes, masks, tokens and accounting",
+      "result": "PASS",
+      "evidence": "Only ordinary verified GETs can admit; startup/observer/PUT cannot. Current-authoritative Full pruning, exact descriptor validation, signed cached masks/continuation revalidation, Full stable token, registration checks, request-error resets and synchronous GC/fault/NULL accounting are unchanged production paths.",
+      "source": "examples/repository-host/src/native.rs:770,873,1928,1980,2140,2233"
+    },
+    {
+      "invariant": "Change boundary",
+      "result": "PASS",
+      "evidence": "Exactly native.rs, CLI and Rust gate change. All six production Worker modules and whole Cloudflare tree equal R19; dependencies/lock, rates, scorer, benchmark workload, production configuration, transport/schema stay unchanged."
+    }
+  ],
+  "Native_tree": "ff99eaf58a5e4f68e744d0b50ddee2af67aff1cf",
+  "Worker_six_modules_tree": "7f41db4407963ed04e6cbe19556b1416633caf18",
+  "whole_Native_source_file_SHA_is_not_ELF_identity": {
+    "bytes": 138095,
+    "sha256": "59d2e8ed53ba8d15c2eb99aea5b7aeb18a31111715ded1c4265961b6851e2cde",
+    "includes_tests": true
+  },
+  "author_final_handoff": {
+    "path": "/tmp/git-zero-joint-chunk-source-handoff.json",
+    "bytes": 41154,
+    "sha256": "fd0720e9646777e04fbe4b36d22c20afadf14fc3c9f8fbeb166bc12073032f8b"
+  },
+  "author_final_handoff_markdown": {
+    "path": "/tmp/git-zero-joint-chunk-source-handoff.md",
+    "bytes": 6826,
+    "sha256": "31f11fa6ab60ee427a627eed23f1d2e0a080d2ed1dd1f939009dec771f6dc118"
+  },
+  "every_handoff_file_record_independently_rehashed": {
+    "/tmp/git-zero-joint-native-v1-binary": {
+      "path": "/tmp/git-zero-joint-native-v1-binary",
+      "bytes": 33989976,
+      "sha256": "2633e97fa9f50afa3b17fe53bdc39e42b1f0ff011f3bed4084c717afc4ffc507"
+    },
+    "/tmp/git-zero-joint-driver-v2-binary": {
+      "path": "/tmp/git-zero-joint-driver-v2-binary",
+      "bytes": 38069568,
+      "sha256": "29fa1c4cfb9a9175b505fb3269ea0cdc05e16f6a2c78981f0caeebcc5287b3e3"
+    },
+    "/tmp/git-zero-joint-driver-v2.rs": {
+      "path": "/tmp/git-zero-joint-driver-v2.rs",
+      "bytes": 71474,
+      "sha256": "8ec5cae65982223f19efb8f06f955726705fefe65eb2e88e0b04106d1d4dde17"
+    },
+    "/tmp/git-zero-joint-first-pair-driver-v1.rs": {
+      "path": "/tmp/git-zero-joint-first-pair-driver-v1.rs",
+      "bytes": 69931,
+      "sha256": "c2efb9c0759ef57c2e9dce36f40a89f7381d00c1fe8ff376c2b11e85e234048a"
+    },
+    "/tmp/git-zero-joint-source-freeze.json": {
+      "path": "/tmp/git-zero-joint-source-freeze.json",
+      "bytes": 24428,
+      "sha256": "5d23fcd33e9cf3cfcbdd0048a16c976f987c1e4a1d097ce6eab2f813fec2b0e1"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/Cargo.toml": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/Cargo.toml",
+      "bytes": 765,
+      "sha256": "8d8bc0f8b2ca29657c37268b36fe6c382d21baf1f6576e6262dd3f5b1b2977cd"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/catalog-pages.js": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/catalog-pages.js",
+      "bytes": 4899,
+      "sha256": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/first-read.js": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/first-read.js",
+      "bytes": 11900,
+      "sha256": "3535717a794e0c0b0fcf3f4777271124ce51fc74b47db7d094843396e06374ac"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/index.js": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/index.js",
+      "bytes": 91566,
+      "sha256": "0b3183bb89d7920c9f1d0868895ec13414d74e74e096f8181b30654e418c0bbd"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/inline-catalog.js": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/inline-catalog.js",
+      "bytes": 3591,
+      "sha256": "b13edf1cc493e814b1b08b406c48b5544122bbaa6130e01d71d7e6555b2aec71"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/retirement-proof.js": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/retirement-proof.js",
+      "bytes": 4361,
+      "sha256": "3ce5c71f08af064d65c712c38d64bf1c2ad75fbf861708d882f8bb14348a182c"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/service-socket.js": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/src/service-socket.js",
+      "bytes": 8306,
+      "sha256": "7cc97f945dff95a852a3c268ba5b4b44d10d03e2f2d4fee9624768a66bd6d81c"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/test/first-read-worker.js": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/test/first-read-worker.js",
+      "bytes": 11194,
+      "sha256": "247727e47a75a187fffdcbb746299f873f392ea64bc37451084d2a7cc1621226"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/test/small-receive-worker.js": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/test/small-receive-worker.js",
+      "bytes": 5421,
+      "sha256": "46241bd435b189868cc49175cced5206d70a64a425628a3a73aca0808e98d0d7"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/test/socket-rpc-worker.js": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/test/socket-rpc-worker.js",
+      "bytes": 5532,
+      "sha256": "7498264aad0756487ea53ae77a2202cceb205a5a185dc98460102bc427d20aa3"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/wrangler.toml": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/cloudflare/wrangler.toml",
+      "bytes": 493,
+      "sha256": "4d35c7af5e0725605b99801be715e53405689036a53c9df2682eba411cea353d"
+    },
+    "/tmp/git-zero-joint-chunk-target-j2/debug/repository-host": {
+      "path": "/tmp/git-zero-joint-chunk-target-j2/debug/repository-host",
+      "bytes": 33989976,
+      "sha256": "2633e97fa9f50afa3b17fe53bdc39e42b1f0ff011f3bed4084c717afc4ffc507"
+    },
+    "/tmp/git-zero-joint-chunk-target-j2/debug/deps/multi_chunk_cloudflare-dcddae24be8f3d8c": {
+      "path": "/tmp/git-zero-joint-chunk-target-j2/debug/deps/multi_chunk_cloudflare-dcddae24be8f3d8c",
+      "bytes": 38069568,
+      "sha256": "29fa1c4cfb9a9175b505fb3269ea0cdc05e16f6a2c78981f0caeebcc5287b3e3"
+    },
+    "/home/pawel/.local/bin/node": {
+      "path": "/home/pawel/.local/bin/node",
+      "bytes": 129491456,
+      "sha256": "141542ec0c8f73b568cd774ea8df43f23768cb086eb5bf21d2dea33072fb2f56"
+    },
+    "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/@cloudflare/workerd-linux-64/bin/workerd": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/@cloudflare/workerd-linux-64/bin/workerd",
+      "bytes": 134840256,
+      "sha256": "3ee1cc5b09497de8f47f513b5c5c485da99a9fc8b188b5618cb05de63f3b4b64"
+    },
+    "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/workerd/bin/workerd": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/workerd/bin/workerd",
+      "bytes": 5770,
+      "sha256": "373ae419539ba6ea40e5d89aec00a6b33ea6894e37e50ed3ff55c281602bde64"
+    },
+    "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/wrangler-dist/cli.js": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/wrangler-dist/cli.js",
+      "bytes": 15017387,
+      "sha256": "31866b9a3686777254819158e60ebe4920d1d91141cde68846c62b52f75d7a66"
+    },
+    "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js",
+      "bytes": 3088,
+      "sha256": "780661a508810f3b65786895b1ca9aacbc4f55d329ae6b8c1e49ec8433569f77"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/accounting.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/accounting.rs",
+      "bytes": 10273,
+      "sha256": "4f2f265d0766c78bcb1540e8b57a85eaf94392aa55692ae8d6ed33859cfae000"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/benchmark_cost.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/benchmark_cost.rs",
+      "bytes": 93500,
+      "sha256": "0dc340f39d51c4baf86e7d8b142f0a02ffaf9dc10345af7c22b27d59fc581401"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/bin/hosting-bench.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/bin/hosting-bench.rs",
+      "bytes": 91804,
+      "sha256": "6c430861588e94d278bc5541d4f3b8196ce75888d5d11e658c2cccf37a6220ea"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/bin/hosting-cost.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/bin/hosting-cost.rs",
+      "bytes": 2260,
+      "sha256": "5840e26bf04c3d3672823cfdd4ac26395060d05162462087d5e850a805e6c3e2"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/bin/repository-host.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/bin/repository-host.rs",
+      "bytes": 7293,
+      "sha256": "838cbb6a5e71eba406fb9ec5fb578a22b0b232695ae8adfdc253f3f852655d6d"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/cloudflare.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/cloudflare.rs",
+      "bytes": 109205,
+      "sha256": "3ba886c9827e5e2d5f064c899245bb19f00b03c114c63c5568086b6a3f4a34ab"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/cost.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/cost.rs",
+      "bytes": 23199,
+      "sha256": "fd27fe75cb9a87117151eb779ff561ddf8a02b550e10f5d7b1ddd4b2181b6756"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/first_read.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/first_read.rs",
+      "bytes": 27043,
+      "sha256": "37e2988a6e2ad39fcb86cba5828d6ef09baa549e0506fa075460d09bdd0ba2af"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/http.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/http.rs",
+      "bytes": 5734,
+      "sha256": "d41038c465141ddfc8cb7c839798798531225ffea248283ba743ee5605694fae"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/lib.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/lib.rs",
+      "bytes": 65552,
+      "sha256": "36c9972f73efaa0b63abb699f380f207e4a85a4e657764049833aa254f84eb5d"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native.rs",
+      "bytes": 138095,
+      "sha256": "59d2e8ed53ba8d15c2eb99aea5b7aeb18a31111715ded1c4265961b6851e2cde"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native/advertisement.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native/advertisement.rs",
+      "bytes": 12984,
+      "sha256": "f4f506457de44c986033f10959db39ae4b48dad7e308d0c56fcbdea8295c972e"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native/advertisement_tests.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native/advertisement_tests.rs",
+      "bytes": 23682,
+      "sha256": "aeeff036299819cfcb3ec7f1cce6235601dae307a51072cff0fd85aa65f0974f"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native/history.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native/history.rs",
+      "bytes": 21101,
+      "sha256": "b30f3432e3d6b09d872fd0d10271c90b9398d75a335bb1a1775a1c7449e66d93"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native/history_tests.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/native/history_tests.rs",
+      "bytes": 19897,
+      "sha256": "3d435ba4c341a81c9b235af163b77f151476c096a2f6ceb3a2086f1d465fe7ce"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/objects.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/objects.rs",
+      "bytes": 7228,
+      "sha256": "de2e702f8d09433efc7db068ca4c3a69317d66d5dd27e0b884c126d5d25e813c"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/packed.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/packed.rs",
+      "bytes": 23557,
+      "sha256": "6c07f19d1f3b4d7d3233d0220a52e5197ba2bea29cfb117b112a5f5b14bf984b"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/socket_rpc.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/socket_rpc.rs",
+      "bytes": 18106,
+      "sha256": "64d6c5b4732772bd1e14017e55103a2307e59ef2d543f7e82406579847019ef6"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/storage.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/src/storage.rs",
+      "bytes": 53337,
+      "sha256": "ce78fb2c374242bdc815252ae740f3d235f1542ae0cf0e9ddb489934f464f3e4"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/tests/multi_chunk_cloudflare.rs": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/tests/multi_chunk_cloudflare.rs",
+      "bytes": 71474,
+      "sha256": "8ec5cae65982223f19efb8f06f955726705fefe65eb2e88e0b04106d1d4dde17"
+    },
+    "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/../../Cargo.lock": {
+      "path": "/tmp/git-zero-hosting-joint-chunk/examples/repository-host/../../Cargo.lock",
+      "bytes": 20651,
+      "sha256": "224e646bb181d2b0d006b36c36e34fd467c667067286837631ea252b400318b9"
+    },
+    "/tmp/git-zero-joint-library-final-01.log": {
+      "path": "/tmp/git-zero-joint-library-final-01.log",
+      "bytes": 12992,
+      "sha256": "78472e934156021519ab6940dbfbc2897ffd6edc6aed7fface7ed1563126bc4b"
+    },
+    "/tmp/git-zero-joint-library-01.log": {
+      "path": "/tmp/git-zero-joint-library-01.log",
+      "bytes": 13086,
+      "sha256": "700f37df783a9c65e0bfe7e45d8852a0668025d65b6a6303e605db0253235def"
+    },
+    "/tmp/git-zero-joint-clippy-final-01.log": {
+      "path": "/tmp/git-zero-joint-clippy-final-01.log",
+      "bytes": 1325,
+      "sha256": "2a716c089a328ed9b8d8f818bf466983e370db0c5570bca677d381e01d60225c"
+    },
+    "/tmp/git-zero-joint-first16-paired-review.json": {
+      "path": "/tmp/git-zero-joint-first16-paired-review.json",
+      "bytes": 118531,
+      "sha256": "301247f4415825ef561975274ddad23fe452adee1bddd54aef012792c379bd55"
+    },
+    "/tmp/git-zero-joint-fallback64-paired-review.json": {
+      "path": "/tmp/git-zero-joint-fallback64-paired-review.json",
+      "bytes": 114109,
+      "sha256": "898c7cafeaca36866a4f58c016c01b2c78ed36661ba76118adc50032bb08e996"
+    },
+    "/tmp/git-zero-joint-canonical64-paired-review.json": {
+      "path": "/tmp/git-zero-joint-canonical64-paired-review.json",
+      "bytes": 311486,
+      "sha256": "73793aa2e13debbb6e0bfa3537adb1193bf011a88bcdc186612ca653d764705d"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/canonical64-latest-recheck-24-proof-01/proof.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/canonical64-latest-recheck-24-proof-01/proof.json",
+      "bytes": 69263,
+      "sha256": "9be54a6e96a5b9dd8f1f8fa825b80c2c393e5a68e7a0705ed06320b0e13cb553"
+    },
+    "/tmp/git-zero-joint-failed64-diagnosis.json": {
+      "path": "/tmp/git-zero-joint-failed64-diagnosis.json",
+      "bytes": 8693,
+      "sha256": "7ca1a03547ebda64e1927f5b07c9312aae7761a9d90cac8a9f204bf3eac9e14d"
+    },
+    "/tmp/git-zero-joint-failed64-diagnosis.md": {
+      "path": "/tmp/git-zero-joint-failed64-diagnosis.md",
+      "bytes": 4777,
+      "sha256": "310b2dfd303d4041849521d712a2c343b5b19f08c0f55ae4e294d8c8455792a4"
+    },
+    "/tmp/git-zero-joint-failed64-owned-cleanup.json": {
+      "path": "/tmp/git-zero-joint-failed64-owned-cleanup.json",
+      "bytes": 703,
+      "sha256": "31a1fe7f9296e8f1a0732346a22e608c7e9adbf10bbcae99e8defa12609063bf"
+    },
+    "/tmp/git-zero-joint-environment-audit.json": {
+      "path": "/tmp/git-zero-joint-environment-audit.json",
+      "bytes": 21809,
+      "sha256": "645cc47e8e1fbf68b59ccd0a0dd2013dfd93ed2fc4b187c56d72cadabb720858"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/source-before.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/source-before.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/source-after.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/source-after.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/allocation-contract.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/allocation-contract.json",
+      "bytes": 326796,
+      "sha256": "a2c93640b45b533086c98050601613fff5694ad5968f650dc7e58407b63e4497"
+    },
+    "/tmp/git-zero-joint-allocation-01.log": {
+      "path": "/tmp/git-zero-joint-allocation-01.log",
+      "bytes": 249,
+      "sha256": "bd9206769fd87fd50d42cfd4ce264b88649ea971d6d0a925389a37fcf15a4dc3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/cleanup.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/cleanup.json",
+      "bytes": 56,
+      "sha256": "0b00caef7625e32c1f3bd3925b4df776068f60ec84985f6092be800a7c9149e4"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-allocation-01/pre-scope-resource.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-allocation-01/pre-scope-resource.json",
+      "bytes": 820,
+      "sha256": "501d9d7747e9256a6f513406b20d1d054eb869bc405623fc15e68a8e128d528a"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/runtime-processes-host.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/runtime-processes-host.json",
+      "bytes": 8708,
+      "sha256": "d51f1b4785578bcf54056639c5e826b32da11af9719dd74fd2be635b2a811f79"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/source-before.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/source-before.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/source-after.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/source-after.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/contract.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/contract.json",
+      "bytes": 64406,
+      "sha256": "88260e394f19a99ea840a2c1388bad0037899f08888ddc80a7ddec4d57b65c0d"
+    },
+    "/tmp/git-zero-joint-plan-01.log": {
+      "path": "/tmp/git-zero-joint-plan-01.log",
+      "bytes": 233,
+      "sha256": "8df4aae5b559b1881a4e76bfe3e94404f4bb6281958bff95392e3c1e02d510ba"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/cleanup.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/cleanup.json",
+      "bytes": 64,
+      "sha256": "cf2a4e8e59ea95e95f662cdf8e2c23aad14d475064b275421b273c6c806d88f1"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-plan-01/pre-scope-resource.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-plan-01/pre-scope-resource.json",
+      "bytes": 814,
+      "sha256": "b679762af45890397586919312523d50f3b65699fb416b592dcf81989924c8ef"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/runtime-processes-host.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/runtime-processes-host.json",
+      "bytes": 10039,
+      "sha256": "c3223cbad349e3df605905f1b58dafd22fcd022d2aa2bb7279be34f71511b2e5"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/source-before.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/source-before.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/source-after.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/source-after.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/contract.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/contract.json",
+      "bytes": 65008,
+      "sha256": "4773c1f2dfe05aeea5111590ff3d619b20ac7c64773d9752b0acd88ef59796aa"
+    },
+    "/tmp/git-zero-joint-faults-01.log": {
+      "path": "/tmp/git-zero-joint-faults-01.log",
+      "bytes": 234,
+      "sha256": "7f966b3b021296b1d88049fdf27e21092d552a4526544a29391eef5e77e465ce"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/cleanup.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/cleanup.json",
+      "bytes": 64,
+      "sha256": "cf2a4e8e59ea95e95f662cdf8e2c23aad14d475064b275421b273c6c806d88f1"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-faults-01/pre-scope-resource.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-faults-01/pre-scope-resource.json",
+      "bytes": 816,
+      "sha256": "29bd5f66253a4b35ea7aa6aa7c7d294318ac2b0fe40987b3b3690332cc393f5b"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/runtime-processes-host.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/runtime-processes-host.json",
+      "bytes": 8934,
+      "sha256": "242dec73d701a069b7341bf5fc6aafa29702b41f25a69f0d39e3d2b3bae6a752"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/source-before.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/source-before.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/source-after.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/source-after.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/contract.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/contract.json",
+      "bytes": 141135,
+      "sha256": "f2ab0103638d22b90ced70555df62883a1fab90fdf06aeb32d25e8942df9d1ab"
+    },
+    "/tmp/git-zero-joint-restart-01.log": {
+      "path": "/tmp/git-zero-joint-restart-01.log",
+      "bytes": 158,
+      "sha256": "dec294ad78f492883f5414f31058713316493e5c359988125292eaff8bcef6c3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/cleanup.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/cleanup.json",
+      "bytes": 64,
+      "sha256": "cf2a4e8e59ea95e95f662cdf8e2c23aad14d475064b275421b273c6c806d88f1"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-restart-01/pre-scope-resource.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-restart-01/pre-scope-resource.json",
+      "bytes": 816,
+      "sha256": "090e76467c8feb3b5a63c63f11f866209f2fc6415df0c3a81ff615dcced9a6d9"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/runtime-processes-host.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/runtime-processes-host.json",
+      "bytes": 11273,
+      "sha256": "b81f2f70b95cff07e01279435e90d92f63876c0e337645c663755ef780ff439d"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/source-before.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/source-before.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/source-after.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/source-after.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/contract.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/contract.json",
+      "bytes": 293090,
+      "sha256": "2f89b37ddc57c054c043398952f95e1afb08c8ca8ac7a26078e45f7ce7a9211e"
+    },
+    "/tmp/git-zero-joint-warm-01.log": {
+      "path": "/tmp/git-zero-joint-warm-01.log",
+      "bytes": 158,
+      "sha256": "28633991312f2063df1a0e94917a4f273ff492b4aad27f35ddaf52bea4075d5f"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/cleanup.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/cleanup.json",
+      "bytes": 64,
+      "sha256": "cf2a4e8e59ea95e95f662cdf8e2c23aad14d475064b275421b273c6c806d88f1"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-warm-01/pre-scope-resource.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-warm-01/pre-scope-resource.json",
+      "bytes": 813,
+      "sha256": "fedf53fa2b8dd5c8e8ab1f769dc363901d4d2eb5c87a2c4554d503b3e0d7b95d"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/runtime-processes-host.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/runtime-processes-host.json",
+      "bytes": 8882,
+      "sha256": "2a104c77d58e1f2174f7960469767f82ea5fbb5a94ce270fa329425d254370e0"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/source-before.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/source-before.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/source-after.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/source-after.json",
+      "bytes": 6785,
+      "sha256": "5fad987c8b78b3a3eae347f2e041595b780853f56f087b19757ebf58e37c00e3"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/contract.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/contract.json",
+      "bytes": 288638,
+      "sha256": "cd7f72b626a0932f51aeccb2a5cf8f7c2358b58c1e7e94ab256c3b4b585f6b34"
+    },
+    "/tmp/git-zero-joint-http-01.log": {
+      "path": "/tmp/git-zero-joint-http-01.log",
+      "bytes": 158,
+      "sha256": "5074cf4ef3d7ccf4eaded797074a23d6824febb4e429440cf9776277dbf29b7a"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/cleanup.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/cleanup.json",
+      "bytes": 64,
+      "sha256": "cf2a4e8e59ea95e95f662cdf8e2c23aad14d475064b275421b273c6c806d88f1"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-http-01/pre-scope-resource.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-http-01/pre-scope-resource.json",
+      "bytes": 813,
+      "sha256": "181e9f4b437a980fcb6195a901872f833801cfe159c01f0dd32f8fe1dbf9247c"
+    },
+    "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/runtime-processes-host.json": {
+      "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/runtime-processes-host.json",
+      "bytes": 283,
+      "sha256": "99be0947e2587c283e5cd9f053956c471b1745d09278633fb47d39a32426f01e"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-allocation-01/allocation-contract.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-allocation-01/allocation-contract.json",
+      "bytes": 326796,
+      "sha256": "a2c93640b45b533086c98050601613fff5694ad5968f650dc7e58407b63e4497"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-plan-01/plan-pressure-contract.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-plan-01/plan-pressure-contract.json",
+      "bytes": 101134,
+      "sha256": "e1f6b4352234698c77592b30d984786ec1b8f551d7c13497b91fafe4c5ce2ac9"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-faults-01/fault-contract.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-faults-01/fault-contract.json",
+      "bytes": 979499,
+      "sha256": "a915f920a80b83b49d1faafbb8f6b88d34aef7f6cee066b33e65aaa32cd8ea65"
+    },
+    "/tmp/git-zero-joint-correctness-manifests/joint-http-01/late-process-snapshot-disclosure.json": {
+      "path": "/tmp/git-zero-joint-correctness-manifests/joint-http-01/late-process-snapshot-disclosure.json",
+      "bytes": 820,
+      "sha256": "13307d2cbcf68e367d548ef5a3e86c6574113c6638762a030a6fd37392b95ce5"
+    },
+    "/tmp/git-zero-joint-first16-evidence-inventory.json": {
+      "path": "/tmp/git-zero-joint-first16-evidence-inventory.json",
+      "bytes": 341917,
+      "sha256": "2e15d7209c58868af16fa037657a31b75b232953a310709f880b11392c196634"
+    },
+    "/tmp/git-zero-joint-failed64-evidence-inventory.json": {
+      "path": "/tmp/git-zero-joint-failed64-evidence-inventory.json",
+      "bytes": 116102,
+      "sha256": "61d313e8e90dbccc46e7e1149e99d88c9d0ae27ccdbe3f9f6aee91fa8db8dec9"
+    },
+    "/tmp/git-zero-joint-fallback64-evidence-inventory.json": {
+      "path": "/tmp/git-zero-joint-fallback64-evidence-inventory.json",
+      "bytes": 426217,
+      "sha256": "91d36d18f7aa440bbd02c34c45aa0d5e92b8284fe9c396b70ebae721597e685c"
+    },
+    "/tmp/git-zero-joint-canonical64-evidence-inventory.json": {
+      "path": "/tmp/git-zero-joint-canonical64-evidence-inventory.json",
+      "bytes": 408039,
+      "sha256": "a625cbde558a7fc8c8a7fd32354b10308a0758d91f0f044b7b2c7d51382bf2f9"
+    },
+    "/tmp/git-zero-joint-bounded-evidence-inventory.json": {
+      "path": "/tmp/git-zero-joint-bounded-evidence-inventory.json",
+      "bytes": 555160,
+      "sha256": "847f4c849f3154693f7287630eca8f820fe5eedcd508ebc0215ec61757c5464e"
+    },
+    "/tmp/git-zero-joint-tmpfs-resource-receipt.json": {
+      "path": "/tmp/git-zero-joint-tmpfs-resource-receipt.json",
+      "bytes": 652,
+      "sha256": "0e8f44ab4a3530d5920f3df2974991115b64ade3f8eb6cefb2b68fca1bf03fcc"
+    },
+    "/tmp/git-zero-joint-tmpfs-resource-receipt-v2.json": {
+      "path": "/tmp/git-zero-joint-tmpfs-resource-receipt-v2.json",
+      "bytes": 1063,
+      "sha256": "aec7c44515bea4fa5bf1b98e0c03366c6d652a2299f3b1a1c96526d9a62080fb"
+    },
+    "/tmp/git-zero-joint-final-owned-cleanup.json": {
+      "path": "/tmp/git-zero-joint-final-owned-cleanup.json",
+      "bytes": 2688,
+      "sha256": "67956ec5ff7f595a5a604d7a314b62e36dd37b94b4b19e57ef2d4fa096e022bb"
+    }
+  },
+  "independent_audit_artifacts": [
+    {
+      "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0-pair-audit.json",
+      "bytes": 253805,
+      "sha256": "482a9422868bfbdd2c379a057273935e6ec5362488580dbe60ba34026dcc013c"
+    },
+    {
+      "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0-scope-audit.json",
+      "bytes": 5198,
+      "sha256": "9aa4e69ed30d6d52d9e954560b295602750a23ad5b374913852be11722962781"
+    },
+    {
+      "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0-controls-audit.json",
+      "bytes": 23945,
+      "sha256": "d1dcdbd6337ae0607cd8822e3fb9a7ffe2501f7daa1e7bf9a00482af3842eb4a"
+    },
+    {
+      "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0-sealed-pairs-inventory.json",
+      "bytes": 1350786,
+      "sha256": "742656f4616c0b5d7817f8d4ad2d616d7000974ec6676292c3977f10a898a7bd"
+    },
+    {
+      "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0-bounded-controls-inventory.json",
+      "bytes": 1302651,
+      "sha256": "36b9b161746da473786fe912a03144907fd794bbaa42dd8a981f974fbef575ef"
+    },
+    {
+      "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0-audit.py",
+      "bytes": 25763,
+      "sha256": "718ae95939c5f49e51855733ae9ce8796bef7884d862fbbf072f535509550c57"
+    }
+  ],
+  "raw_inventory_reconciliation": {
+    "18_raw_roots_all_author_and_independent_file_SHA_inventories_equal": true,
+    "raw_regular_files": 7684,
+    "raw_logical_bytes": 24347201196,
+    "volatile_roots": 13,
+    "volatile_logical_bytes": 18411096507,
+    "additional_compact_mirror_files": 3134
+  },
+  "additional_all_contract_budget_snapshots_checked": {
+    "joint-allocation-01": 27,
+    "joint-plan-01": 14,
+    "joint-faults-01": 69,
+    "joint-restart-01": 12,
+    "joint-warm-01": 24,
+    "joint-http-01": 24
+  },
+  "bounded_actual_process_snapshot_proof_scopes": [
+    {
+      "scope": "joint-allocation-01",
+      "snapshot": {
+        "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-allocation-01/runtime-processes-host.json",
+        "bytes": 8708,
+        "sha256": "d51f1b4785578bcf54056639c5e826b32da11af9719dd74fd2be635b2a811f79"
+      },
+      "observed_process_count": 7,
+      "observed_external_Native_count": 0,
+      "proof_scope": "Native is in-process in counted allocator runner, not a separate Native process; actual source/runner/runtime maps retained."
+    },
+    {
+      "scope": "joint-plan-01",
+      "snapshot": {
+        "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-plan-01/runtime-processes-host.json",
+        "bytes": 10039,
+        "sha256": "c3223cbad349e3df605905f1b58dafd22fcd022d2aa2bb7279be34f71511b2e5"
+      },
+      "observed_process_count": 8,
+      "observed_external_Native_count": 1,
+      "proof_scope": "Actual scoped external Native snapshot with known-only Git environment; no claim to cover every restarted Native instance."
+    },
+    {
+      "scope": "joint-faults-01",
+      "snapshot": {
+        "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-faults-01/runtime-processes-host.json",
+        "bytes": 8934,
+        "sha256": "242dec73d701a069b7341bf5fc6aafa29702b41f25a69f0d39e3d2b3bae6a752"
+      },
+      "observed_process_count": 7,
+      "observed_external_Native_count": 1,
+      "proof_scope": "Actual scoped external Native snapshot with known-only Git environment; no claim to cover every restarted Native instance."
+    },
+    {
+      "scope": "joint-restart-01",
+      "snapshot": {
+        "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-restart-01/runtime-processes-host.json",
+        "bytes": 11273,
+        "sha256": "b81f2f70b95cff07e01279435e90d92f63876c0e337645c663755ef780ff439d"
+      },
+      "observed_process_count": 9,
+      "observed_external_Native_count": 1,
+      "proof_scope": "Actual scoped external Native snapshot with known-only Git environment; no claim to cover every restarted Native instance."
+    },
+    {
+      "scope": "joint-warm-01",
+      "snapshot": {
+        "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-warm-01/runtime-processes-host.json",
+        "bytes": 8882,
+        "sha256": "2a104c77d58e1f2174f7960469767f82ea5fbb5a94ce270fa329425d254370e0"
+      },
+      "observed_process_count": 7,
+      "observed_external_Native_count": 1,
+      "proof_scope": "Actual scoped external Native snapshot with known-only Git environment; no claim to cover every restarted Native instance."
+    },
+    {
+      "scope": "joint-http-01",
+      "snapshot": {
+        "path": "/dev/shm/git-zero-joint-correctness-20261018/joint-http-01/runtime-processes-host.json",
+        "bytes": 283,
+        "sha256": "99be0947e2587c283e5cd9f053956c471b1745d09278633fb47d39a32426f01e"
+      },
+      "observed_process_count": 0,
+      "observed_external_Native_count": 0,
+      "proof_scope": "Late empty snapshot after completion; actual live Native/process environment proof absent."
+    }
+  ],
+  "owned_cleanup_receipt": {
+    "path": "/tmp/git-zero-joint-final-owned-cleanup.json",
+    "bytes": 2688,
+    "sha256": "67956ec5ff7f595a5a604d7a314b62e36dd37b94b4b19e57ef2d4fa096e022bb"
+  },
+  "limits_and_unperformed_work": [
+    "Source approval only. Mandatory five fresh original-R1/final repetitions across all four workloads are NOT DONE; no cost, speed, full-bill, plateau or stopping claim.",
+    "First16 historical actual Native proc environment was not captured. Its Multi read plans/consumed/unsupported are39/39/0 and Joint39/38/1; final manifest observer usage after the last snapshot is UNKNOWN/NULL.",
+    "Fresh canonical64 has actual known-only live Native Git environment and39/39 consumed reads/0unsupported in both modes,7 consumed receives; bootstrap lineage320B and final400B. No upload-advertisement runtime certification coverage claimed.",
+    "Traced64 is fallback-only: both39 read plans unsupported/0consumed, receive7/7. It cannot stand in for optimized canonical proof.",
+    "Raw response encoding differs in one first16 row(-17B,74 ordered decoded objects), one canonical64 row(-45B,64 objects), and two fallback rows(+39B/71 objects,+22B/77 objects). Actual bodies remain; exact existing decode/strict-index/fsck/archive proofs were inspected and independently rehashed. No timing/nondeterminism cause claim.",
+    "Canonical Multi history-nohave23 displayed key delta3GET/37,786,156B versus actual aggregate7GET/67,258,344B has NULL per-key closure. No epoch identity or ordered whole-key GET/admission timeline is proved, even when histogram deltas arithmetically reconcile.",
+    "Failed first64 Multi observer returned actual503 with EAGAIN; underlying cause UNKNOWN. Actual failed body is absent, not reconstructed; successful contract and source-after map are absent. Historical v1 runner ELF is absent; its recorded hash and actual archived Rust source remain. Actual production Native ELF is preserved/rehashed separately.",
+    "Fault cohort has38 records:10read modes,14publication attempts and13same-Native distinct next pushes. GC LIST before next PUT is proved11/13, with unknown-sql and gateway-lost-reply explicit exclusions. Unfired partial-delete attempt0 remains separately paid and distinct from fired attempt1. Final SQLR/SQLW remain NULL and accounting_complete=false; known counters do not close missing receipt usage.",
+    "HTTP live process snapshot was late and empty; no actual live HTTP proc/env claim. Source/runtime before-after maps, explicit disabled preparation/socket, zero consumed gateway paths and real ordinary-HTTP admissions/hits remain adequate for this source-level compatibility control. No rerun was made to conceal the gap.",
+    "All13 raw /dev/shm roots are volatile memory-backed local-only correctness evidence, visible in actual escalated host namespace; no performance or power-loss durability claim. Compact /tmp mirrors omit large raw data.",
+    "Warm and HTTP exceeded each536,870,912B scope estimate by9,204,374B and9,188,108B respectively. Actual volatile total18,411,096,507B stays below24GiB; all preflights met>=40GiB MemAvailable. Cleanup has no visible known scoped runtime matches and both ports bindable, with22unreadable own-UID proc entries and33vanished during its scan; no global process-absence claim.",
+    "Review ran no builds, tests, servers, service requests, process inspections, source edits, pushes, CI or merges. It audited exact source, author execution logs, preserved actual bytes/receipts and final continuity. Independent audit's initial schema and lineage-stage assumptions failed before output and were corrected/disclosed in pair-audit JSON."
+  ],
+  "full_bill_usd": null,
+  "cost_speed_acceptance": false,
+  "mandatory_five_fresh_originalR1_final_all_four_workloads_complete": false,
+  "docs_ledger_approval": false,
+  "push_CI_merge_or_primary_mutation": false,
+  "review_markdown": {
+    "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0.md",
+    "bytes": 3880,
+    "sha256": "48cbc77039e536cabf50f96ae98875369904e096962be765b97defffd88b1f2f"
+  },
+  "review_sealer_program": {
+    "path": "/tmp/git-zero-joint-source-review-b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0-write-report.py",
+    "bytes": 16574,
+    "sha256": "2ba854bb0914b886d6af97a90d5c3bcd07c4150b267427df2b7f69c303b063c3"
+  }
+}

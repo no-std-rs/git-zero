@@ -1,0 +1,222 @@
+{
+  "kind": "independent exact-commit docs-only LEDGER review",
+  "at_utc": "2026-10-18T12:32:51.854766+00:00",
+  "decision": "LEDGER_BLOCKED_DOCUMENTATION_SCOPE_ONLY",
+  "ledger_commit": "06602228e45a2cacbf1bc9d7553f1925cd87b7ee",
+  "exact_parent_and_SOURCE_approved_commit": "b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0",
+  "source_parent": "f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5",
+  "worktree": "/tmp/git-zero-hosting-joint-chunk",
+  "worktree_clean_at_seal": true,
+  "Native_tree": "ff99eaf58a5e4f68e744d0b50ddee2af67aff1cf",
+  "Worker_tree": "7f41db4407963ed04e6cbe19556b1416633caf18",
+  "blockers": [
+    {
+      "id": "R20-LEDGER-001",
+      "severity": "blocking documentation scope precision only",
+      "summary": "Current publication wording implies pack bodies are exclusively local-only, but the capsule intentionally publishes permitted small synthetic Git protocol controls containing actual PACK bytes.",
+      "permission_scope_from_root": "Small synthetic wire/protocol evidence is allowed. Executable binaries, generated repository/R2/SQLite state and large wire/body payloads remain excluded. No requirement to remove these small controls or rerun source/runtime proofs.",
+      "active_conflicting_or_imprecise_assertions": [
+        {
+          "path": "/tmp/git-zero-hosting-joint-chunk/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r20-joint-chunk-candidate/README.md",
+          "line": 14,
+          "text": "Large Git/R2/SQL/state, pack bodies, archives and ELF payloads remain local-only"
+        },
+        {
+          "path": "/tmp/git-zero-hosting-joint-chunk/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r20-joint-chunk-candidate/implementation-ledger.json",
+          "line": 935,
+          "json_key": "publication_limits",
+          "text": "Large raw Git/R2/SQL/state, pack bodies, wanted archives, seed packs and all ELF payloads stay local-only."
+        },
+        {
+          "archive_path": "LOCAL-ONLY-INVENTORY.json",
+          "line": 38702,
+          "json_key": "publication_limits",
+          "text": "Large raw Git/R2/SQL/state, pack bodies, wanted archives, seed packs and all ELF payloads stay local-only."
+        }
+      ],
+      "related_current_assertions_to_disambiguate": [
+        {
+          "path": "/tmp/git-zero-hosting-joint-chunk/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r20-joint-chunk-candidate/publication-validation.json",
+          "line": 71,
+          "json_key": "large_ELF_state_pack_payloads_published",
+          "value": false,
+          "assessment": "Valid with explicit large-payload definition; add positive small-wire disclosure and classifier summary."
+        },
+        {
+          "archive_path": "CAPSULE-MANIFEST.json",
+          "line": 40906,
+          "json_key": "large_raw_and_ELF_bytes_included",
+          "value": false,
+          "assessment": "Valid with explicit large-payload definition; add positive small-wire disclosure and classifier summary."
+        },
+        {
+          "archive_path": "LOCAL-ONLY-INVENTORY.json",
+          "json_key": "kind",
+          "assessment": "Explain this exhaustive list inventories retained original raw files, some of which also have compact published copies; file title does not prove exclusive publication absence."
+        }
+      ],
+      "historical_producer_wording_to_retain_and_scope": [
+        {
+          "archive_path": "author/git-zero-joint-build-ledger.py",
+          "line": 73,
+          "assessment": "Historical producer publication_limits contains original wording; keep exact bytes and explicitly supersede its scope wording in correction provenance."
+        },
+        {
+          "archive_path": "author/git-zero-joint-build-ledger.py",
+          "line": 98,
+          "assessment": "Historical producer README literal contains original wording; keep exact bytes and explicitly supersede its scope wording in correction provenance."
+        }
+      ],
+      "exact_payload_summary": {
+        "PACK_v2_bearing_member_count": 62,
+        "body_members": 21,
+        "request_members": 41,
+        "sum_full_member_bytes": 39445,
+        "min_full_member_bytes": 323,
+        "max_full_member_bytes": 2767,
+        "max_member": {
+          "archive_path": "attempts/canonical64-joint-01/thin-receive.request",
+          "bytes": 2767,
+          "sha256": "0df9fd8f26406ecadbded8f75b022fc53cf79bdce4230b1b279d35b43d299ca2",
+          "pack_offset": 131
+        },
+        "sum_embedded_pack_span_bytes": 33045,
+        "max_embedded_pack_span_bytes": 2636,
+        "mirror_and_legacy_wire_selection_limit_bytes": 4194304,
+        "inclusive_selection": true,
+        "author_text_helper_limit_separate_bytes": 8388608,
+        "every_non_UTF8_member_is_one_of_the_62_PACK_v2_wire_members": true,
+        "ELF_and_SQLite_signature_counts": [
+          0,
+          0
+        ],
+        "classification_artifact": {
+          "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-payload-classification.json",
+          "bytes": 28833,
+          "sha256": "bf67c932ff9a0b958c1d30f5e00a55d9288b3164d3fac64b5d8721490495db99"
+        }
+      },
+      "required_correction": [
+        "Preserve the original 06602228 commit and exact publication/capsule/validation identities as historical evidence.",
+        "Clarify the three active publication_limits/README statements: permitted compact synthetic request/response/control evidence, including small PACK-bearing binary wire samples, is published; executable ELF payloads, generated repository/R2/SQLite state, wanted archives/seed packs and large wire/body payloads stay local-only.",
+        "State the inclusive 4MiB compact wire file selection threshold and actual observed62 samples/39,445B total/max2,767B; distinguish the8MiB text-helper threshold. Include exact classifier enumeration or its checked mapping and hash.",
+        "Add consistent positive small-wire scope/classification to the current capsule manifest and publication validation; clarify inventory retained-original versus published-copy scope.",
+        "Keep historical source maps, original source reviews, author scripts, failed scopes and protocol sample bytes unchanged. Recompute capsule mappings and all dependent byte counts/hashes/checksums after documentation changes. Exact corrected docs commit requires fresh ledger continuity review."
+      ],
+      "no_source_runtime_or_evidence_deletion_fix_needed": true
+    }
+  ],
+  "other_source_or_ledger_integrity_blockers_found": [],
+  "passing_checks": {
+    "exact_parent_clean_branch_docs_only11_added_files": true,
+    "all11_committed_blobs_handoff_and_worktree_exact": true,
+    "all10_SHA256SUMS_pass": true,
+    "source_Worker_deps_lock_scorer_rates_workload_config_unchanged": true,
+    "source_review_handoff_design_cleanup_byte_identical_original_copies": true,
+    "source_review_approval_reused_at_exact_SOURCE_only_no_runtime_duplicated": true,
+    "source_review_original_audit_and_prior_R19_review_retained_in_capsule": true,
+    "shared_ledger_pair_bounded_continuity_failure_cleanup_check_sections_exactly_equal_sealed_source_handoff": true,
+    "safe_regular_unique_relative4090_archive_members_and_manual_extraction": true,
+    "capsule_uncompressed_member_bytes": 34630037,
+    "freshly_SHA256_verified_copied_originals": 4088,
+    "fresh_raw_inventory_owned_roots_discovered_not_just_author_paths": 18,
+    "fresh_raw_inventory_no_missing_or_extra_regular_files": 7684,
+    "fresh_raw_every_byte_SHA256_rehashed_logical_bytes": 24347201196,
+    "fresh_entire_compact_mirror_files": 3134,
+    "fresh_raw_plus_compact_equal_complete_independent_SOURCE_review_inventories": true,
+    "fresh_actual_supporting_paths_derived_from_maps_snapshots_aliases_versioned_artifacts": 46,
+    "fresh_current_runtime_labels": 7,
+    "fresh_direct_current_file_records": 118,
+    "actual_Native_ELF_SHA256": "2633e97fa9f50afa3b17fe53bdc39e42b1f0ff011f3bed4084c717afc4ffc507",
+    "actual_runner_v2_ELF_SHA256": "29fa1c4cfb9a9175b505fb3269ea0cdc05e16f6a2c78981f0caeebcc5287b3e3",
+    "historical_v1_ELF_not_relabelled_as_current_oldpath_nowv2": true,
+    "archived_v1_source_actual": true,
+    "preserved_intermediate_packaging_capsule_hash_exact_and_honestly_historical": true,
+    "no_ELF_or_generated_Git_R2_SQLite_state_or_large_wire_payload_published": true,
+    "permitted_small_PACK_wire_payloads_positive_classification": {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-payload-classification.json",
+      "bytes": 28833,
+      "sha256": "bf67c932ff9a0b958c1d30f5e00a55d9288b3164d3fac64b5d8721490495db99"
+    },
+    "volatile13_roots_bytes": 18411096507,
+    "volatile_under24GiB": true,
+    "historical_cleanup_receipt_exact_no_new_process_absence_claim": true
+  },
+  "scope_limits_retained": [
+    "First16 final manifest observer after last snapshot is UNKNOWN/NULL; historical actual Native proc environment absent; Multi39/39 andJoint38/39 reads consumed.",
+    "Canonical clean64 has live known-only Native Git environment,39/39 reads and7/7 receives; startup and final observer separately paid/closed.",
+    "Traced64 is fallback-only because Trace2 disabled lineage; no normal optimized-count substitution.",
+    "Failed64 observer503/EAGAIN cause UNKNOWN; actual failed response body, completed contract and successful source-after map are missing and not reconstructed.",
+    "Raw wire representation variances and exact decoded-object proofs remain distinct; no timing or nondeterminism cause claim.",
+    "Per-key top-key display closure is NULL when unproved, including history-nohave23 aggregate mismatch; no ordered whole-key timeline claim.",
+    "Fault SQLR/SQLW stay NULL/accounting incomplete;38 records,14publication attempts including separately paid unfiredpartial-delete0,13 distinct following pushes,GC11/13 with explicitunknown-sql/gateway-lost-reply exclusions.",
+    "HTTP late empty process snapshot remains disclosed; no live HTTP proc/environment claim or replacement run.",
+    "Volatile raw data is local-only and sandbox-hidden; no timing or power-loss claim. Warm/HTTP estimates exceeded by9,204,374/9,188,108B but total stayed under24GiB.",
+    "Cleanup is a historical owned-role/port receipt with22unreadable own-UID proc entries/33vanished limits; no fresh or global process-absence claim."
+  ],
+  "review_artifacts": [
+    {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-publication-audit.json",
+      "bytes": 875586,
+      "sha256": "54b3b55aa2cd7bddaf372fd70ce68cbedaf5815c0a0904636e2ff0866aaf4fa4"
+    },
+    {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-local-inventory.json",
+      "bytes": 2557582,
+      "sha256": "bffc9e83de5e1c2691bc51a73826cff5cb5aba69d784f9501aea95ff60eec51a"
+    },
+    {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-payload-classification.json",
+      "bytes": 28833,
+      "sha256": "bf67c932ff9a0b958c1d30f5e00a55d9288b3164d3fac64b5d8721490495db99"
+    },
+    {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-publication-scope-assertions.json",
+      "bytes": 25426,
+      "sha256": "88ca9ec5d1784432561acab01f9aee024ad5dd3aa67668edc97aeed24da78275"
+    },
+    {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-audit.py",
+      "bytes": 23684,
+      "sha256": "be0ed5cca3ced97789729a2a43f8adb068e397186174e406783ed0d28c3e910f"
+    },
+    {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-original-publication-validation.json",
+      "bytes": 5339,
+      "sha256": "a0cb28208c97b53e3b5d40351018344e06a121494e13826fd0f24357eb171c9a"
+    },
+    {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-original-raw-evidence.tar.gz",
+      "bytes": 3412997,
+      "sha256": "c73685d787d9b4d31e47b93975a285e76eef36faf0ab9cd00fb4a4a34f6ac64e"
+    }
+  ],
+  "original066_publication_validation_historical_copy": {
+    "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-original-publication-validation.json",
+    "bytes": 5339,
+    "sha256": "a0cb28208c97b53e3b5d40351018344e06a121494e13826fd0f24357eb171c9a"
+  },
+  "original066_capsule_historical_copy": {
+    "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-original-raw-evidence.tar.gz",
+    "bytes": 3412997,
+    "sha256": "c73685d787d9b4d31e47b93975a285e76eef36faf0ab9cd00fb4a4a34f6ac64e"
+  },
+  "read_only_scope": "Reads exact source/commit/docs and stopped evidence; own report/extraction/copies only under/tmp. Escalation used solely for actual R20-owned raw mount enumeration/hash checks; no unrelated prefix examined.",
+  "source_build_tests_or_runtime_executed_in_review": false,
+  "process_signals_runtime_start_or_service_requests": false,
+  "source_primary_author_edit_push_CI_merge_deploy_or_delegation": false,
+  "full_bill_USD": null,
+  "cost_speed_formal_promotion_plateau_stopping_claim": false,
+  "mandatory_five_fresh_originalR1_final_all_four_workloads_complete": false,
+  "review_stopped_after_report": true,
+  "sealer_program": {
+    "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-seal.py",
+    "bytes": 17986,
+    "sha256": "130650e6b8a74b11e44e80e6cac4f375bc3443e6d03ef6f175ec25b795136e63"
+  },
+  "review_markdown": {
+    "path": "/tmp/git-zero-joint-ledger-review-06602228e45a.md",
+    "bytes": 5129,
+    "sha256": "a99f5ceb277bec268d95cb5caa9f3f37ac938c88519f3ad1ee13a8d445509e07"
+  }
+}
