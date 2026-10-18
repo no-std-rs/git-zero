@@ -14,3 +14,16 @@ not promotion, a cost-screen result, latency acceptance or a plateau claim.
 
 The [review correction](review-correction.json) retains the later malformed
 numeric-metadata recovery and same-Native ambiguous-retirement evidence.
+
+The [independent original review](independent-review-original.md) found the
+numeric-recovery gap; the [focused follow-up](independent-review-correction.md)
+approves its correction and the same-Native ambiguous-response regression.
+`correctness-evidence.tar.gz` retains all 125 ledger-hashed raw reports/logs,
+including failed attempts. Extract paths relative to `/tmp` to check the ledger
+hashes. No fixtures, emulator state or executables are included.
+
+The [combined check](combined-validation.json) exercises final reviewed R12 and
+the real Git capability correction together. Its source exactly matches the
+integrated example; the production Worker contract passes in 44.66 seconds.
+This is correctness evidence, not a cost or latency sample. `SHA256SUMS` verifies
+all publication files.

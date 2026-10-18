@@ -320,8 +320,24 @@ finds a remaining potential SQL representation saving after R11. It reproduces
 all 704 fresh R8 operation rows and specifies bounded pages and routing, with no
 empty-page growth under churn. Its $0.056 gross projection needs actual migration,
 page, failure-recovery and cursor checks. This viable next design prevents a
-plateau claim. An isolated implementation is undergoing source and recovery
-review; it has no benchmark result yet.
+plateau claim. The [reviewed implementation](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r12-catalog-pages-candidate/README.md)
+now has actual mixed-format, maximum-debt, numeric-corruption, partial-failure
+and same-Native recovery checks. All realistic normal/GC/reopen shapes remain
+at 24,576 SQLite bytes. A combined real-Git production-Worker check passes;
+this is correctness evidence, with no replay saving measured yet.
+
+The next [deferred-update proposal](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/deferred-catalog-design/README.md)
+would fold an all-success retirement's page update into a following upload.
+Its $0.028 gross opportunity must pay for actual proof, recovery and cursor
+work. Private receipts, durable replay protection and same-key pre-upload
+barriers are explicit gates; observer inventory cannot certify or repair it.
+Implementation is being prepared in isolation.
+
+A separate [residual-cost audit](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/post-deferral-design-audit/README.md)
+finds no further concrete 1% saving within the retained Native Git views,
+chunk/read limits and per-upload/publication barriers. Its conditional bound
+uses unmeasured projections and must be recomputed from final actual receipts
+before it can support stopping. It establishes no global pack-selection optimum.
 
 ## Completed R8–R11 screen: upload, historical selection and catalog peak
 
