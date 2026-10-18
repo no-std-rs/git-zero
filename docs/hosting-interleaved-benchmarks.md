@@ -271,3 +271,20 @@ Worker CPU, DO duration, monthly SQLite storage and native compute remain unknow
 records the 138.5-second sample alongside its 143.6 ms native codec time and zero
 R2 reads. Response completion and client waiting were not traced, so the cause
 remains unresolved.
+
+## Prepared next candidates
+
+The [R9 upload/publication record](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r9-upload-candidate/README.md)
+retains clean and independent combined correctness checks, including transport
+failures and the actual CLI restart. The
+[historical-prefix proposal](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/history-prefix-design/README.md)
+uses ephemeral lineage and explicitly prices the final full inventory restore.
+Neither candidate has benchmark results. Their implementation preparation uses
+completed R5 evidence; promotion and fresh screen controls remain gated on the
+complete running R5–R8 results. The current experiment stays frozen at its own
+pushed source; no reports will carry into later trials.
+
+The [bounded response experiment](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/fetch-transport-diagnosis/README.md)
+did not reproduce the retained response stalls. It also disproved a proposed
+Expect-header deletion workaround with a strict interim-response client. No
+production transport change was integrated from these controls.

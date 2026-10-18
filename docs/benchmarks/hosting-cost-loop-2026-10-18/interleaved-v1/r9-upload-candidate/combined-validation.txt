@@ -1,0 +1,179 @@
+Independent combined advertisement + final-upload correctness validation
+Date: 2026-10-18
+Frozen primary: /tmp/git-zero-hosting-cost-loop
+HEAD: 457e2fa97b10cf57e47eea7e1c0fcb849d90780b
+Integration commit: 8af8c48fb272624bb67a0cb3923fad154c3a6dcf
+Verification only: no primary edits, commits, push, benchmark, deployment or remote VM work.
+Target: /tmp/git-zero-ad-upload-combined-target (cargo -j2).
+Port: 8828, fresh task-owned persistence /tmp/git-zero-ad-upload-combined-state.
+All checks/runtimes used exact CI Git policy:
+env GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null LC_ALL=C
+
+Source audit PASS:
+- Worktree initially clean; source HEAD held frozen throughout.
+- snapshot_chunks extracted verbatim from integration parent 8af8c48^:
+  sha256 bb77ccd89f2d756d1fe12f72f6f108e0a6c6b237ccfe6388bbd9fa06d65f61f5.
+- validate_staged_manifest extracted verbatim from candidate fc168707cc43784dfd43f374457436c84dd14865:
+  sha256 f716162b528aed3fb66dad5431315f5831746c96a36a23f8d19b7bcc2771fde7.
+- Native receive audited: take certificate before risky work; dirty before import;
+  pending last-tail upload/publication; only strict confirmed publication advances certificate;
+  ambiguous errors leave recovery mandatory. Both validators are preserved exactly.
+- Production Worker matches required 83b52ba0eabd9f752aa1c243ce285f20ab78caac9244329d00d0db788306f9bc.
+
+Commands and results (all from frozen primary, prefix exact CI env above):
+1. cargo fmt --all --check: PASS.
+2. git diff --check: PASS.
+3. node --check examples/repository-host/cloudflare/src/index.js: PASS.
+4. node --check examples/repository-host/cloudflare/test/upload-fault-worker.js: PASS.
+5. CARGO_TARGET_DIR=/tmp/git-zero-ad-upload-combined-target cargo test -p git-zero-host -j2:
+   sandbox attempt FAILED 73 library passed, 12 listener-based tests EPERM at loopback bind;
+   unchanged escalated retry PASS 85 library +3 runner +9 hosting +1 lifecycle =98 tests;
+   27 opt-in workerd tests ignored in default run. Logs:
+   /tmp/git-zero-ad-upload-combined-package.log
+   /tmp/git-zero-ad-upload-combined-package-retry.log
+6. CARGO_TARGET_DIR=/tmp/git-zero-ad-upload-combined-target cargo clippy -p git-zero-host --all-targets -j2 -- -D warnings:
+   PASS. /tmp/git-zero-ad-upload-combined-clippy.log
+7. Worker launch (normal attempt EPERM; identical escalated retry ready):
+   WRANGLER_LOG_PATH=/tmp/git-zero-ad-upload-combined-wrangler.log WRANGLER_SEND_METRICS=false \
+   node /tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js \
+   dev --local --ip 127.0.0.1 --port 8828 --inspector-port 0 --show-interactive-dev-session=false \
+   --config /tmp/git-zero-hosting-cost-loop/examples/repository-host/cloudflare/wrangler.toml \
+   --persist-to /tmp/git-zero-ad-upload-combined-state
+8. With GIT_ZERO_CLOUDFLARE_ORIGIN=http://127.0.0.1:8828 GIT_ZERO_CLOUDFLARE_TOKEN=git-zero-local-services:
+   /tmp/git-zero-ad-upload-combined-target/debug/deps/cloudflare-84709271a47875f5 --ignored --exact --test-threads=1 \
+   real_manifest_advertisement_skips_only_certified_discovery_reads \
+   real_registered_gateway_push_fetch_invalidates_cache_and_recovers_after_codec_restart \
+   real_native_bundle_uses_one_put_and_survives_restart_and_fetch \
+   real_upload_retirement_preserves_binding_sql_bytes_and_removes_one_callback
+   PASS all4. /tmp/git-zero-ad-upload-combined-real.log
+   Covers actual Worker/R2/DO: branch advertisement bootstrap/certificate/shortcut;
+   zero eligible-discovery R2 GET/bytes/PUT/DELETE/SQL-write deltas; subsequent full uncached
+   fetch fsck/blob/archive; strict transaction certificate advance; external generation fallback;
+   actual registered gateway four pushes/compaction/3 retire deletes/actual codec restart;
+   old8MiB vs new16MiB bundle compatibility and native reopen/fetch;
+   eager2 vs fused1 service+DO calls with identical1 actualPUT,3deletes,17bytes,SQL rows.
+9. Temporary Rust contract outside primary, no MJS harness, generated from frozen Rust integration
+   helpers with focused strengthened tests: /tmp/git-zero-ad-upload-combined-contract.rs.
+   Compiler exact command:
+   CARGO_BIN_EXE_repository-host=/tmp/git-zero-ad-upload-combined-target/debug/repository-host \
+   rustc --test --edition=2024 --crate-name ad_upload_combined_contract /tmp/git-zero-ad-upload-combined-contract.rs \
+   --extern git_zero_host=/tmp/git-zero-ad-upload-combined-target/debug/deps/libgit_zero_host-e179542a13bfbb24.rlib \
+   --extern serde_json=/tmp/git-zero-ad-upload-combined-target/debug/deps/libserde_json-fbf4031197b5f528.rlib \
+   -L dependency=/tmp/git-zero-ad-upload-combined-target/debug/deps -o /tmp/git-zero-ad-upload-combined-contract
+   Direct registered NativeHost contract command:
+   /tmp/git-zero-ad-upload-combined-contract --ignored --exact --test-threads=1 --nocapture combined_registered_upload_advances_certified_advertisement
+   PASS. /tmp/git-zero-ad-upload-combined-contract.log
+   Initial registered strict push2 service/DO calls1PUT1CAS; new9MiB pack pushed with live
+   certificate3 calls(load+prior-read+fused upload/CAS),1PUT1GET1CAS; certificate advances,
+   next GET has0 R2 work/SQL writes; next uncached POST full2-pack reads and fsck/blob/archive;
+   unsupported protocol, external authority change and reopen restore full native fallback.
+   This direct-host test registers capability using a dummy loopback origin; the following
+   independent CLI test exercises a real registered listening native endpoint.
+
+Retained unsuccessful attempts and limits:
+- First offline Worker lookup/check used nonexistent cloudflare/worker.mjs and Node reported
+  MODULE_NOT_FOUND; corrected to wrangler-config main cloudflare/src/index.js, checks/hash PASS.
+- Initial login shell printed desktop sysroot/dconf read-only noise; later commands use login=false.
+- Sandbox package/Worker loopback EPERM failures retained and retried unchanged outside sandbox.
+- Actual cold CLI raw9MiB push harness initial default curl Expect:100-continue returned500
+  with RangeError(status100 is outside200..599); log /tmp/git-zero-ad-upload-combined-actual-cold.log.
+  This is the already documented transport-diagnosis100-continue issue, independent of R8/R9.
+  src/http.rs is byte-for-byte unchanged from640b144. Root explicitly confirmed known issue and
+  directed the existing fixed NoExpect policy. No production handling/guard changed.
+  Identical temporary raw-push contract was retried with explicit empty Expect header.
+- No performance acceptance, isolate-fit or paid-deployment claim follows from these correctness checks.
+
+Tool versions:
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo 1.97.1 (c980f4866 2026-06-30)
+git version 2.53.0
+v24.10.0
+Wrangler4.149.0 reused from installed dependency tree.
+
+Final artifact SHA-256:
+83b52ba0eabd9f752aa1c243ce285f20ab78caac9244329d00d0db788306f9bc  /tmp/git-zero-hosting-cost-loop/examples/repository-host/cloudflare/src/index.js
+643c13a4899043c27fd568a58bb134f625f0001e6da10720b7e689ee0905afee  /tmp/git-zero-ad-upload-combined-target/debug/repository-host
+fe3946b27657cd132c917da7ad445c0d3d3fac1e0db9e44be5561ade564ff6b0  /tmp/git-zero-ad-upload-combined-target/debug/deps/cloudflare-84709271a47875f5
+1025f716562df4e75a25f1d3013797aaea2d9ab83b1a2e0c8dbb3c068a8b4c96  /tmp/git-zero-ad-upload-combined-contract.rs
+6adba77fb3dfc1eb693854e8bb552d8d3ca1acb9a8a6f202afbcf974022d53af  /tmp/git-zero-ad-upload-combined-contract
+
+Own production runtime identity before shutdown:
+{
+  "root": [
+    2471177,
+    801415,
+    2471177,
+    "node /tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js dev --local --ip 127.0.0.1 --port 8828 --inspector-port 0 --show-interactive-dev-session=false --config /tmp/git-zero-hosting-cost-loop/examples/repository-host/cloudflare/wrangler.toml --persist-to /tmp/git-zero-ad-upload-combined-state"
+  ],
+  "process_group": [
+    [
+      2471177,
+      801415,
+      2471177,
+      "node /tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js dev --local --ip 127.0.0.1 --port 8828 --inspector-port 0 --show-interactive-dev-session=false --config /tmp/git-zero-hosting-cost-loop/examples/repository-host/cloudflare/wrangler.toml --persist-to /tmp/git-zero-ad-upload-combined-state"
+    ],
+    [
+      2471184,
+      2471177,
+      2471177,
+      "/var/home/pawel/.local/lib/node-v24.10.0-linux-x64/bin/node --no-warnings /tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/wrangler-dist/cli.js dev --local --ip 127.0.0.1 --port 8828 --inspector-port 0 --show-interactive-dev-session=false --config /tmp/git-zero-hosting-cost-loop/examples/repository-host/cloudflare/wrangler.toml --persist-to /tmp/git-zero-ad-upload-combined-state"
+    ],
+    [
+      2471320,
+      2471184,
+      2471177,
+      "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.2 --ping"
+    ],
+    [
+      2471354,
+      2471184,
+      2471177,
+      "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/@cloudflare/workerd-linux-64/bin/workerd serve --binary --experimental --socket-addr=entry=127.0.0.1:8828 --external-addr=loopback=127.0.0.1:46243 --control-fd=3 -"
+    ],
+    [
+      2471409,
+      2471184,
+      2471177,
+      "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/@cloudflare/workerd-linux-64/bin/workerd serve --binary --experimental --socket-addr=entry=127.0.0.1:0 --external-addr=loopback=127.0.0.1:39875 --control-fd=3 - --inspector-addr=127.0.0.1:0 --debug-port=127.0.0.1:0"
+    ]
+  ]
+}
+
+Actual cold CLI temporary Rust contract status:
+Command (same endpoint/token/env as above):
+/tmp/git-zero-ad-upload-combined-contract --exact --test-threads=1 --nocapture actual_registered_cold_codec_combines_upload_fusion_and_certificate_advance
+First NoExpect retry retained at /tmp/git-zero-ad-upload-combined-actual-cold-noexpect.log:
+shared test curl20s deadline expired during fetch after7133184/9440303bytes received;
+strict initial/new-pack pushes and certificate/zero-read assertions had already passed.
+Second identical semantic contract uses90s curl transport deadline in temporary helper only;
+no production source/guard/assertion changes. Log /tmp/git-zero-ad-upload-combined-actual-cold-noexpect-90s.log.
+
+FINAL RESULT: PASS for combined R8 advertisement + R9 staged upload/publication/retirement.
+Actual registered cold CLI endpoint contract PASS on unchanged production Worker under NoExpect
+policy, all protocol/storage/certificate assertions retained, temporary90s transport deadline.
+Log /tmp/git-zero-ad-upload-combined-actual-cold-noexpect-90s.log:1 passed,0 failed.
+The registered endpoint was a real repository-host listening child, not a stub; subsequent child
+PID changed during the actual codec restart. Both strict pushes included different9MiB packs;
+1 actualPUT and1CAS were retained per push; eligible post-push advertisement incurred0R2GET/
+readbytes/PUT/DELETE/SQLwrites; next uncachedPOST read both packs, verifiedfsck/blob/archive;
+unsupported protocol/external CAS/actual codec restart fallbacks all passed.
+Original direct-host strengthened contract artifact before later independent CLI additions:
+source d17214820f9dd161f611a7e179f6c2eee5059ebbbe1b48c1f44ca7f4b24b8701,
+binary2d9d770e66e828ea8f51cc1b27b26a76eafce24797589cf08fb9ef8512ae49c4.
+No claim that the known default Expect:100-continue gateway issue is repaired.
+No whole R9 matrix duplicated: original16 production/2fault/4restart-phase proofs remain
+separately documented; this independent pass focused combined interactions plus package checks.
+
+Final source audit: HEAD457e2fa97b10cf57e47eea7e1c0fcb849d90780b, git status porcelain empty.
+All source/docs unchanged; no commits/push/deployment/local performance probe or remote VM action.
+Own runtime STOP proof (expected Wrangler session exit143 afterSIGTERM):
+{
+  "signal": "SIGTERM",
+  "only_verified_process_group": 2471177,
+  "root_argv_reverified": "node /tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js dev --local --ip 127.0.0.1 --port 8828 --inspector-port 0 --show-interactive-dev-session=false --config /tmp/git-zero-hosting-cost-loop/examples/repository-host/cloudflare/wrangler.toml --persist-to /tmp/git-zero-ad-upload-combined-state",
+  "remaining_process_group_rows": [],
+  "active_processes": [],
+  "port8828_connect_ex": 111
+}
+
+Post-stop host process audit: no own target binary, temporary Rust runner or8828Wrangler processes remain.
