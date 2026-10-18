@@ -1,0 +1,645 @@
+{
+  "kind": "R18 protected immutable GET chunk candidate; source-approved correctness evidence, not a benchmark",
+  "status": "pending-independent-ledger-continuity-review",
+  "source_commit": "f1ba8f548507dca1e5ab78e5c5d20d8360ecee21",
+  "parent": "c128197cc2cf1761e93832c63eec4c25c1268249",
+  "native_source_tree": "c5b06db80540cc21a80e1ad19b4b8d1086425749",
+  "worker_source_tree": "7f41db4407963ed04e6cbe19556b1416633caf18",
+  "source_files_changed": 7,
+  "production_worker_changed": false,
+  "source_review": {
+    "path": "source-review.md",
+    "bytes": 11243,
+    "sha256": "7876f953552db52e91818ae179cc03b919cccf43f0a293a87bbf5a23ad2824b1",
+    "original_inventory_bytes": 647042,
+    "original_inventory_sha256": "28dc32a7dca90b9379b3f83dc695841a01307a74213770a585aff8e3d9aedc95",
+    "inventory_member": "provenance/git-zero-protected-chunk-source-review-f1ba8f548507-inventory.json"
+  },
+  "implementation": [
+    "One private immutable verified GET-owned chunk, at most16MiB, within existing32MiB retained owning budget and256 response/payload entries. Exact Vec capacity/key/Arc/slot plus responses/ring/certificates/pending proofs and256KiB socket reservation are charged.",
+    "Ordinary verified GET admission only. PUT/import/startup/recovery/stats/planning never populate it. Successful push clears response-only gauges while the immutable slot may survive; productive pressure can evict it.",
+    "Whole descriptor graph validated before reads; exact cached/first-missing/remaining verified chunks merge in original order before native files. Existing opaque authenticated selection binds full stable selection and cache/missing partition without Worker framing changes.",
+    "Stable one-use Full receive token is minted after complete reconstruction and is independent of its own admission. Changed cache/authority discards and charges paid bytes, then uses an explicit safe ordinary path before mutation. All-cache uses existing fresh authority and no dummy GET.",
+    "Strict thin/ref/quarantine, publication-sync-before-delete, unknown receipt semantics, no replay and SAME Native physical GC-before-next-PUT remain intact."
+  ],
+  "complete_gates": [
+    {
+      "root": "/tmp/git-zero-protected-first-on-02",
+      "status": "PASS",
+      "test_elapsed_seconds": 38.07,
+      "scope": "early matched16 on",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-first-on-02/source-before.json",
+          "bytes": 4459,
+          "sha256": "950c012617e41c4e242f89fdbbc1cdbfa046c8500a8e921e10bd1df0f4b06bfd"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-first-on-02/source-after.json",
+          "bytes": 4459,
+          "sha256": "950c012617e41c4e242f89fdbbc1cdbfa046c8500a8e921e10bd1df0f4b06bfd"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-first-on-02/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-first-on-02/contract.json",
+          "bytes": 370164,
+          "sha256": "0530cd20b27f1957b0f091871b3c1d87cc1fbbd32fff1ef1ad649a48555ba7d2"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-first-on-02-run.log",
+        "bytes": 475,
+        "sha256": "4a416d4e24b9de1b7ab3edc155ff49c27ea5e76608253ad02225aa87fbb433a5"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-first-off-02",
+      "status": "PASS",
+      "test_elapsed_seconds": 45.81,
+      "scope": "early matched16 off",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-first-off-02/source-before.json",
+          "bytes": 4459,
+          "sha256": "950c012617e41c4e242f89fdbbc1cdbfa046c8500a8e921e10bd1df0f4b06bfd"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-first-off-02/source-after.json",
+          "bytes": 4459,
+          "sha256": "950c012617e41c4e242f89fdbbc1cdbfa046c8500a8e921e10bd1df0f4b06bfd"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-first-off-02/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-first-off-02/contract.json",
+          "bytes": 369828,
+          "sha256": "3a73fb5c0ec89a99db4675dbf29ac2b6396db185b0455abab146d2b8284695a5"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-first-off-02-run.log",
+        "bytes": 376,
+        "sha256": "81bcc95178d5ca2b2b8f317a815edf6eedd023d79a888e500f3b4c2ed5d827cd"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-first64-on-01",
+      "status": "PASS",
+      "test_elapsed_seconds": 111.39,
+      "scope": "early matched64 on",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-first64-on-01/source-before.json",
+          "bytes": 4459,
+          "sha256": "950c012617e41c4e242f89fdbbc1cdbfa046c8500a8e921e10bd1df0f4b06bfd"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-first64-on-01/source-after.json",
+          "bytes": 4459,
+          "sha256": "950c012617e41c4e242f89fdbbc1cdbfa046c8500a8e921e10bd1df0f4b06bfd"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-first64-on-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-first64-on-01/contract.json",
+          "bytes": 386213,
+          "sha256": "6a2c1b0010eb3918fa8b30840b3d07470873837e9d681ec3989be580907d68f3"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-first64-on-01-run.log",
+        "bytes": 451,
+        "sha256": "71dd1ffdbae158f5e85f4480f78dcf11703d383eed9e9c52972a811474ca4638"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-first64-off-01",
+      "status": "PASS",
+      "test_elapsed_seconds": 128.94,
+      "scope": "early matched64 off",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-first64-off-01/source-before.json",
+          "bytes": 4459,
+          "sha256": "950c012617e41c4e242f89fdbbc1cdbfa046c8500a8e921e10bd1df0f4b06bfd"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-first64-off-01/source-after.json",
+          "bytes": 4459,
+          "sha256": "950c012617e41c4e242f89fdbbc1cdbfa046c8500a8e921e10bd1df0f4b06bfd"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-first64-off-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-first64-off-01/contract.json",
+          "bytes": 400772,
+          "sha256": "c756d515f0fa75132e3e5c4fa252a68bf85e0ede8625113b2235e7d919d35797"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-first64-off-01-run.log",
+        "bytes": 451,
+        "sha256": "3549cdadbd41088962d36a1479bd2f5c38a7ad2b51f388972d075348d5d2ca49"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-allocation-02",
+      "status": "PASS",
+      "test_elapsed_seconds": 40.63,
+      "scope": "real full16MiB allocation, twelve near-limit response pressure/refill requests, restart",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-allocation-02/source-before.json",
+          "bytes": 4459,
+          "sha256": "9adfc05f0effc4bf3e9e516085d04327f42ee3be4b70d9ae86aa1da78d11851c"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-allocation-02/source-after.json",
+          "bytes": 4459,
+          "sha256": "9adfc05f0effc4bf3e9e516085d04327f42ee3be4b70d9ae86aa1da78d11851c"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-allocation-02/cleanup.json",
+          "bytes": 56,
+          "sha256": "7f0095a986c7b8ab0d54434bc7eaccfe4b29676a588c5f0dc7ead64b8c180563"
+        },
+        "allocation-contract.json": {
+          "path": "/tmp/git-zero-protected-allocation-02/allocation-contract.json",
+          "bytes": 299384,
+          "sha256": "19e0faa6967ab922ba13df26d930b884ecdac90278055cf6c100e4f46fbd88b0"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-allocation-02-run.log",
+        "bytes": 484,
+        "sha256": "872c0eef3f523022a96cd9243aa00b1f3ef213360c492b6b31211851383d5aa4"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-receive-admission-01",
+      "status": "PASS",
+      "test_elapsed_seconds": 14.11,
+      "scope": "restart then prepared Full receive admits without invalidating token",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-receive-admission-01/source-before.json",
+          "bytes": 4459,
+          "sha256": "9adfc05f0effc4bf3e9e516085d04327f42ee3be4b70d9ae86aa1da78d11851c"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-receive-admission-01/source-after.json",
+          "bytes": 4459,
+          "sha256": "9adfc05f0effc4bf3e9e516085d04327f42ee3be4b70d9ae86aa1da78d11851c"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-receive-admission-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-receive-admission-01/contract.json",
+          "bytes": 371676,
+          "sha256": "677c324560fa22fb2b19cd5a77edbdf5731b093dfc3e909edcb517d1fa87de3f"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-receive-admission-01-run.log",
+        "bytes": 376,
+        "sha256": "2ea5fc9d96c3d90823d14ed2ec0e300bd55d8be36141e9b20bab209db9a7373d"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-faults-on-02",
+      "status": "PASS",
+      "test_elapsed_seconds": 166.77,
+      "scope": "true external-base thin receive plus38 rows of read/publication/socket/recovery evidence",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-faults-on-02/source-before.json",
+          "bytes": 4910,
+          "sha256": "9f85da6f698342cd478f351e90f5f1a69ff7e58f9e826b757f2ebd4993e766ce"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-faults-on-02/source-after.json",
+          "bytes": 4910,
+          "sha256": "9f85da6f698342cd478f351e90f5f1a69ff7e58f9e826b757f2ebd4993e766ce"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-faults-on-02/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-faults-on-02/contract.json",
+          "bytes": 371642,
+          "sha256": "52a325dcf91b149a1c6cdfe27af0456a70e9107693a189eaffbf8217610b061d"
+        },
+        "fault-contract.json": {
+          "path": "/tmp/git-zero-protected-faults-on-02/fault-contract.json",
+          "bytes": 934842,
+          "sha256": "a008619997ff5bd991c6e87d94d9a3f9a8f7e1e393e51adadddf6c4fb1b4119e"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-faults-on-02-run.log",
+        "bytes": 550,
+        "sha256": "5f07944653a8552c475d2ac6086e7a9227c0d97577d3ccbc6d2e733e0fa05d8d"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-plan-pressure-01",
+      "status": "PASS",
+      "test_elapsed_seconds": 154.04,
+      "scope": "real slot eviction between signed first-missing plan and paid continuation",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-plan-pressure-01/source-before.json",
+          "bytes": 4910,
+          "sha256": "9f85da6f698342cd478f351e90f5f1a69ff7e58f9e826b757f2ebd4993e766ce"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-plan-pressure-01/source-after.json",
+          "bytes": 4910,
+          "sha256": "9f85da6f698342cd478f351e90f5f1a69ff7e58f9e826b757f2ebd4993e766ce"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-plan-pressure-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-plan-pressure-01/contract.json",
+          "bytes": 401850,
+          "sha256": "945f5931a307cb65af69e663fdab254975e9e089c0f5d82285297d36cf1ae95a"
+        },
+        "plan-pressure-contract.json": {
+          "path": "/tmp/git-zero-protected-plan-pressure-01/plan-pressure-contract.json",
+          "bytes": 99320,
+          "sha256": "0820b8852ae5e68ee07432d50a5aa209fb01aba21d0cbdc3d014fcba2abc421c"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-plan-pressure-01-run.log",
+        "bytes": 451,
+        "sha256": "2d19a29c6f48f38741e64a51ef742bd6cbbb7d0468169fcf045f9e902bd4fea6"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-warm-01",
+      "status": "PASS",
+      "test_elapsed_seconds": 39.0,
+      "scope": "warm zero admission and zero payload GET",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-warm-01/source-before.json",
+          "bytes": 4910,
+          "sha256": "9f85da6f698342cd478f351e90f5f1a69ff7e58f9e826b757f2ebd4993e766ce"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-warm-01/source-after.json",
+          "bytes": 4910,
+          "sha256": "9f85da6f698342cd478f351e90f5f1a69ff7e58f9e826b757f2ebd4993e766ce"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-warm-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-warm-01/contract.json",
+          "bytes": 353633,
+          "sha256": "c8d8b71fd96e72ed3f20d412293e765acfa1142f19d152252a3f9b4dee43d13e"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-warm-01-run.log",
+        "bytes": 376,
+        "sha256": "f21f67a1143db68678586c73402202f9f4cde92119206be3714b3a6105076ff1"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-http-ordinary-01",
+      "status": "PASS",
+      "test_elapsed_seconds": 61.97,
+      "scope": "ordinary HTTP, preparation and sockets both off",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-http-ordinary-01/source-before.json",
+          "bytes": 4910,
+          "sha256": "3bb0fd739a6d36568e5e8c2b8748fbd0d743bea5a120334af96a12a66483266b"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-http-ordinary-01/source-after.json",
+          "bytes": 4910,
+          "sha256": "3bb0fd739a6d36568e5e8c2b8748fbd0d743bea5a120334af96a12a66483266b"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-http-ordinary-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-http-ordinary-01/contract.json",
+          "bytes": 342152,
+          "sha256": "3989c543388f4e8a86fc94e0ea530045a826e1598da589b081b36f9f8e0f4132"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-http-ordinary-01-run.log",
+        "bytes": 549,
+        "sha256": "73e36391e21744192de09838722244083b9b58b0a68f3dba314bcff71f934906"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-final-on-01",
+      "status": "PASS",
+      "test_elapsed_seconds": 24.92,
+      "scope": "exact frozen source final on",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-final-on-01/source-before.json",
+          "bytes": 4910,
+          "sha256": "3bb0fd739a6d36568e5e8c2b8748fbd0d743bea5a120334af96a12a66483266b"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-final-on-01/source-after.json",
+          "bytes": 4910,
+          "sha256": "3bb0fd739a6d36568e5e8c2b8748fbd0d743bea5a120334af96a12a66483266b"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-final-on-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-final-on-01/contract.json",
+          "bytes": 370008,
+          "sha256": "7963925a8895ed2bb53b429db98d1246c94ceed4a614528d76619564f59eb91c"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-final-on-01-run.log",
+        "bytes": 376,
+        "sha256": "459368cee2a9f93082964d1d6bd80119c612da5fd8688cc67f2e56744d1ff87e"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-final-off-01",
+      "status": "PASS",
+      "test_elapsed_seconds": 39.41,
+      "scope": "exact frozen source final off",
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-protected-final-off-01/source-before.json",
+          "bytes": 4910,
+          "sha256": "3bb0fd739a6d36568e5e8c2b8748fbd0d743bea5a120334af96a12a66483266b"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-protected-final-off-01/source-after.json",
+          "bytes": 4910,
+          "sha256": "3bb0fd739a6d36568e5e8c2b8748fbd0d743bea5a120334af96a12a66483266b"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-protected-final-off-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "8859be4eff3247490df050844ab70bf4a2009f62cae971e8bfc33167f9825f18"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-protected-final-off-01/contract.json",
+          "bytes": 369907,
+          "sha256": "9ec1fbddd8fe79feafa22a4b870e91f8bcf7a1f5ae7120ae9d391946f4f4d330"
+        }
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-final-off-01-run.log",
+        "bytes": 376,
+        "sha256": "1cc76398f5c42f4fcbf0d2fbae16b584e21653b86b6d61eced7f7486197965f7"
+      }
+    }
+  ],
+  "failed_runtime_scopes": [
+    {
+      "root": "/tmp/git-zero-protected-first-on-01",
+      "scope": "driver falsely treated metrics-observer physical LIST as a read write; actual admission1/GET1 correct",
+      "production_source_fix": false,
+      "after_map_exists": false,
+      "source_before": {
+        "path": "/tmp/git-zero-protected-first-on-01/source-before.json",
+        "bytes": 4459,
+        "sha256": "a17512f57aac810d1be49fbb870e37d9c4592284435d36a682aceea05bde7021"
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-first-on-01-run.log",
+        "bytes": 814,
+        "sha256": "a2b8add5265df5868dea922f4af4248e581703b499b5c0c392600fb7f0b10b75"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-allocation-01",
+      "scope": "in-process driver left SDK HTTP default, so no256KiB socket reservation and near-limit response legitimately fit; corrected driver transport only",
+      "production_source_fix": false,
+      "after_map_exists": false,
+      "source_before": {
+        "path": "/tmp/git-zero-protected-allocation-01/source-before.json",
+        "bytes": 4459,
+        "sha256": "4bade4726ccef399092417c0c0d357df1edc83d90570c82d6238a10d145973c9"
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-allocation-01-run.log",
+        "bytes": 886,
+        "sha256": "cc84011495ab8cfe17b080165ff5da0ef11dd1b5333e36d15cf370152e731c72"
+      }
+    },
+    {
+      "root": "/tmp/git-zero-protected-faults-on-01",
+      "scope": "driver expected generic fired flag for unknown-SQL hook, whose actual SQL cursor correctly remained NULL; corrected flag assertion only",
+      "production_source_fix": false,
+      "after_map_exists": false,
+      "source_before": {
+        "path": "/tmp/git-zero-protected-faults-on-01/source-before.json",
+        "bytes": 4910,
+        "sha256": "a18b2f341fb06815f1bb2259982392741af886da247308e7b6a4256995989c45"
+      },
+      "runner_log": {
+        "path": "/tmp/git-zero-protected-faults-on-01-run.log",
+        "bytes": 2972,
+        "sha256": "e22e11c191c1eb838f536dabfaa56c84507aca4d95646a68eac68c4bdc3ec343"
+      }
+    }
+  ],
+  "other_exploratory_scopes": [
+    "Initial cargo check was canceled after starting in the worktree default target; corrected all subsequent builds to the assigned target-j2. No runtime was started.",
+    "Initial unprivileged library run could not bind loopback sockets and was interrupted; the complete privileged runs passed. Original output exists in tool transcript, not a fabricated log file.",
+    "One Rust test-driver configuration edit had a quote syntax error in a no-run compile; corrected to raw strings before runtime. Original diagnostics are in tool transcript."
+  ],
+  "checks": {
+    "library": 125,
+    "all_target_clippy": "PASS",
+    "fmt": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "matched_correctness_pairs": [
+    {
+      "mib": 16,
+      "on": "first-on-02",
+      "off": "first-off-02",
+      "matched_rows": 18,
+      "body_hashes_verified": 11,
+      "gets_on": 29,
+      "gets_off": 46,
+      "read_bytes_on": 38112638,
+      "read_bytes_off": 181926076
+    },
+    {
+      "mib": 64,
+      "on": "first64-on-01",
+      "off": "first64-off-01",
+      "matched_rows": 18,
+      "body_hashes_verified": 11,
+      "gets_on": 65,
+      "gets_off": 82,
+      "read_bytes_on": 353452616,
+      "read_bytes_off": 638665288
+    },
+    {
+      "mib": 16,
+      "on": "final-on-01",
+      "off": "final-off-01",
+      "matched_rows": 18,
+      "body_hashes_verified": 11,
+      "gets_on": 29,
+      "gets_off": 46,
+      "read_bytes_on": 38112638,
+      "read_bytes_off": 181926076
+    }
+  ],
+  "test_durations_are_seconds_not_benchmark_latencies": true,
+  "final_exact_pair": {
+    "on_seconds": 24.92,
+    "off_seconds": 39.41,
+    "matched_rows": 18,
+    "identical_raw_response_pairs": 11,
+    "actual_gets_off_on": [
+      46,
+      29
+    ],
+    "actual_read_bytes_off_on": [
+      181926076,
+      38112638
+    ],
+    "same_worker_requests": 70,
+    "same_do_requests": 77,
+    "same_sql_reads": 109,
+    "same_sql_writes": 17
+  },
+  "allocation": {
+    "initial_actual_retained_heap_delta_bytes": 16798705,
+    "initial_conservative_joint_charge_bytes": 17041092,
+    "protected_payload_bytes": 16777216,
+    "protected_owning_charge_bytes": 16777615,
+    "near_limit_real_response_bytes": 16652188,
+    "pressure_requests": 12,
+    "final_admissions_evictions": [
+      12,
+      12
+    ],
+    "largest_recorded_transient_request_heap_peak_bytes": 106267051,
+    "scope": "Initial measured heap delta is direct cache-domain evidence. Later global LIVE samples include retained audit Values;32MiB is not a total-process-memory limit."
+  },
+  "inflight_eviction": {
+    "paid_discards": [
+      0,
+      1
+    ],
+    "evictions": [
+      1,
+      2
+    ],
+    "admissions": [
+      2,
+      3
+    ],
+    "result": "exact Git bytes after paid discard and ordinary safe reconstruction"
+  },
+  "faults": {
+    "rows": 38,
+    "true_external_base_thin_prepared_receive": true,
+    "read_controls": 10,
+    "publication_socket_modes": 13,
+    "one_logical_request_input_output_once": true,
+    "cas_attempts_at_most_one": true,
+    "same_native_gc_before_put_where_required": true,
+    "unknown_sql_remains_null": true,
+    "incomplete_receipts_remain_incomplete": true
+  },
+  "warm_and_http": {
+    "warm_admissions": 0,
+    "warm_payload_gets": 0,
+    "http_preparation_off_socket_off_admissions": 1,
+    "http_protected_hits": 17,
+    "http_actual_gets": 29
+  },
+  "continuity": {
+    "member": "provenance/git-zero-protected-production-continuity.json",
+    "sha256": "43a3d1afcee607ec5a97aa32fa16b4d1927dd5133ea7fc4d070bc5cfcf357dc9",
+    "executable_production_logic_unchanged_across_gates": true,
+    "explicit_differences": "Trailing cfg(test) helper/coverage and one exact two-line explanatory comment; historical full-file hashes are reproduced before executable-prefix comparison. Rust runners/binaries have separate exact identities."
+  },
+  "capsule": {
+    "file": "raw-evidence.tar.gz",
+    "bytes": 1361154,
+    "sha256": "e2b4048adf537246b6fe2be4e5b4c109dd0afbe7d3ed2fedeb7ce572aad8083f",
+    "members": 2007,
+    "member_manifest_sha256": "7b93dd23ec9be8f092b5375010448e802a39c03141bef88d8aabb8c4aa6dbfd4",
+    "full_local_inventory_sha256": "d1bf6fc23f7a80d9a1fb78740e25ffc3b619a98806a07780065d448490e52b9f",
+    "full_local_inventory_files": 4006,
+    "full_local_inventory_logical_bytes": 3953598095,
+    "hash_methods": {
+      "reused-independent-hash-after-frozen-no-writer-and-size-mtime-check": 2129,
+      "streamed-sha256-once": 1877
+    },
+    "new_bytes_streamed_once": 2348712157,
+    "all_members_reread_after_compression": true
+  },
+  "publication_limits": [
+    "Only compact raw receipts/logs/maps/contracts/proof reviews/source are published. Large Git protocol bodies, fixture repositories, mutable-then-stopped R2/SQLite state and ELF executables remain local-only with full SHA256/size inventory.",
+    "The capsule includes the exact original source-review report/inventory without amending their signed scope. The expanded author inventory additionally includes all stopped fixture/persistence files.",
+    "Earlier overwritten Native/Rust binaries and unarchived old Rust-runner source versions are identified only by their original maps; no unavailable payload is claimed present.",
+    "Three failed runtime scopes lack after maps and remain failed/excluded. Early sandbox/interrupted/no-run diagnostics exist in tool transcript, not fabricated files.",
+    "The two named runtime wrappers and actual Node/workerd ELF hashes are post-gate inventory, not a runtime before/after proof.",
+    "Recent per-key DO maps are instance diagnostics and are not extrapolated across epochs.",
+    "Private immutable handle prevents supported software mutation; arbitrary RAM-corruption protection is not claimed."
+  ],
+  "conditional_cost_opportunity": {
+    "gets_avoided": 156,
+    "usd_per_1000_four_profile_replays": 0.05616,
+    "scope": "conditional source/readset scenario only; not measured net",
+    "proven_net_lower_bound_usd": 0
+  },
+  "worker_cpu_ms": null,
+  "do_duration_gb_s": null,
+  "native_compute": null,
+  "full_bill_usd": null,
+  "performance_cost_acceptance_promotion_plateau_stopping_claim": false,
+  "fresh_screen_required": true,
+  "mandatory_final_five_pairs_remain_root_work": true,
+  "cleanup": "cleanup.json",
+  "pushed": false,
+  "ci_runs": 0,
+  "paid_deployments": 0,
+  "dependencies_caps_benchmark_runner_scorer_rates_fixture_changed": false,
+  "new_correctness_runner": "Rust tests/protected_chunk_cloudflare.rs; not a benchmark runner or scorer"
+}
