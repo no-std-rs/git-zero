@@ -1,0 +1,717 @@
+{
+  "kind": "R19 bounded MULTI verified GET-cache candidate; source-approved local correctness evidence, NOT a benchmark",
+  "status": "pending-independent-ledger-continuity-review",
+  "source_commit": "f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5",
+  "parent": "f1ba8f548507dca1e5ab78e5c5d20d8360ecee21",
+  "native_source_tree": "521d427a056711a58b757c9e52f3d5e047937f92",
+  "worker_source_tree": "7f41db4407963ed04e6cbe19556b1416633caf18",
+  "production_Worker_changed": false,
+  "source_files_changed": 5,
+  "source_review": {
+    "path": "/tmp/git-zero-hosting-multi-chunk/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r19-multi-chunk-candidate/source-review.md",
+    "bytes": 13975,
+    "sha256": "f9d63594e4ae26e97afcfdbbde7ffac0b1138b591563cf258ad1352b9212fb1a"
+  },
+  "source_review_original_inventory": {
+    "path": "/tmp/git-zero-multi-chunk-source-review-f124d3b71ce1-inventory.json",
+    "bytes": 463987,
+    "sha256": "b17e31d26393aef40e9db3f0f04126470b0a8e1484bc4faf4fd13ce5895c92cc"
+  },
+  "implementation": {
+    "max_chunks": 32,
+    "max_secondaries": 31,
+    "joint_entry_limit": 256,
+    "joint_retained_bytes": 33554432,
+    "chunk_entry_bytes": 16777216,
+    "later_admission_total_chunk_owning_ceiling_bytes": 17825792,
+    "unallocated_admission_headroom_bytes": 15728640,
+    "headroom_is_not_retained_or_response_cap": true,
+    "admission": "every already-required verified ordinary GET miss, first-fit without evicting any live cache owner",
+    "prune": "complete installed trusted winning Full publication or ordinary Full authoritative recovery only; observer/startup/projection/proposed/stale/ambiguous do not prune",
+    "anchor_after_prune": "oldest surviving resident, no allocation or replacement eviction",
+    "required_pressure": "newest secondaries then anchor, before ordinary response LRU/failure",
+    "response_entry_eligibility_bytes": 16777216,
+    "stable_Full_token_independent_of_own_admissions": true,
+    "wire_Worker_caps_unchanged": true,
+    "mode_controls": "off|on|one|multi; on=ONE; cold candidate default=MULTI; warm retains no pool",
+    "pressure_counter_also_counts_explicit_policy_reductions": true
+  },
+  "complete_accepted_gates": [
+    {
+      "root": "/tmp/git-zero-multi-first16-one-02",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 293,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-first16-one-02-driver.log",
+        "bytes": 224,
+        "sha256": "112786e0c9dfd364d8a1023893d08b1d06ae98f720f38b484393807261838253"
+      },
+      "test_seconds": 182.74,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-first16-one-02/source-before.json",
+          "bytes": 4890,
+          "sha256": "f394453dc9f2438981b2e088ac345909b26b20441e19652fe711f69ea540f6ab"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-first16-one-02/source-after.json",
+          "bytes": 4890,
+          "sha256": "f394453dc9f2438981b2e088ac345909b26b20441e19652fe711f69ea540f6ab"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-first16-one-02/contract.json",
+          "bytes": 1069864,
+          "sha256": "8bd5cdcb2a6a36b6093d7fd2fd47c7ecef191476a3b174a229bd1502c7915dae"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-first16-one-02/cleanup.json",
+          "bytes": 85,
+          "sha256": "6aec8205c5a94eccea98fcdfd547c9aa7f615149ebba644f545c5176c961032a"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-first16-multi-02",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 293,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-first16-multi-02-driver.log",
+        "bytes": 223,
+        "sha256": "ebaf8b771fb665259f9d4d4ccef237aa2760d764ad5379c583540f59b667e042"
+      },
+      "test_seconds": 94.63,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-first16-multi-02/source-before.json",
+          "bytes": 4890,
+          "sha256": "f394453dc9f2438981b2e088ac345909b26b20441e19652fe711f69ea540f6ab"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-first16-multi-02/source-after.json",
+          "bytes": 4890,
+          "sha256": "f394453dc9f2438981b2e088ac345909b26b20441e19652fe711f69ea540f6ab"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-first16-multi-02/contract.json",
+          "bytes": 1068062,
+          "sha256": "a4528c0f78b5ae8ebc84ea4f8e358a023b3fa50ab87a84504cb5e4cce16789f8"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-first16-multi-02/cleanup.json",
+          "bytes": 85,
+          "sha256": "6aec8205c5a94eccea98fcdfd547c9aa7f615149ebba644f545c5176c961032a"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-first64-one-01",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 293,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-first64-one-01-driver.log",
+        "bytes": 224,
+        "sha256": "aa65aa1e5f53f11f38ce35f8816b415fbebb286648568da468f9d8ac4c30b88d"
+      },
+      "test_seconds": 466.05,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-first64-one-01/source-before.json",
+          "bytes": 4890,
+          "sha256": "f394453dc9f2438981b2e088ac345909b26b20441e19652fe711f69ea540f6ab"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-first64-one-01/source-after.json",
+          "bytes": 4890,
+          "sha256": "f394453dc9f2438981b2e088ac345909b26b20441e19652fe711f69ea540f6ab"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-first64-one-01/contract.json",
+          "bytes": 1044141,
+          "sha256": "c46ed4021babe27b3e08f25c0a0d25e9b6420e5e05213fbd25974803e515af5b"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-first64-one-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "6aec8205c5a94eccea98fcdfd547c9aa7f615149ebba644f545c5176c961032a"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-first64-multi-01",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 293,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-first64-multi-01-driver.log",
+        "bytes": 224,
+        "sha256": "9bf6672facf99f3378b4d166cf0b7951de966874c3b2259b779cf380b6ecd04e"
+      },
+      "test_seconds": 296.46,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-first64-multi-01/source-before.json",
+          "bytes": 4890,
+          "sha256": "f394453dc9f2438981b2e088ac345909b26b20441e19652fe711f69ea540f6ab"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-first64-multi-01/source-after.json",
+          "bytes": 4890,
+          "sha256": "f394453dc9f2438981b2e088ac345909b26b20441e19652fe711f69ea540f6ab"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-first64-multi-01/contract.json",
+          "bytes": 1068579,
+          "sha256": "9afcb36895aca26b0cb7123b0342e9e1303014b73f39d7b20be97d59fd4e5617"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-first64-multi-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "6aec8205c5a94eccea98fcdfd547c9aa7f615149ebba644f545c5176c961032a"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-allocation-01",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 20,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-allocation-01-driver.log",
+        "bytes": 249,
+        "sha256": "8943be2a48dbfd61812ce6cb4522d7fecc244d76abf004e3668ff758db544ebf"
+      },
+      "test_seconds": 78.28,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-allocation-01/source-before.json",
+          "bytes": 4890,
+          "sha256": "c55e8569ef201f42cee5bf7813e73a5bbbe96e17129cce99a0813969b809a48c"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-allocation-01/source-after.json",
+          "bytes": 4890,
+          "sha256": "c55e8569ef201f42cee5bf7813e73a5bbbe96e17129cce99a0813969b809a48c"
+        },
+        "allocation-contract.json": {
+          "path": "/tmp/git-zero-multi-allocation-01/allocation-contract.json",
+          "bytes": 326953,
+          "sha256": "08fef0420d75c9ebc4920fe99e9e36aa71345b64fe519278fbe05b154a06e43c"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-allocation-01/cleanup.json",
+          "bytes": 56,
+          "sha256": "03a54f1c0ddac5c9d4d734f98268efd0549449124f688e3b19f6cb34b85089e2"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-faults-03",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 458,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-faults-03-driver.log",
+        "bytes": 234,
+        "sha256": "7f8c9298dc16e9d5ef037bd7216df531b5317a4f1ec0b0156d4a84b4dceb2eb0"
+      },
+      "test_seconds": 131.68,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-faults-03/source-before.json",
+          "bytes": 4890,
+          "sha256": "74f0cdce11e022011272037df27d415b497cefe6b9bb1251cbd50c6c4b30c5d2"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-faults-03/source-after.json",
+          "bytes": 4890,
+          "sha256": "74f0cdce11e022011272037df27d415b497cefe6b9bb1251cbd50c6c4b30c5d2"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-faults-03/contract.json",
+          "bytes": 61336,
+          "sha256": "2f37f069edac46e8cf9a082820c08baec61d0b86e79a0d79c61372ea68025aad"
+        },
+        "fault-contract.json": {
+          "path": "/tmp/git-zero-multi-faults-03/fault-contract.json",
+          "bytes": 945301,
+          "sha256": "50de1bef57403cadb9716e0e3be84888f42529e022d790f3fd39fed16b4537fe"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-faults-03/cleanup.json",
+          "bytes": 64,
+          "sha256": "cc13a6759083af0290bd53ac6becf11ed9bda8293e16f51dbfafd7b851df8d0d"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-plan-pressure-03",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 58,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-plan-pressure-03-driver.log",
+        "bytes": 233,
+        "sha256": "c6fb67fb7d0d8da59ebf96ccce83a78bb6d43d976ec72ea8e69350b82f603ad5"
+      },
+      "test_seconds": 70.22,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-plan-pressure-03/source-before.json",
+          "bytes": 4890,
+          "sha256": "e60bd6049336680088b1d24b70a29f1c05636409c2bbd8f95b2852191c37b66b"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-plan-pressure-03/source-after.json",
+          "bytes": 4890,
+          "sha256": "e60bd6049336680088b1d24b70a29f1c05636409c2bbd8f95b2852191c37b66b"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-plan-pressure-03/contract.json",
+          "bytes": 64407,
+          "sha256": "7c596fba71687275db06225f6ce072d303c523367c4188a8eabbe9d92b0801ee"
+        },
+        "plan-pressure-contract.json": {
+          "path": "/tmp/git-zero-multi-plan-pressure-03/plan-pressure-contract.json",
+          "bytes": 101158,
+          "sha256": "20719a1786ea881acf0f181875c75cc382194df1fa084540d465ddfab3b47a0d"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-plan-pressure-03/cleanup.json",
+          "bytes": 64,
+          "sha256": "cc13a6759083af0290bd53ac6becf11ed9bda8293e16f51dbfafd7b851df8d0d"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-warm-01",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 89,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-warm-01-driver.log",
+        "bytes": 158,
+        "sha256": "400be3acdabe33a78931d40feb8ed89ede5df996f9ee74a465a4845e2685d329"
+      },
+      "test_seconds": 28.16,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-warm-01/source-before.json",
+          "bytes": 4890,
+          "sha256": "e60bd6049336680088b1d24b70a29f1c05636409c2bbd8f95b2852191c37b66b"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-warm-01/source-after.json",
+          "bytes": 4890,
+          "sha256": "e60bd6049336680088b1d24b70a29f1c05636409c2bbd8f95b2852191c37b66b"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-warm-01/contract.json",
+          "bytes": 285919,
+          "sha256": "ae68177fd9f4180ac476952a4d0f9151d0d179adf988cc98ecb3eaf4a4a0e3e7"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-warm-01/cleanup.json",
+          "bytes": 64,
+          "sha256": "cc13a6759083af0290bd53ac6becf11ed9bda8293e16f51dbfafd7b851df8d0d"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-http-01",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 89,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-http-01-driver.log",
+        "bytes": 158,
+        "sha256": "91ad79fa31d028255452b73c111c02d881faf3342163c8bb0baf936d92d00175"
+      },
+      "test_seconds": 27.96,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-http-01/source-before.json",
+          "bytes": 4890,
+          "sha256": "e60bd6049336680088b1d24b70a29f1c05636409c2bbd8f95b2852191c37b66b"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-http-01/source-after.json",
+          "bytes": 4890,
+          "sha256": "e60bd6049336680088b1d24b70a29f1c05636409c2bbd8f95b2852191c37b66b"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-http-01/contract.json",
+          "bytes": 281730,
+          "sha256": "1e597bcaf0508e9fd531781c930c6ffd2ccd63faf27bd0f9042b9cb8e53360cd"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-http-01/cleanup.json",
+          "bytes": 64,
+          "sha256": "cc13a6759083af0290bd53ac6becf11ed9bda8293e16f51dbfafd7b851df8d0d"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-restart-01",
+      "status": "PASS",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 48,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-restart-01-driver.log",
+        "bytes": 234,
+        "sha256": "d02a7cc66724c13c65dbb4fa62838ac6e1a63b6a699499f80aa0171c7e9ef24c"
+      },
+      "test_seconds": 108.48,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-restart-01/source-before.json",
+          "bytes": 4890,
+          "sha256": "e60bd6049336680088b1d24b70a29f1c05636409c2bbd8f95b2852191c37b66b"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-restart-01/source-after.json",
+          "bytes": 4890,
+          "sha256": "e60bd6049336680088b1d24b70a29f1c05636409c2bbd8f95b2852191c37b66b"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-restart-01/contract.json",
+          "bytes": 107074,
+          "sha256": "7b8f861af8ffae1fffc7adc851ed35068bf9d3992769aefb770c4f36aa2c1621"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-restart-01/cleanup.json",
+          "bytes": 64,
+          "sha256": "cc13a6759083af0290bd53ac6becf11ed9bda8293e16f51dbfafd7b851df8d0d"
+        }
+      }
+    }
+  ],
+  "nonaccepted_attempt_scopes": [
+    {
+      "root": "/tmp/git-zero-multi-first16-one-01",
+      "status": "EXPLORATORY_PASS_old_R19_observer_pruning_policy_bug",
+      "source_before_present": true,
+      "source_after_present": true,
+      "maps_equal": true,
+      "inventoried_root_regular_files_and_recursive_logs": 221,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-first16-one-01-driver.log",
+        "bytes": 431,
+        "sha256": "ce432a2d02daaf74f03f3466829565b4dad8ce8abe77b075284c8cab504edb12"
+      },
+      "test_seconds": 157.88,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-first16-one-01/source-before.json",
+          "bytes": 4890,
+          "sha256": "76942b0cb83adc8caa102b62ceea1d3b041e608519659079b74f887338802120"
+        },
+        "source-after.json": {
+          "path": "/tmp/git-zero-multi-first16-one-01/source-after.json",
+          "bytes": 4890,
+          "sha256": "76942b0cb83adc8caa102b62ceea1d3b041e608519659079b74f887338802120"
+        },
+        "contract.json": {
+          "path": "/tmp/git-zero-multi-first16-one-01/contract.json",
+          "bytes": 828352,
+          "sha256": "be24abe7ec110285ac32b145b868d0ae51d39eda82f8c5719e09a66d14554650"
+        },
+        "cleanup.json": {
+          "path": "/tmp/git-zero-multi-first16-one-01/cleanup.json",
+          "bytes": 85,
+          "sha256": "6aec8205c5a94eccea98fcdfd547c9aa7f615149ebba644f545c5176c961032a"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-faults-01",
+      "status": "FAILED_driver_unretainable21MiB_response",
+      "source_before_present": true,
+      "source_after_present": false,
+      "maps_equal": null,
+      "inventoried_root_regular_files_and_recursive_logs": 40,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-faults-01-driver.log",
+        "bytes": 539,
+        "sha256": "f3b005d3cf97e4e875a2da379034953d86235e6fb12ee1708cd4efc2460e2a08"
+      },
+      "test_seconds": 21.02,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-faults-01/source-before.json",
+          "bytes": 4890,
+          "sha256": "c55e8569ef201f42cee5bf7813e73a5bbbe96e17129cce99a0813969b809a48c"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-faults-02",
+      "status": "FAILED_driver_unpublished_have",
+      "source_before_present": true,
+      "source_after_present": false,
+      "maps_equal": null,
+      "inventoried_root_regular_files_and_recursive_logs": 40,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-faults-02-driver.log",
+        "bytes": 1642,
+        "sha256": "c831f07a4b86016da83baeb845ce2900713ef95ac30c76cc74c320f399e83276"
+      },
+      "test_seconds": 14.96,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-faults-02/source-before.json",
+          "bytes": 4890,
+          "sha256": "a2c44e629fefadb13612e76cd37a879463855891b1f7cfe3a01552a66b40cc3b"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-plan-pressure-01",
+      "status": "FAILED_driver_client_missing_have_objects",
+      "source_before_present": true,
+      "source_after_present": false,
+      "maps_equal": null,
+      "inventoried_root_regular_files_and_recursive_logs": 29,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-plan-pressure-01-driver.log",
+        "bytes": 627,
+        "sha256": "235089f2f41c77f6867399741916e63f4044ee75fc13ea14d7809f5059b38e8d"
+      },
+      "test_seconds": 26.76,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-plan-pressure-01/source-before.json",
+          "bytes": 4890,
+          "sha256": "3e0d6884f8f8a7b27c5c2589e49ceddb20dd5b8972c0de86e42aad51f8e0bd04"
+        }
+      }
+    },
+    {
+      "root": "/tmp/git-zero-multi-plan-pressure-02",
+      "status": "FAILED_driver_required16MiB_refill_violated_no_eviction_admission",
+      "source_before_present": true,
+      "source_after_present": false,
+      "maps_equal": null,
+      "inventoried_root_regular_files_and_recursive_logs": 36,
+      "driver_log": {
+        "path": "/tmp/git-zero-multi-plan-pressure-02-driver.log",
+        "bytes": 516,
+        "sha256": "de58bd3860572d0b90dc0170900f0d1b22ff7be371300f440eff64121164a5e7"
+      },
+      "test_seconds": 40.62,
+      "records": {
+        "source-before.json": {
+          "path": "/tmp/git-zero-multi-plan-pressure-02/source-before.json",
+          "bytes": 4890,
+          "sha256": "89e7daf0829e5af979ef29ed9689da1f9f25107fcbe5d6ade4f7030d1596e9b4"
+        }
+      }
+    }
+  ],
+  "nonaccepted_counts": {
+    "earlier_R19_executable_policy_correction_before_all_accepted_pairs": 1,
+    "later_driver_only_failures": 4,
+    "accepted_runtime_roots": 10,
+    "total_runtime_attempts": 15
+  },
+  "checks": {
+    "library-final.log": {
+      "path": "/tmp/git-zero-multi-library-final.log",
+      "bytes": 12978,
+      "sha256": "a4a62a506ef14738a4bfd9099a6af6b3934881f23b569f9cb718268b25e59d4e"
+    },
+    "clippy-final.log": {
+      "path": "/tmp/git-zero-multi-clippy-final.log",
+      "bytes": 1326,
+      "sha256": "7fe4e5f9df9cced80bac28bea67d653f5f9bf0e01c7a58d71966d5b453e52589"
+    },
+    "fmt-final.log": {
+      "path": "/tmp/git-zero-multi-fmt-final.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "diff-final.log": {
+      "path": "/tmp/git-zero-multi-diff-final.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "matched_correctness_pairs": {
+    "16mib": {
+      "GET_one": 131,
+      "GET_multi": 47,
+      "read_bytes_one": 342809256,
+      "read_bytes_multi": 135422213,
+      "rows_each": 46,
+      "actual_identical_response_pairs": 31
+    },
+    "64mib": {
+      "GET_one": 223,
+      "GET_multi": 119,
+      "read_bytes_one": 1328932300,
+      "read_bytes_multi": 1205941859,
+      "rows_each": 46,
+      "actual_identical_response_pairs": 31
+    },
+    "all_four_before_after_cross_profile_source_binary_maps_equal": true,
+    "per_state_mutation_SQLwrite_storage_Bytes_parity": true,
+    "natural_latest_positive_GETs": true
+  },
+  "allocation": {
+    "actual_first_retained_heap_delta_bytes": 17365752,
+    "conservative_joint_charge_bytes": 17609588,
+    "chunk_payload_bytes": 17343308,
+    "chunk_entries": 6,
+    "twelve_productive_response_bytes_each": 16652187,
+    "joint_retained_peak_bytes": 30182041,
+    "global_transient_request_peak_bytes": 147872971,
+    "cache_domain_not_global_process_memory": true
+  },
+  "held_plan": {
+    "actual_paid_GETs": 18,
+    "actual_paid_read_bytes": 180909302,
+    "paid_discard_delta": 1,
+    "pressure_eviction_delta": 15,
+    "admission_delta": 8,
+    "all_paid_work_retained": true
+  },
+  "faults": {
+    "rows": 38,
+    "publication_attempts": 14,
+    "publication_modes": 13,
+    "SAME_Native_followup_pushes": 13,
+    "unknown_SQL_NULL_not_zero": true,
+    "missing_receipts_incomplete": true,
+    "logical_request_input_output_once": true,
+    "required_physical_GC_before_next_PUT": true,
+    "confirmed_partial_delete_prune": 3,
+    "Native503_prune_delta": 0,
+    "gateway_lost_reply_after_Native_confirmed_success_distinct_from_ambiguous_Native_CAS": true
+  },
+  "warm_HTTP_restart": {
+    "warm_actual_startup_GETs": 8,
+    "warm_actual_startup_read_bytes": 29619316,
+    "warm_ordinary_GET_read_delta": 0,
+    "warm_admissions": 0,
+    "HTTP_socket_RPC_Upgrade_preparation": 0,
+    "HTTP_actual_socket_retained_reservation_bytes": 0,
+    "advertised_socket_bound_is_not_actual_retention": true,
+    "HTTP_admissions": 9,
+    "HTTP_hits": 39,
+    "same_root_restart_starts_empty": true,
+    "restarted_prepared_receive_GETs": 8,
+    "restarted_prepared_receive_read_bytes": 29619316,
+    "restarted_prepared_receive_admissions": 6,
+    "restarted_stable_Full_tokens_consumed": 1
+  },
+  "continuity": {
+    "proof": {
+      "path": "/tmp/git-zero-multi-chunk-production-continuity.json",
+      "bytes": 1553,
+      "sha256": "03e4fbdc119e7bef37b1a062e2a3546c0eb822b2545518b20300cbb5fdee3eb6"
+    },
+    "independently_verified_native_executable_prefix_including_newline_bytes": 93624,
+    "independently_verified_native_executable_prefix_sha256": "b06db24da06b4bb8249fc0b59604db02f81ec2fc7978ead063a6f8b25d8d7a42",
+    "earlier_exploratory_observer_policy_correction_NOT_in_continuity_scope": true,
+    "later_Native_changes_trailing_cfg_test_only": true,
+    "lib_first_read_CLI_whole_files_unchanged_after_first_pairs": true,
+    "all_ten_accepted_Native_binary_sha256": "c6cd4d907f2614f0113eb805a9a0001f57e7e71dd057eb29b61eaf25c19b6e73",
+    "Rust_runner_versions_separately_mapped": true
+  },
+  "full_local_inventory": {
+    "member": "provenance/full-local-inventory.json",
+    "identity": {
+      "path": "/tmp/git-zero-multi-chunk-full-local-inventory-runtimes-fixed.json",
+      "bytes": 2330135,
+      "sha256": "585f0987c9c3d726f485a704fb3bf3e7c7535508d9643e527760a4d16c15a56c"
+    },
+    "files": 5135,
+    "logical_bytes": 6817612457,
+    "new_streamed_files": 2747,
+    "new_streamed_bytes": 4916482812,
+    "independent_hashes_reused": 2388,
+    "hardlink_hashes_reused": 0,
+    "all_generated_fixture_and_R2_SQLite_state_children_included": true,
+    "actual_named_runtime_files": 7,
+    "actual_named_runtime_bytes": 350554053,
+    "runtime_raw_payloads_local_only": true
+  },
+  "capsule": {
+    "path": "/tmp/git-zero-hosting-multi-chunk/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r19-multi-chunk-candidate/raw-evidence.tar.gz",
+    "bytes": 2130960,
+    "sha256": "169aae896f13dd92d4152d63218c8691d54f0ba6377b272b181b73707b7c81a2",
+    "members": 2241,
+    "manifest_member": "CAPSULE-MANIFEST.json",
+    "manifest_self_excluded": true,
+    "all_members_reread": true,
+    "large_gate_root_payloads_local_only_count": 151
+  },
+  "publication_limits": {
+    "all_large_Git_bodies_pack_fixture_state_ELF_not_published": true,
+    "all_local_recursive_gate_files_have_SHA_size": true,
+    "no_claim_capsule_contains_all_payload_bytes": true,
+    "compiler_intermediates_excluded_actual_runtimes_included": true,
+    "source_before_after_maps_and_all_failures_preserved": true,
+    "all7_actual_named_runtime_files_in_full_inventory": true
+  },
+  "conditional_model_only": {
+    "additional_GETs_versus_modeled_ONE": 338,
+    "gross_ClassB_USD_per_1000_four_profile_repetitions": 0.12168,
+    "not_observed_benchmark": true,
+    "unconditional_net_lower_bound_USD": 0
+  },
+  "worker_cpu_ms": null,
+  "DO_duration_GB_seconds": null,
+  "Native_compute": null,
+  "full_bill_USD": null,
+  "cost_speed_resource_acceptance_promotion_plateau_stopping_claim": false,
+  "fresh_independent_screen_required": true,
+  "mandatory_final_five_original_R1_final_pairs_NOT_done": true,
+  "no_build_runtime_perfbench_push_CI_deploy_in_ledger_phase": true,
+  "docs_scope_correction": {
+    "original_blocked_commit": "d5653fc9854aad600aba6b1b6a125f7ccd0d69fe",
+    "reason": "Seven actual named runtime files were missing from the original full inventory despite an inclusion claim; only their JSON record was present.",
+    "preserved_original_bundle": "/tmp/git-zero-multi-ledger-d565-original",
+    "original_preservation_manifest": {
+      "path": "/tmp/git-zero-multi-ledger-d565-original/PRESERVATION.json",
+      "bytes": 7190,
+      "sha256": "4fe735cd7ace1ac033f0e0583dd2a2de0f0d0003f7edf7da1e94f1f231bd46c6"
+    },
+    "original_blocked_review": {
+      "path": "/tmp/git-zero-multi-ledger-d565-original/git-zero-multi-chunk-ledger-review-d5653fc9854a.md",
+      "bytes": 7623,
+      "sha256": "162bfa286c85b7cc68142aa3dedd866e6dc1a5c947117b521c40dea733b76c95"
+    },
+    "original_blocked_verification": {
+      "path": "/tmp/git-zero-multi-ledger-d565-original/git-zero-multi-chunk-ledger-verification-d5653fc9854a.json",
+      "bytes": 1548478,
+      "sha256": "939ce5b5c255aa420e1b4e50bf68877d727a676d5c6b93b6073f95bf2e3cb7c9"
+    },
+    "seven_actual_runtime_SHA_size_stat_checked_against_unchanged_post_gate_inventory": true,
+    "raw_runtime_files_NOT_published": true,
+    "source_review_and_original_scoped_inventory_unchanged": true,
+    "no_source_test_runtime_build_or_performance_change": true
+  }
+}
