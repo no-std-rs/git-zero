@@ -120,9 +120,9 @@ plateau by itself. A failed final latency guard remains inconclusive rather than
 
 The [isolated workflow](../.github/workflows/hosting-isolated.yml) runs only on explicit pushes to
 `perf/hosting-isolated-ci-20261018`, or dispatches selecting that branch. Each of the four profiles gets
-a standard `ubuntu-24.04` VM. On that same VM, it freshly measures scalar baseline
-`556b9ecd2aa79197f86b3db2d546eee81696e899` followed by the pushed candidate, with a fresh local Wrangler
-process and persistent-state directory for each provider. These are a new environment's measurements;
+a standard `ubuntu-24.04` VM. On that same VM, it freshly measures the selected `BASELINE_COMMIT`
+(initially scalar `556b9ecd2aa79197f86b3db2d546eee81696e899`) followed by the pushed candidate, with a
+fresh local Wrangler process and persistent-state directory for each provider. These are a new environment's measurements;
 local-workstation reports must not serve as their baseline.
 
 All dependencies and both native variants are built before timing, with two build jobs and no artifact
@@ -132,6 +132,19 @@ paths and one Rust stable toolchain preserve binary identity across profile jobs
 scorer rejects any mixed native/reference hashes. Health and runtime checks finish before timing, and
 no background benchmark probes run. The complete storage, compaction, cache, fsck and nonempty-pack
 requirements remain enforced by the existing runner and scorer.
+
+`REFERENCE_COMMIT` stays fixed at scalar `556b9ecd2aa79197f86b3db2d546eee81696e899` for every round.
+Its source remains at `scalar-baseline` and its build at `baseline-target` under the experiment root,
+preserving the reference executable's original build paths and hash. When the comparison baseline
+differs, only its native host is additionally built at fixed `screen-baseline` / `screen-baseline-target`
+paths. Provenance records both commits, source trees, manifest paths/hashes and post-run clean status.
+
+For each later optimization screen, set `BASELINE_COMMIT` to the preceding provisional candidate's
+pushed commit and measure both providers freshly on each profile's VM. For final validation, reset
+`BASELINE_COMMIT` to the original scalar R1 commit and select `full` for the final candidate. The Git
+reference source and executable stay fixed in both cases; a full run rejects a different baseline.
+Earlier reports cannot substitute for fresh
+matching baseline measurements, and a green screen does not formally accept an optimization.
 
 Branch pushes default to `screen`, with exactly two measured pairs per provider/profile. For the final
 five-pair run, change the workflow's single `BENCH_STAGE` fallback from `'screen'` to `'full'` in a reviewed

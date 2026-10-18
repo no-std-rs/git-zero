@@ -20,6 +20,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # Keep this source and its existing build paths fixed across optimization rounds.
+  REFERENCE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
+  # Screens compare the preceding candidate; final validation uses REFERENCE_COMMIT.
   BASELINE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
   EXPECTED_WORKER_SHA256: 29830c201a5e97f163c8d40d7087e83c8f63a0608e0e7f246b5924661e3a2f19
   REFERENCE_GIT_VERSION: 2.53.0
@@ -91,7 +94,10 @@ jobs:
           test "$(git --version)" = "git version $REFERENCE_GIT_VERSION"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain)"
-          git worktree add --detach "$BENCH_ROOT/scalar-baseline" "$BASELINE_COMMIT"
+          if [ "$BENCH_STAGE" = full ]; then
+            test "$BASELINE_COMMIT" = "$REFERENCE_COMMIT"
+          fi
+          git worktree add --detach "$BENCH_ROOT/scalar-baseline" "$REFERENCE_COMMIT"
           cargo build --release --locked -p git-zero-host --bins -j2
           cargo build --manifest-path "$BENCH_ROOT/scalar-baseline/Cargo.toml" \
             --target-dir "$BENCH_ROOT/baseline-target" --release --locked \
@@ -99,8 +105,20 @@ jobs:
           cp target/release/hosting-bench target/release/hosting-cost "$BENCH_ROOT/bin/common/"
           cp target/release/repository-host "$BENCH_ROOT/bin/candidate/repository-host"
           cp "$BENCH_ROOT/baseline-target/release/repository-host" \
-            "$BENCH_ROOT/bin/baseline/repository-host"
-          cp "$BENCH_ROOT/bin/baseline/repository-host" "$BENCH_ROOT/bin/common/reference-host"
+            "$BENCH_ROOT/bin/common/reference-host"
+          baseline_source="$BENCH_ROOT/scalar-baseline"
+          if [ "$BASELINE_COMMIT" = "$REFERENCE_COMMIT" ]; then
+            cp "$BENCH_ROOT/bin/common/reference-host" "$BENCH_ROOT/bin/baseline/repository-host"
+          else
+            baseline_source="$BENCH_ROOT/screen-baseline"
+            git worktree add --detach "$baseline_source" "$BASELINE_COMMIT"
+            cargo build --manifest-path "$baseline_source/Cargo.toml" \
+              --target-dir "$BENCH_ROOT/screen-baseline-target" --release --locked \
+              -p git-zero-host --bin repository-host -j2
+            cp "$BENCH_ROOT/screen-baseline-target/release/repository-host" \
+              "$BENCH_ROOT/bin/baseline/repository-host"
+          fi
+          echo "BASELINE_SOURCE=$baseline_source" >> "$GITHUB_ENV"
           for provider in baseline candidate; do
             cp "$BENCH_ROOT/bin/common/hosting-bench" "$BENCH_ROOT/bin/common/hosting-cost" \
               "$BENCH_ROOT/bin/$provider/"
@@ -114,8 +132,13 @@ jobs:
           {
             printf 'candidate_commit=%s\ncandidate_parent=%s\ncandidate_tree=%s\n' \
               "$(git rev-parse HEAD)" "$(git rev-parse HEAD^)" "$(git rev-parse 'HEAD^{tree}')"
-            printf 'baseline_commit=%s\nbaseline_tree=%s\n' "$BASELINE_COMMIT" \
-              "$(git -C "$BENCH_ROOT/scalar-baseline" rev-parse 'HEAD^{tree}')"
+            printf 'baseline_commit=%s\nbaseline_tree=%s\nbaseline_workspace_manifest=%s\nbaseline_host_manifest=%s\n' \
+              "$BASELINE_COMMIT" "$(git -C "$BASELINE_SOURCE" rev-parse 'HEAD^{tree}')" \
+              "$BASELINE_SOURCE/Cargo.toml" "$BASELINE_SOURCE/examples/repository-host/Cargo.toml"
+            printf 'reference_commit=%s\nreference_tree=%s\nreference_workspace_manifest=%s\nreference_host_manifest=%s\n' \
+              "$REFERENCE_COMMIT" "$(git -C "$BENCH_ROOT/scalar-baseline" rev-parse 'HEAD^{tree}')" \
+              "$BENCH_ROOT/scalar-baseline/Cargo.toml" \
+              "$BENCH_ROOT/scalar-baseline/examples/repository-host/Cargo.toml"
             printf 'remote_branch_head=%s\n' \
               "$(git ls-remote origin refs/heads/perf/hosting-isolated-ci-20261018)"
             printf 'run_id=%s\nrun_attempt=%s\nref=%s\nstage=%s\nprofile=%s\n' \
@@ -152,6 +175,10 @@ jobs:
             examples/repository-host/cloudflare/package-lock.json \
             .github/workflows/hosting-isolated.yml \
             "$BENCH_ROOT/scalar-baseline/Cargo.lock" \
+            "$BENCH_ROOT/scalar-baseline/Cargo.toml" \
+            "$BENCH_ROOT/scalar-baseline/examples/repository-host/Cargo.toml" \
+            "$BASELINE_SOURCE/Cargo.lock" "$BASELINE_SOURCE/Cargo.toml" \
+            "$BASELINE_SOURCE/examples/repository-host/Cargo.toml" \
             "$BENCH_ROOT/bin/common/hosting-bench" "$BENCH_ROOT/bin/common/hosting-cost" \
             "$BENCH_ROOT/bin/common/reference-host" \
             "$BENCH_ROOT/bin/baseline/repository-host" "$BENCH_ROOT/bin/candidate/repository-host" \
@@ -234,7 +261,12 @@ jobs:
             test "$status" -eq 0
           done
           test -z "$(git status --porcelain)"
-          test -z "$(git -C "$BENCH_ROOT/scalar-baseline" status --porcelain)"
+          git -C "$BASELINE_SOURCE" status --porcelain \
+            > "$REPORT_ROOT/provenance/baseline-source-status-after.txt"
+          git -C "$BENCH_ROOT/scalar-baseline" status --porcelain \
+            > "$REPORT_ROOT/provenance/reference-source-status-after.txt"
+          test ! -s "$REPORT_ROOT/provenance/baseline-source-status-after.txt"
+          test ! -s "$REPORT_ROOT/provenance/reference-source-status-after.txt"
           sha256sum --check "$REPORT_ROOT/provenance/source-binary-sha256.txt"
 
       - name: Compress only reports, incomplete journals, provenance and logs
