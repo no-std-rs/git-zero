@@ -461,6 +461,12 @@ pub struct Metrics {
     pub history_full_restores: u64,
     pub cache_evictions: u64,
     pub receive_noop_shortcuts: u64,
+    pub gateway_read_plans: u64,
+    pub gateway_read_unsupported: u64,
+    pub gateway_read_consumed: u64,
+    pub gateway_read_generation_changed: u64,
+    pub gateway_read_paid_discards: u64,
+    pub gateway_read_errors: u64,
 }
 
 struct CandidatePack {
@@ -513,6 +519,12 @@ impl Drop for Quarantine {
     }
 }
 
+struct AuthorityFingerprint {
+    generation: u64,
+    published: [u8; 32],
+    local: [u8; 32],
+}
+
 pub struct NativeHost {
     root: PathBuf,
     view: PathBuf,
@@ -529,6 +541,7 @@ pub struct NativeHost {
     pending_advertisement_bytes: usize,
     publication_active: bool,
     manifest: Manifest,
+    authority_fingerprint: Option<AuthorityFingerprint>,
     pub metrics: Metrics,
 }
 
@@ -560,6 +573,7 @@ impl NativeHost {
         crate::storage::durable_create_dir_all(&root)?;
         let root = root.canonicalize()?;
         let services = Arc::new(HttpServices::new(origin, repo, token)?);
+        services.enable_first_read(cold_view);
         let mut repository = Repository::new(
             HostBlobs::Cloudflare(R2BlobStore::new(services.clone()), services.clone()),
             HostState::Cloudflare(DurableStateStore::new(services.clone())),
@@ -598,6 +612,7 @@ impl NativeHost {
             pending_advertisement_bytes: 0,
             publication_active: false,
             manifest: Manifest::default(),
+            authority_fingerprint: None,
             metrics: Metrics::default(),
         };
         host.recover()?;
@@ -605,6 +620,7 @@ impl NativeHost {
     }
 
     fn recover(&mut self) -> io::Result<()> {
+        self.authority_fingerprint = None;
         // Recovery includes ambiguous publications and external generations.
         // A later full native advertisement must certify this state afresh.
         self.advertisement = None;
@@ -619,6 +635,14 @@ impl NativeHost {
         self.metrics.retired_chunk_deletes +=
             self.repository.blobs.reclaim_unreferenced(&manifest)? as u64;
         self.manifest = manifest;
+        if self.cloudflare.is_some() {
+            let digest = crate::first_read::manifest_digest(&self.manifest);
+            self.authority_fingerprint = Some(AuthorityFingerprint {
+                generation: self.manifest.generation,
+                published: digest,
+                local: digest,
+            });
+        }
         self.cache = VecDeque::new();
         self.cache_bytes = 0;
         self.view_dirty = false;
@@ -662,6 +686,15 @@ impl NativeHost {
         manifest: &Manifest,
         projection: Option<&history::Projection>,
     ) -> io::Result<()> {
+        self.materialize_view_prefetched(manifest, projection, None)
+    }
+
+    fn materialize_view_prefetched(
+        &mut self,
+        manifest: &Manifest,
+        projection: Option<&history::Projection>,
+        prefetched: Option<(usize, crate::storage::VerifiedChunks)>,
+    ) -> io::Result<()> {
         self.view_dirty = true;
         self.scope = ViewScope::Invalid;
         validate_snapshot(manifest)?;
@@ -679,7 +712,7 @@ impl NativeHost {
         }
         let files = self
             .repository
-            .read_snapshot_selection(manifest, selected)?;
+            .read_snapshot_selection_prefetched(manifest, selected, prefetched)?;
         init(&self.view)?;
         for (pack, (data, index)) in selected.iter().map(|i| &manifest.packs[*i]).zip(files) {
             let directory = self.view.join("objects/pack");
@@ -1187,6 +1220,7 @@ impl NativeHost {
         // Recover from authoritative state before serving any later request.
         self.view_dirty = true;
         let deferred = pending.as_ref().map(|tail| tail.chunk().len);
+        self.authority_fingerprint = None;
         let publication =
             self.repository
                 .publish_staged_retiring(&previous, next.clone(), pending)?;
@@ -1198,6 +1232,7 @@ impl NativeHost {
             crate::storage::RetiringCas::Published(receipt) => receipt,
             _ => return Err(io::Error::other("concurrent generation update")),
         };
+        let published_digest = crate::first_read::manifest_digest(&next);
         // Publication is authoritative. A restart reconstructs refs from it if
         // the process dies while updating this disposable native view.
         write_refs(&self.view, &next.refs)?;
@@ -1216,6 +1251,13 @@ impl NativeHost {
             .filter(|outcome| !outcome.deleted)
             .map(|outcome| outcome.key)
             .collect();
+        if self.cloudflare.is_some() {
+            self.authority_fingerprint = Some(AuthorityFingerprint {
+                generation: self.manifest.generation,
+                published: published_digest,
+                local: crate::first_read::manifest_digest(&self.manifest),
+            });
+        }
         self.metrics.receive_publication_seconds += publication_start.elapsed().as_secs_f64();
         // A v2 DO can require physical reconciliation after a failed delete.
         // Publication still succeeded; recover before the next request instead
@@ -1441,7 +1483,11 @@ impl NativeHost {
             digest.update((field.len() as u64).to_le_bytes());
             digest.update(field);
         }
-        for (name, value) in &request.headers {
+        for (name, value) in request
+            .headers
+            .iter()
+            .filter(|(name, _)| !crate::first_read::is_transport_header(name))
+        {
             for field in [name.as_bytes(), value.as_bytes()] {
                 digest.update((field.len() as u64).to_le_bytes());
                 digest.update(field);
@@ -1508,13 +1554,15 @@ impl NativeHost {
             + self.cache.capacity() * size_of::<(String, Response)>()
             + size_of::<VecDeque<(String, Response)>>()
             + size_of::<ViewScope>()
+            + size_of::<Option<AuthorityFingerprint>>()
             + size_of::<Option<advertisement::Certificate>>()
             + size_of::<Option<history::Certificate>>()
             + 2 * size_of::<usize>()
-            + self
-                .cloudflare
-                .as_ref()
-                .map_or(0, |_| HttpServices::retirement_proof_storage_bytes())
+            + self.cloudflare.as_ref().map_or(0, |_| {
+                HttpServices::retirement_proof_storage_bytes()
+                    + size_of::<std::sync::Mutex<Option<crate::first_read::Key>>>()
+                    + size_of::<std::sync::atomic::AtomicBool>()
+            })
     }
 
     fn reserve_metadata(&mut self, incoming: usize) {
@@ -1541,7 +1589,214 @@ impl NativeHost {
         }
     }
 
+    fn gateway_plan(
+        &self,
+        request: &Request,
+    ) -> io::Result<Option<(crate::first_read::Plan, Option<history::Projection>)>> {
+        if !self.cold_view
+            || self.cloudflare.is_none()
+            || self.view_dirty
+            || self.publication_active
+        {
+            return Ok(None);
+        }
+        validate_snapshot(&self.manifest)?;
+        let Some(authority) = self.authority_fingerprint.as_ref().filter(|binding| {
+            binding.generation == self.manifest.generation
+                && binding.local == crate::first_read::manifest_digest(&self.manifest)
+        }) else {
+            return Ok(None);
+        };
+        let identity = advertisement::identity(&self.view);
+        let Some(selection) = self
+            .lineage
+            .as_ref()
+            .and_then(|proof| proof.selection(request, &self.manifest, identity))
+        else {
+            return Ok(None);
+        };
+        let projection = (selection.packs.len() < self.manifest.packs.len()).then_some(selection);
+        let selected = projection
+            .as_ref()
+            .map(|p| p.packs.clone())
+            .unwrap_or_else(|| (0..self.manifest.packs.len()).collect());
+        let chunks: Vec<_> = selected
+            .iter()
+            .flat_map(|i| self.manifest.packs[*i].chunks().cloned())
+            .collect();
+        let count = crate::cloudflare::bulk_batch_len(&chunks);
+        if count == 0 {
+            return Ok(None);
+        }
+        let first = chunks[..count].to_vec();
+        Ok(Some((
+            crate::first_read::Plan {
+                generation: self.manifest.generation,
+                manifest: authority
+                    .published
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect(),
+                selection: crate::first_read::selection_hash(
+                    &selected,
+                    projection.as_ref().map(|p| (p.cutoff, p.binding)),
+                    &first,
+                ),
+                first,
+            },
+            projection,
+        )))
+    }
+
+    fn gateway_private(&mut self, request: Request) -> io::Result<Response> {
+        use crate::first_read as fr;
+        let services = self
+            .cloudflare
+            .clone()
+            .ok_or_else(|| io::Error::other("private protocol unavailable"))?;
+        let key = services
+            .first_read_key()?
+            .ok_or_else(|| io::Error::other("private protocol unavailable"))?;
+        if request.method != "POST" || request.body.len() > fr::MAX_FRAME {
+            return Err(io::Error::other("private protocol method or frame bound"));
+        }
+        if request.target == fr::PLAN_PATH {
+            key.verify("git-zero-fetch-plan-request-v1", &request)?;
+            let (meta, body, bulk): (fr::Planning, _, _) = fr::decode(request.body)?;
+            fr::identity(
+                meta.version,
+                &meta.session,
+                &meta.nonce,
+                &meta.repo,
+                &key,
+                services.repo(),
+            )?;
+            if !bulk.is_empty() {
+                return Err(io::Error::other("unexpected plan payload"));
+            }
+            let mut logical = meta.request.request(body)?;
+            let request_hash = fr::request_hash(&logical);
+            let witness = services
+                .witness_for(&logical, self.manifest.generation)?
+                .ok_or_else(|| io::Error::other("missing witness capability"))?;
+            logical
+                .headers
+                .insert("x-git-zero-internal-generation-witness".into(), witness);
+            let hit = self
+                .cache
+                .iter()
+                .any(|(k, _)| k == &self.cache_key(&logical));
+            let plan = if hit {
+                None
+            } else {
+                self.gateway_plan(&logical)?.map(|(p, _)| p)
+            };
+            self.metrics.gateway_read_plans += 1;
+            self.metrics.gateway_read_unsupported += u64::from(plan.is_none());
+            let result = fr::Planned {
+                version: 1,
+                session: meta.session,
+                nonce: meta.nonce,
+                request_hash,
+                status: if plan.is_some() {
+                    "supported"
+                } else {
+                    "unsupported"
+                },
+                plan,
+            };
+            if services.first_read_key()? != Some(key) {
+                return Err(io::Error::other("registration changed during plan"));
+            }
+            key.response("git-zero-fetch-plan-response-v1", fr::encode(&result)?)
+        } else {
+            key.verify("git-zero-fetch-continue-v1", &request)?;
+            let (meta, body, bulk): (fr::Continuing, _, _) = fr::decode(request.body)?;
+            fr::identity(
+                meta.version,
+                &meta.session,
+                &meta.nonce,
+                &meta.repo,
+                &key,
+                services.repo(),
+            )?;
+            let mut logical = meta.request.request(body)?;
+            if fr::request_hash(&logical) != meta.request_hash
+                || meta.generation > 9_007_199_254_740_991
+            {
+                return Err(io::Error::other("continuation identity mismatch"));
+            }
+            logical.headers.insert(
+                "x-git-zero-internal-generation-witness".into(),
+                meta.witness,
+            );
+            if !services.generation_witness_matches(&logical, meta.generation)? {
+                return Err(io::Error::other("continuation witness mismatch"));
+            }
+            if !meta.matched {
+                if !bulk.is_empty() || meta.generation == meta.plan.generation {
+                    return Err(io::Error::other("invalid mismatch continuation"));
+                }
+                self.metrics.gateway_read_generation_changed += 1;
+                return Ok(self.handle(logical));
+            }
+            if meta.generation != meta.plan.generation {
+                return Err(io::Error::other("prefetch generation mismatch"));
+            }
+            // Authenticate the entire frame first; then prove every real byte
+            // against exact signed chunk keys before any fallback or files.
+            let verified = crate::cloudflare::decode_bulk_response(&meta.plan.first, &bulk)?;
+            drop(bulk);
+            let current = self.gateway_plan(&logical)?;
+            let cache_hit = self
+                .cache
+                .iter()
+                .any(|(k, _)| k == &self.cache_key(&logical));
+            let Some((plan, projection)) = current.filter(|(p, _)| *p == meta.plan && !cache_hit)
+            else {
+                drop(verified);
+                self.metrics.gateway_read_paid_discards += 1;
+                return Ok(self.handle(logical));
+            };
+            if services.first_read_key()? != Some(key) {
+                return Err(io::Error::other("registration changed during continuation"));
+            }
+            self.metrics.requests += 1;
+            self.metrics.input_bytes += logical.body.len() as u64;
+            self.metrics.generation_witness_hits += 1;
+            self.metrics.cache_misses += 1;
+            services.set_phase("fetch")?;
+            let key = self.cache_key(&logical);
+            let was_projection = matches!(self.scope, ViewScope::Projection { .. });
+            self.materialize_view_prefetched(
+                &self.manifest.clone(),
+                projection.as_ref(),
+                Some((plan.first.len(), verified)),
+            )?;
+            self.metrics.cloud_view_rehydrates += 1;
+            self.metrics.history_projections += u64::from(projection.is_some());
+            self.metrics.history_full_restores += u64::from(projection.is_none() && was_projection);
+            self.metrics.gateway_read_consumed += 1;
+            let start = Instant::now();
+            let response = self.native_read(&logical)?;
+            self.metrics.upload_codec_seconds += start.elapsed().as_secs_f64();
+            self.cache_insert(key, &response);
+            self.metrics.output_bytes += response.body.len() as u64;
+            Ok(response)
+        }
+    }
+
     pub fn handle(&mut self, request: Request) -> Response {
+        if matches!(
+            request.target.as_str(),
+            crate::first_read::PLAN_PATH | crate::first_read::CONTINUE_PATH
+        ) {
+            return self.gateway_private(request).unwrap_or_else(|error| {
+                self.metrics.gateway_read_errors += 1;
+                eprintln!("private fetch failed: {error}");
+                Response::error(503, "private fetch failed")
+            });
+        }
         if request.method == "GET"
             && matches!(request.target.as_str(), "/metrics" | "/_object-stats")
         {
@@ -1640,6 +1895,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gateway_cache_normalization_preserves_semantics_and_ignores_only_named_transport_fields() {
+        let root = std::env::temp_dir().join(format!("git-zero-r15-cache-{}", std::process::id()));
+        let host = NativeHost::open(root.clone()).unwrap();
+        let base = Request {
+            method: "POST".into(),
+            target: "/repo.git/git-upload-pack".into(),
+            headers: BTreeMap::new(),
+            body: b"request".to_vec(),
+        };
+        let key = host.cache_key(&base);
+        for name in [
+            "host",
+            "connection",
+            "content-length",
+            "transfer-encoding",
+            "accept-encoding",
+            "cf-worker",
+            "cf-connecting-ip",
+            crate::first_read::AUTH_HEADER,
+        ] {
+            let mut other = base.clone();
+            other.headers.insert(name.into(), "transport".into());
+            assert_eq!(key, host.cache_key(&other), "{name}");
+        }
+        for name in [
+            "authorization",
+            "cookie",
+            "git-protocol",
+            "content-type",
+            "content-encoding",
+            "accept",
+            "user-agent",
+            "cf-custom",
+            "x-custom",
+            "x-git-zero-internal-generation-witness",
+        ] {
+            let mut other = base.clone();
+            other.headers.insert(name.into(), "semantic".into());
+            assert_ne!(key, host.cache_key(&other), "{name}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn deferred_catalog_proof_slot_is_reserved_inside_the_existing_cache_budget() {
         let root = std::env::temp_dir().join(format!(
             "git-zero-proof-cache-{}-{}",
@@ -1676,6 +1975,8 @@ mod tests {
         assert_eq!(
             host.metadata_bytes() - metadata,
             HttpServices::retirement_proof_storage_bytes()
+                + size_of::<std::sync::Mutex<Option<crate::first_read::Key>>>()
+                + size_of::<std::sync::atomic::AtomicBool>()
         );
         host.trim_cache(0);
         assert_eq!(host.metrics.cache_evictions, 1);

@@ -1,0 +1,25 @@
+name = "git-zero-local-repository-services"
+main = "first-read-worker.js"
+compatibility_date = "2026-10-06"
+workers_dev = false
+send_metrics = false
+
+[vars]
+REPO_ID = "demo"
+LOCAL_TOKEN = "git-zero-local-services"
+
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "git-zero-local-repository-packs"
+remote = false
+
+[[durable_objects.bindings]]
+name = "REPOSITORIES"
+class_name = "RepositoryServices"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RepositoryServices"]
+
+[observability]
+enabled = false

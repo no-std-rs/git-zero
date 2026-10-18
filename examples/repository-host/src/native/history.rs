@@ -169,6 +169,18 @@ impl Certificate {
         manifest: &Manifest,
         identity: Option<[u8; 32]>,
     ) -> Option<Projection> {
+        self.selection(request, manifest, identity)
+            .filter(|plan| plan.packs.len() < manifest.packs.len())
+    }
+
+    // The gateway must use exactly the same parser and selection, including
+    // the ordinary all-pack outcome. No parser/closure logic lives in Worker.
+    pub(super) fn selection(
+        &self,
+        request: &Request,
+        manifest: &Manifest,
+        identity: Option<[u8; 32]>,
+    ) -> Option<Projection> {
         if !self.matches(manifest, identity)
             || !branch_refs(manifest)
             || request.method != "POST"
@@ -274,7 +286,7 @@ impl Certificate {
             .filter_map(|(index, floor)| (*floor <= cutoff).then_some(index))
             .collect();
         // An all-pack selection gains nothing; retain the exact full ref view.
-        (packs.len() < manifest.packs.len()).then_some(Projection {
+        Some(Projection {
             cutoff,
             binding: self.binding,
             packs,

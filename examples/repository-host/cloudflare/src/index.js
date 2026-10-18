@@ -3,6 +3,7 @@
 import { PAGE_PREFIX, PAGE_END, PAGE_CAPACITY, ancestors, commonPrefix, count, decodePage, encodePage, splitPage } from "./catalog-pages.js";
 import { PROOF_HEADER, DEFERRED_HEADER, CONFIRM_HEADER, DEFERRED_CAPABILITY, debtDigest, registrationProof, issueProof, verifyProof } from "./retirement-proof.js";
 import { INLINE_HEADER, INLINE_CAPABILITY, encodeInline, decodeInline, inlinePeak } from "./inline-catalog.js";
+import { registrationFirstRead, eligibleFirstRead, gatewayFirstRead, FETCH_BODY_MAX, validateFirstBatch, manifestFingerprint } from "./first-read.js";
 const registry = new Map();
 const workerUsage = new Map();
 let workerEpoch;
@@ -370,6 +371,13 @@ async function registrationWitness() {
   return { private: { key, session }, response: { version: 1, key: hex(rawKey), session } };
 }
 
+async function signedGenerationWitness(repo, method, target, config, generation) {
+  if (!validCount(generation)) fail(502, "invalid authoritative generation");
+  const message = JSON.stringify([WITNESS_DOMAIN, 1, config.session, repo, method, target, generation]);
+  const signature = await crypto.subtle.sign("HMAC", config.key, new TextEncoder().encode(message));
+  return `1:${config.session}:${generation}:${hex(new Uint8Array(signature))}`;
+}
+
 async function generationWitness(env, repo, currentPhase, method, target, config) {
   // Construct this request from trusted routing inputs; public headers cannot
   // choose the repository, phase or route of the authoritative read.
@@ -378,10 +386,7 @@ async function generationWitness(env, repo, currentPhase, method, target, config
   }), true);
   if (!response.ok) fail(502, "authoritative generation read failed");
   const generation = (await response.json()).generation;
-  if (!validCount(generation)) fail(502, "invalid authoritative generation");
-  const message = JSON.stringify([WITNESS_DOMAIN, 1, config.session, repo, method, target, generation]);
-  const signature = await crypto.subtle.sign("HMAC", config.key, new TextEncoder().encode(message));
-  return `1:${config.session}:${generation}:${hex(new Uint8Array(signature))}`;
+  return signedGenerationWitness(repo, method, target, config, generation);
 }
 
 export default {
@@ -410,6 +415,7 @@ export default {
           const body = await parseJson(request, 1024);
           const origin = loopbackOrigin(body.codec_origin);
           const witness = body.generation_witness === 1 ? await registrationWitness() : null;
+          const firstRead = witness && body.gateway_first_read === 1 ? await registrationFirstRead(witness.response.session) : null;
           const catalogDeferred = body.catalog_deferred === 1 && body.catalog_pages === 1 && body.catalog_peak === 1;
           const proof = catalogDeferred ? await registrationProof() : null;
           // Recheck after asynchronous key creation so concurrent registrations
@@ -420,7 +426,7 @@ export default {
           if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
           const catalogPages = body.catalog_pages === 1 && body.catalog_peak === 1;
           const catalogInline = body.catalog_inline === 1 && catalogDeferred && body.manifest_upload_retire === 1;
-          registry.set(repo, { origin, witness: witness?.private, catalogPeak: body.catalog_peak === 1, catalogPages, proof, catalogInline });
+          registry.set(repo, { origin, firstRead: firstRead?.private, witness: witness?.private, catalogPeak: body.catalog_peak === 1, catalogPages, proof, catalogInline });
           return json({ registered: true, repository: repo, codec_origin: origin,
             ...(body.manifest_retire === 1 ? { manifest_retire: { version: 1 } } : {}),
             ...(body.manifest_upload_retire === 1 ? { manifest_upload_retire: UPLOAD_CAPABILITY } : {}),
@@ -428,6 +434,7 @@ export default {
             ...(catalogPages ? { catalog_pages: { version: 1 } } : {}),
             ...(proof ? { catalog_deferred: DEFERRED_CAPABILITY } : {}),
             ...(catalogInline ? { catalog_inline: INLINE_CAPABILITY } : {}),
+            ...(firstRead ? { gateway_first_read: firstRead.response } : {}),
             ...(witness ? { generation_witness: witness.response } : {}) });
         }
         if (url.pathname === "/_services/unregister" && request.method === "POST") {
@@ -502,6 +509,17 @@ export default {
       headers.set("x-hosting-phase", gitPhase);
       const forwardedTarget = forwardedPath + url.search;
       const target = loopbackOrigin(origin) + forwardedTarget;
+      let forwardedBody = request.body;
+      if (eligibleFirstRead(request, forwardedTarget, registered, headers)) {
+        const body = await bytes(request, FETCH_BODY_MAX);
+        if (registry.get(repo) !== registered) fail(502, "registration changed while buffering fetch");
+        const result = await gatewayFirstRead({repo,target:forwardedTarget,headers,body,registration:registered,
+          current:()=>registry.get(repo)===registered,strictJson,
+          dispatch:async (internal)=> (await dispatchService(env,repo,internal,true)).response,
+          witness:(generation)=>signedGenerationWitness(repo,request.method,forwardedTarget,registered.witness,generation)});
+        if (result) return result;
+        forwardedBody = body;
+      }
       if (registered?.witness) {
         // Any prefetch/signing failure returns an error. Never silently issue
         // a second callback after completed, receipt-backed DO work.
@@ -511,7 +529,7 @@ export default {
       // This awaits Rust outside a Durable Object. Rust can safely call back
       // into /_services while its Git request is in flight.
       return await fetch(new Request(target, {
-        method: request.method, headers, body: request.body, redirect: "manual",
+        method: request.method, headers, body: forwardedBody, redirect: "manual",
       }));
     } catch (error) {
       return json({ error: String(error.message ?? error) }, error.status ?? 500);
@@ -1326,18 +1344,7 @@ export class RepositoryServices {
     }); } catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
   }
 
-  async handle(request) {
-    this.currentPhase = phase(request);
-    this.bump("do_requests");
-    const repo = repoName(request.headers.get("x-hosting-repo"));
-    const prefix = `${repo}/`;
-    this.repoPrefix = prefix;
-    this.deferAllowed = request.headers.get(DEFERRED_HEADER) === "1";
-    this.inlineAllowed = request.headers.get(INLINE_HEADER) === "1";
-    this.confirmation = request.headers.get(CONFIRM_HEADER);
-    const path = new URL(request.url).pathname;
-    if (path === "/_services/blobs/read" && request.method === "POST") {
-      const body = await parseJson(request, MAX_MANIFEST_BYTES);
+  async readBulk(body, prefix) {
       if (!plainObject(body) || !Array.isArray(body.chunks)
           || body.chunks.length === 0 || body.chunks.length > MAX_BULK_KEYS) fail(400, "invalid bulk read shape");
       let payloadBytes = 0;
@@ -1385,6 +1392,37 @@ export class RepositoryServices {
         offset += part.byteLength;
       }
       return new Response(data, { headers: { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" } });
+  }
+
+  async handle(request) {
+    this.currentPhase = phase(request);
+    this.bump("do_requests");
+    const repo = repoName(request.headers.get("x-hosting-repo"));
+    const prefix = `${repo}/`;
+    this.repoPrefix = prefix;
+    this.deferAllowed = request.headers.get(DEFERRED_HEADER) === "1";
+    this.inlineAllowed = request.headers.get(INLINE_HEADER) === "1";
+    this.confirmation = request.headers.get(CONFIRM_HEADER);
+    const path = new URL(request.url).pathname;
+    if (path === "/_services/manifest/first-read" && request.method === "POST") {
+      const body = strictJson(await bytes(request, MAX_MANIFEST_BYTES));
+      if (!plainObject(body) || Object.keys(body).length !== 4 || body.version !== 1
+          || !validCount(body.generation) || typeof body.manifest !== "string" || !/^[0-9a-f]{64}$/.test(body.manifest)) fail(400, "invalid authority read plan");
+      validateFirstBatch(body.chunks); // Complete bounds before any binding I/O.
+      const manifest = await this.operation("manifest_get", async () => {
+        const row = this.exec("SELECT manifest FROM repository_state WHERE id = 1")[0];
+        return row ? JSON.parse(row.manifest) : {generation:0,refs:{},packs:[]};
+      });
+      if (!validCount(manifest.generation)) fail(502, "invalid authoritative generation");
+      const matched = manifest.generation === body.generation;
+      if (matched && await manifestFingerprint(manifest) !== body.manifest) fail(409, "same-generation manifest changed");
+      const response = matched ? await this.readBulk(body, prefix) : new Response(null);
+      response.headers.set("x-git-zero-internal-first-generation", String(manifest.generation));
+      response.headers.set("x-git-zero-internal-first-matched", matched ? "1" : "0");
+      return response;
+    }
+    if (path === "/_services/blobs/read" && request.method === "POST") {
+      return this.readBulk(await parseJson(request, MAX_MANIFEST_BYTES), prefix);
     }
     if (path.startsWith("/_services/blob/")) {
       const key = path.slice("/_services/blob/".length);
