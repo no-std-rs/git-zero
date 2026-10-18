@@ -753,9 +753,7 @@ fn real_peak_capability_normal_writes_and_realistic_sqlite_pages() {
         assert!(!v2(&worker.state()), "registration/read must not migrate");
         // Exercise the actual new Native registration body/negotiation too.
         worker.services.register("http://127.0.0.1:1").unwrap();
-        if !peak {
-            worker.register(false);
-        }
+        worker.register(peak);
         let repository = Repository::new(
             worker.services_blob(),
             DurableStateStore::new(worker.services.clone()),

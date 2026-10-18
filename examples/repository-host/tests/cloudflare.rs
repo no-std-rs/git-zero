@@ -192,9 +192,7 @@ fn faulted_upload_barriers_catalog_partial_retirement_and_lost_receipt_preserve_
             let worker = RealWorker::new(&format!("upload-{mode}-peak{catalog_peak}"));
             let services = worker.services();
             services.register("http://127.0.0.1:1").unwrap();
-            if !catalog_peak {
-                register_legacy_worker(&worker);
-            }
+            register_catalog_worker(&worker, catalog_peak);
             let repository = Repository::new(
                 R2BlobStore::new(services.clone()),
                 DurableStateStore::new(services.clone()),
@@ -568,6 +566,7 @@ fn real_upload_retirement_preserves_binding_sql_bytes_and_removes_one_callback()
         // Both paths negotiate ordinary fused retirement. The baseline keeps
         // the eager import contract and therefore takes two service calls.
         services.register("http://127.0.0.1:1").unwrap();
+        register_catalog_worker(&worker, true);
         let repository = Repository::new(
             R2BlobStore::new(services.clone()),
             DurableStateStore::new(services.clone()),
@@ -1195,6 +1194,10 @@ fn local_request(
 }
 
 fn register_legacy_worker(worker: &RealWorker) {
+    register_catalog_worker(worker, false);
+}
+
+fn register_catalog_worker(worker: &RealWorker, peak: bool) {
     let (status, body) = local_request(
         &worker.origin,
         "POST",
@@ -1203,7 +1206,7 @@ fn register_legacy_worker(worker: &RealWorker) {
             ("x-hosting-token", &worker.token),
             ("x-hosting-repo", &worker.namespace),
         ],
-        br#"{"codec_origin":"http://127.0.0.1:1","manifest_retire":1,"manifest_upload_retire":1}"#,
+        &serde_json::to_vec(&serde_json::json!({"codec_origin":"http://127.0.0.1:1","manifest_retire":1,"manifest_upload_retire":1,"catalog_peak":u8::from(peak)})).unwrap(),
     );
     assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
 }

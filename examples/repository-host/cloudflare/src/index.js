@@ -1,5 +1,6 @@
 // Local workerd runtime glue. Git and all test/benchmark runners remain Rust.
 // Never deploy this loopback codec gateway as a production Git service.
+import { PAGE_PREFIX, PAGE_END, PAGE_CAPACITY, ancestors, commonPrefix, count, decodePage, encodePage, splitPage } from "./catalog-pages.js";
 const registry = new Map();
 const workerUsage = new Map();
 let workerEpoch;
@@ -21,6 +22,7 @@ const UPLOAD_CAPABILITY = { version: 1, wire_bytes: MAX_BULK_RESPONSE_BYTES,
 const WITNESS_PREFIX = "x-git-zero-internal-";
 const WITNESS_HEADER = `${WITNESS_PREFIX}generation-witness`;
 const CATALOG_PEAK_HEADER = `${WITNESS_PREFIX}catalog-peak`;
+const CATALOG_PAGES_HEADER = `${WITNESS_PREFIX}catalog-pages`;
 const WITNESS_DOMAIN = "git-zero-generation-witness";
 const USAGE_HEADER = "x-git-zero-service-usage";
 const OPERATIONS = new Set(["r2_get", "r2_head", "r2_put", "r2_list", "r2_delete", "manifest_get", "manifest_cas"]);
@@ -410,11 +412,13 @@ export default {
             fail(409, "a different local codec is already registered; unregister it first");
           }
           if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
-          registry.set(repo, { origin, witness: witness?.private, catalogPeak: body.catalog_peak === 1 });
+          const catalogPages = body.catalog_pages === 1 && body.catalog_peak === 1;
+          registry.set(repo, { origin, witness: witness?.private, catalogPeak: body.catalog_peak === 1, catalogPages });
           return json({ registered: true, repository: repo, codec_origin: origin,
             ...(body.manifest_retire === 1 ? { manifest_retire: { version: 1 } } : {}),
             ...(body.manifest_upload_retire === 1 ? { manifest_upload_retire: UPLOAD_CAPABILITY } : {}),
             ...(body.catalog_peak === 1 ? { catalog_peak: { version: 1 } } : {}),
+            ...(catalogPages ? { catalog_pages: { version: 1 } } : {}),
             ...(witness ? { generation_witness: witness.response } : {}) });
         }
         if (url.pathname === "/_services/unregister" && request.method === "POST") {
@@ -426,6 +430,7 @@ export default {
           if (name.startsWith(WITNESS_PREFIX)) headers.delete(name);
         }
         if (registry.get(repo)?.catalogPeak) headers.set(CATALOG_PEAK_HEADER, "1");
+        if (registry.get(repo)?.catalogPages) headers.set(CATALOG_PAGES_HEADER, "1");
         headers.set("x-hosting-repo", repo);
         headers.set("x-hosting-phase", currentPhase);
         // Bound and finish this small JSON upload before entering the DO gate.
@@ -575,14 +580,22 @@ export class RepositoryServices {
   }
 
   reloadCatalog() {
-    this.catalogPeak = this.exec("PRAGMA table_info(blob_catalog)").some((column) => column.name === "peak_bytes");
-    const inventory = this.exec(this.catalogPeak
+    const columns = this.exec("PRAGMA table_info(blob_catalog)");
+    this.catalogPeak = columns.some((column) => column.name === "peak_bytes");
+    this.catalogPages = columns.some((column) => column.name === "entries");
+    if (this.catalogPages && !this.catalogPeak) throw new Error("catalog pages require durable peak schema");
+    const inventory = this.exec(this.catalogPages
+      ? "SELECT COALESCE(SUM(CASE WHEN entries IS NULL THEN 1 ELSE (LENGTH(entries) - 6) / 40 END), 0) AS objects, COALESCE(SUM(size), 0) AS bytes, COALESCE(MAX(peak_bytes), 0) AS peak, COALESCE(SUM(CASE WHEN entries IS NOT NULL AND (LENGTH(entries) < 46 OR LENGTH(entries) > 1286 OR (LENGTH(entries) - 6) % 40 <> 0) THEN 1 ELSE 0 END), 0) AS invalid FROM blob_catalog"
+      : this.catalogPeak
       ? "SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes, COALESCE(MAX(peak_bytes), 0) AS peak FROM blob_catalog"
       : "SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes FROM blob_catalog")[0];
-    this.liveObjects = inventory.objects;
-    this.liveBytes = inventory.bytes;
-    this.fallbackPeak = this.exec("SELECT bytes FROM high_water WHERE id = 1")[0]?.bytes ?? 0;
-    this.peakBytes = Math.max(this.peakBytes, this.liveBytes, inventory.peak ?? 0, this.fallbackPeak);
+    // Corrupt page bytes block mutation but must not prevent authoritative GC
+    // from reopening the object and replacing that representation.
+    if (inventory.invalid) this.catalogUncertain();
+    this.liveObjects = inventory.invalid ? 0 : count(inventory.objects);
+    this.liveBytes = count(inventory.bytes);
+    this.fallbackPeak = count(this.exec("SELECT bytes FROM high_water WHERE id = 1")[0]?.bytes ?? 0);
+    this.peakBytes = Math.max(this.peakBytes, this.liveBytes, count(inventory.peak ?? 0), this.fallbackPeak);
     this.peakOwner = null;
     // SQL recovers peak witnesses, never certainty about an interrupted R2
     // operation. Only a generation-checked physical inventory clears dirty.
@@ -608,6 +621,83 @@ export class RepositoryServices {
         throw error;
       }
     }
+    if (!this.catalogPages && request.headers.get(CATALOG_PAGES_HEADER) === "1") {
+      try {
+        if (!this.catalogPeak) throw new Error("catalog pages require durable peak schema");
+        this.exec("ALTER TABLE blob_catalog ADD COLUMN entries BLOB");
+        this.catalogPages = true;
+      } catch (error) { this.catalogUncertain(); throw error; }
+    }
+  }
+
+  catalogLookup(key) {
+    try {
+      const digest = key.slice(7);
+      const keys = [key, ...ancestors(digest)];
+      let legacy, page, entries, member;
+      // Actual workerd cursors charge IN's temporary keys as read rows. Four
+      // independent UNION ALL terms read only matching PK rows and fit the
+      // existing compound-select limit; inspect every ancestor for overlaps.
+      for (let offset = 0; offset < keys.length; offset += 4) {
+        const batch = keys.slice(offset, offset + 4);
+        const rows = this.exec(batch.map(() => "SELECT key, size, peak_bytes, entries FROM blob_catalog WHERE key = ?").join(" UNION ALL "), ...batch);
+        for (const row of rows) {
+          if (row.key === key) {
+            if (row.entries !== null) throw new Error("invalid legacy catalog row");
+            count(row.size); count(row.peak_bytes);
+            legacy = row;
+          } else {
+            if (page) throw new Error("overlapping catalog pages");
+            entries = decodePage(row);
+            page = row;
+            member = entries.find((entry) => entry.digest === digest);
+          }
+        }
+      }
+      if (legacy && member) throw new Error("duplicate legacy/page catalog membership");
+      return { legacy, page, entries, member, size: legacy?.size ?? member?.size };
+    } catch (error) { this.catalogUncertain(); throw error; }
+  }
+
+  missingPageKey(digest) {
+    const target = PAGE_PREFIX + digest;
+    const before = this.exec("SELECT key, size, peak_bytes, entries FROM blob_catalog WHERE key >= ? AND key < ? ORDER BY key DESC LIMIT 1", PAGE_PREFIX, target)[0];
+    const after = this.exec("SELECT key, size, peak_bytes, entries FROM blob_catalog WHERE key > ? AND key < ? ORDER BY key LIMIT 1", target, PAGE_END)[0];
+    if (!before && !after) return PAGE_PREFIX;
+    let length = 0;
+    for (const row of [before, after]) if (row) {
+      decodePage(row);
+      length = Math.max(length, commonPrefix(digest, row.key.slice(PAGE_PREFIX.length)) + 1);
+    }
+    if (length > 64) throw new Error("invalid catalog gap route");
+    return PAGE_PREFIX + digest.slice(0, length);
+  }
+
+  writePage(key, entries, peak) {
+    const row = encodePage(key, entries, peak);
+    this.exec("INSERT INTO blob_catalog (key, size, peak_bytes, entries) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size, peak_bytes = MAX(blob_catalog.peak_bytes, excluded.peak_bytes), entries = excluded.entries", row.key, row.size, row.peak_bytes, row.entries);
+  }
+
+  putCatalogPage(key, size, found, peak) {
+    if (found.legacy) {
+      this.exec("INSERT INTO blob_catalog (key, size, peak_bytes) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size, peak_bytes = MAX(blob_catalog.peak_bytes, excluded.peak_bytes)", key, size, peak);
+      return key;
+    }
+    const digest = key.slice(7);
+    const pageKey = found.page?.key ?? this.missingPageKey(digest);
+    const entries = found.entries ?? [];
+    const previous = entries.find((entry) => entry.digest === digest);
+    if (previous) previous.size = size;
+    else entries.push({ digest, size });
+    entries.sort((left, right) => left.digest < right.digest ? -1 : left.digest > right.digest ? 1 : 0);
+    peak = Math.max(peak, found.page?.peak_bytes ?? 0);
+    if (entries.length <= PAGE_CAPACITY) { this.writePage(pageKey, entries, peak); return pageKey; }
+    const groups = splitPage(entries);
+    this.ctx.storage.transactionSync(() => {
+      this.exec("DELETE FROM blob_catalog WHERE key = ?", pageKey);
+      for (const group of groups) this.writePage(group.key, group.entries, peak);
+    });
+    return groups[0].key;
   }
 
   async preservePeak(excludedKey) {
@@ -626,6 +716,11 @@ export class RepositoryServices {
   }
 
   async remove(key, prefix, knownSize, reconciling = false) {
+    if (this.catalogPages && !reconciling) {
+      const receipt = await this.retirePages([key], prefix, 0);
+      if (!receipt.outcomes[0].deleted) throw new Error("R2 deletion failed; inventory reconciliation required");
+      return;
+    }
     if (this.catalogPeak && !reconciling) this.requireCatalogCertain();
     const catalog = this.exec(this.catalogPeak ? "SELECT size, peak_bytes FROM blob_catalog WHERE key = ?" : "SELECT size FROM blob_catalog WHERE key = ?", key)[0];
     let size = knownSize ?? catalog?.size;
@@ -654,18 +749,20 @@ export class RepositoryServices {
 
   async put(key, data, prefix) {
     if (this.catalogPeak) this.requireCatalogCertain();
-    const previous = this.exec("SELECT size FROM blob_catalog WHERE key = ?", key)[0];
+    const found = this.catalogPages ? this.catalogLookup(key) : null;
+    const previous = found ? (found.size === undefined ? null : { size: found.size }) : this.exec("SELECT size FROM blob_catalog WHERE key = ?", key)[0];
     if (this.catalogPeak) {
       try {
         await this.operation("r2_put", () => this.env.BLOBS.put(prefix + key, data), () => 0, data.byteLength, key);
         const nextLive = this.liveBytes + data.byteLength - (previous?.size ?? 0);
         if (!Number.isSafeInteger(nextLive) || nextLive < 0) throw new Error("catalog byte total exceeds safe integer bound");
         this.peakBytes = Math.max(this.peakBytes, nextLive);
-        this.exec("INSERT INTO blob_catalog (key, size, peak_bytes) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size, peak_bytes = MAX(blob_catalog.peak_bytes, excluded.peak_bytes)", key, data.byteLength, this.peakBytes);
+        const owner = this.catalogPages ? this.putCatalogPage(key, data.byteLength, found, this.peakBytes) : key;
+        if (!this.catalogPages) this.exec("INSERT INTO blob_catalog (key, size, peak_bytes) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size, peak_bytes = MAX(blob_catalog.peak_bytes, excluded.peak_bytes)", key, data.byteLength, this.peakBytes);
         await this.ctx.storage.sync();
         this.liveObjects += previous ? 0 : 1;
         this.liveBytes = nextLive;
-        this.peakOwner = { key, peak: this.peakBytes };
+        this.peakOwner = { key: owner, peak: this.peakBytes };
         return;
       } catch (error) {
         this.catalogUncertain();
@@ -682,6 +779,7 @@ export class RepositoryServices {
   }
 
   async retire(keys, prefix, generation) {
+    if (this.catalogPages) return this.retirePages(keys, prefix, generation);
     const outcomes = [];
     for (const key of keys) {
       let deleted = false;
@@ -691,6 +789,109 @@ export class RepositoryServices {
     try { await this.ctx.storage.sync(); }
     catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
     return { generation, outcomes };
+  }
+
+  async preserveBatchPeak(doomed) {
+    if (this.fallbackPeak >= this.peakBytes) return;
+    if (this.peakOwner?.peak >= this.peakBytes && !doomed.has(this.peakOwner.key)) return;
+    // The 256-key debt bound exceeds workerd's SQL parameter limit. Walk at
+    // most the doomed count plus one matching witness using two bindings;
+    // excluded rows never witness each other and no map of all pages is kept.
+    let after = "";
+    for (let inspected = 0; inspected <= doomed.size; inspected++) {
+      const witness = this.exec("SELECT key, peak_bytes FROM blob_catalog WHERE key > ? AND peak_bytes >= ? ORDER BY key LIMIT 1", after, this.peakBytes)[0];
+      if (!witness) break;
+      if (!doomed.has(witness.key)) { this.peakOwner = { key: witness.key, peak: count(witness.peak_bytes) }; return; }
+      after = witness.key;
+    }
+    await this.checkpointPeak(this.peakBytes);
+  }
+
+  async retirePages(keys, prefix, generation) {
+    this.requireCatalogCertain();
+    const groups = new Map(), requested = [], outcomes = [];
+    let failed = false;
+    try {
+      // Retain only bounded request metadata, never all touched page payloads.
+      for (const key of keys) {
+        const found = this.catalogLookup(key);
+        const row = found.legacy ?? (found.member ? found.page : null);
+        if (!row) {
+          const object = await this.operation("r2_head", () => this.env.BLOBS.head(prefix + key), () => 0, 0, key);
+          if (object) { this.catalogUncertain(); fail(409, "uncataloged physical object requires inventory reconciliation"); }
+        }
+        const item = { key, rowKey: row?.key, size: found.size, deleted: false };
+        requested.push(item);
+        if (row) {
+          const group = groups.get(row.key) ?? { page: !found.legacy, members: found.legacy ? 1 : found.entries.length, requested: 0 };
+          group.requested++;
+          groups.set(row.key, group);
+        }
+      }
+      const doomed = new Set([...groups].filter(([, group]) => group.members === group.requested).map(([key]) => key));
+      // Exclude the complete union: doomed pages cannot witness one another.
+      await this.preserveBatchPeak(doomed);
+      for (const item of requested) {
+        try {
+          await this.operation("r2_delete", () => this.env.BLOBS.delete(prefix + item.key), () => 0, 0, item.key);
+          item.deleted = true;
+        } catch { failed = true; }
+        outcomes.push({ key: item.key, deleted: item.deleted });
+      }
+      this.ctx.storage.transactionSync(() => {
+        for (const [rowKey, group] of groups) {
+          const removed = requested.filter((item) => item.rowKey === rowKey && item.deleted);
+          if (!removed.length) continue;
+          if (!group.page) { this.exec("DELETE FROM blob_catalog WHERE key = ?", rowKey); continue; }
+          const row = this.exec("SELECT key, size, peak_bytes, entries FROM blob_catalog WHERE key = ?", rowKey)[0];
+          if (!row) throw new Error("catalog page disappeared during retirement");
+          const digests = new Set(removed.map((item) => item.key.slice(7)));
+          const survivors = decodePage(row).filter((entry) => !digests.has(entry.digest));
+          if (survivors.length) this.writePage(rowKey, survivors, row.peak_bytes);
+          else this.exec("DELETE FROM blob_catalog WHERE key = ?", rowKey);
+        }
+      });
+      await this.ctx.storage.sync();
+      for (const item of requested) if (item.deleted && item.size !== undefined) {
+        this.liveObjects--;
+        this.liveBytes -= item.size;
+      }
+      if (this.peakOwner && doomed.has(this.peakOwner.key)) this.peakOwner = null;
+      if (failed) this.catalogUncertain();
+      return { generation, outcomes };
+    } catch (error) {
+      // SQL/transaction/barrier ambiguity is an error, never a clean receipt
+      // with fabricated false outcomes after successful physical deletion.
+      this.catalogUncertain();
+      throw error;
+    }
+  }
+
+  rebuildPages(objects, prefix) {
+    // GC already owns this authoritative inventory array. Sort that existing
+    // array; each builder holds <=32 entries, recursion is <=64 hex digits.
+    for (const object of objects) {
+      if (!object.key.startsWith(prefix) || !BLOB.test(object.key.slice(prefix.length))) throw new Error("noncanonical retained physical catalog key");
+    }
+    objects.sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+    const build = (start, end, pageKey) => {
+      if (end - start <= PAGE_CAPACITY) {
+        if (end > start) this.writePage(pageKey, objects.slice(start, end).map((object) => ({ digest: object.key.slice(prefix.length + 7), size: count(object.size) })), this.peakBytes);
+        return;
+      }
+      const first = objects[start].key.slice(prefix.length + 7), last = objects[end - 1].key.slice(prefix.length + 7);
+      const length = commonPrefix(first, last) + 1;
+      if (length > 64) throw new Error("duplicate physical catalog member");
+      let groupStart = start;
+      while (groupStart < end) {
+        const nextKey = PAGE_PREFIX + objects[groupStart].key.slice(prefix.length + 7, prefix.length + 7 + length);
+        let groupEnd = groupStart + 1;
+        while (groupEnd < end && PAGE_PREFIX + objects[groupEnd].key.slice(prefix.length + 7, prefix.length + 7 + length) === nextKey) groupEnd++;
+        build(groupStart, groupEnd, nextKey);
+        groupStart = groupEnd;
+      }
+    };
+    build(0, objects.length, PAGE_PREFIX);
   }
 
   async publishManifest(expected, next) {
@@ -787,7 +988,7 @@ export class RepositoryServices {
       if (request.method === "DELETE") {
         this.enableCatalogPeak(request);
         await this.remove(key, prefix);
-        try { await this.ctx.storage.sync(); }
+        try { if (!this.catalogPages) await this.ctx.storage.sync(); }
         catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
         return new Response(null, { status: 204 });
       }
@@ -837,7 +1038,7 @@ export class RepositoryServices {
       // A stale/invalid recovery request never migrates. Recovery itself is
       // allowed while dirty; ordinary mutation remains blocked until its sync.
       if (this.catalogPeak || !this.catalogCertain) this.reloadCatalog();
-      if (!this.catalogPeak && request.headers.get(CATALOG_PEAK_HEADER) === "1") this.enableCatalogPeak(request, true);
+      this.enableCatalogPeak(request, true);
       const live = new Set(body.live_keys);
       const objects = await this.inventory(prefix);
       const physicalBytes = objects.reduce((sum, object) => sum + object.size, 0);
@@ -857,12 +1058,20 @@ export class RepositoryServices {
       try {
         for (const object of objects) {
           const key = object.key.slice(prefix.length);
-          if (!live.has(key)) { await this.remove(key, prefix, object.size, true); removed++; }
+          if (!live.has(key)) {
+            // Physical orphan names are untrusted. In particular an R2 key
+            // named pages/foo must never address the SQL private page row.
+            if (this.catalogPages) await this.operation("r2_delete", () => this.env.BLOBS.delete(object.key), () => 0, 0, key);
+            else await this.remove(key, prefix, object.size, true);
+            removed++;
+          }
         }
+        const retained = objects.filter((object) => live.has(object.key.slice(prefix.length)));
         // Reconcile catalog state after interrupted put/catalog updates as well.
         this.ctx.storage.transactionSync(() => {
           this.exec("DELETE FROM blob_catalog");
-          for (const object of objects) {
+          if (this.catalogPages) this.rebuildPages(retained, prefix);
+          else for (const object of objects) {
             const key = object.key.slice(prefix.length);
             if (live.has(key)) {
               if (this.catalogPeak) this.exec("INSERT INTO blob_catalog (key, size, peak_bytes) VALUES (?, ?, ?)", key, object.size, this.peakBytes);
@@ -870,13 +1079,12 @@ export class RepositoryServices {
             }
           }
         });
-        const retained = objects.filter((object) => live.has(object.key.slice(prefix.length)));
         const retainedBytes = retained.reduce((sum, object) => sum + object.size, 0);
         if (!this.catalogPeak) { this.liveBytes = retainedBytes; this.updatePeak(); }
         await this.ctx.storage.sync();
         this.liveObjects = retained.length;
         this.liveBytes = retainedBytes;
-        this.peakOwner = this.catalogPeak && retained.length ? { key: retained[0].key.slice(prefix.length), peak: this.peakBytes } : null;
+        this.peakOwner = this.catalogPeak && retained.length && !this.catalogPages ? { key: retained[0].key.slice(prefix.length), peak: this.peakBytes } : null;
         this.catalogCertain = true;
       } catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
       return json({ deleted: removed });

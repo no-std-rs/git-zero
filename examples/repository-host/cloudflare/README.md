@@ -337,3 +337,10 @@ namespace containing `-upload-catalog-`, and the two Rust contracts
 `seed_upload_catalog_before_workerd_restart` /
 `verify_upload_catalog_after_workerd_restart` in separate Wrangler processes.
 All contracts are ignored by default and require explicit local endpoint/token.
+
+New Native also requests `catalog_pages:1` with `catalog_peak:1`. Supporting
+Workers opt into bounded durable catalog pages on the first validated mutation;
+existing page stores remain readable by older Native clients after registry loss
+or restart. Rolling Worker code back to a version that cannot decode pages is
+unsupported. The [catalog-page contract](../../../docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r12-catalog-pages-candidate/contract.md)
+records schema charges, ordering, recovery and the unchanged R11 crash limitation.
