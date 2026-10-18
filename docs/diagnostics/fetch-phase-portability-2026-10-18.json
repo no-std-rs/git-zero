@@ -1,0 +1,149 @@
+{
+  "status": "SOURCE AND ONE TINY PROOF READY FOR INDEPENDENT REVIEW; NO VM/CI/LARGE RUNTIME GO",
+  "parent_source": "e41159b7fcd3fc9ef16b189464fd6c54189af13b",
+  "native_source": "a827df032e87374737b1ac7e36fb518b507e8411",
+  "approved_source_closure_sha256": "4e8283e57be8c2b4e01c35b427de54c23c73ec62e344340aa2b970ce35330632",
+  "actual_binaries": {
+    "git": {
+      "path": "/usr/bin/git",
+      "sha256": "23b37f0e39d8636823a5ddf102283a317dff962a6a540a8df8444b9970b71eab"
+    },
+    "native": {
+      "path": "/tmp/git-zero-fetch-diagnostics-target-j2/debug/repository-host",
+      "sha256": "3ccf43bb5cca872294191fef57df9d4469ddd5dad41e9b5abf4cd6e270d1f060"
+    },
+    "node": {
+      "path": "/var/home/pawel/.local/lib/node-v24.10.0-linux-x64/bin/node",
+      "sha256": "141542ec0c8f73b568cd774ea8df43f23768cb086eb5bf21d2dea33072fb2f56"
+    },
+    "supervisor": {
+      "path": "/tmp/git-zero-fetch-diagnostics-target-j2/debug/fetch-phase-supervisor",
+      "sha256": "543e1c53e3a7f50ccebca076dbad6f2051ae481b05bdab38cdae938d9a0b0707"
+    },
+    "workerd": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/@cloudflare/workerd-linux-64/bin/workerd",
+      "sha256": "3ee1cc5b09497de8f47f513b5c5c485da99a9fc8b188b5618cb05de63f3b4b64"
+    },
+    "wrangler": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js",
+      "sha256": "780661a508810f3b65786895b1ca9aacbc4f55d329ae6b8c1e49ec8433569f77"
+    },
+    "wrangler_lock": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/package-lock.json",
+      "sha256": "c68ee57e4922151c5b6c0e34eeb6042ed405633e1e249881b2dedef9b2b1d7cd"
+    }
+  },
+  "runtime_manifest": {
+    "path": "/tmp/git-zero-fetch-portability-gate-20261018-01/runtime-manifest.json",
+    "sha256": "119e924e49a7252616eeff60a18b3750a1640a1eb6ea1afdf80785e0847662f8",
+    "source_commit_at_seal_is_parent_with_runner_changes_bound_by_file_hashes": true,
+    "fresh_vm_elfs_must_be_sealed_separately": true
+  },
+  "source_files": {
+    "examples/repository-host/src/bin/fetch-phase-supervisor.rs": "f0532870ba099cb1d711c608c87f2f497b2007129f7d94940300748b7e1c4a22",
+    "examples/repository-host/src/bin/fetch-phase-supervisor/replay.rs": "f8d7a22e70cb177b001920a0b023a3225693f1fa1314ec8745c35abd31d43bb3",
+    "examples/repository-host/src/bin/fetch-phase-supervisor/runtime.rs": "bebb0fdbb1febb8a203a8410483afe4305b36a6dcbc960538e72371dbda1b161",
+    "examples/repository-host/src/bin/fetch-phase-supervisor/approved-source.sha256": "4e8283e57be8c2b4e01c35b427de54c23c73ec62e344340aa2b970ce35330632"
+  },
+  "tiny": {
+    "pass_": true,
+    "proof_sha256": "120aff4fc293ae39aca57701e9040146330726900e602e93dab1e979ab1f77ab",
+    "diagnostic_elapsed_ms": 45552,
+    "tiny_plan_exact_to_previous": true,
+    "operations": 9,
+    "strict_index_checks": 6,
+    "successful_commands": 104,
+    "fully_rehashed_streams": 208,
+    "resource_boundaries": 15,
+    "phase_records": 127,
+    "actual_request_hash_records": 61,
+    "environment_bytes": 5438,
+    "environment_sha256": "2d58c689539c44b244810d54ed4d1a8e0a59d7d608cb4f12fdfe35d61c181bcb",
+    "environment_after_ready_ns": 108604,
+    "environment_capture_elapsed_ns": 1938872323,
+    "native_env_qualified": true,
+    "source_runtime_before_after_equal": true,
+    "applicable_metrics": {
+      "upload_advertisement_certificates": 1,
+      "upload_advertisement_shortcuts": 2,
+      "generation_witness_hits": 18,
+      "gateway_read_consumed": 2,
+      "gateway_read_plans": 6,
+      "gateway_receive_consumed": 0,
+      "gateway_receive_plans": 3,
+      "history_projections": 2,
+      "history_lineage_bytes": 176
+    },
+    "exact_unchanged_executor_functions": [
+      "footprint",
+      "capacity",
+      "capacity_with_helper",
+      "pipe_capture",
+      "command",
+      "git",
+      "text",
+      "content",
+      "geometry",
+      "fixture",
+      "tiny_plan",
+      "http",
+      "close_scopes",
+      "operation",
+      "worker",
+      "resource_check",
+      "blocked_resource_helper",
+      "blocked_resource_proof",
+      "tiny"
+    ],
+    "supervision_canonicalization_and_controls_exact": true,
+    "cpu_ms": null,
+    "large_fixtures_generated": 0,
+    "large_replays_run": 0,
+    "ci_runs": 0,
+    "performance_claim": false
+  },
+  "proof_path": "/tmp/git-zero-fetch-portability-tiny-20261018-01/proof.json",
+  "pre_runtime_archive": {
+    "path": "/tmp/git-zero-fetch-diagnostics-immutable/portability-tested-v1",
+    "map_sha256": "9c44f153c9842041a44f96da7d91c681724041e24b2c5ddc300e3d7be7a92821"
+  },
+  "tests": {
+    "focused_tests": 4,
+    "all_passed": true,
+    "strict_clippy": "BLOCKED by unchanged socket_rpc::call too_many_arguments and existing supervisor type_complexity; initial console-only failures retained in tool history",
+    "clippy_with_only_these_existing_lints_allowed": "PASS",
+    "rustfmt": "PASS",
+    "diff_check": "PASS",
+    "stage2_stall_controls": "not rerun: exact supervision/control code verified unchanged"
+  },
+  "scope": {
+    "native_worker_dependencies_lock_benchmark_client_schedule_transport_resource_floor_timeout_changes": false,
+    "local_node": "v24.10.0",
+    "local_build_profile": "debug",
+    "new_vm_release_node22_cohort_tested": false,
+    "large_fixture_reconstruction_in_this_revision": null,
+    "cpu_ms": null,
+    "do_gb_seconds": null,
+    "full_bill_usd": null,
+    "performance_claim": false,
+    "original_batch02_cold_environment_qualification": null,
+    "original_batch02_receipts_unchanged": true
+  },
+  "draft": {
+    "path": "/tmp/git-zero-fetch-standard-vm-draft-20261018-01/fetch-phase-standard-vm.yml",
+    "installed": false,
+    "job_literal_false_fuse": true,
+    "git": "2.53.0",
+    "node": "22.20.0",
+    "rust": "1.97.1",
+    "profile": "release --locked -j2",
+    "proposed_launch_memory_bytes": 17179869184,
+    "proposed_launch_disk_bytes": 10737418240,
+    "source_case_memory_floor_bytes": 8589934592,
+    "source_raw_reserve_bytes": 2147483648,
+    "source_cumulative_raw_cap_bytes": 8589934592,
+    "compact_input_bundle_cap_bytes": 4128768,
+    "artifact_cap_bytes": 4194304,
+    "fresh_vm_resources_and_activation_require_separate_root_go": true
+  }
+}

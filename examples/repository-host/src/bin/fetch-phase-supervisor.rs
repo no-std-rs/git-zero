@@ -1,6 +1,8 @@
 //! Linux-only watchdog and bounded diagnostic executor. Runtime GO is separate.
 #[path = "fetch-phase-supervisor/replay.rs"]
 mod replay;
+#[path = "fetch-phase-supervisor/runtime.rs"]
+mod runtime;
 use git_zero_host::{benchmark_cost::interleaved_schedule, hash};
 use serde_json::{Value, json};
 use std::{
@@ -340,7 +342,7 @@ fn inherited_environment_receipt(pid: i32) -> io::Result<Value> {
     names.sort();
     invalid.sort();
     Ok(
-        json!({"pid":pid,"source":format!("/proc/{pid}/environ"),"git_environment_names":names,"invalid_git_names":invalid,"identity_environment_eligible":invalid.is_empty(),"values_recorded":false}),
+        json!({"pid":pid,"source":format!("/proc/{pid}/environ"),"git_environment_names":names,"invalid_git_names":invalid,"identity_environment_eligible":!bytes.is_empty() && !names.is_empty() && invalid.is_empty(),"raw_environment_bytes":bytes.len(),"raw_environment_sha256":hash(&bytes),"values_recorded":false}),
     )
 }
 
@@ -835,6 +837,7 @@ fn main() -> Result<()> {
         "--internal-blocked-resource-helper" if args.len() == 2 => {
             replay::blocked_resource_helper(&root)
         }
+        "--seal-runtime-manifest" if args.len() == 2 => runtime::seal(&root),
         "--tiny-production-proof" if args.len() == 2 => replay::tiny(&root),
         "--execute-reviewed-batch" if args.len() == 2 => replay::batch(&root),
         "--internal-executor" if args.len() == 2 => replay::worker(&root),

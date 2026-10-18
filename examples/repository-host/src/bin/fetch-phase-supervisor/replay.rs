@@ -10,12 +10,10 @@ use std::{
 const ORIGIN: &str = "http://127.0.0.1:8853";
 const REPO: &str = "fetchdiag3";
 const GATEWAY: &str = "http://127.0.0.1:8853/fetchdiag3/repo.git";
-const WRANGLER: &str = "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js";
-const NATIVE_HASH: &str = "3ccf43bb5cca872294191fef57df9d4469ddd5dad41e9b5abf4cd6e270d1f060";
 const RAW_CAP: u64 = 8 * 1024 * 1024 * 1024;
 static COMMAND: AtomicU64 = AtomicU64::new(1);
 
-fn stream_hash(path: &Path) -> io::Result<String> {
+pub(super) fn stream_hash(path: &Path) -> io::Result<String> {
     let mut f = File::open(path)?;
     let mut h = Sha256::new();
     let mut b = [0; 65536];
@@ -28,7 +26,7 @@ fn stream_hash(path: &Path) -> io::Result<String> {
     }
     Ok(format!("{:x}", h.finalize()))
 }
-fn executable(name: &str) -> Result<PathBuf> {
+pub(super) fn executable(name: &str) -> Result<PathBuf> {
     for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
         let p = dir.join(name);
         if p.is_file() {
@@ -127,64 +125,9 @@ fn capacity_with_helper(
     Ok(value)
 }
 fn verify_sources() -> Result<Value> {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let frozen = Path::new(IMMUTABLE).join("source/examples/repository-host");
-    let mut files = Vec::new();
-    for rel in [
-        "src/native.rs",
-        "src/http.rs",
-        "src/diagnostics.rs",
-        "src/cloudflare.rs",
-        "src/socket_rpc.rs",
-        "src/lib.rs",
-        "src/bin/hosting-bench.rs",
-        "src/benchmark_cost.rs",
-        "Cargo.toml",
-        "../../Cargo.lock",
-        "cloudflare/wrangler.toml",
-        "cloudflare/src/index.js",
-        "cloudflare/src/catalog-pages.js",
-        "cloudflare/src/first-read.js",
-        "cloudflare/src/inline-catalog.js",
-        "cloudflare/src/retirement-proof.js",
-        "cloudflare/src/service-socket.js",
-    ] {
-        let path = source.join(rel);
-        if fs::read(&path)? != fs::read(frozen.join(rel))? {
-            return Err(format!("approved source changed: {rel}").into());
-        }
-        files.push(json!({"path":path.canonicalize()?,"sha256":stream_hash(&path)?}));
-    }
-    let native = std::env::current_exe()?.with_file_name("repository-host");
-    if stream_hash(&native)? != NATIVE_HASH {
-        return Err("Native ELF differs from approved stage1".into());
-    }
-    let mut binaries = Vec::new();
-    for path in [
-        native,
-        std::env::current_exe()?,
-        executable("git")?,
-        executable("node")?,
-        PathBuf::from(WRANGLER),
-        Path::new(WRANGLER)
-            .ancestors()
-            .nth(3)
-            .ok_or("Wrangler path")?
-            .join("@cloudflare/workerd-linux-64/bin/workerd"),
-    ] {
-        binaries.push(json!({"path":path.canonicalize()?,"sha256":stream_hash(&path)?}));
-    }
-    for rel in [
-        "src/bin/fetch-phase-supervisor.rs",
-        "src/bin/fetch-phase-supervisor/replay.rs",
-    ] {
-        let path = source.join(rel);
-        files.push(json!({"path":path,"sha256":stream_hash(&path)?}));
-    }
-    Ok(
-        json!({"native_source":STAGE1,"native_sha256":NATIVE_HASH,"source_files":files,"actual_binaries":binaries,"cpu_ms":null}),
-    )
+    runtime::verify()
 }
+
 fn audit_tree(root: &Path, name: &str) -> Result<Value> {
     let me = process(std::process::id() as i32)?;
     let mut all = Vec::new();
@@ -773,13 +716,6 @@ impl Runtime {
             thread::spawn(move || pipe_capture(err, e)),
         ];
         save(root, &format!("{label}-process.json"), &process_row(&p))?;
-        if label == "native" {
-            save(
-                root,
-                "native-environment.json",
-                &inherited_environment_receipt(p.pid)?,
-            )?;
-        }
         Ok(Self {
             child,
             readers,
@@ -800,6 +736,14 @@ impl Runtime {
             let err =
                 fs::read_to_string(root.join(format!("{}.stderr", self.label))).unwrap_or_default();
             if out.contains(needle) || err.contains(needle) {
+                save(
+                    root,
+                    &format!("{}-readiness.json", self.label),
+                    &json!({"pid":self.pid,"start_ticks":self.start,"existing_log_needle":needle,
+                        "observed_unix_ns":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos().to_string(),
+                        "stdout_bytes":out.len(),"stderr_bytes":err.len(),"stdout_sha256":hash(out.as_bytes()),"stderr_sha256":hash(err.as_bytes()),
+                        "added_service_probe":false}),
+                )?;
                 return Ok(());
             }
             if start.elapsed() > Duration::from_secs(30) {
@@ -1093,6 +1037,8 @@ fn execute_case(root: &Path, plan: &Value) -> Result<Value> {
     )?;
     save(root, "case-input.json", plan)?;
     let provenance = verify_sources()?;
+    let wrangler_path = runtime::path(&provenance, "wrangler")?;
+    let native_path = runtime::path(&provenance, "native")?;
     save(root, "source-runtime-before.json", &provenance)?;
     git(root, "actual-git-version", root, &["--version"])?;
     command(
@@ -1104,7 +1050,7 @@ fn execute_case(root: &Path, plan: &Value) -> Result<Value> {
         root,
         "actual-wrangler-version",
         Command::new("node")
-            .arg(WRANGLER)
+            .arg(&wrangler_path)
             .arg("--version")
             .env("WRANGLER_SEND_METRICS", "false")
             .env("WRANGLER_LOG_PATH", root.join("wrangler-logs")),
@@ -1120,7 +1066,7 @@ fn execute_case(root: &Path, plan: &Value) -> Result<Value> {
         root,
         "wrangler",
         Command::new("node")
-            .arg(WRANGLER)
+            .arg(&wrangler_path)
             .args(["dev", "--config"])
             .arg(root.join("wrangler.toml"))
             .args([
@@ -1149,14 +1095,21 @@ fn execute_case(root: &Path, plan: &Value) -> Result<Value> {
     let mut native = Runtime::start(
         root,
         "native",
-        Command::new(std::env::current_exe()?.with_file_name("repository-host"))
+        Command::new(&native_path)
             .args(["--cloudflare", ORIGIN, "--repo", REPO, "--view-cache", view])
             .arg(root.join("native-state"))
             .arg("8854")
             .env("GIT_ZERO_PHASE_LEDGER", root.join("native-phase.jsonl")),
     )?;
     native.ready(root, "http://127.0.0.1:8854/repo.git")?;
-    let env = json_from(root.join("native-environment.json"))?;
+    let env = runtime::capture_native(
+        root,
+        native.pid,
+        native.start,
+        provenance["runtime_manifest"]["binaries"]["native"]["sha256"]
+            .as_str()
+            .ok_or("Native runtime hash")?,
+    )?;
     if env["identity_environment_eligible"] != true {
         return Err("Native environment identity is unsupported".into());
     }
@@ -1422,6 +1375,9 @@ pub(super) fn batch(config: &Path) -> Result<()> {
         let mut plan = plan;
         plan["sealed_original_input_sha256"] = json!(expected);
         plans.push(plan);
+    }
+    if config["runtime_manifest_sha256"] != runtime::manifest_hash()? {
+        return Err("authorization does not bind actual runtime manifest".into());
     }
     fs::create_dir(&root)?;
     save(&root, "approved-batch-config.json", &config)?;
