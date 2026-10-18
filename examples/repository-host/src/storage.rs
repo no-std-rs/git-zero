@@ -35,6 +35,17 @@ impl Manifest {
             .collect()
     }
 
+    /// Ordered retirement debt, excluding every live representation. This is
+    /// also the order required in a fused publication's confirmation receipt.
+    pub fn retirement_keys(&self) -> Vec<&str> {
+        let live = self.live_chunks();
+        self.garbage
+            .iter()
+            .map(String::as_str)
+            .filter(|key| !live.contains(key))
+            .collect()
+    }
+
     /// Prepare retirement debt for this generation before publishing it.
     /// Shared chunks and chunks reused after a prior retirement remain live.
     pub fn retire_replaced(&mut self, previous: &Self) {
@@ -70,6 +81,30 @@ impl Manifest {
         }
         failures
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RetirementOutcome {
+    pub key: String,
+    /// Absence counts as success, matching BlobStore::delete's retry contract.
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RetirementReceipt {
+    pub generation: u64,
+    pub outcomes: Vec<RetirementOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetiringCas {
+    /// No publication, deletion, or other side effects have occurred.
+    Unsupported,
+    Stale,
+    /// Publication is durable; individual retirement failures remain debt.
+    Published(RetirementReceipt),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -119,6 +154,16 @@ pub trait BlobStore: Send + Sync {
 pub trait StateStore: Send + Sync {
     fn load(&self) -> io::Result<Manifest>;
     fn compare_and_swap(&self, expected: u64, next: &Manifest) -> io::Result<bool>;
+    /// Optional fused operation. Unsupported MUST have no side effects. Once
+    /// attempted, any error is ambiguous and requires authoritative recovery;
+    /// callers must never fall back to a second publication on an error.
+    fn try_compare_and_swap_retiring(
+        &self,
+        _expected: u64,
+        _next: &Manifest,
+    ) -> io::Result<RetiringCas> {
+        Ok(RetiringCas::Unsupported)
+    }
 }
 
 #[derive(Clone)]
@@ -390,6 +435,13 @@ pub trait CloudflareBindings: Send + Sync {
     fn r2_delete(&self, key: &str) -> io::Result<()>;
     fn manifest_load(&self) -> io::Result<Manifest>;
     fn manifest_cas(&self, expected: u64, next: &Manifest) -> io::Result<bool>;
+    fn try_compare_and_swap_retiring(
+        &self,
+        _expected: u64,
+        _next: &Manifest,
+    ) -> io::Result<RetiringCas> {
+        Ok(RetiringCas::Unsupported)
+    }
 }
 
 pub struct R2BlobStore<T: CloudflareBindings> {
@@ -444,6 +496,15 @@ impl<T: CloudflareBindings> StateStore for DurableStateStore<T> {
     fn compare_and_swap(&self, expected: u64, next: &Manifest) -> io::Result<bool> {
         validate_generation(expected, next)?;
         self.bindings.manifest_cas(expected, next)
+    }
+
+    fn try_compare_and_swap_retiring(
+        &self,
+        expected: u64,
+        next: &Manifest,
+    ) -> io::Result<RetiringCas> {
+        validate_generation(expected, next)?;
+        self.bindings.try_compare_and_swap_retiring(expected, next)
     }
 }
 

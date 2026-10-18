@@ -13,7 +13,10 @@ use git_zero_host::{
     hash,
     http::Request,
     native::{NativeHost, command},
-    storage::{BlobStore, Chunk, DurableStateStore, Manifest, R2BlobStore, StateStore},
+    storage::{
+        BlobStore, Chunk, DurableStateStore, Manifest, R2BlobStore, RetiringCas, StateStore,
+        StoredPack,
+    },
 };
 use std::{
     collections::BTreeMap,
@@ -171,6 +174,279 @@ fn operation(usage: &ServiceUsage, name: &str) -> OperationUsage {
 
 fn usage(services: &HttpServices) -> ServiceUsage {
     serde_json::from_value(services.usage().unwrap()).unwrap()
+}
+
+#[test]
+#[ignore = "requires real local Wrangler R2 and Durable Object bindings"]
+fn real_fused_retirement_matches_scalar_work_and_removes_three_callbacks() {
+    let mut deltas = Vec::new();
+    for fused in [false, true] {
+        let worker = RealWorker::new(if fused {
+            "retire-fused"
+        } else {
+            "retire-scalar"
+        });
+        let services = worker.services();
+        if fused {
+            services.register("http://127.0.0.1:1").unwrap();
+        }
+        let repository = Repository::new(
+            R2BlobStore::new(services.clone()),
+            DurableStateStore::new(services.clone()),
+        );
+        let mut first = Manifest {
+            generation: 1,
+            ..Manifest::default()
+        };
+        for i in 0..3 {
+            first.packs.push(
+                repository
+                    .store_bundled_pack(
+                        format!("pack-{i}"),
+                        format!("pack-{i}").as_bytes(),
+                        b"idx",
+                        0,
+                    )
+                    .unwrap(),
+            );
+        }
+        assert!(
+            repository
+                .publish(&Manifest::default(), first.clone())
+                .unwrap()
+        );
+        let mut next = Manifest {
+            generation: 2,
+            ..Manifest::default()
+        };
+        next.retire_replaced(&first);
+        assert_eq!(next.garbage.len(), 3);
+        let before = usage(&services);
+        let RetiringCas::Published(receipt) =
+            repository.publish_retiring(&first, next.clone()).unwrap()
+        else {
+            panic!("CAS did not publish");
+        };
+        let after = usage(&services);
+        let delta = after.checked_workload_delta(&before).unwrap();
+        assert_eq!(receipt.generation, 2);
+        assert!(receipt.outcomes.iter().all(|outcome| outcome.deleted));
+        assert_eq!(
+            receipt
+                .outcomes
+                .iter()
+                .map(|outcome| &outcome.key)
+                .collect::<Vec<_>>(),
+            next.garbage.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(after.r2_live_objects, 0);
+        assert_eq!(delta.r2_deletes, 3);
+        assert_eq!(delta.r2_class_a, 0);
+        assert_eq!(delta.r2_class_b, 0);
+        assert_eq!(delta.worker_requests, if fused { 1 } else { 4 });
+        assert_eq!(delta.do_requests, if fused { 1 } else { 4 });
+        assert_eq!(
+            operation(&after, "manifest_cas").successes
+                - operation(&before, "manifest_cas").successes,
+            1
+        );
+        assert_eq!(
+            operation(&after, "r2_delete").successes - operation(&before, "r2_delete").successes,
+            3
+        );
+        assert_eq!(repository.state.load().unwrap(), next);
+        deltas.push(delta);
+        // A stale CAS reports no retirement and never touches any R2 binding.
+        let before = usage(&services);
+        assert_eq!(
+            repository.publish_retiring(&first, next).unwrap(),
+            RetiringCas::Stale
+        );
+        let after = usage(&services);
+        let stale = after.checked_workload_delta(&before).unwrap();
+        assert_eq!(stale.r2_deletes, 0);
+        assert_eq!(stale.r2_class_a + stale.r2_class_b, 0);
+    }
+    assert_eq!(deltas[0].do_rows_read, deltas[1].do_rows_read);
+    assert_eq!(deltas[0].do_rows_written, deltas[1].do_rows_written);
+}
+
+#[test]
+#[ignore = "requires local workerd with cloudflare/test/retirement-fault.toml, on a fresh persist-dir"]
+fn faulted_fused_retirement_preserves_cas_and_failed_r2_accounting() {
+    let worker = RealWorker::new("retire-fault");
+    let services = worker.services();
+    services.register("http://127.0.0.1:1").unwrap();
+    let repository = Repository::new(
+        R2BlobStore::new(services.clone()),
+        DurableStateStore::new(services.clone()),
+    );
+    let mut next = Manifest {
+        generation: 1,
+        ..Manifest::default()
+    };
+    for data in [
+        b"retirement-before".as_slice(),
+        b"retirement-failure",
+        b"retirement-after",
+    ] {
+        let key = format!("chunks/{}", hash(data));
+        repository.blobs.put(&key, data).unwrap();
+        next.garbage.push(key);
+    }
+    let before = usage(&services);
+    let RetiringCas::Published(receipt) = repository
+        .publish_retiring(&Manifest::default(), next.clone())
+        .unwrap()
+    else {
+        panic!("CAS did not publish");
+    };
+    let after = usage(&services);
+    assert_eq!(receipt.generation, 1);
+    assert_eq!(
+        receipt
+            .outcomes
+            .iter()
+            .map(|outcome| outcome.deleted)
+            .collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+    let cas = operation(&after, "manifest_cas");
+    assert_eq!(
+        cas.successes - operation(&before, "manifest_cas").successes,
+        1
+    );
+    assert_eq!(cas.failures, 0);
+    let deletes = operation(&after, "r2_delete");
+    assert_eq!(
+        deletes.attempts - operation(&before, "r2_delete").attempts,
+        3
+    );
+    assert_eq!(
+        deletes.successes - operation(&before, "r2_delete").successes,
+        2
+    );
+    assert_eq!(
+        deletes.failures - operation(&before, "r2_delete").failures,
+        1
+    );
+    assert_eq!(after.accounting_complete, Some(true));
+    assert_eq!(after.r2_live_objects, 1);
+    assert_eq!(after.r2_live_bytes, b"retirement-failure".len() as u64);
+    let delta = after.checked_workload_delta(&before).unwrap();
+    assert_eq!(delta.worker_requests, 1);
+    assert_eq!(delta.do_requests, 1);
+    assert_eq!(delta.r2_deletes, 3);
+    assert_eq!(repository.state.load().unwrap(), next);
+    assert_eq!(
+        repository.blobs.get(&next.garbage[1]).unwrap(),
+        b"retirement-failure"
+    );
+    // The real failed counter above is deliberately left in place; existing
+    // benchmark validation rejects any failed service operation in a trace.
+    assert!(next.collect_garbage(&repository.blobs).is_empty());
+    assert_eq!(usage(&services).r2_live_objects, 0);
+}
+
+#[test]
+#[ignore = "requires real local Wrangler R2 and Durable Object bindings"]
+fn real_fused_retirement_validates_before_cas_and_preserves_all_live_representations() {
+    let worker = RealWorker::new("retire-validation");
+    let services = worker.services();
+    services.register("http://127.0.0.1:1").unwrap();
+    let repository = Repository::new(
+        R2BlobStore::new(services.clone()),
+        DurableStateStore::new(services.clone()),
+    );
+    let split = repository
+        .store_pack("split".into(), b"pack", b"index", 0)
+        .unwrap();
+    let bundle = repository
+        .store_bundled_pack("bundle".into(), b"bundled", b"idx", 0)
+        .unwrap();
+    let mut next = Manifest {
+        generation: 1,
+        packs: vec![split, bundle],
+        ..Manifest::default()
+    };
+    next.garbage = next
+        .packs
+        .iter()
+        .flat_map(StoredPack::chunks)
+        .map(|c| c.key.clone())
+        .collect();
+    let base = serde_json::json!({"version":1,"expected":0,"next":next});
+    let mut invalid = Vec::new();
+    invalid.extend([b"null".to_vec(), b"[]".to_vec()]);
+    for (pointer, value) in [
+        ("/version", serde_json::json!(2)),
+        (
+            "/next/garbage",
+            serde_json::json!([next.garbage[0], next.garbage[0]]),
+        ),
+        ("/next/garbage", serde_json::json!(["chunks/../invalid"])),
+        (
+            "/next/garbage",
+            serde_json::json!(
+                (0..257)
+                    .map(|i| format!("chunks/{i:064x}"))
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        ("/next/packs/0/pack/0/len", serde_json::json!(0)),
+        ("/next/packs/1/id", serde_json::json!("split")),
+        (
+            "/next/packs/1/pack",
+            serde_json::json!([next.packs[0].pack[0]]),
+        ),
+    ] {
+        let mut changed = base.clone();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        invalid.push(serde_json::to_vec(&changed).unwrap());
+    }
+    invalid.push(b"{malformed".to_vec());
+    invalid.push(vec![b' '; 1_500_001]);
+    let before = usage(&services);
+    for body in invalid {
+        let (status, _) = local_request(
+            &worker.origin,
+            "POST",
+            "/_services/manifest/retire",
+            &[
+                ("x-hosting-token", &worker.token),
+                ("x-hosting-repo", &worker.namespace),
+                ("x-hosting-phase", "push"),
+            ],
+            &body,
+        );
+        assert!(matches!(status, 400 | 413), "status {status}");
+    }
+    let after = usage(&services);
+    assert_eq!(
+        operation(&after, "manifest_cas"),
+        operation(&before, "manifest_cas")
+    );
+    assert_eq!(
+        operation(&after, "r2_delete"),
+        operation(&before, "r2_delete")
+    );
+    assert_eq!(repository.state.load().unwrap(), Manifest::default());
+    let RetiringCas::Published(receipt) = repository
+        .publish_retiring(&Manifest::default(), next.clone())
+        .unwrap()
+    else {
+        panic!("CAS did not publish");
+    };
+    assert!(receipt.outcomes.is_empty());
+    for pack in &next.packs {
+        repository.read_pack_files(pack).unwrap();
+    }
+    let after = usage(&services);
+    assert_eq!(after.r2_live_objects, 3);
+    assert_eq!(
+        operation(&after, "r2_delete"),
+        operation(&before, "r2_delete")
+    );
 }
 
 // Small Rust-only HTTP test glue; curl preserves gateway streaming and exact
@@ -758,7 +1034,7 @@ fn real_registered_gateway_push_fetch_invalidates_cache_and_recovers_after_codec
     let mut parent: Option<String> = None;
     let mut last_blob = String::new();
     let mut last_tree = String::new();
-    for generation in 1..=2 {
+    for generation in 1..=4 {
         let data = format!("gateway generation {generation}\n").repeat(512);
         let blob = String::from_utf8(git(
             &source,
@@ -796,6 +1072,16 @@ fn real_registered_gateway_push_fetch_invalidates_cache_and_recovers_after_codec
         );
         assert_eq!(metrics["generation_witness_fallbacks"], 0);
         assert!(metrics["generation_witness_hits"].as_u64().unwrap() >= generation * 2);
+        if generation == 4 {
+            assert_eq!(metrics["compactions"], 1);
+            assert_eq!(metrics["retired_chunk_deletes"], 3);
+            let published = DurableStateStore::new(worker.services()).load().unwrap();
+            assert_eq!(published.packs.len(), 1);
+            assert_eq!(published.garbage.len(), 3);
+            let accounted = usage(&worker.services());
+            assert_eq!(operation(&accounted, "r2_delete").successes, 3);
+            assert_eq!(operation(&accounted, "r2_delete").failures, 0);
+        }
         let clone = format!("clone-{generation}.git");
         git(
             &directory.0,
@@ -844,7 +1130,7 @@ fn real_registered_gateway_push_fetch_invalidates_cache_and_recovers_after_codec
     );
     assert_eq!(
         git(&clone, &["cat-file", "blob", &last_blob], &[]),
-        "gateway generation 2\n".repeat(512).as_bytes()
+        "gateway generation 4\n".repeat(512).as_bytes()
     );
     let metrics = native_metrics(&native);
     assert_eq!(metrics["generation_witness_fallbacks"], 0);
@@ -1568,7 +1854,7 @@ fn seed_before_workerd_restart() {
         .unwrap();
     assert_eq!(new.bundle.len(), 1);
     assert!(new.bundle[0].len > 8 * 1024 * 1024);
-    let next = Manifest {
+    let mut next = Manifest {
         generation: 1,
         refs: BTreeMap::from([
             ("refs/tags/restart-legacy".into(), legacy.tip.clone()),
@@ -1577,15 +1863,29 @@ fn seed_before_workerd_restart() {
         packs: vec![old, new],
         ..Manifest::default()
     };
+    // Simulate interruption after publication and the first scalar retirement.
+    // Keep the complete durable debt across a real workerd process restart.
+    for data in [
+        b"restart-retired-a".as_slice(),
+        b"restart-retired-b",
+        b"restart-retired-c",
+    ] {
+        let key = format!("chunks/{}", hash(data));
+        repository.blobs.put(&key, data).unwrap();
+        next.garbage.push(key);
+    }
     assert!(repository.publish(&previous, next.clone()).unwrap());
+    repository.blobs.delete(&next.garbage[0]).unwrap();
     let usage: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
-    assert_eq!(usage.r2_live_objects, 3);
+    assert_eq!(usage.r2_live_objects, 5);
     assert_eq!(
         usage.r2_live_bytes,
         next.packs
             .iter()
             .map(|pack| pack.pack_bytes + pack.index_bytes)
             .sum::<u64>()
+            + b"restart-retired-b".len() as u64
+            + b"restart-retired-c".len() as u64
     );
     let metadata = |fixture: &NativeFixture, seed| {
         serde_json::json!({
@@ -1670,12 +1970,19 @@ fn verify_after_workerd_restart() {
     retained.packs.remove(0);
     retained.refs.remove("refs/tags/restart-legacy");
     retained.retire_replaced(&expected);
-    assert_eq!(retained.garbage.len(), 2);
+    // Startup GC reconciled the interrupted debt; durable debt remains complete
+    // and the fused request idempotently confirms its already-absent keys too.
+    assert_eq!(retained.garbage.len(), 5);
     let shared = retained.packs[0].bundle[0].clone();
     assert!(!retained.garbage.contains(&shared.key));
-    assert!(repository.publish(&expected, retained).unwrap());
+    services.register("http://127.0.0.1:1").unwrap();
+    let RetiringCas::Published(receipt) = repository.publish_retiring(&expected, retained).unwrap()
+    else {
+        panic!("fused retirement failed after restart");
+    };
+    assert_eq!(receipt.outcomes.len(), 5);
+    assert!(receipt.outcomes.iter().all(|outcome| outcome.deleted));
     let retained = repository.state.load().unwrap();
-    assert!(retained.collect_garbage(&repository.blobs).is_empty());
     let remaining = usage(&services);
     assert_eq!(remaining.r2_live_objects, 1);
     assert_eq!(remaining.r2_live_bytes, shared.len);

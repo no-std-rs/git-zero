@@ -8,6 +8,8 @@ const REPO = /^[A-Za-z0-9_-]{1,80}$/;
 const BLOB = /^chunks\/[0-9a-f]{64}$/;
 const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1_500_000;
+const MAX_RETIREMENT_KEYS = 256;
+const MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024;
 const MAX_BULK_KEYS = 256;
 const MAX_BULK_CHUNK_BYTES = 16 * 1024 * 1024;
 const MAX_BULK_PAYLOAD_BYTES = 16 * 1024 * 1024;
@@ -100,6 +102,61 @@ function incomplete(repo, reason) {
 
 function plainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validManifestCas(body) {
+  return plainObject(body) && Number.isSafeInteger(body.expected) && body.expected >= 0
+    && body.next?.generation === body.expected + 1 && Number.isSafeInteger(body.next.generation)
+    && plainObject(body.next.refs) && Array.isArray(body.next.packs);
+}
+
+// Validate the entire fused request before publication or retirement I/O. The
+// durable manifest keeps all debt, including keys shared with live packs.
+function retirementKeys(body) {
+  if (!plainObject(body) || body.version !== 1 || !validManifestCas(body)
+      || Object.values(body.next.refs).some((value) => typeof value !== "string")) fail(400, "invalid retiring manifest");
+  const garbage = body.next.garbage === undefined ? [] : body.next.garbage;
+  if (!Array.isArray(garbage) || garbage.length > MAX_RETIREMENT_KEYS) fail(400, "invalid retirement debt bound");
+  const debt = new Set();
+  for (const key of garbage) {
+    if (typeof key !== "string" || key.length !== 71 || !BLOB.test(key) || debt.has(key)) fail(400, "invalid retirement key");
+    debt.add(key);
+  }
+  const ids = new Set(), live = new Map();
+  let snapshotBytes = 0;
+  const chunks = (items, expected) => {
+    if (!Array.isArray(items)) fail(400, "invalid retiring chunk shape");
+    let total = 0;
+    for (const chunk of items) {
+      if (!plainObject(chunk) || typeof chunk.key !== "string" || chunk.key.length !== 71 || !BLOB.test(chunk.key)
+          || !Number.isSafeInteger(chunk.len) || chunk.len <= 0 || chunk.len > MAX_SNAPSHOT_BYTES
+          || (live.has(chunk.key) && live.get(chunk.key) !== chunk.len)) fail(400, "invalid retiring chunk");
+      live.set(chunk.key, chunk.len);
+      total += chunk.len;
+      if (!Number.isSafeInteger(total) || total > MAX_SNAPSHOT_BYTES) fail(400, "invalid retiring chunk bound");
+    }
+    if (total !== expected) fail(400, "invalid retiring chunk lengths");
+  };
+  for (const pack of body.next.packs) {
+    if (!plainObject(pack) || typeof pack.id !== "string" || ids.has(pack.id)
+        || !Number.isSafeInteger(pack.level) || pack.level < 0 || pack.level > 0xffffffff
+        || !Number.isSafeInteger(pack.pack_bytes) || pack.pack_bytes < 0
+        || !Number.isSafeInteger(pack.index_bytes) || pack.index_bytes < 0
+        || !Array.isArray(pack.pack) || !Array.isArray(pack.index)
+        || (pack.bundle !== undefined && !Array.isArray(pack.bundle))) fail(400, "invalid retiring pack shape");
+    ids.add(pack.id);
+    const total = pack.pack_bytes + pack.index_bytes;
+    snapshotBytes += total;
+    if (!Number.isSafeInteger(snapshotBytes) || snapshotBytes > MAX_SNAPSHOT_BYTES) fail(400, "invalid retiring snapshot bound");
+    if (pack.bundle?.length) {
+      if (pack.pack.length || pack.index.length) fail(400, "mixed retiring pack representations");
+      chunks(pack.bundle, total);
+    } else {
+      chunks(pack.pack, pack.pack_bytes);
+      chunks(pack.index, pack.index_bytes);
+    }
+  }
+  return garbage.filter((key) => !live.has(key));
 }
 
 function validCount(value, nullable = false) {
@@ -272,6 +329,7 @@ export default {
           if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
           registry.set(repo, { origin, witness: witness?.private });
           return json({ registered: true, repository: repo, codec_origin: origin,
+            ...(body.manifest_retire === 1 ? { manifest_retire: { version: 1 } } : {}),
             ...(witness ? { generation_witness: witness.response } : {}) });
         }
         if (url.pathname === "/_services/unregister" && request.method === "POST") {
@@ -284,7 +342,7 @@ export default {
         // Bound and finish this small JSON upload before entering the DO gate.
         // Returning a DO error while its forwarded upload is still active can
         // leave workerd's request pump holding the repository gate indefinitely.
-        const serviceRequest = url.pathname === "/_services/blobs/read" && request.method === "POST"
+        const serviceRequest = ["/_services/blobs/read", "/_services/manifest/retire"].includes(url.pathname) && request.method === "POST"
           ? new Request(request.url, { method: request.method, headers, body: await bytes(request, MAX_MANIFEST_BYTES) })
           : new Request(request, { headers });
         const clean = await dispatchService(env, repo, serviceRequest);
@@ -432,6 +490,20 @@ export class RepositoryServices {
     }
   }
 
+  async publishManifest(expected, next) {
+    return this.operation("manifest_cas", async () => {
+      const published = this.ctx.storage.transactionSync(() => {
+        const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
+        if (generation !== expected) return false;
+        this.exec("INSERT INTO repository_state (id, generation, manifest) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET generation = excluded.generation, manifest = excluded.manifest",
+          next.generation, JSON.stringify(next));
+        return true;
+      });
+      await this.ctx.storage.sync();
+      return published;
+    });
+  }
+
   async handle(request) {
     this.currentPhase = phase(request);
     this.bump("do_requests");
@@ -520,6 +592,22 @@ export class RepositoryServices {
       }
       return json({ error: "method not allowed" }, 405);
     }
+    if (path === "/_services/manifest/retire" && request.method === "POST") {
+      const body = await parseJson(request, MAX_MANIFEST_BYTES);
+      const keys = retirementKeys(body);
+      const published = await this.publishManifest(body.expected, body.next);
+      if (!published) return json({ version: 1, published: false, retirement: null });
+      // CAS success is complete before retirement starts. Failed R2 operations
+      // keep their genuine failure accounting without relabeling durable CAS.
+      const outcomes = [];
+      for (const key of keys) {
+        let deleted = false;
+        try { await this.remove(key, prefix); deleted = true; } catch { /* Durable debt remains retryable. */ }
+        outcomes.push({ key, deleted });
+      }
+      await this.ctx.storage.sync();
+      return json({ version: 1, published: true, retirement: { generation: body.next.generation, outcomes } });
+    }
     if (path === "/_services/manifest") {
       if (request.method === "GET") {
         return this.operation("manifest_get", async () => {
@@ -529,21 +617,8 @@ export class RepositoryServices {
       }
       if (request.method === "POST") {
         const body = await parseJson(request, MAX_MANIFEST_BYTES);
-        if (!Number.isSafeInteger(body.expected) || body.expected < 0
-            || body.next?.generation !== body.expected + 1 || !Number.isSafeInteger(body.next.generation)
-            || !body.next.refs || typeof body.next.refs !== "object" || Array.isArray(body.next.refs)
-            || !Array.isArray(body.next.packs)) fail(400, "invalid manifest generation or shape");
-        return this.operation("manifest_cas", async () => {
-          const published = this.ctx.storage.transactionSync(() => {
-            const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
-            if (generation !== body.expected) return false;
-            this.exec("INSERT INTO repository_state (id, generation, manifest) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET generation = excluded.generation, manifest = excluded.manifest",
-              body.next.generation, JSON.stringify(body.next));
-            return true;
-          });
-          await this.ctx.storage.sync();
-          return json({ published });
-        });
+        if (!validManifestCas(body)) fail(400, "invalid manifest generation or shape");
+        return json({ published: await this.publishManifest(body.expected, body.next) });
       }
       return json({ error: "method not allowed" }, 405);
     }

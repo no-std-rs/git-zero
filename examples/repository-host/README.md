@@ -38,6 +38,10 @@ That hybrid accepts pushes through a Worker gateway and exposes object inventory
 R2/DO operation counts and cost estimates; Git processing stays in Rust/native Git.
 The portable Worker codec and async Rust SDK bindings remain work.
 
+New Cloudflare registrations negotiate bounded publication and retirement in one
+callback. Durable CAS still precedes every R2 delete; complete retirement debt
+survives lost replies and restarts. Local and older adapters use scalar cleanup.
+
 Use one process per storage root. The serial loopback runner buffers requests
 (64 MiB cap), limits live packs/indexes to 128 MiB and refs to 16,384 / 4 MiB.
 Single-chunk native files share

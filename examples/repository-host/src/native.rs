@@ -857,20 +857,28 @@ impl NativeHost {
         // A manifest write can become visible before an I/O error is reported.
         // Recover from authoritative state before serving any later request.
         self.view_dirty = true;
-        if !self.repository.publish(&previous, next.clone())? {
-            return Err(io::Error::other("concurrent generation update"));
-        }
+        let retirement = match self.repository.publish_retiring(&previous, next.clone())? {
+            crate::storage::RetiringCas::Published(receipt) => receipt,
+            _ => return Err(io::Error::other("concurrent generation update")),
+        };
         // Publication is authoritative. A restart reconstructs refs from it if
         // the process dies while updating this disposable native view.
         write_refs(&self.view, &next.refs)?;
         self.manifest = next;
         self.prune_native_packs()?;
-        let garbage = self.manifest.garbage.len();
-        let failed = self.manifest.collect_garbage(&self.repository.blobs);
-        self.metrics.retired_chunk_deletes += (garbage - failed.len()) as u64;
+        self.metrics.retired_chunk_deletes += retirement
+            .outcomes
+            .iter()
+            .filter(|outcome| outcome.deleted)
+            .count() as u64;
         // Failed deletions remain in the durable manifest and are retried
         // before accepting more data; publication itself is already durable.
-        self.manifest.garbage = failed;
+        self.manifest.garbage = retirement
+            .outcomes
+            .into_iter()
+            .filter(|outcome| !outcome.deleted)
+            .map(|outcome| outcome.key)
+            .collect();
         self.metrics.receive_publication_seconds += publication_start.elapsed().as_secs_f64();
         self.view_dirty = false;
         self.cache.clear();
@@ -1126,6 +1134,217 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fused_partial_failure_retains_debt_and_lost_committed_reply_recovers_before_read() {
+        use crate::storage::{RetirementOutcome, RetirementReceipt};
+        use std::io::{BufRead, BufReader};
+        for lose_reply in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "git-zero-retire-recovery-{}-{}-{lose_reply}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let mut host = NativeHost::open(root.clone()).unwrap();
+            let source = root.join("source.git");
+            init(&source).unwrap();
+            let output = |args: &[&str], input: &[u8]| {
+                let mut process = Command::new("git");
+                process.arg("-C").arg(&source).args(args);
+                String::from_utf8(command(process, input).unwrap().stdout)
+                    .unwrap()
+                    .trim()
+                    .to_owned()
+            };
+            let mut previous = "0".repeat(40);
+            let mut pushes = Vec::new();
+            for revision in 0..4 {
+                let blob = output(
+                    &["hash-object", "-w", "--stdin"],
+                    format!("revision {revision}\n").as_bytes(),
+                );
+                let tree = output(
+                    &["mktree"],
+                    format!("100644 blob {blob}\tpayload\n").as_bytes(),
+                );
+                let mut args = vec![
+                    "-c",
+                    "user.name=Contract",
+                    "-c",
+                    "user.email=contract@example.invalid",
+                    "commit-tree",
+                    &tree,
+                ];
+                if revision != 0 {
+                    args.extend(["-p", &previous]);
+                }
+                let tip = output(&args, format!("revision {revision}\n").as_bytes());
+                let line =
+                    format!("{previous} {tip} refs/heads/main\0report-status atomic ofs-delta\n");
+                let mut body = format!("{:04x}{line}0000", line.len() + 4).into_bytes();
+                let mut revisions = format!("{tip}\n");
+                if revision != 0 {
+                    revisions.push_str(&format!("^{previous}\n"));
+                }
+                let mut pack = Command::new("git");
+                pack.arg("-C").arg(&source).args([
+                    "pack-objects",
+                    "--stdout",
+                    "--revs",
+                    "--thin",
+                    "--delta-base-offset",
+                ]);
+                body.extend(command(pack, revisions.as_bytes()).unwrap().stdout);
+                pushes.push(Request {
+                    method: "POST".into(),
+                    target: "/repo.git/git-receive-pack".into(),
+                    headers: BTreeMap::from([(
+                        "content-type".into(),
+                        "application/x-git-receive-pack-request".into(),
+                    )]),
+                    body,
+                });
+                previous = tip;
+            }
+            for request in pushes.drain(..3) {
+                assert_eq!(host.handle(request).status, 200);
+            }
+            assert_eq!(host.manifest.generation, 3);
+            let local = LocalServices::new(root.join("services")).unwrap();
+            let authoritative = local.state.clone();
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let services = Arc::new(
+                HttpServices::new(
+                    &format!("http://{}", listener.local_addr().unwrap()),
+                    "retire",
+                    "token",
+                )
+                .unwrap(),
+            );
+            let server = std::thread::spawn(move || {
+                let mut retired = Vec::new();
+                for step in 0..if lose_reply { 3 } else { 2 } {
+                    let (stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let target = line.clone();
+                    let mut length = 0;
+                    loop {
+                        line.clear();
+                        reader.read_line(&mut line).unwrap();
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) = line.strip_prefix("Content-Length: ") {
+                            length = value.trim().parse().unwrap();
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).unwrap();
+                    let reply = match step {
+                        0 => {
+                            assert!(target.starts_with("POST /_services/register "));
+                            serde_json::json!({"registered":true,"manifest_retire":{"version":1}})
+                        }
+                        1 => {
+                            assert!(
+                                target.starts_with("POST /_services/manifest/retire "),
+                                "{target}"
+                            );
+                            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                            let next: Manifest =
+                                serde_json::from_value(value["next"].clone()).unwrap();
+                            assert_eq!(value["expected"], 3);
+                            assert_eq!(next.generation, 4);
+                            retired = next
+                                .retirement_keys()
+                                .into_iter()
+                                .map(str::to_owned)
+                                .collect();
+                            assert!(retired.len() >= 3);
+                            assert!(local.state.compare_and_swap(3, &next).unwrap());
+                            let outcomes = retired
+                                .iter()
+                                .enumerate()
+                                .map(|(i, key)| {
+                                    if i != 0 {
+                                        local.blobs.delete(key).unwrap();
+                                    }
+                                    RetirementOutcome {
+                                        key: key.clone(),
+                                        deleted: i != 0,
+                                    }
+                                })
+                                .collect();
+                            if lose_reply {
+                                continue;
+                            }
+                            serde_json::json!({"version":1,"published":true,"retirement":RetirementReceipt {generation:4,outcomes}})
+                        }
+                        2 => {
+                            assert!(
+                                target.starts_with("GET /_services/manifest "),
+                                "recovery must load rather than republish: {target}"
+                            );
+                            serde_json::to_value(local.state.load().unwrap()).unwrap()
+                        }
+                        _ => unreachable!(),
+                    };
+                    let reply = serde_json::to_vec(&reply).unwrap();
+                    write!(
+                        reader.get_mut(),
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                        reply.len()
+                    )
+                    .unwrap();
+                    reader.get_mut().write_all(&reply).unwrap();
+                }
+                retired
+            });
+            services.register("http://127.0.0.1:1").unwrap();
+            host.repository.state = HostState::Cloudflare(DurableStateStore::new(services));
+            let before = host.metrics.retired_chunk_deletes;
+            let response = host.handle(pushes.pop().unwrap());
+            assert_eq!(response.status, if lose_reply { 503 } else { 200 });
+            assert_eq!(host.view_dirty, lose_reply);
+            assert_eq!(authoritative.load().unwrap().generation, 4);
+            if !lose_reply {
+                assert_eq!(host.manifest.garbage.len(), 1);
+                assert_eq!(
+                    host.metrics.retired_chunk_deletes - before,
+                    (authoritative.load().unwrap().garbage.len() - 1) as u64
+                );
+            }
+            let response = host.handle(Request {
+                method: "GET".into(),
+                target: "/repo.git/info/refs?service=git-receive-pack".into(),
+                headers: BTreeMap::new(),
+                body: vec![],
+            });
+            assert_eq!(response.status, 200);
+            assert!(!host.view_dirty);
+            assert_eq!(host.manifest.generation, 4);
+            assert_eq!(refs(&host.view).unwrap()["refs/heads/main"], previous);
+            let mut fsck = Command::new("git");
+            fsck.arg("-C").arg(&host.view).args(["fsck", "--strict"]);
+            command(fsck, &[]).unwrap();
+            let retired = server.join().unwrap();
+            assert_eq!(authoritative.load().unwrap().garbage, retired);
+            if lose_reply {
+                assert!(host.repository.blobs.get(&retired[0]).is_err());
+            } else {
+                assert_eq!(host.manifest.garbage, vec![retired[0].clone()]);
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[test]
     fn witness_only_skips_dispatch_load_and_never_skips_dirty_recovery() {

@@ -97,8 +97,46 @@ Registering a different codec origin returns 409 until explicitly unregistered.
 | `blob/chunks/<sha256>` | GET / PUT / DELETE | Immutable compressed bytes; PUT verifies content hash |
 | `blobs/read` | POST | Ordered bulk GET of `{chunks:[{key,len}]}`; binary response, one binding GET per entry |
 | `manifest` | GET / POST | Load state; CAS `{expected,next}` returns `{published}` |
+| `manifest/retire` | POST | Opt-in v1 CAS and bounded ordered retirement, described below |
 | `gc` | POST | `{expected_generation,live_keys}`; stale generation returns 409 before deletion |
 | `metrics` | GET | Inventory, actual operation counters and per-phase accounting |
+
+New codec registrations also request `manifest_retire: 1`; supporting Workers
+return `manifest_retire: {version: 1}` in that existing registration response.
+Absent or unknown versions use ordinary CAS and scalar cleanup before attempting
+publication. More than 256 debt keys also select scalar cleanup before mutation.
+There is no additional capability request on a push. The original `publish` API
+remains CAS-only; `publish_retiring` orchestrates either the fused operation or
+the default/local CAS followed by scalar deletion under exclusive host ownership.
+
+`POST manifest/retire` accepts `{version:1,expected,next}`, within the existing
+1,500,000-byte JSON bound. The Worker finishes buffering this small body before
+the DO gate. Before mutation, the DO validates generation, debt bounds, duplicate
+debt and pack IDs, content-addressed keys, lengths and complete pack representations.
+Eligible keys retain manifest debt order and exclude all live `pack`, `index`
+and `bundle` chunks. Stale CAS returns
+`{version:1,published:false,retirement:null}` with zero retirement/R2 I/O.
+
+After atomic full-manifest replacement, publication storage sync completes and
+`manifest_cas` records success. Only then does the DO sequentially invoke the
+existing scalar removal logic, with the same actual R2 deletes, catalog SELECT
+and DELETE statements, inventory updates and operation accounting. Per-key
+failures do not stop later keys or change successful CAS accounting. A final
+catalog storage sync precedes
+`{version:1,published:true,retirement:{generation,outcomes:[{key,deleted}]}}`.
+`deleted:false` retains retryable debt, and a failed R2 delete remains an actual
+`r2_delete.failures` counter that existing benchmark validation rejects.
+
+The durable manifest keeps the complete garbage list, without another manifest
+SQL update. Rust validates the exact generation, key order, completeness and
+boolean outcomes within a 32 KiB reply bound; the Native host clears only
+confirmed debt in memory and never collects the same receipt twice. After a
+fused request is issued, a 404, malformed response, lost reply, transport error
+or final sync error is an error. The already-dirty native view must recover from
+authoritative state before its next request; it never republishes or silently
+falls back after an ambiguous attempt. Startup/dirty recovery still reconciles
+orphans and the catalog while preserving every live representation. The existing
+single Native owner contract, storage/cache budgets and compaction policy apply.
 
 New codec registrations opt into `generation_witness: 1`. The authenticated
 registration response supplies a private random 32-byte HMAC key and random
@@ -197,3 +235,36 @@ Worker runtime; `do_instance_epoch` separately tracks DO reconstruction. Worker
 restarts reset these runtime counters; R2 inventory, manifest and high-water state
 persist. Missing/invalid receipts or uncertain dispatch failures set
 `accounting_complete:false`; cost estimates and benchmark deltas reject that trace.
+
+## Retirement failure contract
+
+The ordinary ignored Rust contracts `real_fused_retirement_*` compare fused and
+scalar callback counts and identical R2/SQL work, reject malformed/bounded input
+before CAS, and preserve all live chunk representations. The two-phase
+`seed_before_workerd_restart` / `verify_after_workerd_restart` contracts also keep
+partial durable cleanup debt through a real process restart alongside mixed
+8 MiB and 16 MiB layouts, then validate native fsck, shared chunks and GC.
+
+A separate runtime fixture, `test/retirement-fault-worker.js`, wraps the real R2
+binding for a single named chunk. It passes one invalid Symbol argument to
+`R2Bucket.delete`, so the actual binding rejects that call inside the production
+operation wrapper. This tests local binding failure accounting; it does not
+simulate a remote storage/network outage or modify counters. No production route
+contains a fault hook, and the test runner remains Rust.
+
+Start a separate local Wrangler with `--config
+examples/repository-host/cloudflare/test/retirement-fault.toml`, a fresh
+`--persist-to` directory, and your chosen local port. Then run:
+
+```sh
+GIT_ZERO_CLOUDFLARE_ORIGIN=http://127.0.0.1:8824 \
+GIT_ZERO_CLOUDFLARE_TOKEN=git-zero-local-services \
+cargo test -p git-zero-host --test cloudflare faulted_fused_retirement \
+  -- --ignored --test-threads=1
+```
+
+The contract requires three retirement attempts, two successes, one genuine
+failed binding call, successful durable CAS and retained failed debt/blob. It
+then retries cleanup idempotently. The Native Rust HTTP fixture separately
+verifies partial-outcome handling and a lost reply after committed publication,
+including dirty recovery before the next read and absence of duplicate CAS.

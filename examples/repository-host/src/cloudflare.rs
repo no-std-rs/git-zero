@@ -3,7 +3,7 @@
 use crate::http::{Request, Response};
 use crate::storage::{
     BlobStore, Chunk, CloudflareBindings, DurableStateStore, LocalBlobStore, LocalStateStore,
-    Manifest, R2BlobStore, StateStore,
+    Manifest, R2BlobStore, RetirementReceipt, RetiringCas, StateStore,
 };
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
@@ -14,7 +14,10 @@ use std::{
     io::{self, BufRead, BufReader, Read, Write},
     net::TcpStream,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -23,11 +26,115 @@ const MAX_BULK_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BULK_PAYLOAD: usize = 16 * 1024 * 1024;
 const MAX_BULK_KEYS: usize = 256;
 const MAX_MANIFEST_BYTES: usize = 1_500_000;
+const MAX_RETIREMENT_KEYS: usize = 256;
+const MAX_RETIREMENT_RESPONSE: usize = 32 * 1024;
 const BULK_HEADER_BYTES: usize = 12;
 const BULK_LENGTH_BYTES: usize = 8;
 const MAX_BULK_RESPONSE: usize =
     MAX_BULK_PAYLOAD + BULK_HEADER_BYTES + BULK_LENGTH_BYTES * MAX_BULK_KEYS;
 const BULK_MAGIC: &[u8; 4] = b"GZBR";
+
+fn retirement_supported(value: &Value) -> bool {
+    value
+        .get("manifest_retire")
+        .and_then(|config| config.get("version"))
+        .and_then(Value::as_u64)
+        == Some(1)
+}
+
+fn validate_retiring_manifest(next: &Manifest) -> io::Result<()> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "invalid retiring manifest");
+    if next.generation > MAX_SAFE_GENERATION || next.garbage.len() > MAX_RETIREMENT_KEYS {
+        return Err(invalid());
+    }
+    let mut debt = std::collections::BTreeSet::new();
+    for key in &next.garbage {
+        validate_bulk_chunks(&[Chunk {
+            key: key.clone(),
+            len: 1,
+        }])?;
+        if !debt.insert(key) {
+            return Err(invalid());
+        }
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut lengths = BTreeMap::new();
+    let mut snapshot_bytes = 0u64;
+    for pack in &next.packs {
+        if !ids.insert(&pack.id) {
+            return Err(invalid());
+        }
+        let total = crate::pack_total(pack.pack_bytes, pack.index_bytes)?;
+        snapshot_bytes = snapshot_bytes
+            .checked_add(total)
+            .filter(|total| *total <= MAX_RESPONSE as u64)
+            .ok_or_else(invalid)?;
+        if pack.bundle.is_empty() {
+            crate::validate_chunks(&pack.pack, pack.pack_bytes)?;
+            crate::validate_chunks(&pack.index, pack.index_bytes)?;
+        } else {
+            if !pack.pack.is_empty() || !pack.index.is_empty() {
+                return Err(invalid());
+            }
+            crate::validate_chunks(&pack.bundle, total)?;
+        }
+        for chunk in pack.chunks() {
+            validate_bulk_chunks(std::slice::from_ref(chunk))?;
+            if lengths
+                .insert(&chunk.key, chunk.len)
+                .is_some_and(|len| len != chunk.len)
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetirementResponse {
+    version: u32,
+    published: bool,
+    // deserialize_with makes this field required even when its value is null.
+    #[serde(deserialize_with = "deserialize_retirement")]
+    retirement: Option<RetirementReceipt>,
+}
+
+fn deserialize_retirement<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<RetirementReceipt>, D::Error> {
+    serde::Deserialize::deserialize(deserializer)
+}
+
+fn decode_retirement_response(next: &Manifest, bytes: &[u8]) -> io::Result<RetiringCas> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid retirement response");
+    if bytes.len() > MAX_RETIREMENT_RESPONSE {
+        return Err(invalid());
+    }
+    let reply: RetirementResponse = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    if reply.version != 1 {
+        return Err(invalid());
+    }
+    match (reply.published, reply.retirement) {
+        (false, None) => Ok(RetiringCas::Stale),
+        (true, Some(receipt)) => {
+            let keys = next.retirement_keys();
+            if receipt.generation != next.generation
+                || receipt.outcomes.len() != keys.len()
+                || receipt
+                    .outcomes
+                    .iter()
+                    .zip(keys)
+                    .any(|(outcome, key)| outcome.key != key)
+            {
+                return Err(invalid());
+            }
+            Ok(RetiringCas::Published(receipt))
+        }
+        _ => Err(invalid()),
+    }
+}
 
 fn validate_bulk_chunks(chunks: &[Chunk]) -> io::Result<()> {
     let mut lengths = BTreeMap::new();
@@ -209,6 +316,7 @@ pub struct HttpServices {
     token: String,
     phase: Mutex<String>,
     generation_witness: Mutex<Option<GenerationWitness>>,
+    manifest_retire: AtomicBool,
 }
 
 impl HttpServices {
@@ -238,6 +346,7 @@ impl HttpServices {
             token: token.into(),
             phase: Mutex::new("startup".into()),
             generation_witness: Mutex::new(None),
+            manifest_retire: AtomicBool::new(false),
         })
     }
 
@@ -258,6 +367,8 @@ impl HttpServices {
     ) -> io::Result<Response> {
         let maximum = if route == "blobs/read" {
             MAX_BULK_RESPONSE
+        } else if route == "manifest/retire" {
+            MAX_RETIREMENT_RESPONSE
         } else {
             MAX_RESPONSE
         };
@@ -400,7 +511,7 @@ impl HttpServices {
         let response = self.json(
             "POST",
             "register",
-            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1})),
+            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1})),
             Some("stats"),
         )?;
         *self
@@ -408,6 +519,8 @@ impl HttpServices {
             .lock()
             .map_err(|_| io::Error::other("witness config lock poisoned"))? =
             GenerationWitness::from_registration(&response);
+        self.manifest_retire
+            .store(retirement_supported(&response), Ordering::Release);
         Ok(())
     }
 
@@ -512,6 +625,36 @@ impl CloudflareBindings for HttpServices {
             .as_bool()
             .ok_or_else(|| io::Error::other("invalid emulator CAS result"))
     }
+    fn try_compare_and_swap_retiring(
+        &self,
+        expected: u64,
+        next: &Manifest,
+    ) -> io::Result<RetiringCas> {
+        // Capability and debt bounds are resolved before any mutation. An old
+        // Worker is never probed with a request that could already publish.
+        if !self.manifest_retire.load(Ordering::Acquire) || next.garbage.len() > MAX_RETIREMENT_KEYS
+        {
+            return Ok(RetiringCas::Unsupported);
+        }
+        if expected.checked_add(1) != Some(next.generation) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid retiring generation",
+            ));
+        }
+        validate_retiring_manifest(next)?;
+        let body = serde_json::to_vec(&json!({"version": 1, "expected": expected, "next": next}))?;
+        if body.len() > MAX_MANIFEST_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "retiring request too large",
+            ));
+        }
+        let response = self.call("POST", "manifest/retire", &body, None)?;
+        // Errors here remain errors: 404, malformed and lost replies may all
+        // follow a committed CAS, and must never trigger scalar fallback.
+        decode_retirement_response(next, &response.body)
+    }
 }
 
 pub(crate) enum HostBlobs {
@@ -596,6 +739,16 @@ impl StateStore for HostState {
         match self {
             Self::Local(s) => s.compare_and_swap(expected, next),
             Self::Cloudflare(s) => s.compare_and_swap(expected, next),
+        }
+    }
+    fn try_compare_and_swap_retiring(
+        &self,
+        expected: u64,
+        next: &Manifest,
+    ) -> io::Result<RetiringCas> {
+        match self {
+            Self::Local(s) => s.try_compare_and_swap_retiring(expected, next),
+            Self::Cloudflare(s) => s.try_compare_and_swap_retiring(expected, next),
         }
     }
 }
@@ -713,6 +866,185 @@ mod tests {
         Chunk {
             key: format!("chunks/{}", crate::hash(data)),
             len: data.len() as u64,
+        }
+    }
+
+    #[test]
+    fn retirement_decoder_requires_exact_complete_ordered_receipts() {
+        let next = Manifest {
+            generation: 7,
+            garbage: vec![chunk(b"a").key, chunk(b"b").key],
+            ..Manifest::default()
+        };
+        let valid = json!({"version":1, "published":true, "retirement": {
+            "generation":7, "outcomes":[
+                {"key":next.garbage[0], "deleted":true},
+                {"key":next.garbage[1], "deleted":false}
+            ]
+        }});
+        assert!(matches!(
+            decode_retirement_response(&next, &serde_json::to_vec(&valid).unwrap()).unwrap(),
+            RetiringCas::Published(_)
+        ));
+        assert_eq!(
+            decode_retirement_response(
+                &next,
+                br#"{"version":1,"published":false,"retirement":null}"#
+            )
+            .unwrap(),
+            RetiringCas::Stale
+        );
+        let mut invalid = vec![
+            json!({"version":1,"published":false}),
+            json!({"version":1,"published":true,"retirement":null}),
+            json!({"version":1,"published":false,"retirement":valid["retirement"]}),
+        ];
+        for (pointer, value) in [
+            ("/version", json!(2)),
+            ("/published", json!("true")),
+            ("/retirement/generation", json!(8)),
+            ("/retirement/outcomes/0/deleted", json!(1)),
+            ("/retirement/outcomes/0/key", json!(next.garbage[1])),
+            ("/retirement/outcomes/1/key", json!(next.garbage[0])),
+            ("/retirement/outcomes", json!([])),
+            (
+                "/retirement/outcomes",
+                json!([valid["retirement"]["outcomes"][0].clone()]),
+            ),
+            (
+                "/retirement/outcomes",
+                json!([
+                    valid["retirement"]["outcomes"][1].clone(),
+                    valid["retirement"]["outcomes"][0].clone()
+                ]),
+            ),
+        ] {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            invalid.push(changed);
+        }
+        let mut extra = valid.clone();
+        extra["retirement"]["outcomes"][0]["extra"] = json!(true);
+        invalid.push(extra);
+        for value in invalid {
+            assert!(
+                decode_retirement_response(&next, &serde_json::to_vec(&value).unwrap()).is_err(),
+                "{value}"
+            );
+        }
+        for bytes in [
+            br#"{"version":1,"version":1,"published":false,"retirement":null}"#.to_vec(),
+            br#"{"version":1,"published":false,"retirement":null,"retirement":null}"#.to_vec(),
+            vec![b' '; MAX_RETIREMENT_RESPONSE + 1],
+            b"truncated".to_vec(),
+        ] {
+            assert!(decode_retirement_response(&next, &bytes).is_err());
+        }
+    }
+
+    #[test]
+    fn retirement_capability_and_bounds_choose_fallback_before_io() {
+        let services = HttpServices::new("http://127.0.0.1:1", "unused", "token").unwrap();
+        let mut next = Manifest {
+            generation: 1,
+            ..Manifest::default()
+        };
+        for value in [
+            json!({}),
+            json!({"manifest_retire":null}),
+            json!({"manifest_retire":{"version":2}}),
+            json!({"manifest_retire":1}),
+        ] {
+            assert!(!retirement_supported(&value));
+            services
+                .manifest_retire
+                .store(retirement_supported(&value), Ordering::Release);
+            assert_eq!(
+                services.try_compare_and_swap_retiring(0, &next).unwrap(),
+                RetiringCas::Unsupported
+            );
+        }
+        assert!(retirement_supported(
+            &json!({"manifest_retire":{"version":1}})
+        ));
+        services.manifest_retire.store(true, Ordering::Release);
+        next.garbage = (0..=MAX_RETIREMENT_KEYS)
+            .map(|i| format!("chunks/{i:064x}"))
+            .collect();
+        assert_eq!(
+            services.try_compare_and_swap_retiring(0, &next).unwrap(),
+            RetiringCas::Unsupported
+        );
+        next.garbage = vec![chunk(b"a").key; 2];
+        assert_eq!(
+            services
+                .try_compare_and_swap_retiring(0, &next)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        next.garbage = vec!["chunks/../bad".into()];
+        assert_eq!(
+            services
+                .try_compare_and_swap_retiring(0, &next)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn retirement_http_errors_never_return_unsupported() {
+        for (status, body) in [(404, b"missing".to_vec()), (200, b"malformed".to_vec())] {
+            let (services, server) = fake_services(vec![(
+                "POST /_services/manifest/retire ".into(),
+                vec![],
+                status,
+                body,
+            )]);
+            services.manifest_retire.store(true, Ordering::Release);
+            let next = Manifest {
+                generation: 1,
+                ..Manifest::default()
+            };
+            assert!(services.try_compare_and_swap_retiring(0, &next).is_err());
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn unknown_registration_capability_uses_scalar_cas_without_probing_fused_route() {
+        for capability in [
+            json!({"registered":true}),
+            json!({"registered":true,"manifest_retire":{"version":2}}),
+        ] {
+            let (services, server) = fake_services(vec![
+                (
+                    "POST /_services/register ".into(),
+                    vec![],
+                    200,
+                    serde_json::to_vec(&capability).unwrap(),
+                ),
+                (
+                    "POST /_services/manifest ".into(),
+                    vec![],
+                    200,
+                    br#"{"published":true}"#.to_vec(),
+                ),
+            ]);
+            services.register("http://127.0.0.1:1234").unwrap();
+            let services = Arc::new(services);
+            let repository = crate::Repository::new(
+                R2BlobStore::new(services.clone()),
+                DurableStateStore::new(services),
+            );
+            assert!(matches!(
+                repository
+                    .publish_retiring(&Manifest::default(), Manifest::default())
+                    .unwrap(),
+                RetiringCas::Published(_)
+            ));
+            server.join().unwrap();
         }
     }
 
@@ -870,13 +1202,13 @@ mod tests {
                 }
                 let mut body = vec![0; length];
                 reader.read_exact(&mut body).unwrap();
-                if method.starts_with("POST") {
+                if method.starts_with("POST /_services/blobs/read ") {
                     let value: Value = serde_json::from_slice(&body).unwrap();
                     assert_eq!(
                         serde_json::from_value::<Vec<Chunk>>(value["chunks"].clone()).unwrap(),
                         chunks
                     );
-                } else {
+                } else if !method.starts_with("POST") {
                     assert!(body.is_empty());
                 }
                 write!(

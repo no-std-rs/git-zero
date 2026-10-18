@@ -12,7 +12,10 @@ pub mod storage;
 
 use sha2::{Digest, Sha256};
 use std::io;
-use storage::{BlobStore, Chunk, Manifest, StateStore, StoredPack};
+use storage::{
+    BlobStore, Chunk, Manifest, RetirementOutcome, RetirementReceipt, RetiringCas, StateStore,
+    StoredPack,
+};
 
 pub const CHUNK_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PACK_BYTES: u64 = 128 * 1024 * 1024;
@@ -212,6 +215,46 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
             .ok_or_else(|| io::Error::other("generation overflow"))?;
         self.state.compare_and_swap(previous.generation, &next)
     }
+
+    /// Publish durably, then retire only this generation's non-live debt.
+    /// Stores without an advertised fused capability use the original CAS and
+    /// scalar deletion path. An attempted fused operation never retries CAS.
+    /// The caller excludes older readers and concurrent writers until return.
+    /// Durable debt stays complete; only the caller's in-memory view may clear
+    /// confirmed outcomes, so a lost reply remains safe to recover and retry.
+    pub fn publish_retiring(
+        &self,
+        previous: &Manifest,
+        mut next: Manifest,
+    ) -> io::Result<RetiringCas> {
+        next.generation = previous
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("generation overflow"))?;
+        match self
+            .state
+            .try_compare_and_swap_retiring(previous.generation, &next)?
+        {
+            RetiringCas::Unsupported => {
+                if !self.state.compare_and_swap(previous.generation, &next)? {
+                    return Ok(RetiringCas::Stale);
+                }
+                let outcomes = next
+                    .retirement_keys()
+                    .into_iter()
+                    .map(|key| RetirementOutcome {
+                        key: key.into(),
+                        deleted: self.blobs.delete(key).is_ok(),
+                    })
+                    .collect();
+                Ok(RetiringCas::Published(RetirementReceipt {
+                    generation: next.generation,
+                    outcomes,
+                }))
+            }
+            result => Ok(result),
+        }
+    }
 }
 
 fn validate_chunks(chunks: &[Chunk], expected: u64) -> io::Result<()> {
@@ -297,6 +340,140 @@ mod tests {
 
         fn compare_and_swap(&self, _: u64, _: &Manifest) -> io::Result<bool> {
             unreachable!("file reconstruction does not publish state")
+        }
+    }
+
+    #[test]
+    fn retiring_publication_default_preserves_live_representations_and_stale_cas() {
+        use crate::storage::LocalServices;
+        let root = std::env::temp_dir().join(format!(
+            "retiring-local-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let services = LocalServices::new(root.clone()).unwrap();
+        let repository = Repository::new(services.blobs, services.state);
+        let split = repository
+            .store_pack("split".into(), b"pack", b"index", 0)
+            .unwrap();
+        let bundle = repository
+            .store_bundled_pack("bundle".into(), b"packed", b"idx", 0)
+            .unwrap();
+        let retired = repository
+            .store_pack("retired".into(), b"gone", b"gone-index", 0)
+            .unwrap();
+        let previous = Manifest {
+            generation: 1,
+            packs: vec![split.clone(), bundle.clone(), retired.clone()],
+            ..Manifest::default()
+        };
+        assert!(
+            repository
+                .publish(&Manifest::default(), previous.clone())
+                .unwrap()
+        );
+        let mut next = Manifest {
+            packs: vec![split, bundle],
+            ..Manifest::default()
+        };
+        next.retire_replaced(&previous);
+        // Defensively exclude live keys even if durable debt includes them.
+        next.garbage.extend(
+            next.packs
+                .iter()
+                .flat_map(StoredPack::chunks)
+                .map(|c| c.key.clone()),
+        );
+        let durable_debt = next.garbage.clone();
+        let RetiringCas::Published(receipt) = repository
+            .publish_retiring(&previous, next.clone())
+            .unwrap()
+        else {
+            panic!("publication did not succeed");
+        };
+        assert_eq!(receipt.generation, 2);
+        assert_eq!(receipt.outcomes.len(), 2);
+        assert!(receipt.outcomes.iter().all(|outcome| outcome.deleted));
+        assert_eq!(repository.state.load().unwrap().garbage, durable_debt);
+        for pack in &next.packs {
+            repository.read_pack_files(pack).unwrap();
+        }
+        for chunk in retired.chunks() {
+            assert!(repository.blobs.get(&chunk.key).is_err());
+        }
+        // A stale CAS must leave even eligible debt intact.
+        let orphan = repository
+            .store_pack("orphan".into(), b"new-orphan", b"new-index", 0)
+            .unwrap();
+        next.garbage = orphan.chunks().map(|c| c.key.clone()).collect();
+        assert_eq!(
+            repository.publish_retiring(&previous, next).unwrap(),
+            RetiringCas::Stale
+        );
+        repository.read_pack_files(&orphan).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    struct AttemptedState {
+        cas_calls: AtomicUsize,
+        fail: bool,
+    }
+
+    impl StateStore for AttemptedState {
+        fn load(&self) -> io::Result<Manifest> {
+            unreachable!()
+        }
+        fn compare_and_swap(&self, _: u64, _: &Manifest) -> io::Result<bool> {
+            self.cas_calls.fetch_add(1, Ordering::Relaxed);
+            panic!("attempted fusion must never retry scalar CAS")
+        }
+        fn try_compare_and_swap_retiring(
+            &self,
+            _: u64,
+            next: &Manifest,
+        ) -> io::Result<RetiringCas> {
+            if self.fail {
+                return Err(io::Error::other("lost committed response"));
+            }
+            Ok(RetiringCas::Published(RetirementReceipt {
+                generation: next.generation,
+                outcomes: vec![RetirementOutcome {
+                    key: next.garbage[0].clone(),
+                    deleted: false,
+                }],
+            }))
+        }
+    }
+
+    #[test]
+    fn attempted_fusion_never_republishes_or_double_collects_partial_failure() {
+        for fail in [false, true] {
+            let repository = Repository::new(
+                MemoryBlobs::default(),
+                AttemptedState {
+                    cas_calls: AtomicUsize::new(0),
+                    fail,
+                },
+            );
+            repository.blobs.put("retired", b"unchanged").unwrap();
+            let next = Manifest {
+                garbage: vec!["retired".into()],
+                ..Manifest::default()
+            };
+            let result = repository.publish_retiring(&Manifest::default(), next);
+            if fail {
+                assert!(result.is_err());
+            } else {
+                let RetiringCas::Published(receipt) = result.unwrap() else {
+                    panic!("missing successful CAS");
+                };
+                assert!(!receipt.outcomes[0].deleted);
+            }
+            assert_eq!(repository.state.cas_calls.load(Ordering::Relaxed), 0);
+            assert_eq!(repository.blobs.get("retired").unwrap(), b"unchanged");
         }
     }
 

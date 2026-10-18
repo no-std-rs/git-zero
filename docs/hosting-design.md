@@ -63,6 +63,14 @@ implemented and tested.
   no old-generation storage reader when the next request runs. Production
   concurrent streaming still requires the leases below. This cleanup removes
   replaced storage, not unreachable objects inside live packs.
+- The local Cloudflare bridge negotiates bounded CAS/retirement fusion during
+  codec registration. At most 256 debt keys can share one callback; each actual
+  R2 delete and catalog operation remains charged. The DO syncs publication and
+  finishes CAS success accounting before cleanup, then syncs catalog changes
+  before returning ordered per-key outcomes. Durable debt stays complete;
+  ambiguous replies force authoritative Native recovery before another request.
+  Default/local and older adapters retain CAS followed by scalar cleanup. See
+  the [service contract](../examples/repository-host/cloudflare/README.md).
 - Downloads reuse existing compressed streams with `pack.window=0`. Requests
   containing framed client `have` lines use a one-entry delta search instead,
   producing useful thin deltas without a full-history delta search.
