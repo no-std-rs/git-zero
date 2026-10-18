@@ -105,7 +105,8 @@ compute remains unknown. Local timings are latency guards, not billed compute.
 
 The user selected two-pair screens for each optimization, followed by five-pair validation of the final
 candidate. Measure a fresh matching two-pair baseline for each screen: the scalar provider initially,
-then the preceding provisional candidate. Use complete screen counters and
+then the preceding provisional candidate. The declared batch below permits one fresh intermediate
+suite to serve both adjacent comparisons within the same workflow attempt. Use complete screen counters and
 resource/latency guards to choose the next provisional candidate; do not treat the CLI's screen decision
 as formal acceptance. Each change still has a clean designer, clean implementation, committed and pushed
 source, and independent measurement.
@@ -144,8 +145,8 @@ validated Worker hash alongside the four actual pushed source refs before starti
 Its source remains at `scalar-baseline` and its build at `baseline-target` under the experiment root,
 preserving the reference executable's original build paths and hash. Screen native hosts build from
 their pushed `SCREEN_R2_COMMIT` through `SCREEN_R5_COMMIT` at deterministic `providers/r2` through
-`providers/r5` source paths and corresponding `provider-targets` paths. R4/R5 refs are placeholders
-until their implementations are integrated; duplicate refs or native source trees block the screen.
+`providers/r5` source paths and corresponding `provider-targets` paths. The workflow pins all four
+integrated source commits; duplicate refs or native source trees block the screen.
 Provenance records every label, commit, source tree, manifest path/hash and post-run clean status.
 
 This is a prospectively declared batch of independently prepared candidates. Preparing later source

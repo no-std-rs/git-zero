@@ -1,0 +1,2431 @@
+{
+  "evaluator": {
+    "path": "/tmp/git-zero-hosting-loop-artifacts/interleaved-v1/evaluators/zero-get-fix/hosting-cost",
+    "sha256": "01b36df2f5f2019eeb09ebe79eb8ae80e9f86d0cdf39667c9fec9b0584e61fb8",
+    "built_source_commit": "386fa67d594bb2ce12776140a66bf03aec931a95"
+  },
+  "original_ci_run": 39081580940,
+  "original_ci_score_failure": "missing r2_get",
+  "raw_reports_unchanged": true,
+  "objective": "interleaved-v1:16,64mib:cold,warm:32push,56fetch:1000repeats:peak30d:ready-latency:midx-bitmap-graph-v1:v2:screen",
+  "stage": "screen",
+  "comparison": {
+    "decision": "inconclusive",
+    "eligible_rejected_candidate_for_plateau": false,
+    "known_cost_reduction_fraction": 0.15364392841058283,
+    "plateau_requires_independent_rejected_candidates": 2,
+    "reasons": [
+      "16mib-warm/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+      "16mib-warm/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+      "16mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+      "16mib-warm/latest_recheck: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+      "64mib-cold/small_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+      "64mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+      "64mib-warm/latest_recheck: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+      "screening only; full five-pair validation required"
+    ]
+  },
+  "baseline": {
+    "known_usd": 3.28607843618,
+    "min": 3.2860754361800004,
+    "max": 3.2860814361800004,
+    "total_estimate_usd": null
+  },
+  "candidate": {
+    "known_usd": 2.78119243618,
+    "min": 2.7811814361800002,
+    "max": 2.78120343618,
+    "total_estimate_usd": null
+  },
+  "conservative_dollar_threshold_passed": true,
+  "profiles": [
+    {
+      "profile": "16mib-cold",
+      "baseline_cost": {
+        "max": 1.06585197524,
+        "mean": 1.06584897524,
+        "median": 1.06584897524,
+        "min": 1.06584597524,
+        "p95": 1.06585197524
+      },
+      "candidate_cost": {
+        "max": 0.81340197524,
+        "mean": 0.81340197524,
+        "median": 0.81340197524,
+        "min": 0.81340197524,
+        "p95": 0.81340197524
+      },
+      "cost_change_fraction": -0.23685062880804086,
+      "profile_cost_guard_passed": true,
+      "unmeasured_billing_dimensions": [
+        "Worker CPU-ms",
+        "Durable Object GB-seconds",
+        "Durable Object SQLite GB-month"
+      ],
+      "baseline_fixed_workload_trials": [
+        {
+          "sample": 0,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 1058,
+            "do_rows_read": 303,
+            "do_rows_written": 101,
+            "r2_class_a": 33,
+            "r2_class_b": 796,
+            "r2_deletes": 21,
+            "r2_read_bytes": 2638998010,
+            "r2_written_bytes": 40066586,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 1234,
+            "worker_service_requests": 1058
+          }
+        },
+        {
+          "sample": 1,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 1058,
+            "do_rows_read": 297,
+            "do_rows_written": 101,
+            "r2_class_a": 33,
+            "r2_class_b": 796,
+            "r2_deletes": 21,
+            "r2_read_bytes": 2638998010,
+            "r2_written_bytes": 40066586,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 1234,
+            "worker_service_requests": 1058
+          }
+        }
+      ],
+      "candidate_fixed_workload_trials": [
+        {
+          "sample": 0,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 497,
+            "do_rows_read": 303,
+            "do_rows_written": 101,
+            "r2_class_a": 33,
+            "r2_class_b": 796,
+            "r2_deletes": 21,
+            "r2_read_bytes": 2638998010,
+            "r2_written_bytes": 40066586,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 673,
+            "worker_service_requests": 497
+          }
+        },
+        {
+          "sample": 1,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 497,
+            "do_rows_read": 303,
+            "do_rows_written": 101,
+            "r2_class_a": 33,
+            "r2_class_b": 796,
+            "r2_deletes": 21,
+            "r2_read_bytes": 2638998010,
+            "r2_written_bytes": 40066586,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 673,
+            "worker_service_requests": 497
+          }
+        }
+      ],
+      "resource_guards": [
+        {
+          "resource": "do_sqlite_bytes",
+          "baseline": {
+            "max": 24576.0,
+            "mean": 24576.0,
+            "median": 24576.0,
+            "min": 24576.0,
+            "p95": 24576.0
+          },
+          "candidate": {
+            "max": 24576.0,
+            "mean": 24576.0,
+            "median": 24576.0,
+            "min": 24576.0,
+            "p95": 24576.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "fixed_r2_read_bytes",
+          "baseline": {
+            "max": 2638998010.0,
+            "mean": 2638998010.0,
+            "median": 2638998010.0,
+            "min": 2638998010.0,
+            "p95": 2638998010.0
+          },
+          "candidate": {
+            "max": 2638998010.0,
+            "mean": 2638998010.0,
+            "median": 2638998010.0,
+            "min": 2638998010.0,
+            "p95": 2638998010.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "fixed_r2_written_bytes",
+          "baseline": {
+            "max": 40066586.0,
+            "mean": 40066586.0,
+            "median": 40066586.0,
+            "min": 40066586.0,
+            "p95": 40066586.0
+          },
+          "candidate": {
+            "max": 40066586.0,
+            "mean": 40066586.0,
+            "median": 40066586.0,
+            "min": 40066586.0,
+            "p95": 40066586.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "r2_live_bytes",
+          "baseline": {
+            "max": 39265016.0,
+            "mean": 39265016.0,
+            "median": 39265016.0,
+            "min": 39265016.0,
+            "p95": 39265016.0
+          },
+          "candidate": {
+            "max": 39265016.0,
+            "mean": 39265016.0,
+            "median": 39265016.0,
+            "min": 39265016.0,
+            "p95": 39265016.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "r2_peak_bytes",
+          "baseline": {
+            "max": 39265016.0,
+            "mean": 39265016.0,
+            "median": 39265016.0,
+            "min": 39265016.0,
+            "p95": 39265016.0
+          },
+          "candidate": {
+            "max": 39265016.0,
+            "mean": 39265016.0,
+            "median": 39265016.0,
+            "min": 39265016.0,
+            "p95": 39265016.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_client_pack_bytes",
+          "baseline": {
+            "max": 185800878.0,
+            "mean": 185800878.0,
+            "median": 185800878.0,
+            "min": 185800878.0,
+            "p95": 185800878.0
+          },
+          "candidate": {
+            "max": 185800878.0,
+            "mean": 185800878.0,
+            "median": 185800878.0,
+            "min": 185800878.0,
+            "p95": 185800878.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_http_response_bytes",
+          "baseline": {
+            "max": 183754581.0,
+            "mean": 183754293.5,
+            "median": 183754293.5,
+            "min": 183754006.0,
+            "p95": 183754581.0
+          },
+          "candidate": {
+            "max": 183754366.0,
+            "mean": 183754346.0,
+            "median": 183754346.0,
+            "min": 183754326.0,
+            "p95": 183754366.0
+          },
+          "change_fraction": 2.8570760979285126e-07,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_r2_read_bytes",
+          "baseline": {
+            "max": 1913306756.0,
+            "mean": 1913306756.0,
+            "median": 1913306756.0,
+            "min": 1913306756.0,
+            "p95": 1913306756.0
+          },
+          "candidate": {
+            "max": 1913306756.0,
+            "mean": 1913306756.0,
+            "median": 1913306756.0,
+            "min": 1913306756.0,
+            "p95": 1913306756.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_read_amplification",
+          "baseline": {
+            "max": 10.412326771259615,
+            "mean": 10.412310480270131,
+            "median": 10.412310480270131,
+            "min": 10.412294189280647,
+            "p95": 10.412326771259615
+          },
+          "candidate": {
+            "max": 10.412308638654853,
+            "mean": 10.412307505369276,
+            "median": 10.412307505369276,
+            "min": 10.412306372083698,
+            "p95": 10.412308638654853
+          },
+          "change_fraction": -2.857099642428196e-07,
+          "passed": true
+        }
+      ],
+      "latency_guards": [
+        {
+          "workload": "history_no_haves",
+          "baseline": {
+            "git_ms": {
+              "max": 582.4458689999999,
+              "mean": 332.85506756250004,
+              "median": 226.037438,
+              "min": 204.88800300000003,
+              "p95": 582.4458689999999
+            },
+            "host_ms": {
+              "max": 710.4406690000001,
+              "mean": 466.00999824999997,
+              "median": 460.21522000000004,
+              "min": 270.857434,
+              "p95": 710.4406690000001
+            },
+            "paired_host_to_git": {
+              "max": 2.131728021405541,
+              "mean": 1.4846919408358015,
+              "median": 1.3603469587212076,
+              "min": 1.1328180538275134,
+              "p95": 2.131728021405541
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 579.7955049999999,
+              "mean": 330.3937805625,
+              "median": 228.9255915,
+              "min": 204.044014,
+              "p95": 579.7955049999999
+            },
+            "host_ms": {
+              "max": 727.022063,
+              "mean": 445.75692512500007,
+              "median": 409.738589,
+              "min": 256.950154,
+              "p95": 727.022063
+            },
+            "paired_host_to_git": {
+              "max": 1.9260371286588982,
+              "mean": 1.4197684991160788,
+              "median": 1.364066954995144,
+              "min": 1.1419862852835732,
+              "p95": 1.9260371286588982
+            }
+          },
+          "median_change_fraction": 0.0027345937373457474,
+          "p95_change_fraction": -0.09649021389277512,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "history_with_haves",
+          "baseline": {
+            "git_ms": {
+              "max": 410.03135,
+              "mean": 177.5621359375,
+              "median": 152.4288545,
+              "min": 28.882393,
+              "p95": 410.03135
+            },
+            "host_ms": {
+              "max": 39858.56181,
+              "mean": 3013.7230504375,
+              "median": 585.6275489999999,
+              "min": 85.545069,
+              "p95": 39858.56181
+            },
+            "paired_host_to_git": {
+              "max": 147.44778397405528,
+              "mean": 12.447426260692811,
+              "median": 3.3946990007804643,
+              "min": 2.5904550395963626,
+              "p95": 147.44778397405528
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 407.23783,
+              "mean": 179.00296906250003,
+              "median": 154.1087015,
+              "min": 29.222751,
+              "p95": 407.23783
+            },
+            "host_ms": {
+              "max": 60399.038768,
+              "mean": 4286.35221225,
+              "median": 576.65541,
+              "min": 83.08176,
+              "p95": 60399.038768
+            },
+            "paired_host_to_git": {
+              "max": 148.31391957864034,
+              "mean": 12.543031719339591,
+              "median": 3.3962631244256913,
+              "min": 2.745014734000083,
+              "p95": 148.31391957864034
+            }
+          },
+          "median_change_fraction": 0.00046075473697881897,
+          "p95_change_fraction": 0.005874185296250056,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "large_push",
+          "baseline": {
+            "git_ms": {
+              "max": 347.825974,
+              "mean": 183.8562291875,
+              "median": 162.0696465,
+              "min": 151.243282,
+              "p95": 347.825974
+            },
+            "host_ms": {
+              "max": 22605.083642,
+              "mean": 1866.4556092500002,
+              "median": 468.780622,
+              "min": 368.991027,
+              "p95": 22605.083642
+            },
+            "paired_host_to_git": {
+              "max": 147.11046308412764,
+              "mean": 11.766168344369751,
+              "median": 2.7165395848817644,
+              "min": 1.6550697447338998,
+              "p95": 147.11046308412764
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 345.443941,
+              "mean": 183.45574149999996,
+              "median": 161.65463,
+              "min": 152.464547,
+              "p95": 345.443941
+            },
+            "host_ms": {
+              "max": 15994.921966,
+              "mean": 2290.877382375,
+              "median": 471.4173,
+              "min": 351.33450500000004,
+              "p95": 15994.921966
+            },
+            "paired_host_to_git": {
+              "max": 98.26610480420261,
+              "mean": 13.744151753673432,
+              "median": 2.806004554865254,
+              "min": 1.5752421961083751,
+              "p95": 98.26610480420261
+            }
+          },
+          "median_change_fraction": 0.032933431370330446,
+          "p95_change_fraction": -0.33202504604986893,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "latest_fetch",
+          "baseline": {
+            "git_ms": {
+              "max": 207.234792,
+              "mean": 63.35121859374999,
+              "median": 34.825223,
+              "min": 28.277413000000003,
+              "p95": 153.892248
+            },
+            "host_ms": {
+              "max": 20508.051524,
+              "mean": 1293.904929515625,
+              "median": 358.6107825,
+              "min": 130.500804,
+              "p95": 879.1445190000001
+            },
+            "paired_host_to_git": {
+              "max": 138.38400450796428,
+              "mean": 14.10210584646037,
+              "median": 8.66675977524094,
+              "min": 1.5332308389606701,
+              "p95": 14.592449079329615
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 213.770508,
+              "mean": 63.25986856249999,
+              "median": 34.0561985,
+              "min": 29.149734,
+              "p95": 149.90779600000002
+            },
+            "host_ms": {
+              "max": 19703.264063,
+              "mean": 980.943084171875,
+              "median": 371.2681735,
+              "min": 129.332423,
+              "p95": 784.497419
+            },
+            "paired_host_to_git": {
+              "max": 132.75163912324345,
+              "mean": 12.238070808935015,
+              "median": 8.044273694142364,
+              "min": 1.570909795470945,
+              "p95": 14.730656722538887
+            }
+          },
+          "median_change_fraction": -0.07182454541741023,
+          "p95_change_fraction": 0.009471175294696987,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "latest_recheck",
+          "baseline": {
+            "git_ms": {
+              "max": 32.981099,
+              "mean": 31.281401875,
+              "median": 31.633055499999998,
+              "min": 29.284872,
+              "p95": 32.981099
+            },
+            "host_ms": {
+              "max": 33.873209,
+              "mean": 31.379129812499997,
+              "median": 31.037867,
+              "min": 28.408724,
+              "p95": 33.873209
+            },
+            "paired_host_to_git": {
+              "max": 1.086052985013011,
+              "mean": 1.0044259204131532,
+              "median": 1.0282427211397502,
+              "min": 0.908236017241269,
+              "p95": 1.086052985013011
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 33.358329,
+              "mean": 31.425207625,
+              "median": 31.1805035,
+              "min": 29.932024,
+              "p95": 33.358329
+            },
+            "host_ms": {
+              "max": 33.858689999999996,
+              "mean": 31.073922312499995,
+              "median": 30.9284205,
+              "min": 28.809436,
+              "p95": 33.858689999999996
+            },
+            "paired_host_to_git": {
+              "max": 1.0734746504279162,
+              "mean": 0.9897204148870186,
+              "median": 0.9677755952825423,
+              "min": 0.9213196666469435,
+              "p95": 1.0734746504279162
+            }
+          },
+          "median_change_fraction": -0.058806276586313655,
+          "p95_change_fraction": -0.011581695146249293,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "small_push",
+          "baseline": {
+            "git_ms": {
+              "max": 50.15354000000001,
+              "mean": 44.79458356249999,
+              "median": 44.573465999999996,
+              "min": 39.53557000000001,
+              "p95": 48.411162
+            },
+            "host_ms": {
+              "max": 276.1604,
+              "mean": 183.84140327083335,
+              "median": 189.26162349999998,
+              "min": 93.721782,
+              "p95": 267.545364
+            },
+            "paired_host_to_git": {
+              "max": 5.94862344904074,
+              "mean": 4.0610642189635415,
+              "median": 4.197265883427999,
+              "min": 2.1808025452078614,
+              "p95": 5.5568637401821555
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 49.887541,
+              "mean": 44.125117687499994,
+              "median": 44.302313500000004,
+              "min": 40.344419,
+              "p95": 46.671364999999994
+            },
+            "host_ms": {
+              "max": 314.06537299999997,
+              "mean": 191.4698060833333,
+              "median": 198.19395,
+              "min": 92.276765,
+              "p95": 284.593382
+            },
+            "paired_host_to_git": {
+              "max": 6.466978181671744,
+              "mean": 4.29494729323804,
+              "median": 4.430254259836154,
+              "min": 2.187952179002197,
+              "p95": 6.04564949818004
+            }
+          },
+          "median_change_fraction": 0.05550955857432327,
+          "p95_change_fraction": 0.08796072404357047,
+          "median_passed": true,
+          "p95_passed": true
+        }
+      ]
+    },
+    {
+      "profile": "16mib-warm",
+      "baseline_cost": {
+        "max": 0.42108597523999997,
+        "mean": 0.42108597523999997,
+        "median": 0.42108597523999997,
+        "min": 0.42108597523999997,
+        "p95": 0.42108597523999997
+      },
+      "candidate_cost": {
+        "max": 0.42108597523999997,
+        "mean": 0.42108597523999997,
+        "median": 0.42108597523999997,
+        "min": 0.42108597523999997,
+        "p95": 0.42108597523999997
+      },
+      "cost_change_fraction": 0,
+      "profile_cost_guard_passed": true,
+      "unmeasured_billing_dimensions": [
+        "Worker CPU-ms",
+        "Durable Object GB-seconds",
+        "Durable Object SQLite GB-month"
+      ],
+      "baseline_fixed_workload_trials": [
+        {
+          "sample": 0,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 262,
+            "do_rows_read": 297,
+            "do_rows_written": 101,
+            "r2_class_a": 33,
+            "r2_class_b": 0,
+            "r2_deletes": 21,
+            "r2_read_bytes": 0,
+            "r2_written_bytes": 40066586,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 438,
+            "worker_service_requests": 262
+          }
+        },
+        {
+          "sample": 1,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 262,
+            "do_rows_read": 297,
+            "do_rows_written": 101,
+            "r2_class_a": 33,
+            "r2_class_b": 0,
+            "r2_deletes": 21,
+            "r2_read_bytes": 0,
+            "r2_written_bytes": 40066586,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 438,
+            "worker_service_requests": 262
+          }
+        }
+      ],
+      "candidate_fixed_workload_trials": [
+        {
+          "sample": 0,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 262,
+            "do_rows_read": 297,
+            "do_rows_written": 101,
+            "r2_class_a": 33,
+            "r2_class_b": 0,
+            "r2_deletes": 21,
+            "r2_read_bytes": 0,
+            "r2_written_bytes": 40066586,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 438,
+            "worker_service_requests": 262
+          }
+        },
+        {
+          "sample": 1,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 262,
+            "do_rows_read": 297,
+            "do_rows_written": 101,
+            "r2_class_a": 33,
+            "r2_class_b": 0,
+            "r2_deletes": 21,
+            "r2_read_bytes": 0,
+            "r2_written_bytes": 40066586,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 438,
+            "worker_service_requests": 262
+          }
+        }
+      ],
+      "resource_guards": [
+        {
+          "resource": "do_sqlite_bytes",
+          "baseline": {
+            "max": 24576.0,
+            "mean": 24576.0,
+            "median": 24576.0,
+            "min": 24576.0,
+            "p95": 24576.0
+          },
+          "candidate": {
+            "max": 24576.0,
+            "mean": 24576.0,
+            "median": 24576.0,
+            "min": 24576.0,
+            "p95": 24576.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "fixed_r2_read_bytes",
+          "baseline": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "candidate": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "fixed_r2_written_bytes",
+          "baseline": {
+            "max": 40066586.0,
+            "mean": 40066586.0,
+            "median": 40066586.0,
+            "min": 40066586.0,
+            "p95": 40066586.0
+          },
+          "candidate": {
+            "max": 40066586.0,
+            "mean": 40066586.0,
+            "median": 40066586.0,
+            "min": 40066586.0,
+            "p95": 40066586.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "r2_live_bytes",
+          "baseline": {
+            "max": 39265016.0,
+            "mean": 39265016.0,
+            "median": 39265016.0,
+            "min": 39265016.0,
+            "p95": 39265016.0
+          },
+          "candidate": {
+            "max": 39265016.0,
+            "mean": 39265016.0,
+            "median": 39265016.0,
+            "min": 39265016.0,
+            "p95": 39265016.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "r2_peak_bytes",
+          "baseline": {
+            "max": 39265016.0,
+            "mean": 39265016.0,
+            "median": 39265016.0,
+            "min": 39265016.0,
+            "p95": 39265016.0
+          },
+          "candidate": {
+            "max": 39265016.0,
+            "mean": 39265016.0,
+            "median": 39265016.0,
+            "min": 39265016.0,
+            "p95": 39265016.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_client_pack_bytes",
+          "baseline": {
+            "max": 185800878.0,
+            "mean": 185800878.0,
+            "median": 185800878.0,
+            "min": 185800878.0,
+            "p95": 185800878.0
+          },
+          "candidate": {
+            "max": 185800878.0,
+            "mean": 185800878.0,
+            "median": 185800878.0,
+            "min": 185800878.0,
+            "p95": 185800878.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_http_response_bytes",
+          "baseline": {
+            "max": 183754516.0,
+            "mean": 183753648.5,
+            "median": 183753648.5,
+            "min": 183752781.0,
+            "p95": 183754516.0
+          },
+          "candidate": {
+            "max": 183754521.0,
+            "mean": 183754418.5,
+            "median": 183754418.5,
+            "min": 183754316.0,
+            "p95": 183754521.0
+          },
+          "change_fraction": 4.19039298704682e-06,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_r2_read_bytes",
+          "baseline": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "candidate": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_read_amplification",
+          "baseline": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "candidate": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        }
+      ],
+      "latency_guards": [
+        {
+          "workload": "history_no_haves",
+          "baseline": {
+            "git_ms": {
+              "max": 537.560422,
+              "mean": 301.1785044375,
+              "median": 196.6110235,
+              "min": 177.180181,
+              "p95": 537.560422
+            },
+            "host_ms": {
+              "max": 461.130089,
+              "mean": 284.1357076875,
+              "median": 201.9762,
+              "min": 184.005136,
+              "p95": 461.130089
+            },
+            "paired_host_to_git": {
+              "max": 1.356556931944745,
+              "mean": 0.9849363657284828,
+              "median": 0.9935856525353949,
+              "min": 0.8331760171578215,
+              "p95": 1.356556931944745
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 846.800763,
+              "mean": 349.22265381249997,
+              "median": 230.724675,
+              "min": 187.347523,
+              "p95": 846.800763
+            },
+            "host_ms": {
+              "max": 76091.384748,
+              "mean": 5019.369164875,
+              "median": 209.48445450000003,
+              "min": 182.11781,
+              "p95": 76091.384748
+            },
+            "paired_host_to_git": {
+              "max": 132.0193336288472,
+              "mean": 9.132187622304379,
+              "median": 0.900351636974958,
+              "min": 0.4468314537879083,
+              "p95": 132.0193336288472
+            }
+          },
+          "median_change_fraction": -0.0938359117027564,
+          "p95_change_fraction": 96.31941986362912,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "workload": "history_with_haves",
+          "baseline": {
+            "git_ms": {
+              "max": 364.992645,
+              "mean": 159.06960487499998,
+              "median": 136.2455315,
+              "min": 25.119308,
+              "p95": 364.992645
+            },
+            "host_ms": {
+              "max": 836.36844,
+              "mean": 363.5641511875,
+              "median": 303.87889199999995,
+              "min": 25.69478,
+              "p95": 836.36844
+            },
+            "paired_host_to_git": {
+              "max": 3.0365701046901914,
+              "mean": 2.0336741585588585,
+              "median": 2.311210784677246,
+              "min": 0.7261706085183424,
+              "p95": 3.0365701046901914
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 840.41842,
+              "mean": 191.350835125,
+              "median": 134.900524,
+              "min": 23.931309,
+              "p95": 840.41842
+            },
+            "host_ms": {
+              "max": 1012.392102,
+              "mean": 402.8658673125,
+              "median": 331.28152450000005,
+              "min": 26.339175,
+              "p95": 1012.392102
+            },
+            "paired_host_to_git": {
+              "max": 4.264647278925083,
+              "mean": 2.1165448030499543,
+              "median": 2.30925303195469,
+              "min": 1.003554060607096,
+              "p95": 4.264647278925083
+            }
+          },
+          "median_change_fraction": -0.0008470680110768125,
+          "p95_change_fraction": 0.404429053799233,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "workload": "large_push",
+          "baseline": {
+            "git_ms": {
+              "max": 293.849045,
+              "mean": 158.94669549999998,
+              "median": 138.607827,
+              "min": 132.710081,
+              "p95": 293.849045
+            },
+            "host_ms": {
+              "max": 640.1517319999999,
+              "mean": 291.20512381250006,
+              "median": 215.2223815,
+              "min": 204.168668,
+              "p95": 640.1517319999999
+            },
+            "paired_host_to_git": {
+              "max": 4.717670962122153,
+              "mean": 1.8954141367551465,
+              "median": 1.5497236438748148,
+              "min": 1.339227017055645,
+              "p95": 4.717670962122153
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 291.51272500000005,
+              "mean": 165.93073287500002,
+              "median": 137.850171,
+              "min": 131.439763,
+              "p95": 291.51272500000005
+            },
+            "host_ms": {
+              "max": 1034.516029,
+              "mean": 336.4569466875,
+              "median": 230.8775475,
+              "min": 206.787905,
+              "p95": 1034.516029
+            },
+            "paired_host_to_git": {
+              "max": 7.476974700579085,
+              "mean": 2.1879013297957446,
+              "median": 1.5526200808627957,
+              "min": 0.9647202708245999,
+              "p95": 7.476974700579085
+            }
+          },
+          "median_change_fraction": 0.0018690022569050058,
+          "p95_change_fraction": 0.5848868563770528,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "workload": "latest_fetch",
+          "baseline": {
+            "git_ms": {
+              "max": 202.593553,
+              "mean": 61.30716173437501,
+              "median": 29.9589025,
+              "min": 24.825559,
+              "p95": 161.659632
+            },
+            "host_ms": {
+              "max": 688.2850470000001,
+              "mean": 112.24187587499999,
+              "median": 31.75378,
+              "min": 26.967133,
+              "p95": 300.268735
+            },
+            "paired_host_to_git": {
+              "max": 5.4279864909204765,
+              "mean": 1.6252356109366635,
+              "median": 1.0945896708440048,
+              "min": 0.21267354658517362,
+              "p95": 4.191574713676912
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 233.033761,
+              "mean": 61.314653625,
+              "median": 29.1637715,
+              "min": 23.911699,
+              "p95": 149.67182200000002
+            },
+            "host_ms": {
+              "max": 402.014401,
+              "mean": 103.169035890625,
+              "median": 32.582624499999994,
+              "min": 26.748278,
+              "p95": 305.196414
+            },
+            "paired_host_to_git": {
+              "max": 7.890623355042319,
+              "mean": 1.4658613228328705,
+              "median": 1.1524849802827,
+              "min": 0.24860046163245028,
+              "p95": 2.55597903995512
+            }
+          },
+          "median_change_fraction": 0.05289224901423917,
+          "p95_change_fraction": -0.3902103112667705,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "latest_recheck",
+          "baseline": {
+            "git_ms": {
+              "max": 28.521408,
+              "mean": 26.334858,
+              "median": 26.424218,
+              "min": 24.304102,
+              "p95": 28.521408
+            },
+            "host_ms": {
+              "max": 28.114376,
+              "mean": 24.489385374999998,
+              "median": 24.391254500000002,
+              "min": 22.746921,
+              "p95": 28.114376
+            },
+            "paired_host_to_git": {
+              "max": 1.0571090040852325,
+              "mean": 0.9308603856651292,
+              "median": 0.9282375510677149,
+              "min": 0.8564531149422109,
+              "p95": 1.0571090040852325
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 135.486884,
+              "mean": 33.899674062500004,
+              "median": 26.254148999999998,
+              "min": 23.896137000000003,
+              "p95": 135.486884
+            },
+            "host_ms": {
+              "max": 45.440217,
+              "mean": 26.2827025625,
+              "median": 24.8115065,
+              "min": 23.068173,
+              "p95": 45.440217
+            },
+            "paired_host_to_git": {
+              "max": 1.6970256406502624,
+              "mean": 0.9278997644812653,
+              "median": 0.935684086635485,
+              "min": 0.2145458670375798,
+              "p95": 1.6970256406502624
+            }
+          },
+          "median_change_fraction": 0.008022230472366276,
+          "p95_change_fraction": 0.6053459331933142,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "workload": "small_push",
+          "baseline": {
+            "git_ms": {
+              "max": 139.414473,
+              "mean": 47.14933120833334,
+              "median": 38.6673445,
+              "min": 35.040977,
+              "p95": 95.650514
+            },
+            "host_ms": {
+              "max": 86.466004,
+              "mean": 42.73555577083334,
+              "median": 39.670339999999996,
+              "min": 37.130458999999995,
+              "p95": 60.120681000000005
+            },
+            "paired_host_to_git": {
+              "max": 2.442885455952432,
+              "mean": 1.0134818809397366,
+              "median": 1.0189459530110192,
+              "min": 0.2720805966823832,
+              "p95": 1.568967409474719
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 130.789945,
+              "mean": 50.965158270833335,
+              "median": 38.393319,
+              "min": 33.899333,
+              "p95": 125.889083
+            },
+            "host_ms": {
+              "max": 312.038035,
+              "mean": 51.241293208333325,
+              "median": 40.42838,
+              "min": 37.948677,
+              "p95": 109.19084
+            },
+            "paired_host_to_git": {
+              "max": 7.839170555061941,
+              "mean": 1.153746773421297,
+              "median": 1.078715188505123,
+              "min": 0.31718441352659027,
+              "p95": 1.6516885878650724
+            }
+          },
+          "median_change_fraction": 0.0586579055714227,
+          "p95_change_fraction": 0.05272332483824371,
+          "median_passed": true,
+          "p95_passed": true
+        }
+      ]
+    },
+    {
+      "profile": "64mib-cold",
+      "baseline_cost": {
+        "max": 1.35681674285,
+        "mean": 1.35681674285,
+        "median": 1.35681674285,
+        "min": 1.35681674285,
+        "p95": 1.35681674285
+      },
+      "candidate_cost": {
+        "max": 1.10436674285,
+        "mean": 1.10436674285,
+        "median": 1.10436674285,
+        "min": 1.10436674285,
+        "p95": 1.10436674285
+      },
+      "cost_change_fraction": -0.18606049883326736,
+      "profile_cost_guard_passed": true,
+      "unmeasured_billing_dimensions": [
+        "Worker CPU-ms",
+        "Durable Object GB-seconds",
+        "Durable Object SQLite GB-month"
+      ],
+      "baseline_fixed_workload_trials": [
+        {
+          "sample": 0,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 1394,
+            "do_rows_read": 300,
+            "do_rows_written": 107,
+            "r2_class_a": 36,
+            "r2_class_b": 1129,
+            "r2_deletes": 21,
+            "r2_read_bytes": 5498399248,
+            "r2_written_bytes": 66312587,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 1570,
+            "worker_service_requests": 1394
+          }
+        },
+        {
+          "sample": 1,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 1394,
+            "do_rows_read": 300,
+            "do_rows_written": 107,
+            "r2_class_a": 36,
+            "r2_class_b": 1129,
+            "r2_deletes": 21,
+            "r2_read_bytes": 5498399248,
+            "r2_written_bytes": 66312587,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 1570,
+            "worker_service_requests": 1394
+          }
+        }
+      ],
+      "candidate_fixed_workload_trials": [
+        {
+          "sample": 0,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 833,
+            "do_rows_read": 300,
+            "do_rows_written": 107,
+            "r2_class_a": 36,
+            "r2_class_b": 1129,
+            "r2_deletes": 21,
+            "r2_read_bytes": 5498399248,
+            "r2_written_bytes": 66312587,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 1009,
+            "worker_service_requests": 833
+          }
+        },
+        {
+          "sample": 1,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 833,
+            "do_rows_read": 300,
+            "do_rows_written": 107,
+            "r2_class_a": 36,
+            "r2_class_b": 1129,
+            "r2_deletes": 21,
+            "r2_read_bytes": 5498399248,
+            "r2_written_bytes": 66312587,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 1009,
+            "worker_service_requests": 833
+          }
+        }
+      ],
+      "resource_guards": [
+        {
+          "resource": "do_sqlite_bytes",
+          "baseline": {
+            "max": 24576.0,
+            "mean": 24576.0,
+            "median": 24576.0,
+            "min": 24576.0,
+            "p95": 24576.0
+          },
+          "candidate": {
+            "max": 24576.0,
+            "mean": 24576.0,
+            "median": 24576.0,
+            "min": 24576.0,
+            "p95": 24576.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "fixed_r2_read_bytes",
+          "baseline": {
+            "max": 5498399248.0,
+            "mean": 5498399248.0,
+            "median": 5498399248.0,
+            "min": 5498399248.0,
+            "p95": 5498399248.0
+          },
+          "candidate": {
+            "max": 5498399248.0,
+            "mean": 5498399248.0,
+            "median": 5498399248.0,
+            "min": 5498399248.0,
+            "p95": 5498399248.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "fixed_r2_written_bytes",
+          "baseline": {
+            "max": 66312587.0,
+            "mean": 66312587.0,
+            "median": 66312587.0,
+            "min": 66312587.0,
+            "p95": 66312587.0
+          },
+          "candidate": {
+            "max": 66312587.0,
+            "mean": 66312587.0,
+            "median": 66312587.0,
+            "min": 66312587.0,
+            "p95": 66312587.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "r2_live_bytes",
+          "baseline": {
+            "max": 65116174.0,
+            "mean": 65116174.0,
+            "median": 65116174.0,
+            "min": 65116174.0,
+            "p95": 65116174.0
+          },
+          "candidate": {
+            "max": 65116174.0,
+            "mean": 65116174.0,
+            "median": 65116174.0,
+            "min": 65116174.0,
+            "p95": 65116174.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "r2_peak_bytes",
+          "baseline": {
+            "max": 65116190.0,
+            "mean": 65116190.0,
+            "median": 65116190.0,
+            "min": 65116190.0,
+            "p95": 65116190.0
+          },
+          "candidate": {
+            "max": 65116190.0,
+            "mean": 65116190.0,
+            "median": 65116190.0,
+            "min": 65116190.0,
+            "p95": 65116190.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_client_pack_bytes",
+          "baseline": {
+            "max": 417459213.0,
+            "mean": 417459213.0,
+            "median": 417459213.0,
+            "min": 417459213.0,
+            "p95": 417459213.0
+          },
+          "candidate": {
+            "max": 417459213.0,
+            "mean": 417459213.0,
+            "median": 417459213.0,
+            "min": 417459213.0,
+            "p95": 417459213.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_http_response_bytes",
+          "baseline": {
+            "max": 414668890.0,
+            "mean": 414668770.0,
+            "median": 414668770.0,
+            "min": 414668650.0,
+            "p95": 414668890.0
+          },
+          "candidate": {
+            "max": 414668600.0,
+            "mean": 414668460.0,
+            "median": 414668460.0,
+            "min": 414668320.0,
+            "p95": 414668600.0
+          },
+          "change_fraction": -7.475846324211943e-07,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_r2_read_bytes",
+          "baseline": {
+            "max": 3974330244.0,
+            "mean": 3974330244.0,
+            "median": 3974330244.0,
+            "min": 3974330244.0,
+            "p95": 3974330244.0
+          },
+          "candidate": {
+            "max": 3974330244.0,
+            "mean": 3974330244.0,
+            "median": 3974330244.0,
+            "min": 3974330244.0,
+            "p95": 3974330244.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_read_amplification",
+          "baseline": {
+            "max": 9.58435185297948,
+            "mean": 9.584349079387707,
+            "median": 9.584349079387707,
+            "min": 9.584346305795933,
+            "p95": 9.58435185297948
+          },
+          "candidate": {
+            "max": 9.584359480367345,
+            "mean": 9.584356244505436,
+            "median": 9.584356244505436,
+            "min": 9.584353008643529,
+            "p95": 9.584359480367345
+          },
+          "change_fraction": 7.475852215055312e-07,
+          "passed": true
+        }
+      ],
+      "latency_guards": [
+        {
+          "workload": "history_no_haves",
+          "baseline": {
+            "git_ms": {
+              "max": 1014.002093,
+              "mean": 787.8398859374998,
+              "median": 698.5233920000001,
+              "min": 657.12194,
+              "p95": 1014.002093
+            },
+            "host_ms": {
+              "max": 1201.313565,
+              "mean": 990.8934971875,
+              "median": 994.701266,
+              "min": 807.591689,
+              "p95": 1201.313565
+            },
+            "paired_host_to_git": {
+              "max": 1.5814850036295163,
+              "mean": 1.2700824379453974,
+              "median": 1.2011303904252215,
+              "min": 1.1464505434837438,
+              "p95": 1.5814850036295163
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 1005.942064,
+              "mean": 791.8057182500002,
+              "median": 711.7459494999999,
+              "min": 669.865957,
+              "p95": 1005.942064
+            },
+            "host_ms": {
+              "max": 1178.553599,
+              "mean": 985.7599463125001,
+              "median": 951.328487,
+              "min": 837.8257970000001,
+              "p95": 1178.553599
+            },
+            "paired_host_to_git": {
+              "max": 1.4657229465521284,
+              "mean": 1.2535845052330175,
+              "median": 1.2407554174529487,
+              "min": 1.1187124530993027,
+              "p95": 1.4657229465521284
+            }
+          },
+          "median_change_fraction": 0.032989779747142345,
+          "p95_change_fraction": -0.07319832740222854,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "history_with_haves",
+          "baseline": {
+            "git_ms": {
+              "max": 350.031547,
+              "mean": 151.13354,
+              "median": 126.3555735,
+              "min": 24.571082,
+              "p95": 350.031547
+            },
+            "host_ms": {
+              "max": 18086.583357,
+              "mean": 1668.5132770625,
+              "median": 556.6617585,
+              "min": 171.253705,
+              "p95": 18086.583357
+            },
+            "paired_host_to_git": {
+              "max": 173.1749471386305,
+              "mean": 15.264899593386907,
+              "median": 4.295590618871474,
+              "min": 2.9368595396917176,
+              "p95": 173.1749471386305
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 349.317824,
+              "mean": 154.49850418749998,
+              "median": 133.074168,
+              "min": 24.809175,
+              "p95": 349.317824
+            },
+            "host_ms": {
+              "max": 1226.703138,
+              "mean": 608.8492381875001,
+              "median": 563.718651,
+              "min": 186.776102,
+              "p95": 1226.703138
+            },
+            "paired_host_to_git": {
+              "max": 8.256797851919446,
+              "mean": 4.915976901030987,
+              "median": 4.106916958639951,
+              "min": 2.9993829258480673,
+              "p95": 8.256797851919446
+            }
+          },
+          "median_change_fraction": -0.04392263531879359,
+          "p95_change_fraction": -0.9523210603592118,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "large_push",
+          "baseline": {
+            "git_ms": {
+              "max": 826.051204,
+              "mean": 224.60919443749998,
+              "median": 140.17090149999996,
+              "min": 131.798973,
+              "p95": 826.051204
+            },
+            "host_ms": {
+              "max": 1670.132744,
+              "mean": 554.4054068125,
+              "median": 434.86944800000003,
+              "min": 361.208766,
+              "p95": 1670.132744
+            },
+            "paired_host_to_git": {
+              "max": 3.4791448747619116,
+              "mean": 2.873241612840312,
+              "median": 2.9545148644372614,
+              "min": 1.540067817636157,
+              "p95": 3.4791448747619116
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 825.1624850000001,
+              "mean": 222.874140125,
+              "median": 138.99866400000002,
+              "min": 131.400746,
+              "p95": 825.1624850000001
+            },
+            "host_ms": {
+              "max": 1686.346728,
+              "mean": 572.2846543125,
+              "median": 452.193625,
+              "min": 369.469956,
+              "p95": 1686.346728
+            },
+            "paired_host_to_git": {
+              "max": 3.6600505291949967,
+              "mean": 3.0362785066000275,
+              "median": 3.1601279228566215,
+              "min": 1.5908648409179122,
+              "p95": 3.6600505291949967
+            }
+          },
+          "median_change_fraction": 0.06959283261501636,
+          "p95_change_fraction": 0.05199716049348613,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "latest_fetch",
+          "baseline": {
+            "git_ms": {
+              "max": 707.351993,
+              "mean": 69.2324886875,
+              "median": 29.2714605,
+              "min": 24.337697,
+              "p95": 122.356551
+            },
+            "host_ms": {
+              "max": 19891.22996,
+              "mean": 1119.1313109374998,
+              "median": 498.938951,
+              "min": 302.72896199999997,
+              "p95": 952.50686
+            },
+            "paired_host_to_git": {
+              "max": 165.82838025669514,
+              "mean": 18.09277742021301,
+              "median": 15.316606289739312,
+              "min": 1.3668531136553352,
+              "p95": 18.492039501331046
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 688.168763,
+              "mean": 68.48894714062499,
+              "median": 29.3766035,
+              "min": 24.753554,
+              "p95": 121.662345
+            },
+            "host_ms": {
+              "max": 1021.321416,
+              "mean": 566.5511613124999,
+              "median": 546.173864,
+              "min": 338.286847,
+              "p95": 879.98108
+            },
+            "paired_host_to_git": {
+              "max": 21.141818337254758,
+              "mean": 14.35791398256803,
+              "median": 16.23488708154197,
+              "min": 1.4841147563101464,
+              "p95": 20.106073677455388
+            }
+          },
+          "median_change_fraction": 0.05995328040897818,
+          "p95_change_fraction": 0.08728264808260677,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "latest_recheck",
+          "baseline": {
+            "git_ms": {
+              "max": 28.809433,
+              "mean": 26.930185687500003,
+              "median": 26.7910695,
+              "min": 25.297078,
+              "p95": 28.809433
+            },
+            "host_ms": {
+              "max": 28.406341,
+              "mean": 25.255734812500002,
+              "median": 25.030986,
+              "min": 23.979006,
+              "p95": 28.406341
+            },
+            "paired_host_to_git": {
+              "max": 1.0476177217055334,
+              "mean": 0.9385903382271736,
+              "median": 0.934212060638681,
+              "min": 0.8626181223351393,
+              "p95": 1.0476177217055334
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 28.885665000000003,
+              "mean": 26.84241243750001,
+              "median": 26.913334,
+              "min": 25.381038,
+              "p95": 28.885665000000003
+            },
+            "host_ms": {
+              "max": 28.218022,
+              "mean": 25.50406025,
+              "median": 25.498298,
+              "min": 24.586031,
+              "p95": 28.218022
+            },
+            "paired_host_to_git": {
+              "max": 1.0874864810983567,
+              "mean": 0.9522552029832331,
+              "median": 0.9596967475290729,
+              "min": 0.851149904286434,
+              "p95": 1.0874864810983567
+            }
+          },
+          "median_change_fraction": 0.027279338347408144,
+          "p95_change_fraction": 0.03805659122290961,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "small_push",
+          "baseline": {
+            "git_ms": {
+              "max": 51.483967,
+              "mean": 45.055968958333324,
+              "median": 45.1186615,
+              "min": 41.48288599999999,
+              "p95": 47.93071400000001
+            },
+            "host_ms": {
+              "max": 316.044331,
+              "mean": 247.60311449999998,
+              "median": 246.95414599999998,
+              "min": 176.776422,
+              "p95": 311.542526
+            },
+            "paired_host_to_git": {
+              "max": 6.711313063442879,
+              "mean": 5.466670397270209,
+              "median": 5.39855880202071,
+              "min": 4.15763806945748,
+              "p95": 6.573355738906822
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 51.125445000000006,
+              "mean": 45.149148333333336,
+              "median": 45.067521,
+              "min": 42.119448,
+              "p95": 48.321634
+            },
+            "host_ms": {
+              "max": 358.337358,
+              "mean": 273.0234081666667,
+              "median": 275.883772,
+              "min": 197.267444,
+              "p95": 343.051073
+            },
+            "paired_host_to_git": {
+              "max": 7.549059939817745,
+              "mean": 6.017920981807888,
+              "median": 6.1313435488100705,
+              "min": 4.640938365519088,
+              "p95": 7.2261311292771975
+            }
+          },
+          "median_change_fraction": 0.13573710570959707,
+          "p95_change_fraction": 0.09930626247818664,
+          "median_passed": false,
+          "p95_passed": true
+        }
+      ]
+    },
+    {
+      "profile": "64mib-warm",
+      "baseline_cost": {
+        "max": 0.44232674285,
+        "mean": 0.44232674285,
+        "median": 0.44232674285,
+        "min": 0.44232674285,
+        "p95": 0.44232674285
+      },
+      "candidate_cost": {
+        "max": 0.44234874285,
+        "mean": 0.44233774285,
+        "median": 0.44233774285,
+        "min": 0.44232674285,
+        "p95": 0.44234874285
+      },
+      "cost_change_fraction": 2.4868494111540684e-05,
+      "profile_cost_guard_passed": true,
+      "unmeasured_billing_dimensions": [
+        "Worker CPU-ms",
+        "Durable Object GB-seconds",
+        "Durable Object SQLite GB-month"
+      ],
+      "baseline_fixed_workload_trials": [
+        {
+          "sample": 0,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 265,
+            "do_rows_read": 300,
+            "do_rows_written": 107,
+            "r2_class_a": 36,
+            "r2_class_b": 0,
+            "r2_deletes": 21,
+            "r2_read_bytes": 0,
+            "r2_written_bytes": 66312587,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 441,
+            "worker_service_requests": 265
+          }
+        },
+        {
+          "sample": 1,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 265,
+            "do_rows_read": 300,
+            "do_rows_written": 107,
+            "r2_class_a": 36,
+            "r2_class_b": 0,
+            "r2_deletes": 21,
+            "r2_read_bytes": 0,
+            "r2_written_bytes": 66312587,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 441,
+            "worker_service_requests": 265
+          }
+        }
+      ],
+      "candidate_fixed_workload_trials": [
+        {
+          "sample": 0,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 265,
+            "do_rows_read": 322,
+            "do_rows_written": 107,
+            "r2_class_a": 36,
+            "r2_class_b": 0,
+            "r2_deletes": 21,
+            "r2_read_bytes": 0,
+            "r2_written_bytes": 66312587,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 441,
+            "worker_service_requests": 265
+          }
+        },
+        {
+          "sample": 1,
+          "fixed_workload": {
+            "do_gb_seconds": null,
+            "do_requests": 265,
+            "do_rows_read": 300,
+            "do_rows_written": 107,
+            "r2_class_a": 36,
+            "r2_class_b": 0,
+            "r2_deletes": 21,
+            "r2_read_bytes": 0,
+            "r2_written_bytes": 66312587,
+            "worker_cpu_ms": null,
+            "worker_gateway_requests": 176,
+            "worker_observer_requests": 0,
+            "worker_requests": 441,
+            "worker_service_requests": 265
+          }
+        }
+      ],
+      "resource_guards": [
+        {
+          "resource": "do_sqlite_bytes",
+          "baseline": {
+            "max": 24576.0,
+            "mean": 24576.0,
+            "median": 24576.0,
+            "min": 24576.0,
+            "p95": 24576.0
+          },
+          "candidate": {
+            "max": 24576.0,
+            "mean": 24576.0,
+            "median": 24576.0,
+            "min": 24576.0,
+            "p95": 24576.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "fixed_r2_read_bytes",
+          "baseline": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "candidate": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "fixed_r2_written_bytes",
+          "baseline": {
+            "max": 66312587.0,
+            "mean": 66312587.0,
+            "median": 66312587.0,
+            "min": 66312587.0,
+            "p95": 66312587.0
+          },
+          "candidate": {
+            "max": 66312587.0,
+            "mean": 66312587.0,
+            "median": 66312587.0,
+            "min": 66312587.0,
+            "p95": 66312587.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "r2_live_bytes",
+          "baseline": {
+            "max": 65116174.0,
+            "mean": 65116174.0,
+            "median": 65116174.0,
+            "min": 65116174.0,
+            "p95": 65116174.0
+          },
+          "candidate": {
+            "max": 65116174.0,
+            "mean": 65116174.0,
+            "median": 65116174.0,
+            "min": 65116174.0,
+            "p95": 65116174.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "r2_peak_bytes",
+          "baseline": {
+            "max": 65116190.0,
+            "mean": 65116190.0,
+            "median": 65116190.0,
+            "min": 65116190.0,
+            "p95": 65116190.0
+          },
+          "candidate": {
+            "max": 65116190.0,
+            "mean": 65116190.0,
+            "median": 65116190.0,
+            "min": 65116190.0,
+            "p95": 65116190.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_client_pack_bytes",
+          "baseline": {
+            "max": 417459213.0,
+            "mean": 417459213.0,
+            "median": 417459213.0,
+            "min": 417459213.0,
+            "p95": 417459213.0
+          },
+          "candidate": {
+            "max": 417459213.0,
+            "mean": 417459213.0,
+            "median": 417459213.0,
+            "min": 417459213.0,
+            "p95": 417459213.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_http_response_bytes",
+          "baseline": {
+            "max": 414667640.0,
+            "mean": 414667545.0,
+            "median": 414667545.0,
+            "min": 414667450.0,
+            "p95": 414667640.0
+          },
+          "candidate": {
+            "max": 414667575.0,
+            "mean": 414666395.0,
+            "median": 414666395.0,
+            "min": 414665215.0,
+            "p95": 414667575.0
+          },
+          "change_fraction": -2.773306022829658e-06,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_r2_read_bytes",
+          "baseline": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "candidate": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        },
+        {
+          "resource": "varied_fetch_read_amplification",
+          "baseline": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "candidate": {
+            "max": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "p95": 0.0
+          },
+          "change_fraction": 0,
+          "passed": true
+        }
+      ],
+      "latency_guards": [
+        {
+          "workload": "history_no_haves",
+          "baseline": {
+            "git_ms": {
+              "max": 1037.627987,
+              "mean": 817.053865625,
+              "median": 742.3627415,
+              "min": 688.856082,
+              "p95": 1037.627987
+            },
+            "host_ms": {
+              "max": 989.235248,
+              "mean": 773.38753275,
+              "median": 695.1242255,
+              "min": 668.6575,
+              "p95": 989.235248
+            },
+            "paired_host_to_git": {
+              "max": 1.0283184137680172,
+              "mean": 0.9505011375935623,
+              "median": 0.965051594379249,
+              "min": 0.7797098386043403,
+              "p95": 1.0283184137680172
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 1108.6667349999998,
+              "mean": 837.6753550000001,
+              "median": 727.4400820000001,
+              "min": 669.802287,
+              "p95": 1108.6667349999998
+            },
+            "host_ms": {
+              "max": 966.441333,
+              "mean": 789.549313375,
+              "median": 711.5120625,
+              "min": 674.172687,
+              "p95": 966.441333
+            },
+            "paired_host_to_git": {
+              "max": 1.1498999584634144,
+              "mean": 0.9531275540609438,
+              "median": 0.9701685867901104,
+              "min": 0.7603338286799467,
+              "p95": 1.1498999584634144
+            }
+          },
+          "median_change_fraction": 0.005302299318154846,
+          "p95_change_fraction": 0.11823336338974211,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "history_with_haves",
+          "baseline": {
+            "git_ms": {
+              "max": 364.879175,
+              "mean": 170.443606375,
+              "median": 137.886845,
+              "min": 24.58026,
+              "p95": 364.879175
+            },
+            "host_ms": {
+              "max": 840.499854,
+              "mean": 379.61131068749995,
+              "median": 324.262922,
+              "min": 27.187874,
+              "p95": 840.499854
+            },
+            "paired_host_to_git": {
+              "max": 4.293703750507217,
+              "mean": 2.0758249858109425,
+              "median": 2.30456714859835,
+              "min": 0.21719279040012426,
+              "p95": 4.293703750507217
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 374.300877,
+              "mean": 184.98475687500002,
+              "median": 179.70654150000001,
+              "min": 24.336597,
+              "p95": 374.300877
+            },
+            "host_ms": {
+              "max": 891.323904,
+              "mean": 377.26365875000005,
+              "median": 319.095278,
+              "min": 27.036928,
+              "p95": 891.323904
+            },
+            "paired_host_to_git": {
+              "max": 3.1840573756838757,
+              "mean": 1.9208209756836119,
+              "median": 2.233420108370524,
+              "min": 0.19759290753801004,
+              "p95": 3.1840573756838757
+            }
+          },
+          "median_change_fraction": -0.030872192320843483,
+          "p95_change_fraction": -0.25843570942505256,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "large_push",
+          "baseline": {
+            "git_ms": {
+              "max": 854.17699,
+              "mean": 244.00008931250002,
+              "median": 147.13548550000002,
+              "min": 132.951186,
+              "p95": 854.17699
+            },
+            "host_ms": {
+              "max": 1298.301245,
+              "mean": 391.1846061875,
+              "median": 226.416279,
+              "min": 215.69696,
+              "p95": 1298.301245
+            },
+            "paired_host_to_git": {
+              "max": 4.303987006472059,
+              "mean": 1.701482681380292,
+              "median": 1.5239258061988425,
+              "min": 0.7862684582702415,
+              "p95": 4.303987006472059
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 1072.571904,
+              "mean": 283.36441281249995,
+              "median": 172.236313,
+              "min": 140.956386,
+              "p95": 1072.571904
+            },
+            "host_ms": {
+              "max": 19167.106523,
+              "mean": 2759.1746038124998,
+              "median": 234.751401,
+              "min": 212.895442,
+              "p95": 19167.106523
+            },
+            "paired_host_to_git": {
+              "max": 132.891739753424,
+              "mean": 17.59015336315315,
+              "median": 1.422244778864423,
+              "min": 0.6845274494486261,
+              "p95": 132.891739753424
+            }
+          },
+          "median_change_fraction": -0.06672308252856773,
+          "p95_change_fraction": 29.876426799985676,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "workload": "latest_fetch",
+          "baseline": {
+            "git_ms": {
+              "max": 687.421335,
+              "mean": 73.719552421875,
+              "median": 29.6808895,
+              "min": 24.574092,
+              "p95": 193.028412
+            },
+            "host_ms": {
+              "max": 2529.842024,
+              "mean": 153.981802265625,
+              "median": 32.788912499999995,
+              "min": 28.271978,
+              "p95": 472.556739
+            },
+            "paired_host_to_git": {
+              "max": 11.651384287929451,
+              "mean": 1.5964687552694616,
+              "median": 1.135071698836259,
+              "min": 0.4209701333920293,
+              "p95": 2.5719332560041135
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 724.2483589999999,
+              "mean": 96.71244225,
+              "median": 31.3707815,
+              "min": 24.449426,
+              "p95": 342.579723
+            },
+            "host_ms": {
+              "max": 700.564246,
+              "mean": 124.1922145,
+              "median": 33.8064555,
+              "min": 28.825295,
+              "p95": 367.688138
+            },
+            "paired_host_to_git": {
+              "max": 7.785879172629726,
+              "mean": 1.47288654725144,
+              "median": 1.1143594132755088,
+              "min": 0.2373830390764785,
+              "p95": 2.9363239630276676
+            }
+          },
+          "median_change_fraction": -0.018247557032728068,
+          "p95_change_fraction": 0.1416796902380313,
+          "median_passed": true,
+          "p95_passed": true
+        },
+        {
+          "workload": "latest_recheck",
+          "baseline": {
+            "git_ms": {
+              "max": 28.353162,
+              "mean": 26.7901243125,
+              "median": 26.660315,
+              "min": 25.146274,
+              "p95": 28.353162
+            },
+            "host_ms": {
+              "max": 34.123160999999996,
+              "mean": 25.985828374999997,
+              "median": 25.1527525,
+              "min": 23.802017000000003,
+              "p95": 34.123160999999996
+            },
+            "paired_host_to_git": {
+              "max": 1.2035046038251394,
+              "mean": 0.9694777867985179,
+              "median": 0.9385705301564653,
+              "min": 0.9024288450957576,
+              "p95": 1.2035046038251394
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 151.739469,
+              "mean": 44.043246437499995,
+              "median": 27.8336545,
+              "min": 25.277164000000003,
+              "p95": 151.739469
+            },
+            "host_ms": {
+              "max": 75.641389,
+              "mean": 30.576219312499997,
+              "median": 25.120234500000002,
+              "min": 24.455396,
+              "p95": 75.641389
+            },
+            "paired_host_to_git": {
+              "max": 2.7984654968008216,
+              "mean": 0.9128157558170815,
+              "median": 0.9203472019540292,
+              "min": 0.16242151209847713,
+              "p95": 2.7984654968008216
+            }
+          },
+          "median_change_fraction": -0.0194160455894542,
+          "p95_change_fraction": 1.3252636407923695,
+          "median_passed": true,
+          "p95_passed": false
+        },
+        {
+          "workload": "small_push",
+          "baseline": {
+            "git_ms": {
+              "max": 153.25987099999998,
+              "mean": 52.58978122916668,
+              "median": 45.826592500000004,
+              "min": 41.727233000000005,
+              "p95": 118.780123
+            },
+            "host_ms": {
+              "max": 198.629192,
+              "mean": 55.078271374999986,
+              "median": 46.815553,
+              "min": 44.23769,
+              "p95": 122.230863
+            },
+            "paired_host_to_git": {
+              "max": 4.181456542620916,
+              "mean": 1.1347831075807433,
+              "median": 1.0308186036633724,
+              "min": 0.3019148306604017,
+              "p95": 2.1279314698334866
+            }
+          },
+          "candidate": {
+            "git_ms": {
+              "max": 337.35848599999997,
+              "mean": 115.85662768750001,
+              "median": 73.5243175,
+              "min": 41.842206999999995,
+              "p95": 285.24935400000004
+            },
+            "host_ms": {
+              "max": 217.804216,
+              "mean": 56.563598750000004,
+              "median": 46.838195999999996,
+              "min": 44.024598999999995,
+              "p95": 125.56974
+            },
+            "paired_host_to_git": {
+              "max": 2.1626980607187396,
+              "mean": 0.7081354073949461,
+              "median": 0.6943447699390697,
+              "min": 0.13793096344403208,
+              "p95": 1.321828813828308
+            }
+          },
+          "median_change_fraction": -0.326414203748871,
+          "p95_change_fraction": -0.3788198386239652,
+          "median_passed": true,
+          "p95_passed": true
+        }
+      ]
+    }
+  ]
+}

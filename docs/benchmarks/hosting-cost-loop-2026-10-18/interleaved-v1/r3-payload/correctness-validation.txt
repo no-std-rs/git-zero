@@ -1,0 +1,55 @@
+Candidate: e4a2085d4b5c8ec3f19082776a11e65d15972bee
+Branch: perf/hosting-bulk-payload-r3
+Base: 1d9b5f9dbdc0521ecef7cb2b32d6ca62bd1bb8f2
+Worktree: /tmp/git-zero-hosting-bulk-payload
+Checked after root GO; no benchmarks or primary emulator were touched.
+
+PASS: cargo fmt -p git-zero-host -- --check
+PASS: git diff --check
+PASS: CARGO_TARGET_DIR=/tmp/git-zero-hosting-cost-loop/target cargo test -p git-zero-host --locked -j 2
+  46 library tests, 3 hosting-bench tests, 9 hosting integration tests,
+  1 lifecycle test; 9 opt-in Cloudflare contracts ignored in this command.
+  Initial sandboxed invocation had 43/46 library tests pass and 3 failures
+  only at TcpListener::bind with EPERM. Identical command passed with
+  local loopback socket access; no code or allowance changes.
+PASS: CARGO_TARGET_DIR=/tmp/git-zero-hosting-cost-loop/target cargo clippy -p git-zero-host --all-targets --locked -j 2 -- -D warnings
+
+Candidate local workerd (fresh persisted state):
+WRANGLER_LOG_PATH=/tmp/git-zero-bulk-payload-r3-wrangler-logs WRANGLER_HIDE_BANNER=true WRANGLER_SEND_METRICS=false X_LOCAL_EXPLORER=false X_LOCAL_OBSERVABILITY=false node /var/home/pawel/no_std_rs/git-zero/main/examples/cloudflare-worker/node_modules/wrangler/bin/wrangler.js dev --config examples/repository-host/cloudflare/wrangler.toml --local --ip 127.0.0.1 --port 8820 --persist-to /tmp/git-zero-bulk-payload-r3-state --show-interactive-dev-session=false
+  All bindings local. Only this own instance was stopped/restarted.
+  Final own instance stopped after PASS, no remaining workerd on own 8820.
+
+Actual contract environment:
+GIT_ZERO_CLOUDFLARE_ORIGIN=http://127.0.0.1:8820
+GIT_ZERO_CLOUDFLARE_TOKEN=git-zero-local-services
+CARGO_TARGET_DIR=/tmp/git-zero-hosting-cost-loop/target
+
+PASS: cargo test -p git-zero-host --locked -j 2 --test cloudflare real_ -- --ignored --test-threads=1
+  Seven actual workerd contracts passed in 14.34 seconds:
+  full 16 MiB payload with equal repeated keys: one Worker service request,
+  one DO request, two actual successful R2 GET attempts, 16 MiB read bytes;
+  [8 MiB, 8 MiB, 1 B] raw bulk JSON returns 413 with no R2 binding calls;
+  declared and chunked oversized 1.5 MB JSON contracts retained and passed;
+  cross-pack reads, partial missing object and wrong length receipts passed;
+  actual DO idle eviction, CAS recovery, native bundle recovery/fetch,
+  R2 immutability/namespaces/accounting all passed.
+
+Restart environment additionally:
+GIT_ZERO_CLOUDFLARE_RESTART_REPO=contract-bulk-payload-r3-restart-20261018
+PASS: cargo test -p git-zero-host --locked -j 2 --test cloudflare seed_before_workerd_restart -- --ignored --test-threads=1
+  Then interrupted only own Wrangler, restarted same command/persist-dir.
+PASS: cargo test -p git-zero-host --locked -j 2 --test cloudflare verify_after_workerd_restart -- --ignored --test-threads=1
+
+SHA256:
+7ed439369ffbb9f41f0c85c5446dac93748f49474e2a11a1ed16490a4a6fa711  examples/repository-host/src/cloudflare.rs
+a91ac0a693160172ea8b90ff1bc36912feb8043fc29beeef2c92191850aa9f4a  examples/repository-host/cloudflare/src/index.js
+b787e065444ad81b28b3014a3bd0e2964aa0380bd361be4829b994d829948a98  examples/repository-host/tests/cloudflare.rs
+e4222f80827c367514326f7137e109d49225736d64e971d23f76230baaf2feba  docs/hosting-optimization-loop.md
+dfed92f28518168a6978d81fe1007cf1710a177501a152a40b71205a5aac0445  examples/repository-host/cloudflare/README.md
+
+Retained Wrangler logs:
+/tmp/git-zero-bulk-payload-r3-wrangler-logs/wrangler-2026-10-18_00-08-07_145.log
+/tmp/git-zero-bulk-payload-r3-wrangler-logs/wrangler-2026-10-18_00-09-06_776.log
+
+Clean committed worktree. No push performed pending root direction.
+Cost/latency/total-runtime-memory acceptance remains unmeasured.

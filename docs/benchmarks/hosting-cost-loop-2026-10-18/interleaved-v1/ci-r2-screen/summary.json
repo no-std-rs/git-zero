@@ -1,0 +1,281 @@
+{
+  "baseline": {
+    "known_usd": 3.28607843618,
+    "min": 3.2860754361800004,
+    "max": 3.2860814361800004,
+    "total_estimate_usd": null
+  },
+  "candidate": {
+    "known_usd": 2.78119243618,
+    "min": 2.7811814361800002,
+    "max": 2.78120343618,
+    "total_estimate_usd": null
+  },
+  "known_reduction": 0.15364392841058283,
+  "decision": "inconclusive",
+  "all_resource_guards_passed": true,
+  "all_profile_cost_guards_passed": true,
+  "conservative_dollar_threshold_passed": true,
+  "profile_costs": [
+    {
+      "profile": "16mib-cold",
+      "baseline": 1.06584897524,
+      "candidate": 0.81340197524,
+      "reduction_fraction": 0.23685062880804086
+    },
+    {
+      "profile": "16mib-warm",
+      "baseline": 0.42108597523999997,
+      "candidate": 0.42108597523999997,
+      "reduction_fraction": 0
+    },
+    {
+      "profile": "64mib-cold",
+      "baseline": 1.35681674285,
+      "candidate": 1.10436674285,
+      "reduction_fraction": 0.18606049883326736
+    },
+    {
+      "profile": "64mib-warm",
+      "baseline": 0.44232674285,
+      "candidate": 0.44233774285,
+      "reduction_fraction": -2.4868494111540684e-05
+    }
+  ],
+  "latency_failures": [
+    {
+      "profile": "16mib-warm",
+      "workload": "history_no_haves",
+      "baseline_host_ms": {
+        "median": 201.9762,
+        "p95": 461.130089
+      },
+      "baseline_git_ms": {
+        "median": 196.6110235,
+        "p95": 537.560422
+      },
+      "baseline_ratios": {
+        "median": 0.9935856525353949,
+        "p95": 1.356556931944745
+      },
+      "candidate_host_ms": {
+        "median": 209.48445450000003,
+        "p95": 76091.384748
+      },
+      "candidate_git_ms": {
+        "median": 230.724675,
+        "p95": 846.800763
+      },
+      "candidate_ratios": {
+        "median": 0.900351636974958,
+        "p95": 132.0193336288472
+      },
+      "median_change_fraction": -0.0938359117027564,
+      "p95_change_fraction": 96.31941986362912,
+      "median_passed": true,
+      "p95_passed": false
+    },
+    {
+      "profile": "16mib-warm",
+      "workload": "history_with_haves",
+      "baseline_host_ms": {
+        "median": 303.87889199999995,
+        "p95": 836.36844
+      },
+      "baseline_git_ms": {
+        "median": 136.2455315,
+        "p95": 364.992645
+      },
+      "baseline_ratios": {
+        "median": 2.311210784677246,
+        "p95": 3.0365701046901914
+      },
+      "candidate_host_ms": {
+        "median": 331.28152450000005,
+        "p95": 1012.392102
+      },
+      "candidate_git_ms": {
+        "median": 134.900524,
+        "p95": 840.41842
+      },
+      "candidate_ratios": {
+        "median": 2.30925303195469,
+        "p95": 4.264647278925083
+      },
+      "median_change_fraction": -0.0008470680110768125,
+      "p95_change_fraction": 0.404429053799233,
+      "median_passed": true,
+      "p95_passed": false
+    },
+    {
+      "profile": "16mib-warm",
+      "workload": "large_push",
+      "baseline_host_ms": {
+        "median": 215.2223815,
+        "p95": 640.1517319999999
+      },
+      "baseline_git_ms": {
+        "median": 138.607827,
+        "p95": 293.849045
+      },
+      "baseline_ratios": {
+        "median": 1.5497236438748148,
+        "p95": 4.717670962122153
+      },
+      "candidate_host_ms": {
+        "median": 230.8775475,
+        "p95": 1034.516029
+      },
+      "candidate_git_ms": {
+        "median": 137.850171,
+        "p95": 291.51272500000005
+      },
+      "candidate_ratios": {
+        "median": 1.5526200808627957,
+        "p95": 7.476974700579085
+      },
+      "median_change_fraction": 0.0018690022569050058,
+      "p95_change_fraction": 0.5848868563770528,
+      "median_passed": true,
+      "p95_passed": false
+    },
+    {
+      "profile": "16mib-warm",
+      "workload": "latest_recheck",
+      "baseline_host_ms": {
+        "median": 24.391254500000002,
+        "p95": 28.114376
+      },
+      "baseline_git_ms": {
+        "median": 26.424218,
+        "p95": 28.521408
+      },
+      "baseline_ratios": {
+        "median": 0.9282375510677149,
+        "p95": 1.0571090040852325
+      },
+      "candidate_host_ms": {
+        "median": 24.8115065,
+        "p95": 45.440217
+      },
+      "candidate_git_ms": {
+        "median": 26.254148999999998,
+        "p95": 135.486884
+      },
+      "candidate_ratios": {
+        "median": 0.935684086635485,
+        "p95": 1.6970256406502624
+      },
+      "median_change_fraction": 0.008022230472366276,
+      "p95_change_fraction": 0.6053459331933142,
+      "median_passed": true,
+      "p95_passed": false
+    },
+    {
+      "profile": "64mib-cold",
+      "workload": "small_push",
+      "baseline_host_ms": {
+        "median": 246.95414599999998,
+        "p95": 311.542526
+      },
+      "baseline_git_ms": {
+        "median": 45.1186615,
+        "p95": 47.93071400000001
+      },
+      "baseline_ratios": {
+        "median": 5.39855880202071,
+        "p95": 6.573355738906822
+      },
+      "candidate_host_ms": {
+        "median": 275.883772,
+        "p95": 343.051073
+      },
+      "candidate_git_ms": {
+        "median": 45.067521,
+        "p95": 48.321634
+      },
+      "candidate_ratios": {
+        "median": 6.1313435488100705,
+        "p95": 7.2261311292771975
+      },
+      "median_change_fraction": 0.13573710570959707,
+      "p95_change_fraction": 0.09930626247818664,
+      "median_passed": false,
+      "p95_passed": true
+    },
+    {
+      "profile": "64mib-warm",
+      "workload": "large_push",
+      "baseline_host_ms": {
+        "median": 226.416279,
+        "p95": 1298.301245
+      },
+      "baseline_git_ms": {
+        "median": 147.13548550000002,
+        "p95": 854.17699
+      },
+      "baseline_ratios": {
+        "median": 1.5239258061988425,
+        "p95": 4.303987006472059
+      },
+      "candidate_host_ms": {
+        "median": 234.751401,
+        "p95": 19167.106523
+      },
+      "candidate_git_ms": {
+        "median": 172.236313,
+        "p95": 1072.571904
+      },
+      "candidate_ratios": {
+        "median": 1.422244778864423,
+        "p95": 132.891739753424
+      },
+      "median_change_fraction": -0.06672308252856773,
+      "p95_change_fraction": 29.876426799985676,
+      "median_passed": true,
+      "p95_passed": false
+    },
+    {
+      "profile": "64mib-warm",
+      "workload": "latest_recheck",
+      "baseline_host_ms": {
+        "median": 25.1527525,
+        "p95": 34.123160999999996
+      },
+      "baseline_git_ms": {
+        "median": 26.660315,
+        "p95": 28.353162
+      },
+      "baseline_ratios": {
+        "median": 0.9385705301564653,
+        "p95": 1.2035046038251394
+      },
+      "candidate_host_ms": {
+        "median": 25.120234500000002,
+        "p95": 75.641389
+      },
+      "candidate_git_ms": {
+        "median": 27.8336545,
+        "p95": 151.739469
+      },
+      "candidate_ratios": {
+        "median": 0.9203472019540292,
+        "p95": 2.7984654968008216
+      },
+      "median_change_fraction": -0.0194160455894542,
+      "p95_change_fraction": 1.3252636407923695,
+      "median_passed": true,
+      "p95_passed": false
+    }
+  ],
+  "reasons": [
+    "16mib-warm/history_no_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+    "16mib-warm/history_with_haves: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+    "16mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+    "16mib-warm/latest_recheck: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+    "64mib-cold/small_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+    "64mib-warm/large_push: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+    "64mib-warm/latest_recheck: paired Git-normalized latency exceeded median +10% or p95 +25%; independent rerun required",
+    "screening only; full five-pair validation required"
+  ]
+}

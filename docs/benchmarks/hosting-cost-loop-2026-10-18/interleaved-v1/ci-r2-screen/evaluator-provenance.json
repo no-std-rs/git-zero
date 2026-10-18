@@ -1,0 +1,17 @@
+{
+  "evaluator_sha256": "01b36df2f5f2019eeb09ebe79eb8ae80e9f86d0cdf39667c9fec9b0584e61fb8",
+  "evaluator_built_source_commit": "386fa67d594bb2ce12776140a66bf03aec931a95",
+  "strict_zero_get_fix_commit": "dccc84b",
+  "benchmark_cost_source_sha256": "0dc340f39d51c4baf86e7d8b142f0a02ffaf9dc10345af7c22b27d59fc581401",
+  "original_measurement_run": 39081580940,
+  "original_measurement_commit": "e6f4ad0c35581630d1d44c40aa1d5eb3496d5f92",
+  "original_ci_score_failure": "missing r2_get",
+  "original_ci_score_binary_sha256": "4b3b6b10fcf7aac2bcf239f5acbc47c3bdd66d3813b7d3f102f324083cfce1ed",
+  "local_repaired_evaluation": true,
+  "measurement_replayed": false,
+  "raw_reports_mutated": false,
+  "raw_checksums_verified_before_and_after": true,
+  "all_four_measurement_jobs_passed": true,
+  "score_stage": "screen",
+  "formal_acceptance": false
+}
