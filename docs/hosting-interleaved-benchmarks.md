@@ -266,3 +266,8 @@ plateau claim. Final confirmation remains five fresh original-R1/final pairs.
 includes compressed profiles/scores, every guard and actual host/Git ratios,
 source/VM/binary checks, and explicitly separate fixed and whole-trace counters.
 Worker CPU, DO duration, monthly SQLite storage and native compute remain unknown.
+
+[Retained warm-fetch tail](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r5-fetch-tail/README.md)
+records the 138.5-second sample alongside its 143.6 ms native codec time and zero
+R2 reads. Response completion and client waiting were not traced, so the cause
+remains unresolved.
