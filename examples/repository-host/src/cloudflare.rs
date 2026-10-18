@@ -474,6 +474,7 @@ pub struct HttpServices {
     generation_witness: Mutex<Option<GenerationWitness>>,
     pub(crate) first_read: Mutex<Option<crate::first_read::Key>>,
     first_read_enabled: AtomicBool,
+    first_receive_enabled: AtomicBool,
     retirement_proof: Mutex<RetirementProofState>,
     manifest_retire: AtomicBool,
     manifest_upload_retire: AtomicBool,
@@ -508,6 +509,7 @@ impl HttpServices {
             generation_witness: Mutex::new(None),
             first_read: Mutex::new(None),
             first_read_enabled: AtomicBool::new(false),
+            first_receive_enabled: AtomicBool::new(false),
             retirement_proof: Mutex::new(RetirementProofState::default()),
             manifest_retire: AtomicBool::new(false),
             manifest_upload_retire: AtomicBool::new(false),
@@ -741,6 +743,11 @@ impl HttpServices {
         self.first_read_enabled.store(enabled, Ordering::Release);
     }
 
+    /// Select small receive preparation, only alongside first-read on cold hosts.
+    pub fn enable_first_receive(&self, enabled: bool) {
+        self.first_receive_enabled.store(enabled, Ordering::Release);
+    }
+
     pub(crate) fn first_read_key(&self) -> io::Result<Option<crate::first_read::Key>> {
         Ok(*self
             .first_read
@@ -798,19 +805,22 @@ impl HttpServices {
         // Reuse strict loopback validation so registration cannot enable SSRF.
         Self::new(codec_origin, &self.repo, &self.token)?;
         let requested_first = self.first_read_enabled.load(Ordering::Acquire);
+        let requested_receive =
+            requested_first && self.first_receive_enabled.load(Ordering::Acquire);
         let registration_body = serde_json::to_vec(
-            &json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1, "catalog_deferred": 1, "catalog_inline": 1, "gateway_first_read": u8::from(requested_first)}),
+            &json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1, "catalog_deferred": 1, "catalog_inline": 1, "gateway_first_read": u8::from(requested_first), "gateway_first_receive": u8::from(requested_receive)}),
         )?;
         let raw_response = self.call("POST", "register", &registration_body, Some("stats"))?;
         let response = crate::first_read::strict_json(&raw_response.body)?;
         // Inline ownership is selected by the private Worker registration, so
         // acknowledge it before installing any capabilities for this session.
         validate_inline_catalog_registration(&response)?;
+        let first = crate::first_read::Key::from_registration(&response, requested_first)?;
+        let first = crate::first_read::Key::with_receive(first, &response, requested_receive)?;
         *self
             .first_read
             .lock()
-            .map_err(|_| io::Error::other("first read lock poisoned"))? =
-            crate::first_read::Key::from_registration(&response, requested_first)?;
+            .map_err(|_| io::Error::other("first read lock poisoned"))? = first;
         *self
             .generation_witness
             .lock()
@@ -1452,6 +1462,66 @@ mod tests {
         assert!(services.register("http://127.0.0.1:1234").is_err()); // Unsolicited off/warm capability.
         assert!(services.first_read_key().unwrap().is_none());
         assert!(!services.manifest_upload_retire.load(Ordering::Acquire));
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn invalid_receive_ack_never_partially_installs_first_read_or_prior_proofs() {
+        let mut valid = inline_catalog_registration();
+        valid["generation_witness"] =
+            json!({"version":1,"key":"22".repeat(32),"session":"00".repeat(16)});
+        valid["gateway_first_read"] = json!({"version":1,"body_bytes":crate::first_read::MAX_ORIGINAL,"frame_bytes":crate::first_read::MAX_FRAME,"key":"11".repeat(32),"session":"00".repeat(16)});
+        valid["gateway_first_receive"] = json!({"version":1,"body_bytes":crate::first_read::MAX_ORIGINAL,"frame_bytes":crate::first_read::MAX_FRAME,"session":"00".repeat(16)});
+        let mut invalid = Vec::new();
+        for field in ["version", "body_bytes", "frame_bytes", "session"] {
+            let mut response = valid.clone();
+            response["gateway_first_receive"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            invalid.push(proof_reply(response, None));
+        }
+        for field in ["extra", "session", "body_bytes"] {
+            let mut response = valid.clone();
+            response["gateway_first_receive"][field] = json!("bad");
+            invalid.push(proof_reply(response, None));
+        }
+        let mut no_first = valid.clone();
+        no_first
+            .as_object_mut()
+            .unwrap()
+            .remove("gateway_first_read");
+        invalid.push(proof_reply(no_first, None));
+        let mut null = valid.clone();
+        null["gateway_first_receive"] = Value::Null;
+        invalid.push(proof_reply(null, None));
+        let mut duplicate = proof_reply(valid.clone(), None);
+        duplicate.body = String::from_utf8(duplicate.body)
+            .unwrap()
+            .replace(
+                "\"gateway_first_receive\":{",
+                "\"gateway_first_receive\":null,\"gateway_first_receive\":{",
+            )
+            .into_bytes();
+        invalid.push(duplicate);
+        for response in invalid {
+            let (services, server) =
+                proof_services(vec![proof_reply(valid.clone(), None), response]);
+            services.enable_first_read(true);
+            services.enable_first_receive(true);
+            services.register("http://127.0.0.1:1234").unwrap();
+            assert!(services.first_read_key().unwrap().unwrap().receive);
+            assert!(services.register("http://127.0.0.1:1234").is_err());
+            assert!(services.first_read_key().unwrap().is_none());
+            assert!(services.generation_witness.lock().unwrap().is_none());
+            assert!(!services.manifest_upload_retire.load(Ordering::Acquire));
+            assert!(!services.retirement_proof.lock().unwrap().enabled);
+            assert_eq!(server.join().unwrap().len(), 2);
+        }
+        let (services, server) = proof_services(vec![proof_reply(valid, None)]);
+        services.enable_first_read(true);
+        assert!(services.register("http://127.0.0.1:1234").is_err());
+        assert!(services.first_read_key().unwrap().is_none());
         assert_eq!(server.join().unwrap().len(), 1);
     }
 

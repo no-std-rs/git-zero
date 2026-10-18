@@ -91,7 +91,8 @@ async function registrationFirstRead(session) {
 }
 function eligibleFirstRead(request, target, registration, logicalHeaders) {
   const n = request.headers.get("content-length");
-  if (!registration?.firstRead || request.method !== "POST" || target !== "/repo.git/git-upload-pack" || request.headers.get("content-type") !== "application/x-git-upload-pack-request" || n === null || !/^\d+$/.test(n) || Number(n) <= 0 || Number(n) > FETCH_BODY_MAX || request.headers.has("transfer-encoding")) return false;
+  const receive = target === "/repo.git/git-receive-pack" && registration?.firstRead?.receive;
+  if (!registration?.firstRead || request.method !== "POST" || (!receive && target !== "/repo.git/git-upload-pack") || request.headers.get("content-type") !== (receive ? "application/x-git-receive-pack-request" : "application/x-git-upload-pack-request") || (receive && (!([null,"","version=0"].includes(request.headers.get("git-protocol"))) || ![null,"identity"].includes(request.headers.get("content-encoding")?.toLowerCase() ?? null))) || n === null || !/^\d+$/.test(n) || Number(n) <= 0 || Number(n) > FETCH_BODY_MAX || request.headers.has("transfer-encoding")) return false;
   const logical = [...logicalHeaders];
   let total = target.length + 16;
   if (logical.length > 256 || logical.some(([name,value]) => {
@@ -172,7 +173,7 @@ async function gatewayFirstRead({ repo, target, headers, body, registration, cur
   const plan = reply.plan;
   if (reply.status !== "supported" || !exact(plan, ["generation", "manifest", "selection", "first"]) || !validCount(plan.generation) || !HEX.test(plan.manifest) || !HEX.test(plan.selection)) fail("invalid Native fetch plan");
   validateFirstBatch(plan.first);
-  const authority = await dispatch(new Request("https://local/_services/manifest/first-read", { method: "POST", headers: { "x-hosting-repo": repo, "x-hosting-phase": "fetch", "content-type": "application/json" }, body: JSON.stringify({ version: 1, generation: plan.generation, manifest: plan.manifest, chunks: plan.first }) }));
+  const authority = await dispatch(new Request("https://local/_services/manifest/first-read", { method: "POST", headers: { "x-hosting-repo": repo, "x-hosting-phase": target === "/repo.git/git-receive-pack" ? "push" : "fetch", "content-type": "application/json" }, body: JSON.stringify({ version: 1, generation: plan.generation, manifest: plan.manifest, chunks: plan.first }) }));
   check();
   if (!authority.ok) fail("authority plus first read failed");
   const generationText = authority.headers.get("x-git-zero-internal-first-generation"), matchedText = authority.headers.get("x-git-zero-internal-first-matched");

@@ -44,6 +44,7 @@ fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
 pub(crate) struct Key {
     key: [u8; 32],
     session: [u8; 32],
+    pub(crate) receive: bool,
 }
 impl Key {
     pub(crate) fn from_registration(
@@ -87,6 +88,7 @@ impl Key {
             return Err(invalid());
         }
         Ok(Some(Self {
+            receive: false,
             key: unhex(&config.key).ok_or_else(invalid)?,
             session: config
                 .session
@@ -94,6 +96,35 @@ impl Key {
                 .try_into()
                 .map_err(|_| invalid())?,
         }))
+    }
+    // Receive is independently negotiated; old first-read clients remain fetch-only.
+    pub(crate) fn with_receive(
+        mut key: Option<Self>,
+        v: &serde_json::Value,
+        requested: bool,
+    ) -> io::Result<Option<Self>> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Capability {
+            version: u32,
+            body_bytes: usize,
+            frame_bytes: usize,
+            session: String,
+        }
+        if let Some(value) = v.get("gateway_first_receive") {
+            let cap: Capability = serde_json::from_value(value.clone()).map_err(|_| invalid())?;
+            let config = key.as_mut().ok_or_else(invalid)?;
+            if !requested
+                || cap.version != 1
+                || cap.body_bytes != MAX_ORIGINAL
+                || cap.frame_bytes != MAX_FRAME
+                || cap.session != config.session()
+            {
+                return Err(invalid());
+            }
+            config.receive = true;
+        }
+        Ok(key)
     }
     pub(crate) fn session(&self) -> &str {
         std::str::from_utf8(&self.session).expect("ASCII session")
@@ -135,7 +166,10 @@ pub(crate) struct Logical {
 impl Logical {
     pub(crate) fn request(&self, body: Vec<u8>) -> io::Result<Request> {
         if self.method != "POST"
-            || self.target != "/repo.git/git-upload-pack"
+            || !matches!(
+                self.target.as_str(),
+                "/repo.git/git-upload-pack" | "/repo.git/git-receive-pack"
+            )
             || body.len() > MAX_ORIGINAL
             || self.headers.len() > 256
         {
@@ -165,6 +199,15 @@ impl Logical {
             headers,
             body,
         };
+        if request.target == "/repo.git/git-receive-pack"
+            && (request.headers.contains_key("transfer-encoding")
+                || request
+                    .headers
+                    .get("content-length")
+                    .is_none_or(|n| n.parse::<usize>().ok() != Some(request.body.len())))
+        {
+            return Err(invalid());
+        }
         normalize(&mut request);
         Ok(request)
     }
@@ -453,6 +496,7 @@ mod tests {
     use super::*;
     fn key() -> Key {
         Key {
+            receive: false,
             key: [7; 32],
             session: *b"00000000000000000000000000000000",
         }
@@ -600,6 +644,51 @@ mod tests {
         ] {
             assert!(strict_json(json).is_err());
         }
+    }
+
+    #[test]
+    fn receive_capability_requires_explicit_request_exact_bounds_and_first_read_session() {
+        let cap = serde_json::json!({"version":1,"body_bytes":MAX_ORIGINAL,"frame_bytes":MAX_FRAME,"session":key().session()});
+        let valid = serde_json::json!({"gateway_first_receive":cap});
+        assert!(
+            Key::with_receive(Some(key()), &valid, true)
+                .unwrap()
+                .unwrap()
+                .receive
+        );
+        assert!(
+            !Key::with_receive(Some(key()), &serde_json::json!({}), true)
+                .unwrap()
+                .unwrap()
+                .receive
+        );
+        assert!(Key::with_receive(None, &valid, true).is_err());
+        assert!(Key::with_receive(Some(key()), &valid, false).is_err());
+        for field in ["version", "body_bytes", "frame_bytes", "session"] {
+            let mut invalid = valid.clone();
+            invalid["gateway_first_receive"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(Key::with_receive(Some(key()), &invalid, true).is_err());
+        }
+        for (field, value) in [
+            ("extra", serde_json::json!(1)),
+            ("session", serde_json::json!("f".repeat(32))),
+            ("body_bytes", serde_json::json!(MAX_ORIGINAL + 1)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["gateway_first_receive"][field] = value;
+            assert!(Key::with_receive(Some(key()), &invalid, true).is_err());
+        }
+        assert!(
+            Key::with_receive(
+                Some(key()),
+                &serde_json::json!({"gateway_first_receive":null}),
+                true
+            )
+            .is_err()
+        );
     }
 
     #[test]

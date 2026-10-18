@@ -16,6 +16,7 @@ fn main() -> io::Result<()> {
         let mut cold = true;
         let mut unregister = false;
         let mut gateway_first_read = true;
+        let mut gateway_first_receive = true;
         loop {
             match arguments.peek().map(String::as_str) {
                 Some("--repo") => {
@@ -44,6 +45,18 @@ fn main() -> io::Result<()> {
                         Some("on") => true,
                         Some("off") => false,
                         _ => return Err(io::Error::other("gateway first read must be on or off")),
+                    };
+                }
+                Some("--gateway-first-receive") => {
+                    arguments.next();
+                    gateway_first_receive = match arguments.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => {
+                            return Err(io::Error::other(
+                                "gateway first receive must be on or off",
+                            ));
+                        }
                     };
                 }
                 Some("--unregister") => {
@@ -75,6 +88,7 @@ fn main() -> io::Result<()> {
             .cloudflare_services()
             .ok_or_else(|| io::Error::other("missing Cloudflare registration services"))?;
         services.enable_first_read(cold && gateway_first_read);
+        services.enable_first_receive(cold && gateway_first_read && gateway_first_receive);
         return http::serve_with_ready(
             port,
             |request| host.handle(request),

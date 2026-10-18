@@ -416,6 +416,8 @@ export default {
           const origin = loopbackOrigin(body.codec_origin);
           const witness = body.generation_witness === 1 ? await registrationWitness() : null;
           const firstRead = witness && body.gateway_first_read === 1 ? await registrationFirstRead(witness.response.session) : null;
+          const firstReceive = firstRead && body.gateway_first_receive === 1;
+          if (firstRead) firstRead.private.receive = !!firstReceive;
           const catalogDeferred = body.catalog_deferred === 1 && body.catalog_pages === 1 && body.catalog_peak === 1;
           const proof = catalogDeferred ? await registrationProof() : null;
           // Recheck after asynchronous key creation so concurrent registrations
@@ -435,6 +437,7 @@ export default {
             ...(proof ? { catalog_deferred: DEFERRED_CAPABILITY } : {}),
             ...(catalogInline ? { catalog_inline: INLINE_CAPABILITY } : {}),
             ...(firstRead ? { gateway_first_read: firstRead.response } : {}),
+            ...(firstReceive ? { gateway_first_receive: { version: 1, body_bytes: FETCH_BODY_MAX, frame_bytes: firstRead.response.frame_bytes, session: firstRead.response.session } } : {}),
             ...(witness ? { generation_witness: witness.response } : {}) });
         }
         if (url.pathname === "/_services/unregister" && request.method === "POST") {
