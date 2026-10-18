@@ -1,7 +1,12 @@
 //! Experimental host-side coordination. Native Git is the initial pack codec;
 //! this crate does not add receive-pack to the allocator-free library or Worker.
 pub mod accounting;
+pub mod cloudflare;
 pub mod cost;
+pub mod http;
+pub mod native;
+pub mod objects;
+mod packed;
 pub mod storage;
 
 use sha2::{Digest, Sha256};
