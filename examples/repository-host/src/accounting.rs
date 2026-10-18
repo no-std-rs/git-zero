@@ -156,6 +156,12 @@ impl ServiceUsage {
                 "service counter scope changed",
             ));
         }
+        if self.by_phase.contains_key("stats") != earlier.by_phase.contains_key("stats") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "service observer accounting availability changed",
+            ));
+        }
         self.workload_counters()?
             .checked_sub(&earlier.workload_counters()?)
     }
@@ -215,6 +221,64 @@ mod tests {
         };
         assert!(identity_lost.checked_workload_delta(&before).is_err());
         assert!(UsageCounters::default().checked_sub(&before.calls).is_err());
+    }
+
+    #[test]
+    fn workload_deltas_require_matching_observer_phase_availability() {
+        let mut before = ServiceUsage {
+            calls: UsageCounters {
+                worker_requests: 100,
+                r2_class_b: 100,
+                ..UsageCounters::default()
+            },
+            counter_scope: "worker ledger".into(),
+            counter_epoch: Some("same-runtime".into()),
+            ..ServiceUsage::default()
+        };
+        let mut after = ServiceUsage {
+            calls: UsageCounters {
+                worker_requests: 130,
+                r2_class_b: 130,
+                ..UsageCounters::default()
+            },
+            ..before.clone()
+        };
+        let legacy_delta = after.checked_workload_delta(&before).unwrap();
+        assert_eq!(legacy_delta.worker_requests, 30);
+        assert_eq!(legacy_delta.r2_class_b, 30);
+
+        after.by_phase.insert(
+            "stats".into(),
+            UsageCounters {
+                worker_requests: 20,
+                r2_class_b: 20,
+                ..UsageCounters::default()
+            },
+        );
+        // All counters still increase, so subtraction alone cannot detect that
+        // only the later snapshot excludes cumulative observer traffic.
+        assert_eq!(
+            after.checked_workload_delta(&before).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        before.by_phase.insert(
+            "stats".into(),
+            UsageCounters {
+                worker_requests: 10,
+                r2_class_b: 10,
+                ..UsageCounters::default()
+            },
+        );
+        let measured_delta = after.checked_workload_delta(&before).unwrap();
+        assert_eq!(measured_delta.worker_requests, 20);
+        assert_eq!(measured_delta.r2_class_b, 20);
+
+        after.by_phase.clear();
+        assert_eq!(
+            after.checked_workload_delta(&before).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
