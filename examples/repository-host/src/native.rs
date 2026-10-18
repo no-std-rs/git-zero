@@ -943,7 +943,16 @@ impl NativeHost {
                 .is_none_or(|length| length == "4")
         {
             validate_snapshot(&self.manifest)?;
-            if advertisement::identity(&self.view).is_some() {
+            if let Some(identity) = advertisement::identity(&self.view)
+                && self
+                    .lineage
+                    .as_ref()
+                    .is_none_or(|proof| proof.matches(&self.manifest, Some(identity)))
+                && self
+                    .advertisement
+                    .as_ref()
+                    .is_none_or(|proof| proof.matches(&self.manifest, Some(identity)))
+            {
                 self.metrics.receive_noop_shortcuts += 1;
                 return Ok(Response {
                     status: 200,

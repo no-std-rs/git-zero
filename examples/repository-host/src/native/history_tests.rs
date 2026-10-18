@@ -452,3 +452,42 @@ fn noop_requires_complete_valid_metadata_and_unsupported_policy_keeps_full_nativ
     assert_eq!(host.metrics.cloud_view_rehydrates, hydrated + 1);
     assert_eq!(host.metrics.receive_noop_shortcuts, shortcuts);
 }
+
+#[test]
+fn noop_identity_change_uses_full_fallback_and_discards_each_stale_certificate() {
+    for stale_lineage in [false, true] {
+        let (fixture, mut host, _) = prepared();
+        assert_eq!(host.handle(fetch(&fixture.tip, None)).status, 200);
+        assert!(matches!(host.scope, ViewScope::Projection { .. }));
+        assert!(host.lineage.is_some());
+        assert!(host.advertisement.is_some());
+        // Construct a valid metadata certificate under a DIFFERENT private test
+        // identity. This exercises identity drift without racing global env.
+        if stale_lineage {
+            host.lineage = history::Certificate::bootstrap(&host.manifest, [9; 32]);
+        } else {
+            host.advertisement = advertisement::Certificate::learn(
+                &host.manifest,
+                &fixture.native(&host.manifest),
+                [9; 32],
+            );
+        }
+        let hydrated = host.metrics.cloud_view_rehydrates;
+        let shortcuts = host.metrics.receive_noop_shortcuts;
+        let expected = git_rpc(&host.view, &noop()).unwrap();
+        let response = host.handle(noop());
+        assert_eq!(response.status, expected.status);
+        assert_eq!(response.body, expected.body);
+        assert_eq!(response.headers, expected.headers);
+        assert_eq!(host.metrics.receive_noop_shortcuts, shortcuts);
+        assert_eq!(host.metrics.cloud_view_rehydrates, hydrated + 1);
+        assert!(matches!(host.scope, ViewScope::Full { .. }));
+        if stale_lineage {
+            assert!(host.lineage.is_none());
+        } else {
+            assert!(host.advertisement.is_none());
+        }
+        assert_eq!(host.pending_lineage_bytes, 0);
+        assert_eq!(host.pending_advertisement_bytes, 0);
+    }
+}

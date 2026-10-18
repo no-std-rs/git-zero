@@ -527,8 +527,8 @@ restoration counts. No provenance is persisted.
 The exact successful empty receive probe `0000` has an additional bounded cold
 Cloudflare shortcut. After normal dirty recovery/authoritative generation checks,
 complete metadata validation, exact path/MIME/v0/identity encoding, fixed native
-policy identity, no transfer encoding, and absent-or-exact-4 content length, it
-returns the byte/header-equivalent native 200 empty receive result. It preserves
+policy identity matching every present lineage/advertisement certificate, no
+transfer encoding, and absent-or-exact-4 content length, it returns the byte/header-equivalent native 200 empty receive result. It preserves
 Full/Projection scope, both certificates, cache, generation, refs and retirement
 debt. The next nonempty or ref-only push still reconstructs Full once. Unsupported
 policy/framing/protocol/shape uses the ordinary strict path. In native Git 2.53,
