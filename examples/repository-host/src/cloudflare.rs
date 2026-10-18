@@ -19,6 +19,7 @@ use std::{
 };
 
 const MAX_RESPONSE: usize = 128 * 1024 * 1024;
+const MAX_BULK_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BULK_PAYLOAD: usize = 16 * 1024 * 1024;
 const MAX_BULK_KEYS: usize = 256;
 const MAX_MANIFEST_BYTES: usize = 1_500_000;
@@ -52,13 +53,13 @@ fn validate_bulk_chunks(chunks: &[Chunk]) -> io::Result<()> {
 }
 
 /// Larger legacy chunks retain the scalar route. Payload and framing have
-/// separate bounds so two complete 8 MiB chunks fit in one bulk response.
+/// separate bounds so one complete 16 MiB chunk or two 8 MiB chunks fit.
 fn bulk_batch_len(chunks: &[Chunk]) -> usize {
     let mut payload = 0usize;
     let mut wire = BULK_HEADER_BYTES;
     let mut count = 0;
     for chunk in chunks.iter().take(MAX_BULK_KEYS) {
-        if chunk.len == 0 || chunk.len > crate::CHUNK_BYTES as u64 {
+        if chunk.len == 0 || chunk.len > MAX_BULK_CHUNK_BYTES as u64 {
             break;
         }
         let Ok(len) = usize::try_from(chunk.len) else {
@@ -734,6 +735,10 @@ mod tests {
         assert_eq!(bulk_batch_len(&chunks[..2]), 2);
         assert_eq!(bulk_batch_len(&chunks), 2);
         assert_eq!(bulk_batch_len(&chunks[2..]), 1);
+        let mut full = chunk(b"a");
+        full.len = MAX_BULK_CHUNK_BYTES as u64;
+        assert_eq!(bulk_batch_len(std::slice::from_ref(&full)), 1);
+        assert_eq!(bulk_batch_len(&[full, chunk(b"a")]), 1);
         assert_eq!(MAX_BULK_RESPONSE, 16_779_276);
         let mut exact = vec![chunk(b"a"); MAX_BULK_KEYS];
         for chunk in &mut exact {
@@ -752,7 +757,7 @@ mod tests {
                 .len()
                 <= MAX_MANIFEST_BYTES
         );
-        for len in [0, crate::CHUNK_BYTES as u64 + 1, u64::MAX] {
+        for len in [0, MAX_BULK_CHUNK_BYTES as u64 + 1, u64::MAX] {
             chunks[0].len = len;
             assert_eq!(bulk_batch_len(&chunks), 0);
         }
@@ -913,9 +918,34 @@ mod tests {
     }
 
     #[test]
+    fn bulk_bridge_reads_one_full_cloud_chunk_before_the_next_byte() {
+        let full = vec![0x63; MAX_BULK_CHUNK_BYTES];
+        let chunks = vec![chunk(&full), chunk(b"d")];
+        let (services, server) = fake_services(vec![
+            (
+                "POST /_services/blobs/read ".into(),
+                chunks[..1].to_vec(),
+                200,
+                frame(&[&full]),
+            ),
+            (
+                "POST /_services/blobs/read ".into(),
+                chunks[1..].to_vec(),
+                200,
+                frame(&[b"d"]),
+            ),
+        ]);
+        assert_eq!(
+            services.r2_get_many(&chunks).unwrap(),
+            vec![full, b"d".to_vec()]
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
     fn bulk_bridge_batches_repeated_keys_and_preserves_large_legacy_scalar_reads() {
         let chunks = vec![chunk(b"a"); MAX_BULK_KEYS + 1];
-        let legacy = vec![0x62; crate::CHUNK_BYTES + 1];
+        let legacy = vec![0x62; MAX_BULK_CHUNK_BYTES + 1];
         let legacy_chunk = chunk(&legacy);
         let expected = vec![
             (

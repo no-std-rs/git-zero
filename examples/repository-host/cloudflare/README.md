@@ -134,7 +134,11 @@ An earlier queued proof whose generation differs after publication forces a fres
 load. Matching proofs place the authority read at the gateway DO read, with the
 existing publication CAS preserving concurrent-write checks.
 
-Blob bodies are limited to 16 MiB; the native Cloudflare adapter uses 8 MiB chunks.
+Blob bodies are limited to 16 MiB; the native Cloudflare adapter writes 16 MiB
+chunks. This is a host storage policy: the generic repository default remains
+8 MiB. Existing 8 MiB manifests remain readable alongside new 16 MiB manifests.
+The independent compaction budget remains 8 MiB, four inputs and one job per push;
+a pack larger than that budget is never pulled into an inline rewrite.
 New Cloudflare packs concatenate the pack and index into `bundle` chunks, with
 `pack_bytes` marking the split. Recovery verifies all complete chunks before
 reconstructing both files. Manifests with separate `pack` and `index` chunks remain
@@ -142,26 +146,36 @@ readable; a pack cannot mix the two representations. Local storage retains separ
 files so single-chunk packs and indexes can share immutable blob inodes.
 Snapshot rehydration batches across packs, with no retained chunk cache. Each batch
 allows at most 256 strict `chunks/<64 lowercase hex>` keys, positive lengths up to
-8 MiB, a 1.5 MB JSON request, and 16 MiB of payload. The separate wire limit is
+16 MiB, a 1.5 MB JSON request, and 16 MiB of payload. The separate wire limit is
 16 MiB + 12 + 8 × 256 bytes (16,779,276 bytes). The frame
 is `GZBR`, a little-endian u32 version (`1`), a u32 count, then a u64 byte length and
 raw bytes per requested entry. Its exact allocation is 12 + 8 × entry count +
-payload bytes, allowing two full 8 MiB chunks without splitting the batch.
-Repeated keys retain one actual R2 GET per occurrence. Valid larger legacy chunks
-use scalar GETs. The Rust reader rejects bad framing, lengths and SHA-256 hashes
-before materializing pack files; a failed read leaves the native view dirty.
+payload bytes, allowing one full 16 MiB chunk or two full 8 MiB chunks.
+Repeated keys retain one actual R2 GET per occurrence. Valid legacy chunks larger
+than 16 MiB use scalar GETs within the existing 128 MiB Rust reader bound. The
+Rust reader rejects bad framing, lengths and SHA-256 hashes before materializing
+pack files; a failed read leaves the native view dirty.
 The Worker finishes bounded bulk JSON intake before forwarding to the Durable
 Object; oversized uploads return 413 with one Worker request and no DO dispatch.
 Chunk and reconstructed file payloads each stay within the existing 128 MiB
 snapshot limit, with at most one bounded bridge response in flight. The Worker
 holds up to 16 MiB of chunk payload alongside the exact frame allocation; the
 Rust reader holds the frame alongside verified payload copies. These bounds do
-not measure total runtime memory. Existing view and response cache budgets stay
-unchanged. Frame version 1 is unchanged: older clients work with the newer Worker;
-the newer client requires that Worker before sending full payload batches. An empty
+not measure total runtime memory or prove a 128 MiB isolate bound: ordinary PUTs
+can now contain 16 MiB, and hashing, binding and runtime copies remain unmeasured.
+Request (64 MiB), view (128 MiB), and response cache (32 MiB, 256 entries, at most
+16 MiB per entry) budgets stay unchanged. Frame version 1 is unchanged: older
+clients work with the newer Worker. Update the client and Worker together; the
+16 MiB writer requires the Worker's 16 MiB bulk-entry limit. An empty
 snapshot issues no blob RPC. Failed batches retain receipts for completed binding
 attempts and their actual bytes; an uncertain partial body read marks accounting
 incomplete through the existing missing-receipt path.
+The 16 MiB layout is a prepared cost candidate, not a measured performance result.
+Larger chunks can reduce binding operations without changing pack/index payload
+bytes; content-addressed deduplication, storage peaks and full trace operations
+must still pass paired benchmarks with unchanged fixtures and cache policies.
+Projected request savings do not establish billed compute or a full hosting bill.
+
 Manifest request JSON is capped at 1.5 MB to stay below SQLite's row/value limit;
 larger repositories need paged metadata. Startup/orphan GC assumes exclusive codec
 ownership: generation checking alone cannot protect another writer's in-flight

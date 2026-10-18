@@ -493,10 +493,13 @@ impl NativeHost {
         crate::storage::durable_create_dir_all(&root)?;
         let root = root.canonicalize()?;
         let services = Arc::new(HttpServices::new(origin, repo, token)?);
-        let repository = Repository::new(
+        let mut repository = Repository::new(
             HostBlobs::Cloudflare(R2BlobStore::new(services.clone()), services.clone()),
             HostState::Cloudflare(DurableStateStore::new(services.clone())),
         );
+        // Storage layout policy is independent of the 8 MiB compaction budget.
+        // Readers use manifest lengths, so existing 8 MiB chunks remain valid.
+        repository.chunk_bytes = 16 * 1024 * 1024;
         Self::with_services(root, repository, Some(services), cold_view)
     }
 
@@ -1348,6 +1351,30 @@ mod tests {
         );
         assert_eq!(incoming_pack(b"0008test0000"), None);
         assert_eq!(incoming_pack(b"zzzzPACKbytes"), None);
+    }
+
+    #[test]
+    fn cloud_chunk_policy_does_not_expand_compaction_budget() {
+        let root =
+            std::env::temp_dir().join(format!("git-zero-compaction-bound-{}", std::process::id()));
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        let mut packs: Vec<_> = [8 * 1024 * 1024 + 1, 1, 2, 3]
+            .into_iter()
+            .map(|bytes| CandidatePack {
+                stored: None,
+                id: String::new(),
+                level: 0,
+                // No file may be opened for a job beyond the unchanged budget.
+                pack: root.join("must-not-read.pack"),
+                index: root.join("must-not-read.idx"),
+                bytes,
+            })
+            .collect();
+        host.compact(&root, &mut packs).unwrap();
+        assert_eq!(packs.len(), 4);
+        assert_eq!(host.metrics.compactions, 0);
+        assert_eq!(host.metrics.compaction_input_bytes, 0);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

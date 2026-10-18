@@ -69,7 +69,71 @@ fn git(directory: &std::path::Path, arguments: &[&str], input: &[u8]) -> Vec<u8>
     command(process, input).unwrap().stdout
 }
 
-const RESTART_DATA: &[u8] = b"persisted through a real local workerd process restart\n";
+fn fixture_data(mut state: u32) -> Vec<u8> {
+    (0..9 * 1024 * 1024)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as u8
+        })
+        .collect()
+}
+
+struct NativeFixture {
+    data: Vec<u8>,
+    tip: String,
+    blob: String,
+    tree: String,
+    id: String,
+    pack: Vec<u8>,
+    index: Vec<u8>,
+}
+
+fn native_fixture(source: &std::path::Path, seed: u32) -> NativeFixture {
+    let data = fixture_data(seed);
+    let output = |arguments: &[&str], input: &[u8]| {
+        String::from_utf8(git(source, arguments, input))
+            .unwrap()
+            .trim()
+            .to_string()
+    };
+    let blob = output(&["hash-object", "-w", "--stdin"], &data);
+    let tree = output(
+        &["mktree"],
+        format!("100644 blob {blob}\tpayload.bin\n").as_bytes(),
+    );
+    let tip = output(
+        &[
+            "-c",
+            "user.name=Contract",
+            "-c",
+            "user.email=contract@example.invalid",
+            "commit-tree",
+            &tree,
+        ],
+        b"bounded cloud layout fixture\n",
+    );
+    let pack = git(
+        source,
+        &["pack-objects", "--stdout", "--revs"],
+        format!("{tip}\n").as_bytes(),
+    );
+    let indexed = output(&["index-pack", "--stdin", "--strict"], &pack);
+    let id = indexed.split_whitespace().last().unwrap().to_string();
+    let index = fs::read(source.join(format!("objects/pack/pack-{id}.idx"))).unwrap();
+    assert!(pack.len() > 8 * 1024 * 1024);
+    assert!(pack.len() + index.len() < 16 * 1024 * 1024);
+    NativeFixture {
+        data,
+        tip,
+        blob,
+        tree,
+        id,
+        pack,
+        index,
+    }
+}
 
 fn restart_fixture() -> RealWorker {
     let mut worker = RealWorker::new("restart");
@@ -1017,6 +1081,61 @@ fn real_bulk_read_fits_two_full_chunks_and_charges_each_repeated_get() {
 
 #[test]
 #[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_full_cloud_chunk_put_and_bulk_read_charge_one_binding_each() {
+    let worker = RealWorker::new("bulk-16mib");
+    let services = worker.services();
+    let blobs = R2BlobStore::new(services.clone());
+    let data = vec![0x63; 16 * 1024 * 1024];
+    let chunk = Chunk {
+        key: format!("chunks/{}", hash(&data)),
+        len: data.len() as u64,
+    };
+    let before = usage(&services);
+    blobs.put(&chunk.key, &data).unwrap();
+    let written = usage(&services);
+    let put = written
+        .workload_counters()
+        .unwrap()
+        .checked_sub(&before.workload_counters().unwrap())
+        .unwrap();
+    assert_eq!(
+        (
+            put.worker_service_requests,
+            put.do_requests,
+            put.r2_class_a,
+            put.r2_written_bytes
+        ),
+        (1, 1, 1, 16 * 1024 * 1024)
+    );
+    assert_eq!(blobs.get_many(&[chunk]).unwrap(), vec![data]);
+    let after = usage(&services);
+    let read = after
+        .workload_counters()
+        .unwrap()
+        .checked_sub(&written.workload_counters().unwrap())
+        .unwrap();
+    assert_eq!(
+        (
+            read.worker_service_requests,
+            read.do_requests,
+            read.r2_class_b,
+            read.r2_read_bytes
+        ),
+        (1, 1, 1, 16 * 1024 * 1024)
+    );
+    assert_eq!(
+        (read.r2_class_a, read.r2_deletes, read.r2_written_bytes),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        operation(&after, "r2_get").successes - operation(&written, "r2_get").successes,
+        1
+    );
+    assert_eq!(after.accounting_complete, Some(true));
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
 fn real_bulk_read_validates_all_bounds_before_binding_io() {
     let worker = RealWorker::new("bulk-bounds");
     let services = worker.services();
@@ -1030,7 +1149,7 @@ fn real_bulk_read_validates_all_bounds_before_binding_io() {
         serde_json::json!({"chunks": [{"key": format!("{key}\n"), "len": 1}]}),
         serde_json::json!({"chunks": [chunk.clone(), {"key": key, "len": 2}]}),
         serde_json::json!({"chunks": [{"key": key, "len": 0}]}),
-        serde_json::json!({"chunks": [{"key": key, "len": 8 * 1024 * 1024 + 1}]}),
+        serde_json::json!({"chunks": [{"key": key, "len": 16 * 1024 * 1024 + 1}]}),
         serde_json::json!({"chunks": [{"key": key, "len": u64::MAX}]}),
     ];
     for body in &invalid {
@@ -1088,21 +1207,22 @@ fn real_native_bundle_uses_one_put_and_survives_restart_and_fetch() {
         &["init", "--bare", "--quiet", "--object-format=sha1"],
         &[],
     );
-    let data = b"a small native pack and its index share one immutable R2 object\n";
-    let object_id = String::from_utf8(git(&source, &["hash-object", "-w", "--stdin"], data))
-        .unwrap()
-        .trim()
-        .to_string();
-    let packed = git(
-        &source,
-        &["pack-objects", "--stdout"],
-        format!("{object_id}\n").as_bytes(),
-    );
+    let fixture = native_fixture(&source, 7);
+    let object_id = &fixture.tip;
+    let packed = &fixture.pack;
+    // The old default splits this exact pack/index stream into two chunks.
+    let legacy_services =
+        git_zero_host::storage::LocalServices::new(directory.0.join("legacy")).unwrap();
+    let legacy = Repository::new(legacy_services.blobs, legacy_services.state)
+        .store_bundled_pack(fixture.id.clone(), packed, &fixture.index, 0)
+        .unwrap();
+    assert_eq!(legacy.bundle.len(), 2);
+    assert_eq!(legacy.bundle[0].len, 8 * 1024 * 1024);
     let mut body = packet(&format!(
         "0000000000000000000000000000000000000000 {object_id} refs/tags/bundle-fixture\0report-status atomic\n"
     ));
     body.extend_from_slice(b"0000");
-    body.extend_from_slice(&packed);
+    body.extend_from_slice(packed);
     let root = directory.0.join("host");
     let mut host = NativeHost::open_cloudflare(
         root.clone(),
@@ -1122,6 +1242,7 @@ fn real_native_bundle_uses_one_put_and_survives_restart_and_fetch() {
     assert_eq!(published.packs.len(), 1);
     let stored = &published.packs[0];
     assert_eq!(stored.bundle.len(), 1);
+    assert!(stored.bundle[0].len > 8 * 1024 * 1024);
     assert!(stored.pack.is_empty() && stored.index.is_empty());
     assert_eq!(
         host.metrics.blob_put_bytes,
@@ -1150,14 +1271,27 @@ fn real_native_bundle_uses_one_put_and_survives_restart_and_fetch() {
         operation(&reopened, "r2_get").successes - operation(&pushed, "r2_get").successes,
         1
     );
-    git(&root.join("view/repo.git"), &["fsck", "--strict"], &[]);
+    let view = root.join("view/repo.git");
+    assert_eq!(
+        fs::read(view.join(format!("objects/pack/pack-{}.pack", stored.id))).unwrap(),
+        fixture.pack
+    );
+    assert_eq!(
+        fs::read(view.join(format!("objects/pack/pack-{}.idx", stored.id))).unwrap(),
+        fixture.index
+    );
+    assert_eq!(
+        git(&view, &["rev-parse", &format!("{object_id}^{{tree}}")], &[]),
+        format!("{}\n", fixture.tree).as_bytes()
+    );
+    git(&view, &["fsck", "--strict"], &[]);
     assert_eq!(
         git(
             &root.join("view/repo.git"),
-            &["cat-file", "blob", &object_id],
+            &["cat-file", "blob", &fixture.blob],
             &[]
         ),
-        data
+        fixture.data
     );
 
     let mut fetch = packet(&format!("want {object_id}\n"));
@@ -1184,13 +1318,13 @@ fn real_native_bundle_uses_one_put_and_survives_restart_and_fetch() {
     );
     git(
         &destination,
-        &["update-ref", "refs/tags/bundle-fixture", &object_id],
+        &["update-ref", "refs/tags/bundle-fixture", object_id],
         &[],
     );
     git(&destination, &["fsck", "--strict"], &[]);
     assert_eq!(
-        git(&destination, &["cat-file", "blob", &object_id], &[]),
-        data
+        git(&destination, &["cat-file", "blob", &fixture.blob], &[]),
+        fixture.data
     );
     assert_eq!(state.load().unwrap(), published);
     assert_eq!(recovered.metrics.blob_puts, 0);
@@ -1420,41 +1554,48 @@ fn seed_before_workerd_restart() {
         &["init", "--bare", "--quiet", "--object-format=sha1"],
         &[],
     );
-    let object_id = String::from_utf8(git(
-        &source.0,
-        &["hash-object", "-w", "--stdin"],
-        RESTART_DATA,
-    ))
-    .unwrap()
-    .trim()
-    .to_string();
-    let data = git(
-        &source.0,
-        &["pack-objects", "--stdout"],
-        format!("{object_id}\n").as_bytes(),
-    );
-    let indexed = String::from_utf8(git(
-        &source.0,
-        &["index-pack", "--stdin", "--strict"],
-        &data,
-    ))
-    .unwrap();
-    let id = indexed.split_whitespace().last().unwrap();
-    let index = fs::read(source.0.join(format!("objects/pack/pack-{id}.idx"))).unwrap();
-    let stored = repository
-        .store_bundled_pack(id.into(), &data, &index, 0)
+    let legacy = native_fixture(&source.0, 11);
+    let current = native_fixture(&source.0, 13);
+    let mut repository = repository;
+    let old = repository
+        .store_bundled_pack(legacy.id.clone(), &legacy.pack, &legacy.index, 0)
         .unwrap();
+    assert_eq!(old.bundle.len(), 2);
+    assert_eq!(old.bundle[0].len, 8 * 1024 * 1024);
+    repository.chunk_bytes = 16 * 1024 * 1024;
+    let new = repository
+        .store_bundled_pack(current.id.clone(), &current.pack, &current.index, 0)
+        .unwrap();
+    assert_eq!(new.bundle.len(), 1);
+    assert!(new.bundle[0].len > 8 * 1024 * 1024);
     let next = Manifest {
         generation: 1,
-        refs: BTreeMap::from([("refs/tags/restart-fixture".into(), object_id.clone())]),
-        packs: vec![stored],
+        refs: BTreeMap::from([
+            ("refs/tags/restart-legacy".into(), legacy.tip.clone()),
+            ("refs/tags/restart-current".into(), current.tip.clone()),
+        ]),
+        packs: vec![old, new],
         ..Manifest::default()
     };
     assert!(repository.publish(&previous, next.clone()).unwrap());
     let usage: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
-    assert_eq!(usage.r2_live_objects, 1);
+    assert_eq!(usage.r2_live_objects, 3);
+    assert_eq!(
+        usage.r2_live_bytes,
+        next.packs
+            .iter()
+            .map(|pack| pack.pack_bytes + pack.index_bytes)
+            .sum::<u64>()
+    );
+    let metadata = |fixture: &NativeFixture, seed| {
+        serde_json::json!({
+            "seed":seed, "tip":fixture.tip, "blob":fixture.blob, "tree":fixture.tree,
+            "pack_hash":hash(&fixture.pack), "index_hash":hash(&fixture.index),
+        })
+    };
     let marker = serde_json::json!({
-        "manifest":next, "object_id":object_id, "counter_epoch":usage.counter_epoch,
+        "manifest":next, "fixtures":[metadata(&legacy, 11), metadata(&current, 13)],
+        "counter_epoch":usage.counter_epoch,
     });
     fs::write(
         restart_marker(&worker),
@@ -1473,23 +1614,28 @@ fn verify_after_workerd_restart() {
     )
     .unwrap();
     let expected: Manifest = serde_json::from_value(marker["manifest"].clone()).unwrap();
-    let object_id = marker["object_id"].as_str().unwrap();
     let services = worker.services();
     let repository = Repository::new(
         R2BlobStore::new(services.clone()),
         DurableStateStore::new(services.clone()),
     );
     assert_eq!(repository.state.load().unwrap(), expected);
-    let usage: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
+    let restarted: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
     assert_ne!(
-        serde_json::to_value(&usage.counter_epoch).unwrap(),
+        serde_json::to_value(&restarted.counter_epoch).unwrap(),
         marker["counter_epoch"],
         "Worker/DO runtime did not restart between the two test phases"
     );
-    for pack in &expected.packs {
+    for (pack, fixture) in expected
+        .packs
+        .iter()
+        .zip(marker["fixtures"].as_array().unwrap())
+    {
         let (data, index) = repository.read_pack_files(pack).unwrap();
         assert_eq!(data.len() as u64, pack.pack_bytes);
         assert_eq!(index.len() as u64, pack.index_bytes);
+        assert_eq!(hash(&data), fixture["pack_hash"].as_str().unwrap());
+        assert_eq!(hash(&index), fixture["index_hash"].as_str().unwrap());
     }
     let view = Directory(std::env::temp_dir().join(format!("{}-recovered", worker.namespace)));
     let host = NativeHost::open_cloudflare(
@@ -1500,21 +1646,63 @@ fn verify_after_workerd_restart() {
         true,
     )
     .unwrap();
+    let native = view.0.join("view/repo.git");
+    git(&native, &["fsck", "--strict"], &[]);
+    for fixture in marker["fixtures"].as_array().unwrap() {
+        let tip = fixture["tip"].as_str().unwrap();
+        assert_eq!(
+            git(
+                &native,
+                &["cat-file", "blob", fixture["blob"].as_str().unwrap()],
+                &[]
+            ),
+            fixture_data(fixture["seed"].as_u64().unwrap() as u32)
+        );
+        assert_eq!(
+            git(&native, &["rev-parse", &format!("{tip}^{{tree}}")], &[]),
+            format!("{}\n", fixture["tree"].as_str().unwrap()).as_bytes()
+        );
+    }
+    drop(host);
+    // The new layout's chunk is shared by consecutive manifest generations.
+    // Retiring the legacy layout must preserve that live chunk and its objects.
+    let mut retained = expected.clone();
+    retained.packs.remove(0);
+    retained.refs.remove("refs/tags/restart-legacy");
+    retained.retire_replaced(&expected);
+    assert_eq!(retained.garbage.len(), 2);
+    let shared = retained.packs[0].bundle[0].clone();
+    assert!(!retained.garbage.contains(&shared.key));
+    assert!(repository.publish(&expected, retained).unwrap());
+    let retained = repository.state.load().unwrap();
+    assert!(retained.collect_garbage(&repository.blobs).is_empty());
+    let remaining = usage(&services);
+    assert_eq!(remaining.r2_live_objects, 1);
+    assert_eq!(remaining.r2_live_bytes, shared.len);
+    let host = NativeHost::open_cloudflare(
+        view.0.clone(),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        true,
+    )
+    .unwrap();
+    let current = &marker["fixtures"][1];
     assert_eq!(
         git(
-            &view.0.join("view/repo.git"),
-            &["cat-file", "blob", object_id],
+            &native,
+            &["cat-file", "blob", current["blob"].as_str().unwrap()],
             &[]
         ),
-        RESTART_DATA
+        fixture_data(13)
     );
+    git(&native, &["fsck", "--strict"], &[]);
     drop(host);
     let mut empty = Manifest::default();
-    empty.retire_replaced(&expected);
-    assert!(repository.publish(&expected, empty).unwrap());
+    empty.retire_replaced(&retained);
+    assert!(repository.publish(&retained, empty).unwrap());
     let retired = repository.state.load().unwrap();
     assert!(retired.collect_garbage(&repository.blobs).is_empty());
-    let usage: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
-    assert_eq!(usage.r2_live_objects, 0);
+    assert_eq!(usage(&services).r2_live_objects, 0);
     fs::remove_file(restart_marker(&worker)).unwrap();
 }
