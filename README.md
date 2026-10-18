@@ -11,8 +11,9 @@ runs natively and as a Cloudflare Workers Wasm module.
 
 - SHA-1/SHA-256 objects, refs, trees, commits, and synthetic snapshots.
 - Smart HTTP serving over protocol v0/v1/v2, plus dumb HTTP loose objects.
-- Bounded fetch selection, shallow depths, blob filters, and streamed responses.
+- Bounded fetch selection, absolute/relative deepening, filters, and streamed responses.
 - Transport-independent fetching, zlib/pack decoding, and delta resolution.
+- Caller-owned selected-pack caches and a native disk backend.
 - Native file/socket adapters and a Cloudflare metadata repository demo.
 
 The library server is read-only today. Its encoder emits stored DEFLATE blocks

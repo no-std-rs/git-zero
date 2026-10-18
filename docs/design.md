@@ -27,7 +27,9 @@
   tree order and links, commit parents, tag targets, and exact reachability from
   HEAD and independent refs. Symbolic ref chains and final peeled tags are supported.
 - Bounded multiple-want selection and packing of just the requested closures,
-  using caller-owned traversal arrays, scratch and a graph-read byte limit.
+  common-history exclusion, absolute/relative deepening and unshallowing, plus
+  `blob:none` and `blob:limit` filters, using caller-owned traversal arrays,
+  scratch and a graph-read byte limit.
 - A transport-independent client that discovers refs, resolves `HEAD`, downloads
   and checksum-validates smart packs, fetches several tips with optional shallow
   negotiation, and fetches dumb loose objects.
@@ -37,20 +39,42 @@
   reader with wire CRCs, canonical object IDs and bounded offset/reference deltas.
 - Complete pack materialization into caller-owned bodies and a sorted ID index,
   plus borrowed commit messages, tree entries and annotated-tag targets.
-- An optional `PackCache` interface with caller-owned storage and versioned keys.
-- A loopback IPv4 server/client adapter and a Cloudflare Workers Wasm demo.
+- Streaming pack and Git v2 index generation with caller-owned metadata, in both
+  object formats. Publishing packed dumb HTTP repositories remains planned.
+- Optional complete-HEAD and selected-pack caches, with versioned closure/format/
+  encoder keys, integrity checks, a caller-buffer cache, and a native disk backend
+  with atomic publication and cooperative per-key producer leases.
+- IPv4/IPv6 server listeners, an IPv4 client adapter and a Cloudflare Workers Wasm demo.
 - Native file-backed raw objects and verified prepacked responses, with positional
   reads and caller-owned scratch, using `rustix` without `std` or `alloc`.
+- Worker immutable inline/KV/R2 metadata snapshots, explicit public binding/header
+  selection, optional tree layout, and bounded canonical repository import.
 - Parallel interoperability tests mixing real Git and git-zero clients/servers.
 
-The client downloads wire objects: raw packs for smart HTTP and zlib objects for
-dumb HTTP. Hosts can decode them and materialize complete packs with shared core
-APIs; the kernel example uses these to expose cached snapshots and refs. A dumb
-repository walker, a native checkout writer, push, and standalone `git://`
-transport remain future work. The server supports protocol v0/v1/v2, absolute
-shallow depths, and blob filters through its selection APIs. Partial clones need
-`--no-checkout` until lazy promised-object retrieval is implemented. Client
-primitives use v0 and support shallow negotiation.
+The client discovers and selects refs, downloads checksum-validated v0 smart
+packs or dumb loose objects, and supports shallow/multiple-tip requests. Shared
+core APIs decode objects, materialize complete non-thin packs and traverse
+checkout trees; the kernel example uses them to expose cached snapshots and refs.
+Complete pack materialization currently supports SHA-1; the entry reader also
+supports SHA-256 packs.
+A complete native clone/checkout writer, dumb repository walker, client filters,
+client protocol v1/v2, push and standalone `git://` transport remain planned.
+
+Server partial clones can perform ordinary lazy checkout when the host explicitly
+grants retrieval from its immutable visible closure. The default advertised-ID
+want policy still requires `--no-checkout`; the grant never exposes objects
+outside the supplied validated repository view.
+Time/exclusion deepening and tree/sparse/combine filters remain unsupported.
+The native server uses blocking sockets and HTTP/1.0 close-delimited responses.
+Hosts can set inclusive complete-wire/decoded-body quotas and independent
+accepted-socket read/write timeouts; default quotas remain unset and timeouts
+remain ten seconds. TLS, chunked intake, keep-alive, request deadlines and
+poll-based concurrency remain host work. See the
+[native admission contract](../crates/git-zero-rustix/README.md).
+The Worker has streamed responses and
+async snapshot persistence, but no complete-pack KV/R2 cache integration or
+deployed performance measurements. Server parity is still incomplete; further
+client and receive-pack work follows its completion gate.
 
 ## Workspace
 

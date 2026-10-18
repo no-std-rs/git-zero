@@ -232,8 +232,9 @@ budget reporting. Separate owners keep overlapping responses independent.
 Both selection arrays need one slot per provider object. Wants need one slot per
 distinct requested ID. Scratch follows validation's header/tree-name limits;
 `graph_read_limit` caps actual structural read bytes, including buffered reads and
-rereads. Selection uses no body-sized buffer or allocation. Only advertised HEAD,
-ref and peeled IDs are accepted; unknown or merely reachable IDs are rejected.
+rereads. Selection uses no body-sized buffer or allocation. By default only
+advertised HEAD, ref and peeled IDs are accepted; unknown or merely reachable
+IDs are rejected.
 Duplicate and overlapping wants produce each object once. Ordinary requests without `done`
 negotiate ACK/NAK without graph traversal. Selection failures occur before output,
 and the same storage can be reused on retry. Known commit haves omit their complete
@@ -241,6 +242,20 @@ closure, sharing `graph_read_limit` across common and wanted traversals. Unknown
 and non-commit haves are ignored. Requests replay wants and common haves each
 round; no connection state or have-ID array is retained. A client's shallow
 boundaries stop common-history traversal, so missing parents are never excluded.
+
+Hosts may opt into `WantOptions::all_visible_reachable(max_want_lines)` through
+`serve_with_selection_policy` or the policy-aware selected response encoders.
+Authenticate and project the repository first: this grant permits every object
+kind in that exact validated visible closure. It does not consult a physical
+object pool or infer authorization from wire capabilities. The occurrence cap
+counts duplicate want lines before deduplication; request-byte, array and graph
+limits remain separate from a total request-work budget.
+
+The native demonstration accepts `git-zero serve --allow-reachable-wants`.
+Worker loaders and deployments have an explicit optional policy; old interfaces
+remain strict and incompatible opt-in interfaces fail closed. V0/v1 opt-in
+discovery adds `allow-reachable-sha1-in-want` after complete packet preflight;
+v2 uses its normal fetch command. Hosts own immutable URL retention and GC.
 
 V0 advertisements include `multi_ack`, `multi_ack_detailed`, `side-band`,
 `side-band-64k` and `no-progress`. A client chooses at most one ACK mode and one
@@ -259,8 +274,9 @@ protocol header selects v0; `version=1` adds its version announcement and
 unborn HEAD and include-tag. Done fetches send a sideband packfile section without
 ACKs; negotiation rounds return ACKs or NAK and wait for done. Thin-pack/ofs-delta
 hints permit full non-delta packs. Selection-enabled discovery adds v0/v1
-`shallow filter` or v2 `fetch=shallow filter`. Legacy complete-pack APIs advertise
-their smaller capability set and reject extensions. The client primitives continue using v0.
+`shallow deepen-relative filter` or v2 `fetch=shallow filter`. Legacy complete-pack
+APIs advertise their smaller capability set and reject extensions. The client
+primitives continue using v0.
 
 Selected fetches support absolute `deepen N` (1..=2147483647), client `shallow`
 IDs, and `filter blob:none` / `filter blob:limit=N` (optional lowercase k/m/g
@@ -268,14 +284,16 @@ binary suffixes). Depth counts commits from every wanted tip, following the
 shortest merge path; annotated tags preserve their target's depth. Depth requests
 resend the bounded closure rather than trusting shallow haves. Responses update
 shallow/unshallow boundaries, including root commits exactly at the depth limit;
-`git fetch --depth=N` and `--unshallow` work with the same arrays and graph budget.
+`git fetch --depth=N`, `--deepen=N` and `--unshallow` work with the same arrays
+and graph budget. Relative deepening follows wanted-history semantics matching
+Git 2.55; versioned oracle tests retain Git 2.53's unrelated-branch difference.
 V0's initial shallow-list probe has no ACK/NAK; v2 uses a shallow-info section.
 
 Blob filters omit bodies of the selected size or larger and retain explicitly
-wanted blobs. Partial clones currently require `--no-checkout`: the advertised-ID
-want policy still rejects requests for unadvertised promised blobs, so lazy
-checkout retrieval remains deferred. Relative/time/exclusion deepening
-(`--deepen`, deepen-since/not), tree/sparse/combine filters, unknown/non-commit
+wanted blobs. An explicit visible-closure grant permits lazy retrieval of promised
+blobs for ordinary partial-clone checkout; strict hosts still require
+`--no-checkout`. Time/exclusion deepening
+(`deepen-since`/`deepen-not`), tree/sparse/combine filters, unknown/non-commit
 shallow IDs, malformed/duplicate options and exhausted budgets fail before
 output. Shallow probes also traverse within the graph budget; hosts must size
 control storage for their boundary packets. No history or filter state persists
@@ -286,7 +304,9 @@ methods and service/version selection, reject duplicate selectors and unsafe or
 malformed paths, and accept at most one leading slash. Native and Worker hosts
 decode gzip uploads with bounded output; native compressed plus expanded bytes
 must fit the caller's request storage, with a fixed 32 KiB stack history window.
-Chunked requests and incremental HTTP I/O remain planned.
+Requests accumulate within bounded storage before parsing. Pull-based response
+streaming is implemented; chunked request decoding, keep-alive and nonblocking
+native I/O remain planned.
 
 On a failed buffered upload, discard the complete failed body. A host can call
 `http::write_upload_error(error, output)` on an empty sink to produce a terminal
@@ -303,8 +323,24 @@ The legacy `http::serve`, `serve_with_scratch`, `serve_with_pack` and HEAD-key
 Complete-pack hooks still negotiate and frame sideband, but may resend common
 objects. Use `serve_with_selection` to omit them.
 Independent roots require selection; legacy upload-pack/cache paths return
-`Unsupported` before invoking pack/cache backends. Requested-closure cache keys
-and prepacked reuse remain roadmap work.
+`Unsupported` before invoking pack/cache backends. The separate
+`cache::selected` API already provides exact-closure keys, integrity checks and
+bounded stored-pack caching. Hosts must authorize and select before every cache
+lookup, including hits, and frame ACK/shallow/sideband output separately.
+`serve_with_selected_pack` and `serve_with_selected_pack_policy` expose the exact
+selected indices to a synchronous trusted pack callback. Pass those indices and
+the supplied read scratch to `cache::selected::write`; its raw PACK bytes flow
+through fresh request-local framing. Authorization and selection run before every
+hit. ACK-only rounds and shallow probes bypass the callback; empty selections
+still emit a valid empty pack.
+
+Cache/backend errors may follow provisional control bytes. Buffer the complete
+response before sending HTTP success, or abort an already started transport on
+failure. The bounded native `selected-cache` example shares its responder with
+the memory/disk real-Git tests and supports an explicit visible-closure grant.
+See the [native cache example](../crates/git-zero-rustix/README.md).
+Async Worker/pull-cursor caching and reuse of arbitrary prepacked closures remain
+roadmap work.
 
 ## Stream object bodies and packs
 
@@ -346,9 +382,15 @@ scratch for streamed bodies; borrowed bodies still write directly.
 
 Use `pack::write` to stream directly to any `io::Write` implementation. Use
 `cache::write` with a `PackCache` and pack-sized scratch buffer to reuse generated
-packs. Cache hits do not need scratch space. Cache failures propagate. Async
-platform caches such as Workers KV/R2 can wrap the host boundary; none is required
-or configured in the demo yet.
+packs. Cache hits do not need scratch space. Cache failures propagate.
+For selected closures, `cache::selected::write` supports a caller-buffer
+`FixedCache` and the native `git_zero_rustix::cache::DiskCache`. The disk backend
+uses fixed resident buffers and atomic complete-file publication; optional
+`DiskCache::try_lease` guards coordinate cooperative producers, which recheck
+after acquisition. Hosts own private namespaces, disk quotas, retries/deadlines
+and crash cleanup. See the [native cache contract](../crates/git-zero-rustix/README.md).
+Worker KV/R2 bindings persist immutable metadata snapshots; asynchronous
+complete-pack caching remains planned.
 
 Buffers are explicit limits. On capacity or protocol errors, discard partial
 output before sending a response. Hosts own authentication, HTTP framing,

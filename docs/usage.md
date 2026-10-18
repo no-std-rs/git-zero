@@ -51,6 +51,8 @@ contents at `main/msg` and `main/tree/src/lib.rs`. Select `checkout` for HEAD's
 files at the mount root, or `ref=main` for a named branch. Both layouts support
 Git symlinks; ref selection and checkout traversal live in the shared crates.
 No userspace mount helper is needed.
+The example's HTTPS transport does not validate certificates, hostnames or server
+signatures; its README documents the current transport and kernel limits.
 
 Use Rust 1.85 or newer, Git with HTTP support, and Python 3 for tests.
 
@@ -133,11 +135,13 @@ Scratch and output limits remain explicit; discard partial output on any error.
 ## Cloudflare Workers demo
 
 See [the demo README](../examples/cloudflare-worker/README.md) for setup and its
-snapshot URL format. It exports available `request.cf` properties, explicitly
-selected public `cf-*` request headers and environment variables, and a runtime descriptor
-as four JSON files in one root commit. Internal platform state unavailable to
-Workers cannot be exported. Environment bindings use an explicit allowlist
-because the runtime does not distinguish string variables from secrets.
+snapshot URL formats and resource limits. By default it exports serializable
+`request.cf` metadata, explicitly selected public headers (default: `cf-ray`),
+selected public string/JSON bindings, and a runtime descriptor as four JSON files
+in one parentless commit. Access credentials are excluded from captures.
+Bindings use an explicit allowlist because the runtime does not distinguish
+public variables from secrets. Optional tree captures put bounded encoded-key
+JSON files in category directories while retaining earlier flat snapshot IDs.
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -147,7 +151,10 @@ npm run dev
 ```
 
 Open the local Worker URL to obtain `clone_url`, then pass that URL to `git clone`.
-The default URL contains the captured public metadata, so every request and
-isolate can reconstruct the same snapshot without a persistence service. The
-demo also supports optional KV/R2 persistence for shorter immutable snapshot
-URLs; see its README for configuration and limits.
+By default the URL contains the captured public metadata. Optional KV/R2 storage
+awaits publication before returning a shorter immutable URL; expiry, missing
+records and integrity failures never recapture current metadata. Each streamed
+response owns its Wasm instance and snapshot across pulls and cancellation.
+Local tests enforce a 24-page linear-memory ceiling and no growth, including the
+raw repository ABI's 64 objects, eight refs and 128 KiB body arena. JavaScript,
+backend and whole-isolate memory are outside that Rust linear-memory bound.
