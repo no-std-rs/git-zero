@@ -506,6 +506,27 @@ fn real_peak_capability_is_repo_scoped_and_migration_mutation_only() {
         &json!({"expected":0,"next":{"generation":1,"refs":{},"packs":[]}}),
     );
     assert_eq!(worker.gc(0, &[]).0, 409);
+    // RegExp.test coerces an array containing one key to that valid string.
+    // GC must reject the actual JSON type before capability migration or Set
+    // membership could misclassify the physical live object as garbage.
+    assert_eq!(
+        worker
+            .request(
+                "POST",
+                "/_services/gc",
+                &serde_json::to_vec(&json!({"expected_generation":1,"live_keys":[[key]]})).unwrap(),
+                &[]
+            )
+            .0,
+        400
+    );
+    assert!(!v2(&worker.state()));
+    assert_eq!(
+        worker
+            .request("GET", &format!("/_services/blob/{key}"), &[], &[])
+            .0,
+        200
+    );
     assert_eq!(
         worker
             .request("PUT", &format!("/_services/blob/{key}"), b"wrong hash", &[])
@@ -526,6 +547,7 @@ fn real_peak_capability_is_repo_scoped_and_migration_mutation_only() {
     );
     assert!(!v2(&worker.state()));
     let after = worker.usage();
+    assert_eq!(after.calls.r2_deletes, before.calls.r2_deletes);
     assert_eq!(
         after.calls.do_rows_written.unwrap() - before.calls.do_rows_written.unwrap(),
         1,

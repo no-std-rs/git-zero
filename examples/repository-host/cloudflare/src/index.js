@@ -830,7 +830,7 @@ export class RepositoryServices {
     }
     if (path === "/_services/gc" && request.method === "POST") {
       const body = await parseJson(request, MAX_MANIFEST_BYTES);
-      if (!Array.isArray(body.live_keys) || body.live_keys.some((key) => !BLOB.test(key))) fail(400, "invalid GC live keys");
+      if (!Array.isArray(body.live_keys) || body.live_keys.some((key) => typeof key !== "string" || !BLOB.test(key))) fail(400, "invalid GC live keys");
       const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
       if (!Number.isSafeInteger(body.expected_generation) || body.expected_generation < 0) fail(400, "GC requires expected_generation");
       if (body.expected_generation !== generation) fail(409, "stale GC generation");
