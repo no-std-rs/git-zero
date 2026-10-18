@@ -475,6 +475,8 @@ pub struct HttpServices {
     pub(crate) first_read: Mutex<Option<crate::first_read::Key>>,
     first_read_enabled: AtomicBool,
     first_receive_enabled: AtomicBool,
+    socket_enabled: AtomicBool,
+    socket: Mutex<crate::socket_rpc::State>,
     retirement_proof: Mutex<RetirementProofState>,
     manifest_retire: AtomicBool,
     manifest_upload_retire: AtomicBool,
@@ -510,6 +512,8 @@ impl HttpServices {
             first_read: Mutex::new(None),
             first_read_enabled: AtomicBool::new(false),
             first_receive_enabled: AtomicBool::new(false),
+            socket_enabled: AtomicBool::new(false),
+            socket: Mutex::new(crate::socket_rpc::State::default()),
             retirement_proof: Mutex::new(RetirementProofState::default()),
             manifest_retire: AtomicBool::new(false),
             manifest_upload_retire: AtomicBool::new(false),
@@ -594,6 +598,27 @@ impl HttpServices {
                 .map_err(|_| io::Error::other("retirement proof lock poisoned"))?
                 .token
         };
+        if let Some(response) = self
+            .socket
+            .lock()
+            .map_err(|_| io::Error::other("service socket lock poisoned"))?
+            .call(
+                crate::socket_rpc::Endpoint {
+                    authority: &self.authority,
+                    repo: &self.repo,
+                    token: &self.token,
+                },
+                crate::socket_rpc::Rpc {
+                    method,
+                    route,
+                    phase,
+                    proof: proof.as_ref().map(RetirementProof::as_str),
+                    body,
+                },
+            )
+        {
+            return Self::checked_response(response?, method, route);
+        }
         let mut stream = TcpStream::connect(&self.authority)?;
         stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(Duration::from_secs(60)))?;
@@ -702,25 +727,69 @@ impl HttpServices {
                 }
             }
         }
-        if !(200..300).contains(&status) {
+        Self::checked_response(
+            Response {
+                status,
+                headers,
+                body: bytes.into(),
+            },
+            method,
+            route,
+        )
+    }
+
+    fn checked_response(response: Response, method: &str, route: &str) -> io::Result<Response> {
+        if !(200..300).contains(&response.status) {
             return Err(io::Error::new(
-                match status {
+                match response.status {
                     404 => io::ErrorKind::NotFound,
                     409 => io::ErrorKind::AlreadyExists,
                     401 | 403 => io::ErrorKind::PermissionDenied,
                     _ => io::ErrorKind::Other,
                 },
                 format!(
-                    "emulator {method} {route}: {status}: {}",
-                    String::from_utf8_lossy(&bytes[..bytes.len().min(1024)])
+                    "emulator {method} {route}: {}: {}",
+                    response.status,
+                    String::from_utf8_lossy(&response.body[..response.body.len().min(1024)])
                 ),
             ));
         }
-        Ok(Response {
-            status,
-            headers,
-            body: bytes.into(),
-        })
+        Ok(response)
+    }
+
+    fn socket_decoded<T>(&self, result: io::Result<T>) -> io::Result<T> {
+        if result.is_err()
+            && let Ok(mut socket) = self.socket.lock()
+        {
+            // A malformed typed reply may follow real I/O. Never replay it;
+            // a later distinct operation opens a newly counted connection.
+            socket.disconnect();
+        }
+        result
+    }
+
+    /// Choose the next registration's private socket transport capability.
+    pub fn enable_socket_rpc(&self, enabled: bool) {
+        self.socket_enabled.store(enabled, Ordering::Release);
+    }
+
+    /// Unpriced transport diagnostics; physical billing stays in usage().
+    pub fn socket_diagnostics(&self) -> io::Result<Value> {
+        Ok(self
+            .socket
+            .lock()
+            .map_err(|_| io::Error::other("service socket lock poisoned"))?
+            .diagnostics())
+    }
+
+    pub(crate) fn socket_storage_bytes(&self) -> usize {
+        size_of::<Mutex<crate::socket_rpc::State>>()
+            + size_of::<AtomicBool>()
+            + if self.socket_enabled.load(Ordering::Acquire) {
+                crate::socket_rpc::RETAINED_BOUND
+            } else {
+                0
+            }
     }
 
     fn json(
@@ -791,6 +860,10 @@ impl HttpServices {
     pub fn register(&self, codec_origin: &str) -> io::Result<()> {
         // Reset before all validation/I/O: failed registration cannot retain
         // capabilities or witnesses from an earlier session.
+        self.socket
+            .lock()
+            .map_err(|_| io::Error::other("service socket lock poisoned"))?
+            .reset();
         *self
             .first_read
             .lock()
@@ -807,8 +880,9 @@ impl HttpServices {
         let requested_first = self.first_read_enabled.load(Ordering::Acquire);
         let requested_receive =
             requested_first && self.first_receive_enabled.load(Ordering::Acquire);
+        let requested_socket = self.socket_enabled.load(Ordering::Acquire);
         let registration_body = serde_json::to_vec(
-            &json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1, "catalog_deferred": 1, "catalog_inline": 1, "gateway_first_read": u8::from(requested_first), "gateway_first_receive": u8::from(requested_receive)}),
+            &json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1, "catalog_deferred": 1, "catalog_inline": 1, "gateway_first_read": u8::from(requested_first), "gateway_first_receive": u8::from(requested_receive), "service_socket": u8::from(requested_socket)}),
         )?;
         let raw_response = self.call("POST", "register", &registration_body, Some("stats"))?;
         let response = crate::first_read::strict_json(&raw_response.body)?;
@@ -817,6 +891,7 @@ impl HttpServices {
         validate_inline_catalog_registration(&response)?;
         let first = crate::first_read::Key::from_registration(&response, requested_first)?;
         let first = crate::first_read::Key::with_receive(first, &response, requested_receive)?;
+        let socket = crate::socket_rpc::Capability::parse(&response, requested_socket)?;
         *self
             .first_read
             .lock()
@@ -837,6 +912,10 @@ impl HttpServices {
         if proof.epoch == proof_epoch {
             proof.enabled = deferred_catalog_supported(&response);
         }
+        self.socket
+            .lock()
+            .map_err(|_| io::Error::other("service socket lock poisoned"))?
+            .capability = socket;
         Ok(())
     }
 
@@ -855,6 +934,10 @@ impl HttpServices {
     }
 
     pub fn unregister(&self) -> io::Result<()> {
+        self.socket
+            .lock()
+            .map_err(|_| io::Error::other("service socket lock poisoned"))?
+            .reset();
         *self
             .first_read
             .lock()
@@ -933,7 +1016,7 @@ impl CloudflareBindings for HttpServices {
                 ));
             }
             let response = self.call("POST", "blobs/read", &body, None)?;
-            result.append(decode_bulk_response(batch, &response.body)?);
+            result.append(self.socket_decoded(decode_bulk_response(batch, &response.body))?);
             offset += count;
         }
         Ok(result)
@@ -1015,7 +1098,7 @@ impl CloudflareBindings for HttpServices {
         let response = self.call("POST", "manifest/upload-retire", &body, None);
         self.replace_retirement_proof(proof_epoch, None)?;
         let response = response?;
-        let result = decode_upload_response(next, pending, &response.body)?;
+        let result = self.socket_decoded(decode_upload_response(next, pending, &response.body))?;
         if let UploadRetiringCas::Published { retirement, .. } = &result
             && retirement.outcomes.iter().all(|outcome| outcome.deleted)
         {
@@ -1396,6 +1479,46 @@ mod tests {
             "catalog_deferred": {"version": 1, "proof_bytes": RETIREMENT_PROOF_BYTES},
             "catalog_inline": {"version": 1, "members": 32, "manifest_bytes": 8192},
         })
+    }
+
+    #[test]
+    fn invalid_socket_ack_resets_every_prior_capability_before_more_io() {
+        let mut valid = inline_catalog_registration();
+        valid["service_socket"] = json!({"version":1,"protocol":"git-zero-service-rpc.v1",
+            "piece_bytes":16384,"header_bytes":4096,"body_bytes":MAX_BULK_RESPONSE,
+            "rpcs":16,"session":"11".repeat(16)});
+        let mut malformed = valid.clone();
+        malformed["service_socket"] = Value::Null;
+        let mut duplicate = proof_reply(valid.clone(), None);
+        duplicate.body = String::from_utf8(duplicate.body)
+            .unwrap()
+            .replace("\"rpcs\":16", "\"rpcs\":16,\"rpcs\":16")
+            .into_bytes();
+        for bad in [proof_reply(malformed, None), duplicate] {
+            let (services, server) = proof_services(vec![proof_reply(valid.clone(), None), bad]);
+            services.enable_socket_rpc(true);
+            services.register("http://127.0.0.1:1234").unwrap();
+            assert!(services.socket.lock().unwrap().capability.is_some());
+            assert!(services.manifest_upload_retire.load(Ordering::Acquire));
+            assert!(services.register("http://127.0.0.1:1234").is_err());
+            assert!(services.socket.lock().unwrap().capability.is_none());
+            assert!(services.first_read_key().unwrap().is_none());
+            assert!(services.generation_witness.lock().unwrap().is_none());
+            assert!(!services.manifest_retire.load(Ordering::Acquire));
+            assert!(!services.manifest_upload_retire.load(Ordering::Acquire));
+            let proof = services.retirement_proof.lock().unwrap();
+            assert!(!proof.enabled && proof.token.is_none());
+            drop(proof);
+            assert_eq!(
+                services.socket_diagnostics().unwrap()["upgrades_attempted"],
+                0
+            );
+            assert_eq!(server.join().unwrap().len(), 2);
+        }
+        let (services, server) = proof_services(vec![proof_reply(valid, None)]);
+        assert!(services.register("http://127.0.0.1:1234").is_err());
+        assert!(services.socket.lock().unwrap().capability.is_none());
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     #[test]

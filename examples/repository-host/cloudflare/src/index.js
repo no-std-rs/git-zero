@@ -4,6 +4,7 @@ import { PAGE_PREFIX, PAGE_END, PAGE_CAPACITY, ancestors, commonPrefix, count, d
 import { PROOF_HEADER, DEFERRED_HEADER, CONFIRM_HEADER, DEFERRED_CAPABILITY, debtDigest, registrationProof, issueProof, verifyProof } from "./retirement-proof.js";
 import { INLINE_HEADER, INLINE_CAPABILITY, encodeInline, decodeInline, inlinePeak } from "./inline-catalog.js";
 import { registrationFirstRead, eligibleFirstRead, gatewayFirstRead, FETCH_BODY_MAX, validateFirstBatch, manifestFingerprint } from "./first-read.js";
+import { SOCKET_CAPABILITY, socketRegistration, closeRegisteredSocket, upgradeServiceSocket } from "./service-socket.js";
 const registry = new Map();
 const workerUsage = new Map();
 let workerEpoch;
@@ -328,6 +329,7 @@ function mergeWorkerUsage(result, repo) {
   result.do_instance_epoch = usage.do_instance_epoch;
   result.accounting_complete = usage.accounting_complete;
   result.accounting_errors = usage.accounting_errors;
+  result.socket_rpc = usage.socket_rpc ?? {};
   result.counter_scope = "current Worker runtime; actual per-RPC receipts survive Durable Object eviction; R2 inventory persists";
   return result;
 }
@@ -389,6 +391,63 @@ async function generationWitness(env, repo, currentPhase, method, target, config
   return signedGenerationWitness(repo, method, target, config, generation);
 }
 
+// HTTP and authenticated socket RPCs share this exact service bridge. Socket
+// messages call it internally; they never enter fetch() or count as Workers.
+async function bridgeService(request, env, repo, currentPhase, observer = false, expectedRegistration = null) {
+  const url = new URL(request.url);
+  if (expectedRegistration && registry.get(repo) !== expectedRegistration) fail(409, "socket registration changed");
+  const headers = new Headers(request.headers);
+  const registration = registry.get(repo), proof = request.headers.get(PROOF_HEADER);
+  if (proof && proof.length > 512) fail(400, "retirement proof exceeds header limit");
+  headers.delete(PROOF_HEADER);
+  for (const name of [...headers.keys()]) {
+    if (name.startsWith(WITNESS_PREFIX)) headers.delete(name);
+  }
+  if (registration?.catalogPeak) headers.set(CATALOG_PEAK_HEADER, "1");
+  if (registration?.catalogPages) headers.set(CATALOG_PAGES_HEADER, "1");
+  if (registration?.catalogInline) headers.set(INLINE_HEADER, "1");
+  if (registration?.proof) headers.set(DEFERRED_HEADER, "1");
+  if (!observer && proof) {
+    let confirmation = null;
+    try { confirmation = await verifyProof(registration?.proof, repo, proof); } catch { /* Paid debt recovery remains available. */ }
+    if (confirmation && registry.get(repo) === registration) headers.set(CONFIRM_HEADER, confirmation);
+  }
+  headers.set("x-hosting-repo", repo);
+  headers.set("x-hosting-phase", currentPhase);
+  // Bound and finish this small JSON upload before entering the DO gate.
+  // Returning a DO error while its forwarded upload is still active can
+  // leave workerd's request pump holding the repository gate indefinitely.
+  const upload = url.pathname === "/_services/manifest/upload-retire";
+  const buffered = (upload || ["/_services/blobs/read", "/_services/manifest/retire"].includes(url.pathname)) && request.method === "POST";
+  const frame = buffered ? await bytes(request, upload ? MAX_BULK_RESPONSE_BYTES : MAX_MANIFEST_BYTES) : null;
+  let context = null;
+  if (registration?.proof && request.method === "POST" && (upload || url.pathname === "/_services/manifest/retire")) {
+    let body;
+    if (upload) {
+      if (frame.length < 12) fail(400, "invalid upload header");
+      const length = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(8, true);
+      if (length > MAX_MANIFEST_BYTES || length > frame.length - 12) fail(400, "invalid upload metadata bound");
+      body = strictJson(frame.subarray(12, 12 + length));
+    } else body = strictJson(frame);
+    context = { generation: body.next?.generation, keys: retirementKeys(body), ...(upload ? { uploaded: body.chunk } : {}) };
+  }
+  if (expectedRegistration && registry.get(repo) !== expectedRegistration) fail(409, "socket registration changed");
+  const serviceRequest = buffered ? new Request(request.url, { method: request.method, headers, body: frame }) : new Request(request, { headers });
+  const { response: clean, receipt } = await dispatchService(env, repo, serviceRequest, upload);
+  if (expectedRegistration && registry.get(repo) !== expectedRegistration) fail(409, "socket registration changed after dispatch");
+  if (context && clean.ok && registry.get(repo) === registration) {
+    // Actual receipts are already charged. Optional crypto/body failure
+    // suppresses the proof, preserving the authoritative publication.
+    try {
+      const reply = strictJson(new Uint8Array(await clean.clone().arrayBuffer()));
+      const token = await issueProof(registration.proof, repo, context, reply, receipt);
+      if (token && registry.get(repo) === registration) clean.headers.set(PROOF_HEADER, token);
+    } catch { /* No proof: bounded actual HEADs can recover after eviction. */ }
+  }
+  if (observer && clean.ok) return json(mergeWorkerUsage(await clean.json(), repo));
+  return clean;
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -408,7 +467,16 @@ export default {
         const observer = url.pathname === "/_services/metrics";
         const currentPhase = observer ? "stats" : phase(request);
         workerCount(repo, observer ? "observer" : "service", currentPhase);
+        if (url.pathname === "/_services/socket") {
+          const usage = workerUsage.get(repo);
+          usage.socket_rpc ??= {};
+          usage.socket_rpc.upgrade_attempts = addCount(usage.socket_rpc.upgrade_attempts ?? 0, 1);
+        }
         if (!env.LOCAL_TOKEN || request.headers.get("x-hosting-token") !== env.LOCAL_TOKEN) {
+          if (url.pathname === "/_services/socket") {
+            const counters = workerUsage.get(repo).socket_rpc;
+            counters.auth_rejected = addCount(counters.auth_rejected ?? 0, 1);
+          }
           return json({ error: "invalid local service token" }, 401);
         }
         if (url.pathname === "/_services/register" && request.method === "POST") {
@@ -428,7 +496,9 @@ export default {
           if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
           const catalogPages = body.catalog_pages === 1 && body.catalog_peak === 1;
           const catalogInline = body.catalog_inline === 1 && catalogDeferred && body.manifest_upload_retire === 1;
-          registry.set(repo, { origin, firstRead: firstRead?.private, witness: witness?.private, catalogPeak: body.catalog_peak === 1, catalogPages, proof, catalogInline });
+          closeRegisteredSocket(registry.get(repo));
+          const socket = body.service_socket === 1 ? socketRegistration() : null;
+          registry.set(repo, { socket, origin, firstRead: firstRead?.private, witness: witness?.private, catalogPeak: body.catalog_peak === 1, catalogPages, proof, catalogInline });
           return json({ registered: true, repository: repo, codec_origin: origin,
             ...(body.manifest_retire === 1 ? { manifest_retire: { version: 1 } } : {}),
             ...(body.manifest_upload_retire === 1 ? { manifest_upload_retire: UPLOAD_CAPABILITY } : {}),
@@ -438,60 +508,28 @@ export default {
             ...(catalogInline ? { catalog_inline: INLINE_CAPABILITY } : {}),
             ...(firstRead ? { gateway_first_read: firstRead.response } : {}),
             ...(firstReceive ? { gateway_first_receive: { version: 1, body_bytes: FETCH_BODY_MAX, frame_bytes: firstRead.response.frame_bytes, session: firstRead.response.session } } : {}),
-            ...(witness ? { generation_witness: witness.response } : {}) });
+            ...(witness ? { generation_witness: witness.response } : {}),
+            ...(socket ? { service_socket: { ...SOCKET_CAPABILITY, session: socket.session } } : {}) });
         }
         if (url.pathname === "/_services/unregister" && request.method === "POST") {
+          closeRegisteredSocket(registry.get(repo));
           registry.delete(repo);
           return json({ registered: false, repository: repo });
         }
-        const headers = new Headers(request.headers);
-        const registration = registry.get(repo), proof = request.headers.get(PROOF_HEADER);
-        if (proof && proof.length > 512) fail(400, "retirement proof exceeds header limit");
-        headers.delete(PROOF_HEADER);
-        for (const name of [...headers.keys()]) {
-          if (name.startsWith(WITNESS_PREFIX)) headers.delete(name);
+        if (url.pathname === "/_services/socket") {
+          const registration = registry.get(repo);
+          return upgradeServiceSocket(request, {
+            repo, registration, current: () => registry.get(repo) === registration,
+            strictJson, bytes, json, fail,
+            diagnostic: (name, count = 1) => {
+              const usage = workerUsage.get(repo);
+              usage.socket_rpc ??= {};
+              usage.socket_rpc[name] = addCount(usage.socket_rpc[name] ?? 0, count);
+            },
+            dispatch: (internal, rpcPhase) => bridgeService(internal, env, repo, rpcPhase, false, registration),
+          });
         }
-        if (registration?.catalogPeak) headers.set(CATALOG_PEAK_HEADER, "1");
-        if (registration?.catalogPages) headers.set(CATALOG_PAGES_HEADER, "1");
-        if (registration?.catalogInline) headers.set(INLINE_HEADER, "1");
-        if (registration?.proof) headers.set(DEFERRED_HEADER, "1");
-        if (!observer && proof) {
-          let confirmation = null;
-          try { confirmation = await verifyProof(registration?.proof, repo, proof); } catch { /* Paid debt recovery remains available. */ }
-          if (confirmation && registry.get(repo) === registration) headers.set(CONFIRM_HEADER, confirmation);
-        }
-        headers.set("x-hosting-repo", repo);
-        headers.set("x-hosting-phase", currentPhase);
-        // Bound and finish this small JSON upload before entering the DO gate.
-        // Returning a DO error while its forwarded upload is still active can
-        // leave workerd's request pump holding the repository gate indefinitely.
-        const upload = url.pathname === "/_services/manifest/upload-retire";
-        const buffered = (upload || ["/_services/blobs/read", "/_services/manifest/retire"].includes(url.pathname)) && request.method === "POST";
-        const frame = buffered ? await bytes(request, upload ? MAX_BULK_RESPONSE_BYTES : MAX_MANIFEST_BYTES) : null;
-        let context = null;
-        if (registration?.proof && request.method === "POST" && (upload || url.pathname === "/_services/manifest/retire")) {
-          let body;
-          if (upload) {
-            if (frame.length < 12) fail(400, "invalid upload header");
-            const length = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(8, true);
-            if (length > MAX_MANIFEST_BYTES || length > frame.length - 12) fail(400, "invalid upload metadata bound");
-            body = strictJson(frame.subarray(12, 12 + length));
-          } else body = strictJson(frame);
-          context = { generation: body.next?.generation, keys: retirementKeys(body), ...(upload ? { uploaded: body.chunk } : {}) };
-        }
-        const serviceRequest = buffered ? new Request(request.url, { method: request.method, headers, body: frame }) : new Request(request, { headers });
-        const { response: clean, receipt } = await dispatchService(env, repo, serviceRequest, upload);
-        if (context && clean.ok && registry.get(repo) === registration) {
-          // Actual receipts are already charged. Optional crypto/body failure
-          // suppresses the proof, preserving the authoritative publication.
-          try {
-            const reply = strictJson(new Uint8Array(await clean.clone().arrayBuffer()));
-            const token = await issueProof(registration.proof, repo, context, reply, receipt);
-            if (token && registry.get(repo) === registration) clean.headers.set(PROOF_HEADER, token);
-          } catch { /* No proof: bounded actual HEADs can recover after eviction. */ }
-        }
-        if (observer && clean.ok) return json(mergeWorkerUsage(await clean.json(), repo));
-        return clean;
+        return await bridgeService(request, env, repo, currentPhase, observer);
       }
       const forwardedPath = prefixed ? url.pathname.slice(repo.length + 1) : url.pathname;
       if (!forwardedPath.startsWith("/repo.git/")) return json({ error: "unknown route" }, 404);

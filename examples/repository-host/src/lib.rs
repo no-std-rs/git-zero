@@ -9,6 +9,7 @@ pub mod http;
 pub mod native;
 pub mod objects;
 mod packed;
+mod socket_rpc;
 pub mod storage;
 
 use sha2::{Digest, Sha256};

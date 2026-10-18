@@ -1684,8 +1684,9 @@ impl NativeHost {
             + size_of::<Option<advertisement::Certificate>>()
             + size_of::<Option<history::Certificate>>()
             + 2 * size_of::<usize>()
-            + self.cloudflare.as_ref().map_or(0, |_| {
+            + self.cloudflare.as_ref().map_or(0, |services| {
                 HttpServices::retirement_proof_storage_bytes()
+                    + services.socket_storage_bytes()
                     + size_of::<std::sync::Mutex<Option<crate::first_read::Key>>>()
                     + 2 * size_of::<std::sync::atomic::AtomicBool>()
             })
@@ -2041,6 +2042,7 @@ impl NativeHost {
                     value["objects"] = crate::objects::inventory(&self.view, &self.manifest)?;
                 }
                 if let Some(services) = &self.cloudflare {
+                    value["native_socket_rpc"] = services.socket_diagnostics()?;
                     let usage = services.usage()?;
                     if request.target == "/_object-stats" {
                         let counters = serde_json::from_value(usage.clone())?;
@@ -2222,6 +2224,7 @@ mod tests {
         assert_eq!(
             host.metadata_bytes() - metadata,
             HttpServices::retirement_proof_storage_bytes()
+                + host.cloudflare.as_ref().unwrap().socket_storage_bytes()
                 + size_of::<std::sync::Mutex<Option<crate::first_read::Key>>>()
                 + 2 * size_of::<std::sync::atomic::AtomicBool>()
         );
