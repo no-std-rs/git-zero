@@ -17,6 +17,7 @@ fn main() -> io::Result<()> {
         let mut unregister = false;
         let mut gateway_first_read = true;
         let mut gateway_first_receive = true;
+        let mut socket_rpc = true;
         loop {
             match arguments.peek().map(String::as_str) {
                 Some("--repo") => {
@@ -63,6 +64,14 @@ fn main() -> io::Result<()> {
                     arguments.next();
                     unregister = true;
                 }
+                Some("--socket-rpc") => {
+                    arguments.next();
+                    socket_rpc = match arguments.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err(io::Error::other("socket RPC must be on or off")),
+                    };
+                }
                 _ => break,
             }
         }
@@ -89,6 +98,7 @@ fn main() -> io::Result<()> {
             .ok_or_else(|| io::Error::other("missing Cloudflare registration services"))?;
         services.enable_first_read(cold && gateway_first_read);
         services.enable_first_receive(cold && gateway_first_read && gateway_first_receive);
+        services.enable_socket_rpc(socket_rpc);
         return http::serve_with_ready(
             port,
             |request| host.handle(request),
