@@ -25,14 +25,14 @@ env:
   # Full validation always compares the original scalar baseline with current HEAD.
   BASELINE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
   # Ordered providers, measured once each per VM; adjacent comparisons share suites.
-  # R14 couples catalog/publication; R15 combines authority and the first fetch batch.
+  # R16 combines first small receive; R17 multiplexes Native service RPCs.
   # Duplicate refs or native source trees fail closed before build/timing.
-  SCREEN_PROVIDERS: r13 r14 r15
-  SCREEN_R13_COMMIT: 774adce8795577f4ed7f4a21c3239106abeb21e0
-  SCREEN_R14_COMMIT: 5759726b0a4545f6613553e1f2303f303eb65384
+  SCREEN_PROVIDERS: r15 r16 r17
   SCREEN_R15_COMMIT: 5a7f74f58336b5474dc9920cd20857ab8e573910
-  EXPECTED_WORKER_SOURCE_TREE: 2944d3ecf512c09452e9d4487bd8bfc0b3815f91
-  EXPECTED_WORKER_SHA256: bd42e9b9fc4039688b554c97a47d89202df4422fa5b91e008ec892811bb39f17
+  SCREEN_R16_COMMIT: 603b224eda3719c7525db00ac6a112a71368d7b3
+  SCREEN_R17_COMMIT: c128197cc2cf1761e93832c63eec4c25c1268249
+  EXPECTED_WORKER_SOURCE_TREE: 7f41db4407963ed04e6cbe19556b1416633caf18
+  EXPECTED_WORKER_SHA256: 0b3183bb89d7920c9f1d0868895ec13414d74e74e096f8181b30654e418c0bbd
   REFERENCE_GIT_VERSION: 2.53.0
   # Four profile archives plus one score archive: at most 20 MiB per run.
   ARTIFACT_MAX_BYTES: '4194304'

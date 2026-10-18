@@ -493,11 +493,12 @@ exports stopped-host stderr tails beside incomplete reports, outside workload
 timers. Successful workload logic, reference, Native providers, all five Worker
 modules, rates and scoring stay fixed. The 4 MiB archive cap remains unchanged.
 
-## Fresh declared screen: atomic metadata and first fetch batch
+## Completed fresh screen: atomic metadata and first fetch batch
 
-After reviewing all four original outcomes, the fresh three-provider two-pair
-screen will compare the same pinned sources below. Each provider and all four
-profiles are newly measured within one new workflow attempt:
+Fresh [run 39106495382, attempt 1](https://github.com/no-std-rs/git-zero/actions/runs/39106495382)
+at `74e4b8b5cd111341043cdab04a89c047aa052cee` completed all four profiles and scoring.
+Each provider was measured with two fresh pairs and an excluded warmup on each
+profile VM. None of the failed attempt's samples supplied this run:
 
 
 | Label | Change | Source commit | Native source tree |
@@ -506,11 +507,11 @@ profiles are newly measured within one new workflow attempt:
 | r14 | Atomic bounded catalog/manifest metadata | `5759726b0a4545f6613553e1f2303f303eb65384` | `bfc7e5dbf7e7f244572e5d0f40e79f3190ad1707` |
 | r15 | Same-gateway authority and first fetch batch | `5a7f74f58336b5474dc9920cd20857ab8e573910` | `f6c9a339159083a06531dd4982cc201ec46c13de` |
 
-All three run freshly on the same standard GitHub VM within each 16/64 MiB ×
+All three ran freshly on the same standard GitHub VM within each 16/64 MiB ×
 cold/warm profile. Each has one excluded warmup and two measured pairs with
 stock Git's MIDX bitmap and commit-graph maintenance. Every trial has 32 pushes
 and 56 verified fetches. No earlier raw report or score supplies a sample.
-Compared providers use the common final Worker source tree
+Those providers used the common Worker source tree
 `2944d3ecf512c09452e9d4487bd8bfc0b3815f91`, index SHA256
 `bd42e9b9fc4039688b554c97a47d89202df4422fa5b91e008ec892811bb39f17`.
 The workflow freezes all five tracked Worker modules, including inline catalog
@@ -522,7 +523,7 @@ final-source on/off control removes one service Worker and one DO callback per
 activated cold fetch, with the same real GETs, bytes and SQL work. Its whole
 fetch phase changes 24→15 Worker/DO requests, with 30 GETs/104,943,319 bytes,
 13 SQL reads and no writes. These are local correctness/topology results;
-net cost and latency still require the fresh screen. Legacy, boundary,
+the fresh measured results appear below. Legacy, boundary,
 corruption, concurrent-state and ambiguous-publication controls remain separate
 from performance samples.
 
@@ -537,3 +538,85 @@ reviewed first. Final validation still requires five fresh original-R1/final
 pairs on all four profiles. Prepared receiving and any socket service transport
 are separate unmeasured candidates; this batch enables neither for its Native
 providers.
+
+
+All three CI scores and comparisons reproduce byte-exactly with the frozen
+Rust evaluator. The fixed objective is the sum of all four profiles' measured
+32-push/56-fetch mix repeated 1,000 times, plus each observed peak held once for
+30 days. It is a known resource subtotal, with no allowances or invoice rounding.
+
+| Provider | Known fixed objective | Change versus R13 |
+| --- | ---: | ---: |
+| R13 | $1.80461543618 | — |
+| R14 | $1.68445743618 | −6.658372% |
+| R15 | $1.64124743618 | −9.052787% |
+
+R15 is 2.565218% below R14. All three conservative cost envelopes pass 1%,
+all 108 resource guards and all 12 profile-cost guards pass. Actual cold R15
+first-read consumption is 48 requests per trial on both sizes, removing 48
+Worker/DO callbacks with identical GETs and bytes. Warm consumption is zero.
+SQL writes per trial are 66→35→35 at 16 MiB and 68→39→39 at 64 MiB. All final
+SQLite files are 24,576 bytes. First-mutation migration is included; startup
+and observer operations remain separately visible, not credited as free work.
+
+Every comparison remains **inconclusive and plateau-ineligible**: R14/R13,
+R15/R13 and R15/R14 fail 6, 9 and 10 latency groups respectively, 26 limits in
+total. R15's worst sample is 94.790 seconds versus paired Git's 0.995 seconds;
+R13's worst is 160.642 seconds versus 0.706 seconds. No transfer-timing cause or
+speed win is established. Complete review of sources, all guards and every tail
+selects R15 only as the next provisional known-cost comparison anchor.
+
+[Fresh evidence and analysis](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r13-r15-fresh-screen/README.md)
+preserves all five unchanged archives, 12 reports, three scores/comparisons,
+2,112 individual ratios, 96 selected tails and all 1,440 pairs in the 25 failed
+latency groups. The independent verifier checks all 212 original checksums and
+416 evidence hashes. Root review independently rebuilds all 24 priced trials,
+all resource/profile-cost and latency guards, and every retained tail. The
+failed earlier attempt remains separate evidence above. Unknown compute and
+SQLite retention keep the full hosting bill null; five fresh original/final
+pairs on all four profiles remain mandatory.
+
+## Next declared screen: small receiving and Worker service sockets
+
+After the complete fresh R13–R15 review, a new three-provider screen measures:
+
+| Label | Change | Exact source commit | Native source tree |
+| --- | --- | --- | --- |
+| r15 | Provisional known-cost anchor: first fetch batch | `5a7f74f58336b5474dc9920cd20857ab8e573910` | `f6c9a339159083a06531dd4982cc201ec46c13de` |
+| r16 | First verified Full reconstruction for small receiving | `603b224eda3719c7525db00ac6a112a71368d7b3` | `a255cf03e52648248cd0e71051a3c2a9d8e0a827` |
+| r17 | Bounded Native-to-Worker service socket transport | `c128197cc2cf1761e93832c63eec4c25c1268249` | `328a5bd64b51e2335d5aa3432d46c07d1d022655` |
+
+Each profile gets a fresh standard GitHub VM, with these providers measured
+sequentially using separate Worker processes and state, two pairs each and an
+excluded warmup. Every comparison uses only this new attempt's reports; the
+three earlier-to-later comparisons share intermediate suites and are correlated.
+The original scalar Git wrapper, Git 2.53 policy, objective, dated prices,
+32 MiB/256-entry owning cache, storage caps and all guards stay fixed.
+
+The common Worker source is `7f41db4407963ed04e6cbe19556b1416633caf18`, with
+index SHA256 `0b3183bb89d7920c9f1d0868895ec13414d74e74e096f8181b30654e418c0bbd`.
+All six source modules, including `service-socket.js`, are frozen before/after
+measurement and across VMs. R15/R16 do not negotiate sockets; the shared ordinary
+HTTP bridge is independently verified equivalent to their preceding Worker.
+
+The [R16 candidate evidence](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r16-small-receive-candidate/README.md)
+proves eight same-source small/thin receiving pairs each remove one Worker/DO
+callback, with identical Full GETs, bytes, writes and verified Git contents.
+Its shared error cleanup, one-use Full token, unknown receipts, ambiguity and
+same-Native GC-before-PUT controls remain separate from performance samples.
+
+The [R17 candidate evidence](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/README.md)
+proves an initial Upgrade is one Worker request and later messages dispatch
+ordinary DO HTTP calls, each still one DO request. There is no DO-socket billing
+discount. Connections rotate after 16 RPCs; every Upgrade is charged. Actual
+maximum payloads, strict framing/authentication/ACK/session controls and the
+256 KiB retained reservation inside the same shared cache cap passed review.
+Exact-source Git on/off and 29 fault controls verify no automatic resend after
+ambiguous publication and recovery before a later PUT. Those are correctness
+and topology controls; only this new screen can measure net cost and latency.
+
+The protected immutable-chunk cache is a separate unmeasured candidate and is
+not enabled by these three source pins. No stopping condition is established.
+All two-pair comparisons remain formally inconclusive; final validation still
+requires five fresh original-R1/final pairs on every profile, with full unknown
+cloud and Native compute left unknown.

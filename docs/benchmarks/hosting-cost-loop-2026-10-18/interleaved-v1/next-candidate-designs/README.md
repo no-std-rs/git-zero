@@ -16,3 +16,7 @@ Each design has an independent review and implementation preparation. All
 retain existing memory/storage/API limits and unknown compute costs. These
 records establish no speed win, global minimum or stopping result. Verify
 publication files with `sha256sum --check SHA256SUMS`.
+
+The protected-chunk design, independent review and implementation preparation are prospective evidence for one bounded immutable GET cache. Its candidate source is excluded from the R15–R17 screen. Conditional GET counts and cache-survival arithmetic are hypotheses; only a later fresh screen can establish net cost.
+
+The multi-chunk audit extends that hypothesis to bounded secondary admission. Its modeled GET savings require independent design review, real ownership/pressure gates and fresh measurement; the current screen enables neither chunk-cache design.

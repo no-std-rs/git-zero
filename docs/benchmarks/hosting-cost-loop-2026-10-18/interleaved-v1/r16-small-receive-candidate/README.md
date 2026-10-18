@@ -15,4 +15,6 @@ Repeated large fixture/pack payloads remain local with complete SHA/size invento
 - [Publication validation](publication-validation.json)
 - [Protocol and limits](../../../../hosting-small-receive.md)
 
-Independent ledger review, fresh screens and final five-pair validation remain.
+Independent [source review](independent-source-review.md) and [ledger continuity review](independent-ledger-review.md) passed. Fresh screens and final five-pair validation remain.
+
+Injected after-PUT failure receipts contain zero acknowledged written bytes; the physical write is proven by the wrapper and recovery inventory. Those incomplete fault traces are not priced as successful benchmarks.

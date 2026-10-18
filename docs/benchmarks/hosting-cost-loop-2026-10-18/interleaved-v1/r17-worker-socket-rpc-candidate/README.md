@@ -15,3 +15,5 @@ performance screen, promotion or stopping decision is recorded here.
 
 Large payloads, generated Git/R2/SQLite state and ELF files are local hash-only;
 their paths, sizes and SHA-256 values are included in the retained inventory.
+
+The [independent ledger review](independent-ledger-review.md) approves exact docs commit `9135f96207e89faa5c566aaa2780991eb5644f82` and frozen production source `c128197cc2cf1761e93832c63eec4c25c1268249`. Fresh screens and final five-pair validation remain; this is no net-cost or speed result.

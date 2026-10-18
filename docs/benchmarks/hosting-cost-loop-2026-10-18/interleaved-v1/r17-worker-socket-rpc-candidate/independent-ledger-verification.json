@@ -1,0 +1,226 @@
+{
+  "kind": "Independent R17 final compact ledger continuity verification; no source edit/runtime/build/test/benchmark",
+  "utc": "2026-10-18T07:50:11.612164+00:00",
+  "source": "c128197cc2cf1761e93832c63eec4c25c1268249",
+  "docs": "9135f96207e89faa5c566aaa2780991eb5644f82",
+  "docs_exact_parent_source": true,
+  "clean": true,
+  "docs_only_files": 10,
+  "handoff_sha256": "54e8ea3589b141637da303f0bfe2ab4a079ea7a1e8a3ef798e7a6f4cf493a3da",
+  "published_files": [
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/README.md",
+      "bytes": 995,
+      "sha256": "df2f2b0f89f1eb4103a7d23a2996623d0a20d9bec85424df4dbcfc014807917b"
+    },
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/SHA256SUMS",
+      "bytes": 776,
+      "sha256": "57e4174a09ec7463fa4df9a03d06aab2a52d7d600a89537d97a649a32a2f947d"
+    },
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/capsule-members.json.gz",
+      "bytes": 126530,
+      "sha256": "947f7611f8a26f99af2d52f40ba4b4534ca3b0fbbc1902459f419b7d2f9d6474"
+    },
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/correctness-evidence.tar.gz",
+      "bytes": 2236102,
+      "sha256": "c3d3b0dd039388d5a79bb2e889ad8691f66ed300453584a39621811e7295da03"
+    },
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/implementation.json",
+      "bytes": 42754,
+      "sha256": "9b11b2d5bf1a6f302b80d4291b365f8e6f5c1b0d80f0e10e6922d2e8338df590"
+    },
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/retained-artifacts.json.gz",
+      "bytes": 225707,
+      "sha256": "478926c1262357986257b6da08246f0928ac7eb29a328c8b3c6d847aac1f7986"
+    },
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/source-manifest.json.gz",
+      "bytes": 18244,
+      "sha256": "95723625079bfe72ac00db19fb693f5b270b998abee3c37c8dea2bd1abd611c5"
+    },
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/source-review.md",
+      "bytes": 10517,
+      "sha256": "fa6e4c6ab2c6573163bb953d0c72cebe3a3601a17e1136844d21951763a74b13"
+    },
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/validation.md",
+      "bytes": 10657,
+      "sha256": "8ae1dd54ca471e266993277f0eeadb1e3edfae017113d3800812873ae8f8f202"
+    },
+    {
+      "path": "/tmp/git-zero-hosting-socket-rpc/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r17-worker-socket-rpc-candidate/verification.json",
+      "bytes": 2260,
+      "sha256": "df9f3acc1fad846cf78aa49d1535a910f0376c4b3ad24b75782f60afb5d76807"
+    }
+  ],
+  "published_checksums_verified": 9,
+  "retained_full_inventory": {
+    "files": 4271,
+    "bytes": 1667363419,
+    "every_file_hash_and_size_matches": true,
+    "all_12_root_file_sets_exact": true,
+    "roots": [
+      {
+        "root": "/tmp/git-zero-socket-first-proof-01",
+        "files": 28,
+        "bytes": 17186675
+      },
+      {
+        "root": "/tmp/git-zero-socket-first-proof-02",
+        "files": 1,
+        "bytes": 670
+      },
+      {
+        "root": "/tmp/git-zero-socket-first-proof-03",
+        "files": 39,
+        "bytes": 35685128
+      },
+      {
+        "root": "/tmp/git-zero-socket-git-production-on-01",
+        "files": 292,
+        "bytes": 204682888
+      },
+      {
+        "root": "/tmp/git-zero-socket-git-production-off-01",
+        "files": 292,
+        "bytes": 204666206
+      },
+      {
+        "root": "/tmp/git-zero-socket-git-receiving-faults-01",
+        "files": 715,
+        "bytes": 205532673
+      },
+      {
+        "root": "/tmp/git-zero-socket-git-receiving-faults-02",
+        "files": 1062,
+        "bytes": 207261967
+      },
+      {
+        "root": "/tmp/git-zero-socket-first-proof-final-01",
+        "files": 54,
+        "bytes": 35972896
+      },
+      {
+        "root": "/tmp/git-zero-socket-first-proof-final-02",
+        "files": 90,
+        "bytes": 36964433
+      },
+      {
+        "root": "/tmp/git-zero-socket-final-c128-git-on-01",
+        "files": 292,
+        "bytes": 204696404
+      },
+      {
+        "root": "/tmp/git-zero-socket-final-c128-git-off-01",
+        "files": 292,
+        "bytes": 204679204
+      },
+      {
+        "root": "/tmp/git-zero-socket-final-c128-receiving-faults-01",
+        "files": 1062,
+        "bytes": 208072482
+      }
+    ]
+  },
+  "local_hash_only": {
+    "files": 1870,
+    "bytes": 1655343945,
+    "all_dispositions_explicit": true
+  },
+  "capsule": {
+    "bytes": 2236102,
+    "sha256": "c3d3b0dd039388d5a79bb2e889ad8691f66ed300453584a39621811e7295da03",
+    "members": 2731,
+    "uncompressed_bytes": 17968149,
+    "all_members_read_sha_size": true,
+    "safe_paths_no_duplicates_links": true,
+    "exact_inventory_member_set": true,
+    "member_prefix_counts": {
+      "dependency-source": 13,
+      "provenance": 5,
+      "raw": 2401,
+      "source": 312
+    }
+  },
+  "source_capsule": {
+    "tracked_files": 312,
+    "bytes": 3729485,
+    "every_file_exact_git_c128": true,
+    "dependency_source_and_license_files": 13,
+    "every_dependency_exact_local_source": true
+  },
+  "source_maps": [
+    {
+      "before_after_current_and_capsule_match": true,
+      "bytes": 4857,
+      "entries": 34,
+      "name": "production-first-gate",
+      "path": "/tmp/git-zero-socket-first-proof-final-02/production/source-before.json",
+      "sha256": "200929a74eb5e437cc688a12cf00fb140d3bd2770191d7223fdaaef926461582"
+    },
+    {
+      "before_after_current_and_capsule_match": true,
+      "bytes": 5317,
+      "entries": 37,
+      "name": "on",
+      "path": "/tmp/git-zero-socket-final-c128-git-on-01/source-before.json",
+      "sha256": "96a1f225a73002048be51de1b756ce06536b7ed38f10389035ea85001b09db42"
+    },
+    {
+      "before_after_current_and_capsule_match": true,
+      "bytes": 5317,
+      "entries": 37,
+      "name": "off",
+      "path": "/tmp/git-zero-socket-final-c128-git-off-01/source-before.json",
+      "sha256": "96a1f225a73002048be51de1b756ce06536b7ed38f10389035ea85001b09db42"
+    },
+    {
+      "before_after_current_and_capsule_match": true,
+      "bytes": 5317,
+      "entries": 37,
+      "name": "faults",
+      "path": "/tmp/git-zero-socket-final-c128-receiving-faults-01/source-before.json",
+      "sha256": "96a1f225a73002048be51de1b756ce06536b7ed38f10389035ea85001b09db42"
+    }
+  ],
+  "old_479_all_retained_matched": true,
+  "fresh_956_all_retained_matched": true,
+  "pinned_original_and_final_reviews_and_proofs": {
+    "/tmp/git-zero-socket-rpc-source-review-c128197.md": "ee7420bf56edfb43ee89d11a53d79bdf77469790ad3b74c0e016597dfa73776e",
+    "/tmp/git-zero-socket-rpc-source-review-c128197-inventory.json": "6aef4744027f234baedd8b7dec41f3bcc6e76801ba9c4f618f7a180e92a5bb51",
+    "/tmp/git-zero-socket-rpc-source-review-final-c128197.md": "fa6e4c6ab2c6573163bb953d0c72cebe3a3601a17e1136844d21951763a74b13",
+    "/tmp/git-zero-socket-rpc-source-review-final-c128197-inventory.json": "1f4a681a773eaada836a3d2ddbf085865310ae7bdab76d48b66d0235b74fb42d",
+    "/tmp/git-zero-socket-final-c128-paired-control.json": "674ef0620606b07c0de2aa5a65fc5669995d72eb67c1069f594878d0ff110e13",
+    "/tmp/git-zero-socket-final-c128-independent-pair-review.json": "e8cafa6bf731b1392d00162b8f040b84efe4dbadf834e7c74e3f798a0a18bc21",
+    "/tmp/git-zero-socket-final-c128-independent-fault-review.json": "70ae2fea61851feb5408df39282639352aed34b31ebb588a9c8bb5d57037f4b5"
+  },
+  "review_status": "APPROVED for exact docs9135f962/sourcec128197 compact ledger continuity; no proven blocker",
+  "remaining_work": [
+    "No cost/performance/promotion/plateau/stopping decision from correctness evidence.",
+    "Root integration/publication and prospective measurement remain separate."
+  ],
+  "full_bill": null,
+  "narrative_verification": {
+    "public_source_review_byte_identical_to_approved_fa6e4c6a": true,
+    "all_8_paired_push_rows_equal_original_root_proof": true,
+    "all_29_fault_rows_equal_independently_approved_raw_derivation": true,
+    "separate_projected_thin_restore_deltas_exact": true,
+    "all_60_historical_binary_lock_references_current_match_flags_truthful": true,
+    "all_12_local_relative_markdown_links_resolve": true,
+    "all_failure_and_prior_source_scopes_preserved": true,
+    "unverified_prior_telemetry_only_claim_explicitly_superseded_not_erased": true,
+    "NULL_incomplete_sticky_counter_limit_explicit": true,
+    "old_Native_warm_scope_structural_only_explicit": true,
+    "large_local_only_publication_boundary_and_no_old_binary_retention_claim_explicit": true,
+    "total_published_files": 10,
+    "total_published_bytes": 2674542,
+    "root_cleanup_report_retained": "/tmp/git-zero-socket-final-c128-root-validation.json records final owned8839/8840 no listeners; reviewer did not probe processes or ports",
+    "full_bill_NULL_no_net_cost_speed_acceptance_promotion_plateau_or_stopping_claim": true
+  }
+}
