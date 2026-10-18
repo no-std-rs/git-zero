@@ -35,40 +35,76 @@ mod history;
 mod history_tests;
 
 pub fn command(mut command: Command, input: &[u8]) -> io::Result<Output> {
-    command
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn()?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| io::Error::other("no child input"))?;
-    let result = std::thread::scope(|scope| {
-        let writer = scope.spawn(move || stdin.write_all(input));
-        let output = child.wait_with_output();
-        let written = writer
-            .join()
-            .map_err(|_| io::Error::other("child input thread failed"))?;
-        // A rejected Git request can close stdin early. Its exit/status is the
-        // useful diagnostic in that case.
-        if let Ok(ref output) = output {
-            if output.status.success() {
-                written?;
+    crate::diagnostics::observe("git_child", |diagnostic| {
+        diagnostic.mark("begin");
+        diagnostic.field(
+            "service",
+            command
+                .get_args()
+                .filter_map(|a| a.to_str())
+                .find(|a| {
+                    matches!(
+                        *a,
+                        "upload-pack"
+                            | "receive-pack"
+                            | "http-backend"
+                            | "index-pack"
+                            | "pack-objects"
+                    )
+                })
+                .unwrap_or("other-git"),
+        );
+        diagnostic.field("stdin_bytes", input.len());
+
+        command
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        diagnostic.mark("child_spawn_begin");
+        let mut child = command.spawn()?;
+        diagnostic.field("child_pid", child.id());
+        diagnostic.mark("child_spawned");
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("no child input"))?;
+        let result = std::thread::scope(|scope| {
+            let writer = scope.spawn(move || stdin.write_all(input));
+            diagnostic.mark("child_wait_begin");
+            let output = child.wait_with_output();
+            diagnostic.mark("child_exit_observed_output_collected");
+            if let Ok(ref result) = output {
+                diagnostic.field("exit_code", serde_json::json!(result.status.code()));
+                diagnostic.field("exit_success", result.status.success());
+                diagnostic.field("stdout_bytes", result.stdout.len());
+                diagnostic.field("stderr_bytes", result.stderr.len());
             }
+            let written = writer
+                .join()
+                .map_err(|_| io::Error::other("child input thread failed"))?;
+            // A rejected Git request can close stdin early. Its exit/status is the
+            // useful diagnostic in that case.
+            if let Ok(ref output) = output {
+                if output.status.success() {
+                    if written.is_err() {
+                        diagnostic.mark("child_stdin_write_failed");
+                    }
+                    written?;
+                }
+            }
+            output
+        })?;
+        if !result.status.success() {
+            return Err(io::Error::other(
+                String::from_utf8_lossy(&result.stderr).into_owned(),
+            ));
         }
-        output
-    })?;
-    if !result.status.success() {
-        return Err(io::Error::other(
-            String::from_utf8_lossy(&result.stderr).into_owned(),
-        ));
-    }
-    Ok(result)
+        Ok(result)
+    })
 }
 
 fn init(repo: &Path) -> io::Result<()> {
@@ -856,92 +892,96 @@ impl NativeHost {
         projection: Option<&history::Projection>,
         prefetched: Option<(Vec<Chunk>, crate::storage::VerifiedChunks)>,
     ) -> io::Result<()> {
-        self.view_dirty = true;
-        self.scope = ViewScope::Invalid;
-        validate_snapshot(manifest)?;
-        let all;
-        let selected = if let Some(projection) = projection {
-            &projection.packs
-        } else {
-            all = (0..manifest.packs.len()).collect::<Vec<_>>();
-            &all
-        };
-        // Remove the old disposable view, then verify every selected byte
-        // against exact ordered descriptors BEFORE writing any native file.
-        if self.view.exists() {
-            fs::remove_dir_all(&self.view)?;
-        }
-        let cached = self.protected_chunks.clone();
-        let non_chunk_bytes = self.cache_bytes + self.metadata_bytes() - self.protected_bytes();
-        let response_entries = self.cache.len();
-        let limit = if self.ordinary_chunk_admission {
-            self.protected_limit()
-        } else {
-            0
-        };
-        let chunks = &mut self.protected_chunks;
-        let metrics = &mut self.metrics;
-        let resolved = self.repository.read_snapshot_selection_cached(
-            manifest,
-            selected,
-            &cached,
-            prefetched,
-            &mut |candidate| {
-                Self::admit_chunk(
-                    chunks,
-                    metrics,
-                    candidate,
-                    limit,
-                    non_chunk_bytes,
-                    response_entries,
-                );
-            },
-        )?;
-        self.metrics.protected_chunk_hits += resolved.cache_hits as u64;
-        self.metrics.protected_chunk_hit_bytes += resolved.cache_hit_bytes;
-        self.note_joint_retention();
-        let files = resolved.files;
-        init(&self.view)?;
-        for (pack, (data, index)) in selected.iter().map(|i| &manifest.packs[*i]).zip(files) {
-            let directory = self.view.join("objects/pack");
-            for (extension, chunks, bytes) in
-                [("pack", &pack.pack, &data), ("idx", &pack.index, &index)]
-            {
-                let path = directory.join(format!("pack-{}.{extension}", pack.id));
-                if pack.bundle.is_empty() && chunks.len() == 1 {
-                    self.repository
-                        .blobs
-                        .materialize_file(&chunks[0].key, &path, bytes)?;
-                } else {
-                    fs::write(path, bytes)?;
+        crate::diagnostics::observe("view_materialize", |diagnostic| {
+            diagnostic.mark("begin");
+
+            self.view_dirty = true;
+            self.scope = ViewScope::Invalid;
+            validate_snapshot(manifest)?;
+            let all;
+            let selected = if let Some(projection) = projection {
+                &projection.packs
+            } else {
+                all = (0..manifest.packs.len()).collect::<Vec<_>>();
+                &all
+            };
+            // Remove the old disposable view, then verify every selected byte
+            // against exact ordered descriptors BEFORE writing any native file.
+            if self.view.exists() {
+                fs::remove_dir_all(&self.view)?;
+            }
+            let cached = self.protected_chunks.clone();
+            let non_chunk_bytes = self.cache_bytes + self.metadata_bytes() - self.protected_bytes();
+            let response_entries = self.cache.len();
+            let limit = if self.ordinary_chunk_admission {
+                self.protected_limit()
+            } else {
+                0
+            };
+            let chunks = &mut self.protected_chunks;
+            let metrics = &mut self.metrics;
+            let resolved = self.repository.read_snapshot_selection_cached(
+                manifest,
+                selected,
+                &cached,
+                prefetched,
+                &mut |candidate| {
+                    Self::admit_chunk(
+                        chunks,
+                        metrics,
+                        candidate,
+                        limit,
+                        non_chunk_bytes,
+                        response_entries,
+                    );
+                },
+            )?;
+            self.metrics.protected_chunk_hits += resolved.cache_hits as u64;
+            self.metrics.protected_chunk_hit_bytes += resolved.cache_hit_bytes;
+            self.note_joint_retention();
+            let files = resolved.files;
+            init(&self.view)?;
+            for (pack, (data, index)) in selected.iter().map(|i| &manifest.packs[*i]).zip(files) {
+                let directory = self.view.join("objects/pack");
+                for (extension, chunks, bytes) in
+                    [("pack", &pack.pack, &data), ("idx", &pack.index, &index)]
+                {
+                    let path = directory.join(format!("pack-{}.{extension}", pack.id));
+                    if pack.bundle.is_empty() && chunks.len() == 1 {
+                        self.repository
+                            .blobs
+                            .materialize_file(&chunks[0].key, &path, bytes)?;
+                    } else {
+                        fs::write(path, bytes)?;
+                    }
                 }
             }
-        }
-        if let Some(projection) = projection {
-            let refs = self
-                .lineage
-                .as_ref()
-                .ok_or_else(|| io::Error::other("missing lineage proof"))?
-                .projected_refs(manifest, projection.cutoff);
-            write_refs(&self.view, &refs)?;
-            self.scope = ViewScope::Projection {
-                generation: manifest.generation,
-                cutoff: projection.cutoff,
-                binding: projection.binding,
-                packs: selected.len(),
-                bytes: selected
-                    .iter()
-                    .map(|i| manifest.packs[*i].pack_bytes + manifest.packs[*i].index_bytes)
-                    .sum(),
-            };
-        } else {
-            write_refs(&self.view, &manifest.refs)?;
-            self.scope = ViewScope::Full {
-                generation: manifest.generation,
-            };
-        }
-        self.view_dirty = false;
-        Ok(())
+            if let Some(projection) = projection {
+                let refs = self
+                    .lineage
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("missing lineage proof"))?
+                    .projected_refs(manifest, projection.cutoff);
+                write_refs(&self.view, &refs)?;
+                self.scope = ViewScope::Projection {
+                    generation: manifest.generation,
+                    cutoff: projection.cutoff,
+                    binding: projection.binding,
+                    packs: selected.len(),
+                    bytes: selected
+                        .iter()
+                        .map(|i| manifest.packs[*i].pack_bytes + manifest.packs[*i].index_bytes)
+                        .sum(),
+                };
+            } else {
+                write_refs(&self.view, &manifest.refs)?;
+                self.scope = ViewScope::Full {
+                    generation: manifest.generation,
+                };
+            }
+            self.view_dirty = false;
+            Ok(())
+        })
     }
 
     fn cloud_read_view(&mut self) -> io::Result<()> {
@@ -963,37 +1003,46 @@ impl NativeHost {
     }
 
     fn fetch_read_view(&mut self, request: &Request) -> io::Result<()> {
-        if self.cloudflare.is_none() || !self.cold_view {
-            return self.require_full_view();
-        }
-        validate_snapshot(&self.manifest)?;
-        let identity = advertisement::identity(&self.view);
-        if self
-            .lineage
-            .as_ref()
-            .is_some_and(|proof| !proof.matches(&self.manifest, identity))
-        {
-            self.lineage = None;
-        }
-        let plan = self
-            .lineage
-            .as_ref()
-            .and_then(|proof| proof.plan(request, &self.manifest, identity));
-        if let Some(plan) = plan {
-            // Always reconstruct a cold miss using the verified immutable slot
-            // and ordinary verified GETs for all missing selected chunks.
-            self.materialize_view(&self.manifest.clone(), Some(&plan))?;
-            self.metrics.cloud_view_rehydrates += 1;
-            self.metrics.history_projections += 1;
-            return Ok(());
-        }
-        self.cloud_read_view()
+        crate::diagnostics::observe("fetch_view_prepare", |diagnostic| {
+            diagnostic.mark("begin");
+
+            if self.cloudflare.is_none() || !self.cold_view {
+                return self.require_full_view();
+            }
+            validate_snapshot(&self.manifest)?;
+            let identity = advertisement::identity(&self.view);
+            if self
+                .lineage
+                .as_ref()
+                .is_some_and(|proof| !proof.matches(&self.manifest, identity))
+            {
+                self.lineage = None;
+            }
+            let plan = self
+                .lineage
+                .as_ref()
+                .and_then(|proof| proof.plan(request, &self.manifest, identity));
+            if let Some(plan) = plan {
+                // Always reconstruct a cold miss using the verified immutable slot
+                // and ordinary verified GETs for all missing selected chunks.
+                self.materialize_view(&self.manifest.clone(), Some(&plan))?;
+                self.metrics.cloud_view_rehydrates += 1;
+                self.metrics.history_projections += 1;
+                return Ok(());
+            }
+            self.cloud_read_view()
+        })
     }
 
     fn native_read(&mut self, request: &Request) -> io::Result<Response> {
-        git_rpc(&self.view, request).inspect_err(|_| {
-            self.view_dirty = true;
-            self.scope = ViewScope::Invalid;
+        crate::diagnostics::observe("native_read", |diagnostic| {
+            diagnostic.mark("begin");
+            diagnostic.body("logical_request_body", &request.body);
+
+            git_rpc(&self.view, request).inspect_err(|_| {
+                self.view_dirty = true;
+                self.scope = ViewScope::Invalid;
+            })
         })
     }
 

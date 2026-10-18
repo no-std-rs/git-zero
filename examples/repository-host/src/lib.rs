@@ -4,6 +4,7 @@ pub mod accounting;
 pub mod benchmark_cost;
 pub mod cloudflare;
 pub mod cost;
+pub mod diagnostics;
 mod first_read;
 pub mod http;
 pub mod native;

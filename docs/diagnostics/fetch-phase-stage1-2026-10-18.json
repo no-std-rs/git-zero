@@ -1,0 +1,266 @@
+{
+  "schema": 1,
+  "approved_base": "f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5",
+  "proof_directory": "/tmp/git-zero-fetch-phase-stage1-proof-20261018-03",
+  "final_proof": {
+    "approved_base": "f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5",
+    "disabled": {
+      "after_failure_counters": null,
+      "after_failure_counters_complete": false,
+      "archive_sha256": "ccf5a2eea7cc50baec532ed03de85288d81f4e112e489faea6dae6ad33363f03",
+      "failure_body_bytes": 17,
+      "failure_body_sha256": "bb5f99d50753b1b4983a0d8c2cd15b44a0d2a5ce00c41d49d898de9d14a0fb98",
+      "failure_status": 503,
+      "framing": [
+        {
+          "archive_sha256": "ccf5a2eea7cc50baec532ed03de85288d81f4e112e489faea6dae6ad33363f03",
+          "body_bytes": 65777,
+          "body_sha256": "1b1788ba6415eb379624242ffc612482a8af66569ce1ee5c5f9b6279c8c815f8",
+          "framing": "content-length",
+          "status": 200,
+          "tree": "bc3799289611fbcbc176cc0959f388c1403bf2aa",
+          "want": "750324febf218b5ea75fd6a0c5c6618717782e23"
+        },
+        {
+          "archive_sha256": "ccf5a2eea7cc50baec532ed03de85288d81f4e112e489faea6dae6ad33363f03",
+          "body_bytes": 65777,
+          "body_sha256": "1b1788ba6415eb379624242ffc612482a8af66569ce1ee5c5f9b6279c8c815f8",
+          "framing": "chunked",
+          "status": 200,
+          "tree": "bc3799289611fbcbc176cc0959f388c1403bf2aa",
+          "want": "750324febf218b5ea75fd6a0c5c6618717782e23"
+        }
+      ],
+      "full_bill_usd": null,
+      "phase_ledger": null,
+      "pre_failure_observer_complete": true,
+      "server_cpu_ms": null,
+      "traced": false,
+      "tree": "bc3799289611fbcbc176cc0959f388c1403bf2aa",
+      "want": "750324febf218b5ea75fd6a0c5c6618717782e23",
+      "worker_cpu_ms": null
+    },
+    "do_gb_seconds": null,
+    "full_bill_usd": null,
+    "observational_equivalence": true,
+    "pass": true,
+    "performance_claim": false,
+    "schema": 1,
+    "server_cpu_ms": null,
+    "stage": "cheap production-gateway proof only",
+    "tail_replays_run": 0,
+    "traced": {
+      "after_failure_counters": null,
+      "after_failure_counters_complete": false,
+      "archive_sha256": "ccf5a2eea7cc50baec532ed03de85288d81f4e112e489faea6dae6ad33363f03",
+      "failure_body_bytes": 17,
+      "failure_body_sha256": "bb5f99d50753b1b4983a0d8c2cd15b44a0d2a5ce00c41d49d898de9d14a0fb98",
+      "failure_status": 503,
+      "framing": [
+        {
+          "archive_sha256": "ccf5a2eea7cc50baec532ed03de85288d81f4e112e489faea6dae6ad33363f03",
+          "body_bytes": 65777,
+          "body_sha256": "1b1788ba6415eb379624242ffc612482a8af66569ce1ee5c5f9b6279c8c815f8",
+          "framing": "content-length",
+          "status": 200,
+          "tree": "bc3799289611fbcbc176cc0959f388c1403bf2aa",
+          "want": "750324febf218b5ea75fd6a0c5c6618717782e23"
+        },
+        {
+          "archive_sha256": "ccf5a2eea7cc50baec532ed03de85288d81f4e112e489faea6dae6ad33363f03",
+          "body_bytes": 65777,
+          "body_sha256": "1b1788ba6415eb379624242ffc612482a8af66569ce1ee5c5f9b6279c8c815f8",
+          "framing": "chunked",
+          "status": 200,
+          "tree": "bc3799289611fbcbc176cc0959f388c1403bf2aa",
+          "want": "750324febf218b5ea75fd6a0c5c6618717782e23"
+        }
+      ],
+      "full_bill_usd": null,
+      "phase_ledger": {
+        "complete_fetches": 4,
+        "cpu_ms": null,
+        "kinds": {
+          "fetch_view_prepare": 3,
+          "git_child": 8,
+          "http_request": 19,
+          "native_read": 4,
+          "service_callback": 9,
+          "service_socket": 4,
+          "view_materialize": 8
+        },
+        "metrics_connect_errors": 1,
+        "phase_order_pass": true,
+        "socket_terminal_and_ack": 4
+      },
+      "pre_failure_observer_complete": true,
+      "server_cpu_ms": null,
+      "traced": true,
+      "tree": "bc3799289611fbcbc176cc0959f388c1403bf2aa",
+      "want": "750324febf218b5ea75fd6a0c5c6618717782e23",
+      "worker_cpu_ms": null
+    },
+    "worker_cpu_ms": null
+  },
+  "source_runtime": {
+    "do_gb_seconds": null,
+    "full_bill_usd": null,
+    "git": {
+      "path": "/usr/bin/git",
+      "sha256": "23b37f0e39d8636823a5ddf102283a317dff962a6a540a8df8444b9970b71eab"
+    },
+    "native": {
+      "path": "/tmp/git-zero-fetch-diagnostics-target-j2/debug/repository-host",
+      "sha256": "3ccf43bb5cca872294191fef57df9d4469ddd5dad41e9b5abf4cd6e270d1f060"
+    },
+    "node": {
+      "path": "/var/home/pawel/.local/lib/node-v24.10.0-linux-x64/bin/node",
+      "sha256": "141542ec0c8f73b568cd774ea8df43f23768cb086eb5bf21d2dea33072fb2f56"
+    },
+    "runner": {
+      "path": "/tmp/git-zero-fetch-diagnostics-target-j2/debug/fetch-phase-diagnostic",
+      "sha256": "d2e21856771f7fb3b8bb0e15517c4ab150645dc623255880d90699663a1db943"
+    },
+    "server_cpu_ms": null,
+    "sources": [
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/src/diagnostics.rs",
+        "sha256": "db8bb252e37bb627905320afe0da0dadc6c685d588fd19112e301e50e3751c35"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/src/http.rs",
+        "sha256": "73eb58afb3b4f1d766848e4b6367d037ce1f59b6d57c562e5863e193cbc1e329"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/src/native.rs",
+        "sha256": "1bcf63cb01f1714be79d667ab95cc90782bd5826c88968ec7e6cc2f2645522ad"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/src/cloudflare.rs",
+        "sha256": "00e04f19b0197204ac5e8c2d207c031b4bd9aeb100067c0186a7d4fb167a5c7b"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/src/socket_rpc.rs",
+        "sha256": "73135ee57dfdfb8f9ad8eafb0a2867d6f9bd1fe4dc1a059063a37aa6636ed5eb"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/src/bin/fetch-phase-diagnostic.rs",
+        "sha256": "887e814c53366cdabf9baa71ef811072f44e4f73936f4687dcdc1aa32ea50379"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/Cargo.toml",
+        "sha256": "8d8bc0f8b2ca29657c37268b36fe6c382d21baf1f6576e6262dd3f5b1b2977cd"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/Cargo.lock",
+        "sha256": "224e646bb181d2b0d006b36c36e34fd467c667067286837631ea252b400318b9"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/cloudflare/src/index.js",
+        "sha256": "0b3183bb89d7920c9f1d0868895ec13414d74e74e096f8181b30654e418c0bbd"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/cloudflare/src/catalog-pages.js",
+        "sha256": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/cloudflare/src/first-read.js",
+        "sha256": "3535717a794e0c0b0fcf3f4777271124ce51fc74b47db7d094843396e06374ac"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/cloudflare/src/inline-catalog.js",
+        "sha256": "b13edf1cc493e814b1b08b406c48b5544122bbaa6130e01d71d7e6555b2aec71"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/cloudflare/src/retirement-proof.js",
+        "sha256": "3ce5c71f08af064d65c712c38d64bf1c2ad75fbf861708d882f8bb14348a182c"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/cloudflare/src/service-socket.js",
+        "sha256": "7cc97f945dff95a852a3c268ba5b4b44d10d03e2f2d4fee9624768a66bd6d81c"
+      },
+      {
+        "path": "/tmp/git-zero-hosting-fetch-diagnostics/examples/repository-host/src/lib.rs",
+        "sha256": "be8bf607a4f28ceb86cb2248f0e8411bb63228b0a600eb5b5b688b198ad18310",
+        "sealed_after_gate": true
+      }
+    ],
+    "worker_cpu_ms": null,
+    "workerd": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/@cloudflare/workerd-linux-64/bin/workerd",
+      "sha256": "3ee1cc5b09497de8f47f513b5c5c485da99a9fc8b188b5618cb05de63f3b4b64"
+    },
+    "wrangler": {
+      "path": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js",
+      "sha256": "780661a508810f3b65786895b1ca9aacbc4f55d329ae6b8c1e49ec8433569f77"
+    }
+  },
+  "artifact_manifest_sha256": "48b4f6abf51845ba18b3e20a2882c081fc0f89377844b34c14ec7334afcbe9f6",
+  "traced_actual_native_environment": {
+    "native_pid": 333517,
+    "owned_pgid": 333517,
+    "git_environment_names": [
+      "GIT_PAGER",
+      "GIT_ZERO_PHASE_LEDGER"
+    ],
+    "unknown_git_environment_names": [],
+    "known_settings_valid": true,
+    "environment_identity_eligible": true,
+    "values_recorded": false,
+    "source": "/proc/333517/environ",
+    "scope": "environment prerequisite only; policy HEAD/config/executable checked by Native"
+  },
+  "disabled_actual_native_environment": null,
+  "disabled_actual_native_environment_receipt_complete": false,
+  "applicable_fast_paths": {
+    "disabled": {
+      "history_projections": 1,
+      "history_lineage_bytes": 176,
+      "cache_hits": 1,
+      "upload_advertisement_certificates": 0,
+      "gateway_read_consumed": 0
+    },
+    "traced": {
+      "history_projections": 1,
+      "history_lineage_bytes": 176,
+      "cache_hits": 1,
+      "upload_advertisement_certificates": 0,
+      "gateway_read_consumed": 0
+    }
+  },
+  "full_library_tests": {
+    "pass": 132,
+    "failed": 0,
+    "seconds": 67.09,
+    "git_editor_unset": true,
+    "local_sockets_permitted": true,
+    "log": "/tmp/git-zero-fetch-diagnostics-lib-tests-clean-env-20261018.log"
+  },
+  "framing_tests": {
+    "pass": 3,
+    "failed": 0,
+    "log": "/tmp/git-zero-fetch-phase-framing-final-20261018.log",
+    "ledger": "/tmp/git-zero-fetch-phase-framing-final-20261018.jsonl"
+  },
+  "earlier_proofs": [
+    {
+      "path": "/tmp/git-zero-fetch-phase-stage1-proof-20261018-01",
+      "pass": false,
+      "reason": "out-of-scope forced Expect gateway control; actual 500 headers/body retained"
+    },
+    {
+      "path": "/tmp/git-zero-fetch-phase-stage1-proof-20261018-02",
+      "pass": true,
+      "scope": "boundary/equivalence only; unsupported inherited editor environment"
+    }
+  ],
+  "environment_collector": {
+    "/tmp/git-zero-fetch-phase-env-capture-20261018.rs": "3e46b171f25755b665b258efeebc220eb91a5255aa57b69b416ffbbd615b37bd",
+    "/tmp/git-zero-fetch-phase-env-capture-20261018": "30d1fe77e84f8a75e68464afeb372896da227b145142e3bd3d606458f8ed59da"
+  },
+  "expensive_replays_run": 0,
+  "performance_claim": false,
+  "server_cpu_ms": null,
+  "worker_cpu_ms": null,
+  "full_bill_usd": null
+}

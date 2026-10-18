@@ -158,23 +158,53 @@ impl State {
         {
             return None;
         }
+        let mut diagnostic = crate::diagnostics::Span::new("service_socket");
+        diagnostic.field("method", method);
+        diagnostic.field("route", route);
+        diagnostic.field("request_body_bytes", body.len());
+        diagnostic.field("reused_connection", self.connection.is_some());
+        diagnostic.mark("socket_begin");
         if self.connection.is_none() {
             self.opens += 1;
-            match Connection::open(authority, repo, token, phase, capability) {
+            match Connection::open(authority, repo, token, phase, capability, &mut diagnostic) {
                 Ok(Some(connection)) => self.connection = Some(connection),
                 Ok(None) => {
                     self.unsupported_upgrades += 1;
+                    diagnostic.field("fallback_before_rpc", true);
+                    diagnostic.finish(&Ok::<_, io::Error>(()));
                     return None;
                 }
                 Err(error) => {
                     self.failures += 1;
+                    diagnostic.finish(&Err::<(), _>(io::Error::new(
+                        error.kind(),
+                        "socket open failed",
+                    )));
+                    diagnostic.error(&error);
                     return Some(Err(error));
                 }
             }
         }
         let result = (|| {
             let connection = self.connection.as_mut().expect("opened socket");
-            let result = connection.call(method, route, phase, proof, body, response_bound);
+            let result = connection.call(
+                method,
+                route,
+                phase,
+                proof,
+                body,
+                response_bound,
+                &mut diagnostic,
+            );
+            diagnostic.field(
+                "request_frames_written",
+                connection.frames.request_frames_written,
+            );
+            diagnostic.field(
+                "response_messages_read",
+                connection.frames.response_messages,
+            );
+            diagnostic.field("ack_frames_written", connection.frames.acks_written);
             self.frames.add(&connection.frames);
             connection.frames = Frames::default();
             let response = result?;
@@ -194,6 +224,7 @@ impl State {
             self.failures += 1;
             self.connection = None;
         }
+        diagnostic.finish(&result);
         Some(result)
     }
 }
@@ -217,6 +248,10 @@ fn bounds(method: &str, route: &str) -> Option<(usize, usize)> {
 }
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+fn socket_io_error(diagnostic: &mut crate::diagnostics::Span, e: &io::Error) {
+    diagnostic.field("socket_io_error_kind", format!("{:?}", e.kind()));
+    diagnostic.field("socket_io_raw_os_error", json!(e.raw_os_error()));
 }
 fn socket_error(error: impl std::fmt::Display) -> io::Error {
     io::Error::other(format!("service socket: {error}"))
@@ -250,11 +285,14 @@ impl Connection {
         token: &str,
         phase: &str,
         capability: Capability,
+        diagnostic: &mut crate::diagnostics::Span,
     ) -> io::Result<Option<Self>> {
+        diagnostic.mark("socket_connect_begin");
         let stream = TcpStream::connect(authority)?;
         stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(Duration::from_secs(60)))?;
         stream.set_write_timeout(Some(Duration::from_secs(60)))?;
+        diagnostic.mark("socket_connected");
         let mut request = format!("ws://{authority}/_services/socket")
             .into_client_request()
             .map_err(socket_error)?;
@@ -276,6 +314,7 @@ impl Connection {
             .max_write_buffer_size(2 * PIECE)
             .max_message_size(Some(PIECE))
             .max_frame_size(Some(PIECE));
+        diagnostic.mark("socket_upgrade_begin");
         let (socket, response) = match client_with_config(request, stream, Some(config)) {
             Ok(result) => result,
             Err(tungstenite::HandshakeError::Failure(tungstenite::Error::Http(response)))
@@ -283,8 +322,14 @@ impl Connection {
             {
                 return Ok(None);
             }
-            Err(error) => return Err(socket_error(error)),
+            Err(error) => {
+                if let tungstenite::HandshakeError::Failure(tungstenite::Error::Io(ref e)) = error {
+                    socket_io_error(diagnostic, e);
+                }
+                return Err(socket_error(error));
+            }
         };
+        diagnostic.mark("socket_upgrade_complete");
         if response.headers().contains_key("sec-websocket-extensions")
             || response
                 .headers()
@@ -300,15 +345,31 @@ impl Connection {
             frames: Frames::default(),
         }))
     }
-    fn binary(&mut self) -> io::Result<Vec<u8>> {
+    fn binary(&mut self, diagnostic: &mut crate::diagnostics::Span) -> io::Result<Vec<u8>> {
         for _ in 0..16 {
-            match self.socket.read().map_err(socket_error)? {
+            match self
+                .socket
+                .read()
+                .inspect_err(|e| {
+                    if let tungstenite::Error::Io(e) = e {
+                        socket_io_error(diagnostic, e);
+                    }
+                })
+                .map_err(socket_error)?
+            {
                 Message::Binary(bytes) if bytes.len() <= PIECE => {
                     self.frames.response_messages += 1;
                     return Ok(bytes.to_vec());
                 }
                 Message::Ping(_) | Message::Pong(_) => {
-                    self.socket.flush().map_err(socket_error)?;
+                    self.socket
+                        .flush()
+                        .inspect_err(|e| {
+                            if let tungstenite::Error::Io(e) = e {
+                                socket_io_error(diagnostic, e);
+                            }
+                        })
+                        .map_err(socket_error)?;
                 }
                 _ => return Err(invalid("unexpected service socket message")),
             }
@@ -323,6 +384,7 @@ impl Connection {
         proof: Option<&str>,
         body: &[u8],
         maximum: usize,
+        diagnostic: &mut crate::diagnostics::Span,
     ) -> io::Result<Response> {
         let metadata = serde_json::to_vec(
             &json!({"method":method,"route":route,"phase":phase,"proof":proof}),
@@ -336,6 +398,7 @@ impl Connection {
         prefix.extend_from_slice(&metadata);
         // Small RFC frames bound Tungstenite's retained output Vec capacity.
         // The runtime still receives exactly one complete application request.
+        diagnostic.mark("socket_request_send_begin");
         self.frames.request_frame_attempts += 1;
         self.socket
             .send(Message::Frame(Frame::message(
@@ -343,6 +406,11 @@ impl Connection {
                 OpCode::Data(Data::Binary),
                 body.is_empty(),
             )))
+            .inspect_err(|e| {
+                if let tungstenite::Error::Io(e) = e {
+                    socket_io_error(diagnostic, e);
+                }
+            })
             .map_err(socket_error)?;
         self.frames.request_frames_written += 1;
         let chunks = body.chunks(PIECE);
@@ -355,10 +423,17 @@ impl Connection {
                     OpCode::Data(Data::Continue),
                     index + 1 == count,
                 )))
+                .inspect_err(|e| {
+                    if let tungstenite::Error::Io(e) = e {
+                        socket_io_error(diagnostic, e);
+                    }
+                })
                 .map_err(socket_error)?;
             self.frames.request_frames_written += 1;
         }
-        let header = self.binary()?;
+        diagnostic.mark("socket_request_sent");
+        diagnostic.mark("socket_response_header_read_begin");
+        let header = self.binary(diagnostic)?;
         if !header.starts_with(b"GZSR")
             || header.len() < 24
             || number(&header, 4)? != 1
@@ -397,9 +472,16 @@ impl Connection {
         {
             return Err(invalid("invalid service socket response metadata"));
         }
+        diagnostic.field("response_status", metadata.status);
+        diagnostic.field("expected_response_body_bytes", length);
+        diagnostic.mark("socket_response_headers_complete");
+        diagnostic.mark("socket_response_body_read_begin");
         let mut body = Vec::with_capacity(length);
         for index in 0..count {
-            let piece = self.binary()?;
+            let piece = self.binary(diagnostic)?;
+            if index == 0 {
+                diagnostic.mark("socket_first_body_segment");
+            }
             let part_length = number(&piece, 20)? as usize;
             if !piece.starts_with(b"GZSD")
                 || piece.len() < DATA_HEADER
@@ -415,8 +497,10 @@ impl Connection {
                 return Err(invalid("invalid service socket response segment"));
             }
             body.extend_from_slice(&piece[DATA_HEADER..]);
+            diagnostic.field("response_body_bytes", body.len());
         }
-        let terminal = self.binary()?;
+        diagnostic.mark("socket_terminal_read_begin");
+        let terminal = self.binary(diagnostic)?;
         if terminal != frame(b"GZSE", &[1, id, length as u32, count as u32]) || body.len() != length
         {
             return Err(invalid("invalid service socket response terminal"));
@@ -425,14 +509,23 @@ impl Connection {
         // ACK merely releases the Worker's bounded response gate. If this
         // transport-only write fails, the verified response still wins and the
         // caller drops this connection before its next distinct RPC.
+        diagnostic.mark("socket_terminal_received");
+        diagnostic.mark("socket_ack_write_begin");
         self.frames.ack_attempts += 1;
         if self
             .socket
             .send(Message::Binary(frame(b"GZSA", &[1, id]).into()))
+            .inspect_err(|e| {
+                if let tungstenite::Error::Io(e) = e {
+                    socket_io_error(diagnostic, e);
+                }
+            })
             .is_err()
         {
             self.usable = false;
+            diagnostic.field("ack_write_failed", true);
         } else {
+            diagnostic.mark("socket_ack_written");
             self.frames.acks_written += 1;
         }
         Ok(Response {

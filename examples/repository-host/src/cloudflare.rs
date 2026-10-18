@@ -577,165 +577,205 @@ impl HttpServices {
         body: &[u8],
         phase: Option<&str>,
     ) -> io::Result<Response> {
-        let maximum = if route == "blobs/read" {
-            MAX_BULK_RESPONSE
-        } else if matches!(route, "manifest/retire" | "manifest/upload-retire") {
-            MAX_RETIREMENT_RESPONSE
-        } else {
-            MAX_RESPONSE
-        };
-        let current_phase = self
-            .phase
-            .lock()
-            .map_err(|_| io::Error::other("phase lock poisoned"))?
-            .clone();
-        let phase = phase.unwrap_or(&current_phase);
-        let proof = if matches!(route, "register" | "unregister" | "metrics") {
-            None
-        } else {
-            self.retirement_proof
+        crate::diagnostics::observe("service_callback", |diagnostic| {
+            diagnostic.field("method", method);
+            diagnostic.field("route", route);
+            diagnostic.field("request_body_bytes", body.len());
+            diagnostic.mark("callback_begin");
+
+            let maximum = if route == "blobs/read" {
+                MAX_BULK_RESPONSE
+            } else if matches!(route, "manifest/retire" | "manifest/upload-retire") {
+                MAX_RETIREMENT_RESPONSE
+            } else {
+                MAX_RESPONSE
+            };
+            let current_phase = self
+                .phase
                 .lock()
-                .map_err(|_| io::Error::other("retirement proof lock poisoned"))?
-                .token
-        };
-        if let Some(response) = self
-            .socket
-            .lock()
-            .map_err(|_| io::Error::other("service socket lock poisoned"))?
-            .call(
-                crate::socket_rpc::Endpoint {
-                    authority: &self.authority,
-                    repo: &self.repo,
-                    token: &self.token,
-                },
-                crate::socket_rpc::Rpc {
-                    method,
-                    route,
-                    phase,
-                    proof: proof.as_ref().map(RetirementProof::as_str),
-                    body,
-                },
-            )
-        {
-            return Self::checked_response(response?, method, route);
-        }
-        let mut stream = TcpStream::connect(&self.authority)?;
-        stream.set_nodelay(true)?;
-        stream.set_read_timeout(Some(Duration::from_secs(60)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(60)))?;
-        write!(
-            stream,
-            "{method} /_services/{route} HTTP/1.1\r\nHost: {}\r\nx-hosting-token: {}\r\nx-hosting-repo: {}\r\nx-hosting-phase: {phase}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n",
-            self.authority,
-            self.token,
-            self.repo,
-            body.len()
-        )?;
-        if let Some(proof) = proof {
-            write!(stream, "{RETIREMENT_PROOF_HEADER}: {}\r\n", proof.as_str())?;
-        }
-        stream.write_all(b"\r\n")?;
-        stream.write_all(body)?;
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.by_ref().take(8193).read_line(&mut line)?;
-        if line.len() > 8192 || !line.starts_with("HTTP/1.") || !line.ends_with("\r\n") {
-            return Err(io::Error::other("invalid emulator status line"));
-        }
-        let status = line
-            .split_whitespace()
-            .nth(1)
-            .ok_or_else(|| io::Error::other("missing HTTP status"))?
-            .parse()
-            .map_err(io::Error::other)?;
-        let mut headers = BTreeMap::new();
-        let mut proof_header_seen = false;
-        let mut total_headers = line.len();
-        loop {
-            line.clear();
-            let read = reader.by_ref().take(8193).read_line(&mut line)?;
-            total_headers += read;
-            if read == 0 || read > 8192 || total_headers > 65536 {
-                return Err(io::Error::other("invalid emulator HTTP headers"));
+                .map_err(|_| io::Error::other("phase lock poisoned"))?
+                .clone();
+            let phase = phase.unwrap_or(&current_phase);
+            let proof = if matches!(route, "register" | "unregister" | "metrics") {
+                None
+            } else {
+                self.retirement_proof
+                    .lock()
+                    .map_err(|_| io::Error::other("retirement proof lock poisoned"))?
+                    .token
+            };
+            if let Some(response) = self
+                .socket
+                .lock()
+                .map_err(|_| io::Error::other("service socket lock poisoned"))?
+                .call(
+                    crate::socket_rpc::Endpoint {
+                        authority: &self.authority,
+                        repo: &self.repo,
+                        token: &self.token,
+                    },
+                    crate::socket_rpc::Rpc {
+                        method,
+                        route,
+                        phase,
+                        proof: proof.as_ref().map(RetirementProof::as_str),
+                        body,
+                    },
+                )
+            {
+                diagnostic.field("transport", "websocket");
+                diagnostic.mark("socket_returned");
+                let response = response?;
+                diagnostic.field("response_status", response.status);
+                diagnostic.field("response_body_bytes", response.body.len());
+                diagnostic.mark("response_check_begin");
+                return Self::checked_response(response, method, route);
             }
-            if line == "\r\n" {
-                break;
+            diagnostic.field("transport", "http");
+            diagnostic.mark("connect_begin");
+            let stream = TcpStream::connect(&self.authority)?;
+            diagnostic.mark("connected");
+            stream.set_nodelay(true)?;
+            stream.set_read_timeout(Some(Duration::from_secs(60)))?;
+            stream.set_write_timeout(Some(Duration::from_secs(60)))?;
+            let counts = crate::diagnostics::Counts::default();
+            diagnostic.counts(&counts);
+            let mut stream = crate::diagnostics::Observed::new(stream, counts);
+            diagnostic.mark("request_write_begin");
+            write!(
+                stream,
+                "{method} /_services/{route} HTTP/1.1\r\nHost: {}\r\nx-hosting-token: {}\r\nx-hosting-repo: {}\r\nx-hosting-phase: {phase}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n",
+                self.authority,
+                self.token,
+                self.repo,
+                body.len()
+            )?;
+            if let Some(proof) = proof {
+                write!(stream, "{RETIREMENT_PROOF_HEADER}: {}\r\n", proof.as_str())?;
             }
-            let (name, value) = line
-                .split_once(':')
-                .ok_or_else(|| io::Error::other("invalid emulator header"))?;
-            let name = name.to_ascii_lowercase();
-            let value = value.trim();
-            if name == RETIREMENT_PROOF_HEADER {
-                if proof_header_seen || RetirementProof::parse(value).is_none() {
-                    // An ambiguous proof is optional metadata; publication
-                    // still uses the existing strict typed response decoder.
-                    headers.remove(RETIREMENT_PROOF_HEADER);
-                    proof_header_seen = true;
-                    continue;
-                }
-                proof_header_seen = true;
+            stream.write_all(b"\r\n")?;
+            stream.write_all(body)?;
+            diagnostic.mark("request_written");
+            let mut reader = BufReader::new(stream);
+            diagnostic.mark("response_status_read_begin");
+            let mut line = String::new();
+            reader.by_ref().take(8193).read_line(&mut line)?;
+            if line.len() > 8192 || !line.starts_with("HTTP/1.") || !line.ends_with("\r\n") {
+                return Err(io::Error::other("invalid emulator status line"));
             }
-            headers.insert(name, value.to_string());
-        }
-        let mut bytes = Vec::new();
-        if status == 204 || status == 304 || method == "HEAD" {
-            // These statuses have no message body, even on a persistent socket.
-        } else if headers
-            .get("transfer-encoding")
-            .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
-        {
+            let status = line
+                .split_whitespace()
+                .nth(1)
+                .ok_or_else(|| io::Error::other("missing HTTP status"))?
+                .parse()
+                .map_err(io::Error::other)?;
+            diagnostic.field("response_status", status);
+            diagnostic.mark("response_header_read_begin");
+            let mut headers = BTreeMap::new();
+            let mut proof_header_seen = false;
+            let mut total_headers = line.len();
             loop {
                 line.clear();
-                reader.by_ref().take(129).read_line(&mut line)?;
-                if line.len() > 128 {
-                    return Err(io::Error::other("invalid HTTP chunk"));
+                let read = reader.by_ref().take(8193).read_line(&mut line)?;
+                total_headers += read;
+                if read == 0 || read > 8192 || total_headers > 65536 {
+                    return Err(io::Error::other("invalid emulator HTTP headers"));
                 }
-                let length = usize::from_str_radix(line.trim().split(';').next().unwrap_or(""), 16)
-                    .map_err(io::Error::other)?;
-                if length == 0 {
+                if line == "\r\n" {
                     break;
                 }
-                if length > maximum - bytes.len() {
+                let (name, value) = line
+                    .split_once(':')
+                    .ok_or_else(|| io::Error::other("invalid emulator header"))?;
+                let name = name.to_ascii_lowercase();
+                let value = value.trim();
+                if name == RETIREMENT_PROOF_HEADER {
+                    if proof_header_seen || RetirementProof::parse(value).is_none() {
+                        // An ambiguous proof is optional metadata; publication
+                        // still uses the existing strict typed response decoder.
+                        headers.remove(RETIREMENT_PROOF_HEADER);
+                        proof_header_seen = true;
+                        continue;
+                    }
+                    proof_header_seen = true;
+                }
+                headers.insert(name, value.to_string());
+            }
+            diagnostic.mark("response_headers_complete");
+            diagnostic.field(
+                "framing",
+                if headers.contains_key("transfer-encoding") {
+                    "chunked"
+                } else if headers.contains_key("content-length") {
+                    "content-length"
+                } else {
+                    "eof"
+                },
+            );
+            diagnostic.mark("response_body_read_begin");
+            let mut bytes = Vec::new();
+            if status == 204 || status == 304 || method == "HEAD" {
+                // These statuses have no message body, even on a persistent socket.
+            } else if headers
+                .get("transfer-encoding")
+                .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
+            {
+                loop {
+                    line.clear();
+                    reader.by_ref().take(129).read_line(&mut line)?;
+                    if line.len() > 128 {
+                        return Err(io::Error::other("invalid HTTP chunk"));
+                    }
+                    let length =
+                        usize::from_str_radix(line.trim().split(';').next().unwrap_or(""), 16)
+                            .map_err(io::Error::other)?;
+                    if length == 0 {
+                        break;
+                    }
+                    if length > maximum - bytes.len() {
+                        return Err(io::Error::other("emulator response too large"));
+                    }
+                    let start = bytes.len();
+                    bytes.resize(start + length, 0);
+                    reader.read_exact(&mut bytes[start..])?;
+                    let mut ending = [0u8; 2];
+                    reader.read_exact(&mut ending)?;
+                    if ending != *b"\r\n" {
+                        return Err(io::Error::other("invalid HTTP chunk ending"));
+                    }
+                }
+            } else if let Some(length) = headers.get("content-length") {
+                let length: usize = length.parse().map_err(io::Error::other)?;
+                if length > maximum {
                     return Err(io::Error::other("emulator response too large"));
                 }
-                let start = bytes.len();
-                bytes.resize(start + length, 0);
-                reader.read_exact(&mut bytes[start..])?;
-                let mut ending = [0u8; 2];
-                reader.read_exact(&mut ending)?;
-                if ending != *b"\r\n" {
-                    return Err(io::Error::other("invalid HTTP chunk ending"));
+                bytes.resize(length, 0);
+                reader.read_exact(&mut bytes)?;
+            } else {
+                reader.take((maximum + 1) as u64).read_to_end(&mut bytes)?;
+                if bytes.len() > maximum {
+                    return Err(io::Error::other("emulator response too large"));
+                }
+                if let Some(length) = headers.get("content-length") {
+                    let length: usize = length.parse().map_err(io::Error::other)?;
+                    if bytes.len() != length {
+                        return Err(io::Error::other("truncated emulator response"));
+                    }
                 }
             }
-        } else if let Some(length) = headers.get("content-length") {
-            let length: usize = length.parse().map_err(io::Error::other)?;
-            if length > maximum {
-                return Err(io::Error::other("emulator response too large"));
-            }
-            bytes.resize(length, 0);
-            reader.read_exact(&mut bytes)?;
-        } else {
-            reader.take((maximum + 1) as u64).read_to_end(&mut bytes)?;
-            if bytes.len() > maximum {
-                return Err(io::Error::other("emulator response too large"));
-            }
-            if let Some(length) = headers.get("content-length") {
-                let length: usize = length.parse().map_err(io::Error::other)?;
-                if bytes.len() != length {
-                    return Err(io::Error::other("truncated emulator response"));
-                }
-            }
-        }
-        Self::checked_response(
-            Response {
-                status,
-                headers,
-                body: bytes.into(),
-            },
-            method,
-            route,
-        )
+            diagnostic.mark("response_body_complete");
+            diagnostic.field("response_body_bytes", bytes.len());
+            diagnostic.mark("response_check_begin");
+            Self::checked_response(
+                Response {
+                    status,
+                    headers,
+                    body: bytes.into(),
+                },
+                method,
+                route,
+            )
+        })
     }
 
     fn checked_response(response: Response, method: &str, route: &str) -> io::Result<Response> {
