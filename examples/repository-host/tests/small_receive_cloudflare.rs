@@ -456,6 +456,8 @@ fn production_gateway_small_receive_contract() {
     }
     let mode = std::env::var("GIT_ZERO_SMALL_RECEIVE_MODE").unwrap_or_else(|_| "on".into());
     assert!(matches!(mode.as_str(), "on" | "off"));
+    let view_cache = std::env::var("GIT_ZERO_SMALL_RECEIVE_VIEW").unwrap_or_else(|_| "cold".into());
+    assert!(matches!(view_cache.as_str(), "cold" | "warm"));
     let stdout = root.join("native.stdout");
     let stderr = root.join("native.stderr");
     let child = Command::new("setsid")
@@ -466,7 +468,7 @@ fn production_gateway_small_receive_contract() {
             "--repo",
             "demo",
             "--view-cache",
-            "cold",
+            &view_cache,
             "--gateway-first-read",
             "on",
             "--gateway-first-receive",
@@ -539,7 +541,7 @@ fn production_gateway_small_receive_contract() {
         if revision > 1 {
             assert_eq!(
                 consumed,
-                u64::from(mode == "on"),
+                u64::from(mode == "on" && view_cache == "cold"),
                 "small push {revision} activation"
             );
         }
@@ -566,6 +568,55 @@ fn production_gateway_small_receive_contract() {
         immediate_retirement_checks > 0,
         "actual inline retirement must precede immediate fetch"
     );
+    if view_cache == "warm" {
+        let before = metrics(&root, "warm-before", &native, false);
+        for (i, index) in [7, 2, 3, 7, 2].into_iter().enumerate() {
+            let response = http(
+                &root,
+                &format!("warm-fetch-{i}"),
+                &format!("{gateway}/git-upload-pack"),
+                Some(&fetch(
+                    &tips[index],
+                    None,
+                    &format!(" no-progress ofs-delta agent=warm-{i}"),
+                )),
+            );
+            accept_pack(&client, &response, &tips[index]);
+        }
+        let after = metrics(&root, "warm-after", &native, false);
+        for field in [
+            "gateway_receive_plans",
+            "gateway_receive_consumed",
+            "gateway_read_plans",
+            "gateway_read_consumed",
+            "cloud_view_rehydrates",
+        ] {
+            assert_eq!(n(&after, field), 0, "warm {field}");
+        }
+        for field in [
+            "r2_class_b",
+            "r2_read_bytes",
+            "r2_written_bytes",
+            "do_rows_written",
+        ] {
+            assert_eq!(
+                usage(&after, field),
+                usage(&before, field),
+                "warm fetch {field}"
+            );
+        }
+        assert_eq!(after["native_view"]["scope"], "full");
+        assert!(n(&after, "cache_retained_bytes") <= 32 * 1024 * 1024);
+        assert!(usage(&after, "do_sqlite_bytes") <= 24576);
+        git(&client, &["fsck", "--strict", "--full"], &[]);
+        assert_eq!(
+            git(&source, &["archive", "--format=tar", &tips[7]], &[]),
+            git(&client, &["archive", "--format=tar", &tips[7]], &[])
+        );
+        fs::write(root.join("warm-contract.json"),serde_json::to_vec_pretty(&serde_json::json!({"kind":"production_worker_correctness_not_benchmark","view_cache":"warm","receive_default":"on_but_not_negotiated","five_verified_fetches":true,"before":before,"after":after,"fsck_strict":true,"archive_identical":true,"known_full_bill":null})).unwrap()).unwrap();
+        verify_sources(&root, &sources);
+        return;
+    }
     // Bootstrap the existing R8 advertisement certificate from a true Full view.
     http(
         &root,
@@ -923,6 +974,11 @@ fn projected_receive_control(
     );
     tip
 }
+fn selected_receive_case(kind: &str, mode: &str) -> bool {
+    std::env::var("GIT_ZERO_SMALL_RECEIVE_CASE")
+        .ok()
+        .is_none_or(|selected| selected == kind || selected == format!("{kind}:{mode}"))
+}
 fn receive_fault_controls(
     root: &Path,
     source: &Path,
@@ -951,6 +1007,9 @@ fn receive_fault_controls(
         "get-body-failure",
     ];
     for mode in cases {
+        if !selected_receive_case("private", mode) {
+            continue;
+        }
         let current = service(
             root,
             &format!("receive-{mode}-manifest"),
@@ -1096,16 +1155,19 @@ fn receive_fault_controls(
         .unwrap();
     }
     for mode in [
-        "suffix-get",
         "put-after",
         "sql-before",
         "transaction",
         "sync-after",
         "lost-reply",
         "partial-delete",
-        "unknown-sql",
         "gateway-lost-reply",
+        "unknown-sql",
+        "suffix-get",
     ] {
+        if !selected_receive_case("publication", mode) {
+            continue;
+        }
         for attempt in 0..5 {
             let current = service(
                 root,
@@ -1210,8 +1272,15 @@ fn receive_fault_controls(
                 "test/small-receive-arm",
                 Some(&serde_json::json!({"mode":""})),
             );
-            let next = commit(source, Some(parent), blob, None, serial);
-            serial += 1;
+            let same_payload = matches!(mode, "put-after" | "sql-before" | "transaction");
+            let next = if same_payload {
+                assert_eq!(parent, current);
+                tip.clone()
+            } else {
+                let next = commit(source, Some(parent), blob, None, serial);
+                serial += 1;
+                next
+            };
             let (next_status, next_response) = receive_http(
                 root,
                 &format!("publication-{mode}-{attempt}-next"),
@@ -1226,6 +1295,17 @@ fn receive_fault_controls(
                 native,
                 false,
             );
+            if same_payload {
+                assert_eq!(
+                    fs::read(root.join(format!("publication-{mode}-{attempt}.receive-request")))
+                        .unwrap(),
+                    fs::read(
+                        root.join(format!("publication-{mode}-{attempt}-next.receive-request"))
+                    )
+                    .unwrap(),
+                    "explicit same-payload manual retry {mode}"
+                );
+            }
             let trace = service(
                 root,
                 &format!("publication-{mode}-{attempt}-follow-trace"),
@@ -1235,6 +1315,20 @@ fn receive_fault_controls(
             );
             let ops = trace["trace"].as_array().unwrap();
             let put = ops.iter().position(|v| v["name"] == "r2_put").unwrap();
+            if same_payload {
+                let first_key = failed["trace"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|v| v["name"] == "r2_put")
+                    .unwrap()["key"]
+                    .clone();
+                assert_eq!(
+                    first_key, ops[put]["key"],
+                    "same immutable key after explicit retry {mode}"
+                );
+            }
+
             if !matches!(mode, "unknown-sql" | "gateway-lost-reply") {
                 assert!(
                     ops[..put].iter().any(|v| v["name"] == "r2_list"),
@@ -1266,6 +1360,7 @@ fn receive_fault_controls(
             break;
         }
     }
+    assert!(!rows.is_empty(), "selected receiving fault cohort must run");
     let manifest = service(root, "receive-final-manifest", origin, "manifest", None);
     let tip = manifest["refs"]["refs/heads/main"]
         .as_str()
