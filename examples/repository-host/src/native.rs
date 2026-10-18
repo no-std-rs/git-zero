@@ -474,6 +474,11 @@ pub struct Metrics {
     pub protected_chunk_hits: u64,
     pub protected_chunk_hit_bytes: u64,
     pub protected_chunk_evictions: u64,
+    pub protected_chunk_pressure_evictions: u64,
+    pub protected_chunk_reset_evictions: u64,
+    pub protected_chunk_prunes: u64,
+    pub protected_chunk_rejections: u64,
+    pub protected_chunk_entries: u64,
     pub protected_chunk_bytes: u64,
     pub protected_chunk_owning_bytes: u64,
     pub joint_cache_entries: u64,
@@ -618,6 +623,14 @@ fn eligible_small_receive(request: &Request) -> bool {
     false
 }
 
+/// Generic immutable GET-cache policy, independent of workload or key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProtectedChunkMode {
+    Off,
+    One,
+    Multi,
+}
+
 pub struct NativeHost {
     root: PathBuf,
     view: PathBuf,
@@ -626,8 +639,8 @@ pub struct NativeHost {
     cold_view: bool,
     cache: VecDeque<(String, Response)>,
     cache_bytes: usize,
-    protected_chunk: Option<crate::storage::VerifiedChunk>,
-    protected_enabled: bool,
+    protected_chunks: Vec<crate::storage::VerifiedChunk>,
+    protected_mode: ProtectedChunkMode,
     ordinary_chunk_admission: bool,
     advertisement: Option<advertisement::Certificate>,
     view_dirty: bool,
@@ -686,13 +699,33 @@ impl NativeHost {
         self.cloudflare.clone()
     }
 
-    /// Generic production cache policy; disabling releases its retained owner.
+    /// Original boolean control retains its ONE/off semantics.
     pub fn enable_protected_chunk(&mut self, enabled: bool) {
-        self.protected_enabled = enabled && self.cloudflare.is_some();
-        if !self.protected_enabled {
+        self.set_protected_chunk_mode(if enabled {
+            ProtectedChunkMode::One
+        } else {
+            ProtectedChunkMode::Off
+        });
+    }
+
+    pub fn set_protected_chunk_mode(&mut self, mode: ProtectedChunkMode) {
+        self.protected_mode = if self.cloudflare.is_some() && self.cold_view {
+            mode
+        } else {
+            ProtectedChunkMode::Off
+        };
+        while self.protected_chunks.len() > self.protected_limit() {
             self.evict_protected_chunk();
         }
         self.trim_cache(0);
+    }
+
+    fn protected_limit(&self) -> usize {
+        match self.protected_mode {
+            ProtectedChunkMode::Off => 0,
+            ProtectedChunkMode::One => 1,
+            ProtectedChunkMode::Multi => 32,
+        }
     }
 
     fn with_services(
@@ -702,7 +735,11 @@ impl NativeHost {
         cold_view: bool,
     ) -> io::Result<Self> {
         let view = root.join("view/repo.git");
-        let protected_enabled = cloudflare.is_some();
+        let protected_mode = if cloudflare.is_some() && cold_view {
+            ProtectedChunkMode::Multi
+        } else {
+            ProtectedChunkMode::Off
+        };
         let mut host = Self {
             root,
             view,
@@ -711,8 +748,8 @@ impl NativeHost {
             cold_view,
             cache: VecDeque::new(),
             cache_bytes: 0,
-            protected_chunk: None,
-            protected_enabled,
+            protected_chunks: Vec::new(),
+            protected_mode,
             ordinary_chunk_admission: false,
             advertisement: None,
             view_dirty: false,
@@ -732,13 +769,13 @@ impl NativeHost {
     fn recover(&mut self) -> io::Result<()> {
         // Startup/observer/dirty-state reconciliation must never warm the slot.
         let admission = std::mem::replace(&mut self.ordinary_chunk_admission, false);
-        let result = self.recover_inner();
+        let result = self.recover_inner(admission);
         self.ordinary_chunk_admission = admission;
         self.trim_cache(0);
         result
     }
 
-    fn recover_inner(&mut self) -> io::Result<()> {
+    fn recover_inner(&mut self, ordinary: bool) -> io::Result<()> {
         self.authority_fingerprint = None;
         // Recovery includes ambiguous publications and external generations.
         // A later full native advertisement must certify this state afresh.
@@ -754,6 +791,10 @@ impl NativeHost {
         self.metrics.retired_chunk_deletes +=
             self.repository.blobs.reclaim_unreferenced(&manifest)? as u64;
         self.manifest = manifest;
+        // Observer/startup reconstruction is not a cache-policy mutation.
+        if ordinary {
+            self.prune_protected_chunks()?;
+        }
         if self.cloudflare.is_some() {
             let digest = crate::first_read::manifest_digest(&self.manifest);
             self.authority_fingerprint = Some(AuthorityFingerprint {
@@ -830,20 +871,35 @@ impl NativeHost {
         if self.view.exists() {
             fs::remove_dir_all(&self.view)?;
         }
-        let resolved = self.repository.read_snapshot_selection_resolved(
+        let cached = self.protected_chunks.clone();
+        let non_chunk_bytes = self.cache_bytes + self.metadata_bytes() - self.protected_bytes();
+        let response_entries = self.cache.len();
+        let limit = if self.ordinary_chunk_admission {
+            self.protected_limit()
+        } else {
+            0
+        };
+        let chunks = &mut self.protected_chunks;
+        let metrics = &mut self.metrics;
+        let resolved = self.repository.read_snapshot_selection_cached(
             manifest,
             selected,
-            self.protected_chunk.clone(),
+            &cached,
             prefetched,
-            self.protected_enabled
-                && self.ordinary_chunk_admission
-                && self.protected_chunk.is_none(),
+            &mut |candidate| {
+                Self::admit_chunk(
+                    chunks,
+                    metrics,
+                    candidate,
+                    limit,
+                    non_chunk_bytes,
+                    response_entries,
+                );
+            },
         )?;
         self.metrics.protected_chunk_hits += resolved.cache_hits as u64;
         self.metrics.protected_chunk_hit_bytes += resolved.cache_hit_bytes;
-        if let Some(candidate) = resolved.admission {
-            self.admit_protected_chunk(candidate);
-        }
+        self.note_joint_retention();
         let files = resolved.files;
         init(&self.view)?;
         for (pack, (data, index)) in selected.iter().map(|i| &manifest.packs[*i]).zip(files) {
@@ -1414,6 +1470,7 @@ impl NativeHost {
         // the process dies while updating this disposable native view.
         write_refs(&self.view, &next.refs)?;
         self.manifest = next;
+        self.prune_protected_chunks()?;
         self.prune_native_packs()?;
         self.metrics.retired_chunk_deletes += retirement
             .outcomes
@@ -1744,7 +1801,8 @@ impl NativeHost {
             + size_of::<Option<advertisement::Certificate>>()
             + size_of::<Option<history::Certificate>>()
             + 2 * size_of::<usize>()
-            + size_of::<Option<crate::storage::VerifiedChunk>>()
+            + size_of::<Vec<crate::storage::VerifiedChunk>>()
+            + size_of::<ProtectedChunkMode>()
             + 2 * size_of::<bool>()
             + self.protected_bytes()
             + self.cloudflare.as_ref().map_or(0, |services| {
@@ -1756,13 +1814,17 @@ impl NativeHost {
     }
 
     fn protected_bytes(&self) -> usize {
-        self.protected_chunk
-            .as_ref()
-            .map_or(0, |v| v.retained_bytes())
+        Self::chunk_bytes(&self.protected_chunks)
+    }
+
+    fn chunk_bytes(chunks: &Vec<crate::storage::VerifiedChunk>) -> usize {
+        chunks.capacity() * size_of::<crate::storage::VerifiedChunk>()
+            + usize::from(chunks.capacity() != 0) * 256
+            + chunks.iter().map(|v| v.retained_bytes()).sum::<usize>()
     }
 
     fn joint_cache_entries(&self) -> usize {
-        self.cache.len() + usize::from(self.protected_chunk.is_some())
+        self.cache.len() + self.protected_chunks.len()
     }
 
     fn note_joint_retention(&mut self) {
@@ -1772,25 +1834,101 @@ impl NativeHost {
             .max((self.cache_bytes + self.metadata_bytes()) as u64);
     }
 
+    // Newest secondary first, then the anchor. Release empty backing capacity.
     fn evict_protected_chunk(&mut self) {
-        if self.protected_chunk.take().is_some() {
+        if self.protected_chunks.pop().is_some() {
             self.metrics.protected_chunk_evictions += 1;
+            self.metrics.protected_chunk_pressure_evictions += 1;
+        }
+        if self.protected_chunks.is_empty() {
+            self.protected_chunks = Vec::new();
         }
     }
 
+    fn clear_protected_chunks(&mut self) {
+        self.metrics.protected_chunk_evictions += self.protected_chunks.len() as u64;
+        self.metrics.protected_chunk_reset_evictions += self.protected_chunks.len() as u64;
+        self.protected_chunks = Vec::new();
+    }
+
+    #[cfg(test)]
     fn admit_protected_chunk(&mut self, candidate: crate::storage::VerifiedChunk) {
-        if !self.protected_enabled
-            || !self.ordinary_chunk_admission
-            || self.protected_chunk.is_some()
+        let limit = if self.ordinary_chunk_admission {
+            self.protected_limit()
+        } else {
+            0
+        };
+        let non_chunk_bytes = self.cache_bytes + self.metadata_bytes() - self.protected_bytes();
+        Self::admit_chunk(
+            &mut self.protected_chunks,
+            &mut self.metrics,
+            &candidate,
+            limit,
+            non_chunk_bytes,
+            self.cache.len(),
+        );
+        self.note_joint_retention();
+    }
+
+    fn admit_chunk(
+        chunks: &mut Vec<crate::storage::VerifiedChunk>,
+        metrics: &mut Metrics,
+        candidate: &crate::storage::VerifiedChunk,
+        limit: usize,
+        non_chunk_bytes: usize,
+        response_entries: usize,
+    ) {
+        if limit == 0
             || candidate.bytes().len() > CACHE_ENTRY_BYTES
+            || chunks
+                .iter()
+                .any(|old| old.descriptor() == candidate.descriptor())
         {
             return;
         }
-        if self.trim_joint(candidate.retained_bytes(), true) {
-            self.protected_chunk = Some(candidate);
-            self.metrics.protected_chunk_admissions += 1;
-            self.note_joint_retention();
+        if chunks.len() >= limit || response_entries + chunks.len() >= CACHE_ENTRIES {
+            metrics.protected_chunk_rejections += 1;
+            return;
         }
+        // Reserve old+new backing ownership before a possible Vec allocation.
+        let growth = if chunks.len() == chunks.capacity() {
+            (chunks.len() + 1) * size_of::<crate::storage::VerifiedChunk>() + 256
+        } else {
+            0
+        };
+        let chunk_needed = Self::chunk_bytes(chunks) + candidate.retained_bytes() + growth;
+        // Unallocated admission heuristic only: no response cap or owned reserve.
+        let secondary_headroom = 15 * 1024 * 1024;
+        if non_chunk_bytes + chunk_needed > CACHE_BYTES
+            || (!chunks.is_empty() && chunk_needed > CACHE_BYTES - secondary_headroom)
+        {
+            metrics.protected_chunk_rejections += 1;
+            return;
+        }
+        metrics.joint_cache_retained_peak_bytes = metrics
+            .joint_cache_retained_peak_bytes
+            .max((non_chunk_bytes + chunk_needed) as u64);
+        if growth != 0 {
+            chunks.reserve_exact(1);
+        }
+        chunks.push(candidate.clone());
+        metrics.protected_chunk_admissions += 1;
+        metrics.joint_cache_retained_peak_bytes = metrics
+            .joint_cache_retained_peak_bytes
+            .max((non_chunk_bytes + Self::chunk_bytes(chunks)) as u64);
+    }
+
+    fn prune_protected_chunks(&mut self) -> io::Result<()> {
+        let live = crate::snapshot_chunks(&self.manifest)?;
+        let before = self.protected_chunks.len();
+        self.protected_chunks
+            .retain(|v| live.contains(v.descriptor()));
+        self.metrics.protected_chunk_prunes += (before - self.protected_chunks.len()) as u64;
+        if self.protected_chunks.is_empty() {
+            self.protected_chunks = Vec::new();
+        }
+        self.note_joint_retention();
+        Ok(())
     }
 
     fn reserve_metadata(&mut self, incoming: usize) -> bool {
@@ -1805,11 +1943,11 @@ impl NativeHost {
         while self.cache_bytes + self.metadata_bytes() + incoming > CACHE_BYTES
             || self.joint_cache_entries() + usize::from(entry) > CACHE_ENTRIES
         {
-            if let Some((old_key, old)) = self.cache.pop_front() {
+            if !self.protected_chunks.is_empty() {
+                self.evict_protected_chunk();
+            } else if let Some((old_key, old)) = self.cache.pop_front() {
                 self.cache_bytes -= Self::cache_weight(old_key.capacity(), &old);
                 self.metrics.cache_evictions += 1;
-            } else if self.protected_chunk.is_some() {
-                self.evict_protected_chunk();
             } else {
                 return false;
             }
@@ -1868,10 +2006,14 @@ impl NativeHost {
             .iter()
             .flat_map(|i| self.manifest.packs[*i].chunks().cloned())
             .collect();
-        let cached = self.protected_chunk.as_ref().map(|v| v.descriptor());
+        let cached: Vec<_> = self
+            .protected_chunks
+            .iter()
+            .map(|v| v.descriptor())
+            .collect();
         let missing: Vec<_> = chunks
             .iter()
-            .filter(|c| cached != Some(*c))
+            .filter(|c| !cached.contains(c))
             .cloned()
             .collect();
         let count = crate::cloudflare::bulk_batch_len(&missing);
@@ -1893,7 +2035,7 @@ impl NativeHost {
                     .map(|b| format!("{b:02x}"))
                     .collect(),
                 selection: crate::first_read::cached_selection_hash(
-                    &stable, &chunks, cached, &first,
+                    &stable, &chunks, &cached, &first,
                 ),
                 first,
             },
@@ -2084,7 +2226,7 @@ impl NativeHost {
     fn request_error_cleanup(&mut self) {
         self.advertisement = None;
         self.lineage = None;
-        self.evict_protected_chunk();
+        self.clear_protected_chunks();
         self.trim_cache(0);
         if self.view_dirty || !matches!(self.scope, ViewScope::Full { .. }) {
             self.view_dirty = true;
@@ -2151,9 +2293,11 @@ impl NativeHost {
                 self.metrics.cache_budget_bytes = CACHE_BYTES as u64;
                 self.metrics.cache_entries = self.cache.len() as u64;
                 self.metrics.protected_chunk_bytes = self
-                    .protected_chunk
-                    .as_ref()
-                    .map_or(0, |v| v.bytes().len() as u64);
+                    .protected_chunks
+                    .iter()
+                    .map(|v| v.bytes().len() as u64)
+                    .sum();
+                self.metrics.protected_chunk_entries = self.protected_chunks.len() as u64;
                 self.metrics.protected_chunk_owning_bytes = self.protected_bytes() as u64;
                 self.metrics.joint_cache_entries = self.joint_cache_entries() as u64;
                 self.metrics.cache_entry_limit = CACHE_ENTRIES as u64;
@@ -2247,10 +2391,10 @@ mod tests {
             std::env::temp_dir().join(format!("git-zero-protected-budget-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let mut host = NativeHost::open(root.clone()).unwrap();
-        host.protected_enabled = true;
+        host.protected_mode = ProtectedChunkMode::One;
         let payload = verified_payload(vec![7; CACHE_ENTRY_BYTES]);
         host.admit_protected_chunk(payload.clone());
-        assert!(host.protected_chunk.is_none(), "setup cannot admit");
+        assert!(host.protected_chunks.is_empty(), "setup cannot admit");
         host.ordinary_chunk_admission = true;
         host.admit_protected_chunk(payload);
         assert_eq!(host.metrics.protected_chunk_admissions, 1);
@@ -2262,7 +2406,7 @@ mod tests {
         };
         host.cache_insert("max-response".into(), &response);
         assert!(
-            host.protected_chunk.is_none(),
+            host.protected_chunks.is_empty(),
             "slot is evictable under the same budget"
         );
         assert_eq!(host.cache.len(), 1);
@@ -2278,7 +2422,7 @@ mod tests {
             std::env::temp_dir().join(format!("git-zero-protected-entry-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let mut host = NativeHost::open(root.clone()).unwrap();
-        host.protected_enabled = true;
+        host.protected_mode = ProtectedChunkMode::One;
         host.ordinary_chunk_admission = true;
         let stable = host.stable_full_selection().unwrap();
         host.admit_protected_chunk(verified_payload(vec![7; 100]));
@@ -2294,14 +2438,156 @@ mod tests {
             assert!(host.joint_cache_entries() <= CACHE_ENTRIES);
             assert!(host.cache_bytes + host.metadata_bytes() <= CACHE_BYTES);
         }
-        assert!(host.protected_chunk.is_some());
-        assert_eq!(host.cache.len(), 255);
+        assert!(host.protected_chunks.is_empty());
+        assert_eq!(host.cache.len(), 256);
         assert_eq!(stable, host.stable_full_selection().unwrap());
         host.cache = VecDeque::new();
         host.cache_bytes = 0;
-        assert_eq!(host.joint_cache_entries(), 1);
+        assert_eq!(host.joint_cache_entries(), 0);
         host.request_error_cleanup();
-        assert!(host.protected_chunk.is_none());
+        assert!(host.protected_chunks.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn multi_chunk_first_fit_prunes_full_authority_and_promotes_without_replacement() {
+        let root =
+            std::env::temp_dir().join(format!("git-zero-multi-policy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        host.protected_mode = ProtectedChunkMode::Multi;
+        host.ordinary_chunk_admission = true;
+        let anchor = verified_payload(vec![1; 9 * 1024 * 1024]);
+        let secondary = verified_payload(vec![2; 4 * 1024 * 1024]);
+        let rejected = verified_payload(vec![3; 5 * 1024 * 1024]);
+        let tiny = verified_payload(vec![4; 100]);
+        host.admit_protected_chunk(anchor.clone());
+        host.admit_protected_chunk(secondary.clone());
+        let entries = host
+            .protected_chunks
+            .iter()
+            .map(|v| v.descriptor().clone())
+            .collect::<Vec<_>>();
+        host.admit_protected_chunk(rejected);
+        assert_eq!(
+            host.protected_chunks
+                .iter()
+                .map(|v| v.descriptor().clone())
+                .collect::<Vec<_>>(),
+            entries
+        );
+        assert_eq!(host.metrics.protected_chunk_rejections, 1);
+        host.admit_protected_chunk(tiny.clone());
+        assert_eq!(
+            host.protected_chunks.len(),
+            3,
+            "late small fitting item is considered"
+        );
+        // Proposed or projected manifests have no pruning side effect. Only
+        // the explicit trusted Full install hook performs this operation.
+        let mut next = Manifest::default();
+        next.packs.push(StoredPack {
+            id: "live".into(),
+            bundle: vec![secondary.descriptor().clone(), tiny.descriptor().clone()],
+            pack_bytes: secondary.descriptor().len,
+            index_bytes: tiny.descriptor().len,
+            ..StoredPack::default()
+        });
+        assert_eq!(host.protected_chunks.len(), 3);
+        host.manifest = next;
+        host.prune_protected_chunks().unwrap();
+        assert_eq!(host.metrics.protected_chunk_prunes, 1);
+        assert_eq!(
+            host.protected_chunks[0].descriptor(),
+            secondary.descriptor()
+        );
+        host.admit_protected_chunk(anchor);
+        assert_eq!(
+            host.protected_chunks[0].descriptor(),
+            secondary.descriptor()
+        );
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Arc::from(vec![5; CACHE_ENTRY_BYTES]),
+        };
+        host.cache_insert("eligible-above14m".into(), &response);
+        assert_eq!(host.cache.len(), 1);
+        assert!(host.cache_bytes + host.metadata_bytes() <= CACHE_BYTES);
+        assert!(host.metrics.joint_cache_retained_peak_bytes <= CACHE_BYTES as u64);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn multi_chunk_pool_and_joint_entry_limits_reclaim_newest_secondary_first() {
+        let root =
+            std::env::temp_dir().join(format!("git-zero-multi-entries-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        host.protected_mode = ProtectedChunkMode::Multi;
+        host.ordinary_chunk_admission = true;
+        for index in 0..32u8 {
+            host.admit_protected_chunk(verified_payload(vec![index; 100]));
+        }
+        assert_eq!(host.protected_chunks.len(), 32);
+        let anchor = host.protected_chunks[0].descriptor().clone();
+        let newest = host.protected_chunks[31].descriptor().clone();
+        host.admit_protected_chunk(verified_payload(vec![99; 100]));
+        assert_eq!(host.protected_chunks.len(), 32);
+        assert_eq!(host.metrics.protected_chunk_rejections, 1);
+        for index in 0..224 {
+            host.cache_insert(
+                index.to_string(),
+                &Response {
+                    status: 200,
+                    headers: BTreeMap::new(),
+                    body: Arc::from([1u8]),
+                },
+            );
+        }
+        assert_eq!(host.joint_cache_entries(), 256);
+        assert_eq!(host.protected_chunks.len(), 32);
+        host.cache_insert(
+            "pressure-one-more".into(),
+            &Response {
+                status: 200,
+                headers: BTreeMap::new(),
+                body: Arc::from([1u8]),
+            },
+        );
+        assert_eq!(host.protected_chunks.len(), 31);
+        assert_eq!(host.protected_chunks[0].descriptor(), &anchor);
+        assert!(
+            !host
+                .protected_chunks
+                .iter()
+                .any(|v| v.descriptor() == &newest)
+        );
+        assert_eq!(host.metrics.protected_chunk_pressure_evictions, 1);
+        assert_eq!(host.joint_cache_entries(), 256);
+        assert!(host.cache_bytes + host.metadata_bytes() <= CACHE_BYTES);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observer_full_recovery_cannot_admit_or_prune_the_immutable_pool() {
+        let root =
+            std::env::temp_dir().join(format!("git-zero-multi-observer-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        host.protected_mode = ProtectedChunkMode::Multi;
+        host.ordinary_chunk_admission = true;
+        host.admit_protected_chunk(verified_payload(vec![1; 100]));
+        host.ordinary_chunk_admission = false;
+        host.recover().unwrap();
+        assert_eq!(host.protected_chunks.len(), 1);
+        assert_eq!(host.metrics.protected_chunk_admissions, 1);
+        assert_eq!(host.metrics.protected_chunk_prunes, 0);
+        host.ordinary_chunk_admission = true;
+        host.recover().unwrap();
+        assert!(host.protected_chunks.is_empty());
+        assert_eq!(host.metrics.protected_chunk_prunes, 1);
+        assert_eq!(host.metrics.protected_chunk_admissions, 1);
         fs::remove_dir_all(root).unwrap();
     }
 

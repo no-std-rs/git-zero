@@ -18,7 +18,7 @@ fn main() -> io::Result<()> {
         let mut gateway_first_read = true;
         let mut gateway_first_receive = true;
         let mut socket_rpc = true;
-        let mut protected_chunk = true;
+        let mut protected_chunk = git_zero_host::native::ProtectedChunkMode::Multi;
         loop {
             match arguments.peek().map(String::as_str) {
                 Some("--repo") => {
@@ -76,9 +76,14 @@ fn main() -> io::Result<()> {
                 Some("--protected-chunk") => {
                     arguments.next();
                     protected_chunk = match arguments.next().as_deref() {
-                        Some("on") => true,
-                        Some("off") => false,
-                        _ => return Err(io::Error::other("protected chunk must be on or off")),
+                        Some("on" | "one") => git_zero_host::native::ProtectedChunkMode::One,
+                        Some("multi") => git_zero_host::native::ProtectedChunkMode::Multi,
+                        Some("off") => git_zero_host::native::ProtectedChunkMode::Off,
+                        _ => {
+                            return Err(io::Error::other(
+                                "protected chunk must be off, on, one or multi",
+                            ));
+                        }
                     };
                 }
                 _ => break,
@@ -102,7 +107,7 @@ fn main() -> io::Result<()> {
         }
         let mut host =
             NativeHost::open_cloudflare(PathBuf::from(root), &origin, &repo, &token, cold)?;
-        host.enable_protected_chunk(protected_chunk);
+        host.set_protected_chunk_mode(protected_chunk);
         let services = host
             .cloudflare_services()
             .ok_or_else(|| io::Error::other("missing Cloudflare registration services"))?;
