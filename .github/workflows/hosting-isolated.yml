@@ -1,0 +1,336 @@
+name: Isolated interleaved hosting benchmark
+
+on:
+  push:
+    branches: [perf/hosting-isolated-ci-20261018]
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Two-pair screen or final five-pair validation
+        type: choice
+        options: [screen, full]
+        default: screen
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosting-isolated-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BASELINE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
+  EXPECTED_WORKER_SHA256: 29830c201a5e97f163c8d40d7087e83c8f63a0608e0e7f246b5924661e3a2f19
+  REFERENCE_GIT_VERSION: 2.53.0
+  # Four profile archives plus one score archive: at most 20 MiB per run.
+  ARTIFACT_MAX_BYTES: '4194304'
+  # For final validation by branch push, change this one fallback to 'full'.
+  # A new workflow on a nondefault branch may not support workflow_dispatch yet.
+  BENCH_STAGE: ${{ inputs.stage || 'screen' }}
+  WRANGLER_HIDE_BANNER: 'true'
+  WRANGLER_SEND_METRICS: 'false'
+  X_LOCAL_EXPLORER: 'false'
+  X_LOCAL_OBSERVABILITY: 'false'
+  NO_COLOR: '1'
+
+jobs:
+  profiles:
+    # Dispatches on another ref cannot start the experiment.
+    if: github.ref == 'refs/heads/perf/hosting-isolated-ci-20261018'
+    name: ${{ matrix.fixture_mib }} MiB / ${{ matrix.view_cache }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture_mib: [16, 64]
+        view_cache: [cold, warm]
+    env:
+      BENCH_ROOT: ${{ runner.temp }}/hosting-interleaved
+      REPORT_ROOT: ${{ runner.temp }}/hosting-interleaved/reports
+      PROFILE: ${{ matrix.fixture_mib }}mib-${{ matrix.view_cache }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Prepare pinned Git and local Worker dependencies before timing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_ROOT/provenance" "$BENCH_ROOT/bin/common" \
+            "$BENCH_ROOT/bin/baseline" "$BENCH_ROOT/bin/candidate"
+          test "$REFERENCE_GIT_VERSION" = "$(cat tests/git-version.txt)"
+          printf '%s  %s\n' "$EXPECTED_WORKER_SHA256" \
+            examples/repository-host/cloudflare/src/index.js | sha256sum --check
+          if [ "$(git --version)" != "git version $REFERENCE_GIT_VERSION" ]; then
+            sudo apt-get update
+            sudo apt-get install -y libcurl4-openssl-dev zlib1g-dev
+            git clone --depth 1 --branch "v$REFERENCE_GIT_VERSION" \
+              https://github.com/git/git.git "$BENCH_ROOT/git-source"
+            make -C "$BENCH_ROOT/git-source" -j2 prefix="$BENCH_ROOT/reference-git" \
+              NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_OPENSSL=YesPlease NO_EXPAT=YesPlease
+            make -C "$BENCH_ROOT/git-source" install prefix="$BENCH_ROOT/reference-git" \
+              NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_OPENSSL=YesPlease NO_EXPAT=YesPlease
+            echo "$BENCH_ROOT/reference-git/bin" >> "$GITHUB_PATH"
+            git -C "$BENCH_ROOT/git-source" rev-parse HEAD \
+              > "$REPORT_ROOT/provenance/git-source-commit.txt"
+          fi
+          npm ci --prefix examples/repository-host/cloudflare
+
+      - name: Build both native variants and the common Rust tools before timing
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git --version)" = "git version $REFERENCE_GIT_VERSION"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          git worktree add --detach "$BENCH_ROOT/scalar-baseline" "$BASELINE_COMMIT"
+          cargo build --release --locked -p git-zero-host --bins -j2
+          cargo build --manifest-path "$BENCH_ROOT/scalar-baseline/Cargo.toml" \
+            --target-dir "$BENCH_ROOT/baseline-target" --release --locked \
+            -p git-zero-host --bin repository-host -j2
+          cp target/release/hosting-bench target/release/hosting-cost "$BENCH_ROOT/bin/common/"
+          cp target/release/repository-host "$BENCH_ROOT/bin/candidate/repository-host"
+          cp "$BENCH_ROOT/baseline-target/release/repository-host" \
+            "$BENCH_ROOT/bin/baseline/repository-host"
+          cp "$BENCH_ROOT/bin/baseline/repository-host" "$BENCH_ROOT/bin/common/reference-host"
+          for provider in baseline candidate; do
+            cp "$BENCH_ROOT/bin/common/hosting-bench" "$BENCH_ROOT/bin/common/hosting-cost" \
+              "$BENCH_ROOT/bin/$provider/"
+          done
+
+      - name: Freeze source, binary, runtime and VM provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          provenance="$REPORT_ROOT/provenance"
+          {
+            printf 'candidate_commit=%s\ncandidate_parent=%s\ncandidate_tree=%s\n' \
+              "$(git rev-parse HEAD)" "$(git rev-parse HEAD^)" "$(git rev-parse 'HEAD^{tree}')"
+            printf 'baseline_commit=%s\nbaseline_tree=%s\n' "$BASELINE_COMMIT" \
+              "$(git -C "$BENCH_ROOT/scalar-baseline" rev-parse 'HEAD^{tree}')"
+            printf 'remote_branch_head=%s\n' \
+              "$(git ls-remote origin refs/heads/perf/hosting-isolated-ci-20261018)"
+            printf 'run_id=%s\nrun_attempt=%s\nref=%s\nstage=%s\nprofile=%s\n' \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_REF" "$BENCH_STAGE" "$PROFILE"
+            printf 'runner_name=%s\nrunner_os=%s\nrunner_arch=%s\nimage_os=%s\nimage_version=%s\n' \
+              "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            printf 'workspace=%s\nreference_binary=%s\n' "$GITHUB_WORKSPACE" \
+              "$BENCH_ROOT/bin/common/reference-host"
+            printf 'topology=Git client -> local Worker -> native Rust -> Worker R2/SQLite\n'
+            printf 'GIT_CONFIG_COUNT=0\nGIT_CONFIG_NOSYSTEM=1\nGIT_CONFIG_GLOBAL=/dev/null\n'
+            printf 'worker_cpu=unknown\ndo_duration=unknown\nsqlite_monthly_storage=unknown\nnative_compute=unknown\n'
+            date -u +recorded_at=%FT%TZ
+            git --version --build-options
+            git --exec-path
+            rustc --version --verbose
+            cargo --version
+            node --version
+            npm --version
+            node examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js --version
+            uname -a
+            df -h "$RUNNER_TEMP"
+          } > "$provenance/runtime.txt"
+          npm ls --prefix examples/repository-host/cloudflare --all --json \
+            > "$provenance/npm-dependencies.json"
+          lscpu --json > "$provenance/cpu.json"
+          cp /proc/meminfo "$provenance/memory.txt"
+          sha256sum Cargo.lock Cargo.toml examples/repository-host/Cargo.toml \
+            examples/repository-host/src/bin/hosting-bench.rs \
+            examples/repository-host/src/bin/hosting-cost.rs \
+            examples/repository-host/src/benchmark_cost.rs \
+            examples/repository-host/cloudflare/src/index.js \
+            examples/repository-host/cloudflare/wrangler.toml \
+            examples/repository-host/cloudflare/package.json \
+            examples/repository-host/cloudflare/package-lock.json \
+            .github/workflows/hosting-isolated.yml \
+            "$BENCH_ROOT/scalar-baseline/Cargo.lock" \
+            "$BENCH_ROOT/bin/common/hosting-bench" "$BENCH_ROOT/bin/common/hosting-cost" \
+            "$BENCH_ROOT/bin/common/reference-host" \
+            "$BENCH_ROOT/bin/baseline/repository-host" "$BENCH_ROOT/bin/candidate/repository-host" \
+            "$(command -v git)" "$(git --exec-path)/git-http-backend" \
+            "$(git --exec-path)/git-remote-http" "$(command -v node)" /usr/bin/time \
+            > "$provenance/source-binary-sha256.txt"
+          find examples/repository-host/cloudflare/node_modules -path '*/bin/workerd' -type f -print0 |
+            while IFS= read -r -d '' binary; do
+              "$binary" --version
+              sha256sum "$binary"
+            done > "$provenance/workerd.txt"
+          test -s "$provenance/workerd.txt"
+
+      - name: Run fresh matching baseline and candidate on this VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_CONFIG_COUNT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+          export GIT_TERMINAL_PROMPT=0 LC_ALL=C
+          case "$BENCH_STAGE" in
+            screen) samples=2 ;;
+            full) samples=5 ;;
+            *) exit 1 ;;
+          esac
+          worker_pid=''
+          stop_worker() {
+            if [ -n "$worker_pid" ]; then
+              kill -- "-$worker_pid" 2>/dev/null || true
+              wait "$worker_pid" 2>/dev/null || true
+              worker_pid=''
+            fi
+          }
+          trap stop_worker EXIT
+          # Builds, dependency installation and version probes are complete.
+          # Each provider gets a fresh emulator, its own state and fresh namespaces.
+          for provider in baseline candidate; do
+            mkdir -p "$REPORT_ROOT/$provider/wrangler"
+            persist="$BENCH_ROOT/state-$provider"
+            test ! -e "$persist"
+            export WRANGLER_LOG_PATH="$REPORT_ROOT/$provider/wrangler"
+            setsid node examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js dev \
+              --config examples/repository-host/cloudflare/wrangler.toml --local \
+              --ip 127.0.0.1 --port 8808 --persist-to "$persist" \
+              --show-interactive-dev-session=false \
+              > "$REPORT_ROOT/$provider/wrangler.log" 2>&1 &
+            worker_pid=$!
+            ready=false
+            for attempt in {1..120}; do
+              if curl --silent --fail --max-time 2 http://127.0.0.1:8808/health \
+                > "$REPORT_ROOT/$provider/health.json"; then
+                ready=true
+                break
+              fi
+              kill -0 "$worker_pid"
+              sleep 1
+            done
+            test "$ready" = true
+            printf 'worker_pid=%s\nworker_cwd=%s\nstate=%s\nport=8808\n' \
+              "$worker_pid" "$GITHUB_WORKSPACE" "$persist" \
+              > "$REPORT_ROOT/$provider/service.txt"
+            sleep 5
+            cat /proc/loadavg /proc/pressure/cpu > "$REPORT_ROOT/$provider/contention-before.txt"
+            date -u +%FT%TZ > "$REPORT_ROOT/$provider/start.txt"
+            # Only the existing Rust runner performs measurements. No concurrent probes.
+            status=0
+            "$BENCH_ROOT/bin/$provider/hosting-bench" \
+              --flow interleaved-v1 --stage "$BENCH_STAGE" --samples "$samples" \
+              --fixture-mib '${{ matrix.fixture_mib }}' --view-cache '${{ matrix.view_cache }}' \
+              --pushes 32 --random-fetches 56 --reference-maintenance midx-bitmap-graph-v1 \
+              --reference-binary "$BENCH_ROOT/bin/common/reference-host" \
+              --cloudflare-endpoint http://127.0.0.1:8808 \
+              --cloudflare-token git-zero-local-services \
+              --cloudflare-repo-prefix "ci-$provider-$PROFILE" --monthly-runs 1000 \
+              --output "$REPORT_ROOT/$provider/$PROFILE.json" \
+              > "$REPORT_ROOT/$provider/benchmark.log" 2>&1 || status=$?
+            date -u +%FT%TZ > "$REPORT_ROOT/$provider/end.txt"
+            cat /proc/loadavg /proc/pressure/cpu > "$REPORT_ROOT/$provider/contention-after.txt"
+            printf 'benchmark_exit=%s\n' "$status" > "$REPORT_ROOT/$provider/status.txt"
+            stop_worker
+            test "$status" -eq 0
+          done
+          test -z "$(git status --porcelain)"
+          test -z "$(git -C "$BENCH_ROOT/scalar-baseline" status --porcelain)"
+          sha256sum --check "$REPORT_ROOT/provenance/source-binary-sha256.txt"
+
+      - name: Compress only reports, incomplete journals, provenance and logs
+        id: evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d "$REPORT_ROOT" ]; then exit 0; fi
+          cd "$REPORT_ROOT"
+          find . -type f -print0 | sort -z | xargs -0 -r sha256sum > "$BENCH_ROOT/raw-sha256.txt"
+          cp "$BENCH_ROOT/raw-sha256.txt" SHA256SUMS
+          archive="$RUNNER_TEMP/hosting-$PROFILE.tar.gz"
+          tar -czf "$archive" .
+          # Fail closed before upload. No fixture, emulator state, binary or cache is included.
+          test "$(stat -c %s "$archive")" -le "$ARTIFACT_MAX_BYTES"
+          sha256sum "$archive"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.evidence.outcome == 'success'
+        with:
+          name: hosting-${{ env.BENCH_STAGE }}-${{ env.PROFILE }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hosting-${{ env.PROFILE }}.tar.gz
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+
+  score:
+    needs: profiles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SUITE_ROOT: ${{ runner.temp }}/hosting-suite
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the same offline Rust evaluator
+        run: cargo build --release --locked -p git-zero-host --bin hosting-cost -j2
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hosting-${{ env.BENCH_STAGE }}-*-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hosting-downloads
+          merge-multiple: true
+      - name: Score complete matching CI suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$SUITE_ROOT/output"
+          for profile in 16mib-cold 16mib-warm 64mib-cold 64mib-warm; do
+            mkdir -p "$SUITE_ROOT/$profile"
+            tar -xzf "$RUNNER_TEMP/hosting-downloads/hosting-$profile.tar.gz" -C "$SUITE_ROOT/$profile"
+            (cd "$SUITE_ROOT/$profile" && sha256sum --check SHA256SUMS)
+          done
+          target/release/hosting-cost --output "$SUITE_ROOT/output/baseline-score.json" \
+            "$SUITE_ROOT/16mib-cold/baseline/16mib-cold.json" \
+            "$SUITE_ROOT/16mib-warm/baseline/16mib-warm.json" \
+            "$SUITE_ROOT/64mib-cold/baseline/64mib-cold.json" \
+            "$SUITE_ROOT/64mib-warm/baseline/64mib-warm.json"
+          target/release/hosting-cost --baseline "$SUITE_ROOT/output/baseline-score.json" \
+            --output "$SUITE_ROOT/output/comparison.json" \
+            "$SUITE_ROOT/16mib-cold/candidate/16mib-cold.json" \
+            "$SUITE_ROOT/16mib-warm/candidate/16mib-warm.json" \
+            "$SUITE_ROOT/64mib-cold/candidate/64mib-cold.json" \
+            "$SUITE_ROOT/64mib-warm/candidate/64mib-warm.json"
+          {
+            printf 'commit=%s\nstage=%s\nrun_id=%s\nrun_attempt=%s\n' \
+              "$GITHUB_SHA" "$BENCH_STAGE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            rustc --version --verbose
+            sha256sum target/release/hosting-cost "$RUNNER_TEMP"/hosting-downloads/*.tar.gz
+          } > "$SUITE_ROOT/output/provenance.txt"
+          {
+            printf 'Measured stage: **%s**. Baseline and candidate were measured freshly on the same VM for each profile.\n\n' "$BENCH_STAGE"
+            printf 'Read `comparison.json` and its decision/reasons before making a claim. A successful job is not acceptance.\n\n'
+            if [ "$BENCH_STAGE" = screen ]; then
+              printf 'Two-pair screens are provisional and cannot establish acceptance or a formal plateau.\n\n'
+            fi
+            printf 'Worker CPU, DO duration, monthly SQLite storage and native compute remain unknown; the full cost estimate stays null.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Compress scores and provenance
+        id: scores
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d "$SUITE_ROOT/output" ]; then exit 0; fi
+          cd "$SUITE_ROOT/output"
+          find . -type f -print0 | sort -z | xargs -0 -r sha256sum > "$SUITE_ROOT/score-sha256.txt"
+          cp "$SUITE_ROOT/score-sha256.txt" SHA256SUMS
+          tar -czf "$RUNNER_TEMP/hosting-scores.tar.gz" .
+          test "$(stat -c %s "$RUNNER_TEMP/hosting-scores.tar.gz")" -le "$ARTIFACT_MAX_BYTES"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scores.outcome == 'success'
+        with:
+          name: hosting-scores-${{ env.BENCH_STAGE }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hosting-scores.tar.gz
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1

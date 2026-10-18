@@ -115,3 +115,38 @@ incomparable attempts do not establish that condition. Then measure the original
 final candidate with five pairs and the identical runner/reference/runtime policy. Report the full
 comparison's outcome and all earlier screens; no screen counts as a formally accepted result or formal
 plateau by itself. A failed final latency guard remains inconclusive rather than becoming a speed claim.
+
+## Isolated GitHub runner experiment
+
+The [isolated workflow](../.github/workflows/hosting-isolated.yml) runs only on explicit pushes to
+`perf/hosting-isolated-ci-20261018`, or dispatches selecting that branch. Each of the four profiles gets
+a standard `ubuntu-24.04` VM. On that same VM, it freshly measures scalar baseline
+`556b9ecd2aa79197f86b3db2d546eee81696e899` followed by the pushed candidate, with a fresh local Wrangler
+process and persistent-state directory for each provider. These are a new environment's measurements;
+local-workstation reports must not serve as their baseline.
+
+All dependencies and both native variants are built before timing, with two build jobs and no artifact
+or dependency caches. Both providers use the candidate's identical Rust runner, the frozen scalar
+reference wrapper, Git 2.53.0 and the same pinned Worker source/configuration. Standardized absolute build
+paths and one Rust stable toolchain preserve binary identity across profile jobs; the existing Rust
+scorer rejects any mixed native/reference hashes. Health and runtime checks finish before timing, and
+no background benchmark probes run. The complete storage, compaction, cache, fsck and nonempty-pack
+requirements remain enforced by the existing runner and scorer.
+
+Branch pushes default to `screen`, with exactly two measured pairs per provider/profile. For the final
+five-pair run, change the workflow's single `BENCH_STAGE` fallback from `'screen'` to `'full'` in a reviewed
+commit and push that commit to the same branch. This works even when GitHub cannot dispatch a workflow
+that has never existed on the default branch. If dispatch is available, its explicit `stage` input
+overrides the fallback. Stage and sample count are the only workload changes for final validation.
+Future candidates can include the workflow on the same branch and repeat the complete fresh comparison.
+
+The offline Rust scoring job compares all four profiles and retains every actual resource and latency
+guard in `comparison.json`; a screen remains formally inconclusive. A green workflow only means that
+measurement and scoring completed. Inspect the comparison decision and reasons before interpreting it.
+Unknown Worker CPU, DO duration, monthly SQLite storage and native compute remain unknown.
+
+Per-profile evidence contains compressed raw JSON, incomplete progress journals when present, source
+and executable hashes, runtime/hardware provenance and local service logs. A separate small archive
+holds scores and evaluator provenance. Artifacts have one-day retention and a hard 4 MiB compressed
+cap per archive (at most five archives, 20 MiB total); no binaries, fixtures, emulator state or caches are uploaded.
+Download evidence before expiration. No Cloudflare account, deployment, secrets or paid runner is used.
