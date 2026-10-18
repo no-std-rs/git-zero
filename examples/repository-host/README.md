@@ -43,6 +43,22 @@ Single-chunk native files share
 immutable blob storage. Native Git's expanded processing is outside a Worker memory
 budget. This example supplies no authentication or remote listener.
 
+Cold Cloudflare upload discovery can use manifest metadata after one complete
+native protocol-v0 advertisement certifies the exact branch set, fixed main HEAD
+and capability order. A bounded native type check also requires branch targets
+to be commits. The learned native agent and capability template retain no refs
+or objects. Strict native branch publications can advance the certificate;
+recovery, external generations or changed codec/configuration invalidate it.
+Tags, unborn repositories, other protocols and unrecognized requests or policies
+keep the ordinary native path. Fetch POSTs still reconstruct the complete view.
+
+`/metrics` reports advertisement shortcuts, native bootstrap attempts and the
+one-time type-check count/time. `cache_bytes` and `cache_entries` describe the
+existing response cache and clear after publication. The separate
+`upload_advertisement_template_bytes` and `cache_retained_bytes` include the
+bounded certificate in the same 32 MiB allocation budget. No certificate is
+persisted, and eligible discovery writes no authoritative state or blobs.
+
 See the [hosting design](../../docs/hosting-design.md) for the Cloudflare service
 layout and Linux-size cost assumptions, and the
 [performance report](../../docs/hosting-performance.md) for results and limits.

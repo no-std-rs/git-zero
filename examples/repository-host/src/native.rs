@@ -7,7 +7,7 @@ use crate::storage::{
     StoredPack,
 };
 use crate::{Repository, hash};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
@@ -25,6 +25,11 @@ const MAX_REFS: usize = 16 * 1024;
 const MAX_REF_BYTES: usize = 4 * 1024 * 1024;
 const COMPACTION_BYTES: u64 = 8 * 1024 * 1024;
 const FANOUT: usize = 4;
+const NATIVE_CONFIG: &[u8] = b"[core]\nrepositoryformatversion = 0\nbare = true\nfsync = none\n[http]\nreceivepack = true\n[receive]\nunpackLimit = 0\nfsckObjects = true\ndenyNonFastForwards = true\ndenyDeleteCurrent = ignore\nautogc = false\n[gc]\nauto = 0\n[pack]\nthreads = 0\nwindow = 0\nuseBitmaps = true\n";
+
+mod advertisement;
+#[cfg(test)]
+mod advertisement_tests;
 
 pub fn command(mut command: Command, input: &[u8]) -> io::Result<Output> {
     command
@@ -77,7 +82,7 @@ fn init(repo: &Path) -> io::Result<()> {
     // Do not pay for a second durability transaction on temporary codec refs.
     // Existing compressed entries/deltas are reused; a download never starts
     // a fresh delta search proportional to the size of the requested history.
-    fs::write(repo.join("config"), b"[core]\nrepositoryformatversion = 0\nbare = true\nfsync = none\n[http]\nreceivepack = true\n[receive]\nunpackLimit = 0\nfsckObjects = true\ndenyNonFastForwards = true\ndenyDeleteCurrent = ignore\nautogc = false\n[gc]\nauto = 0\n[pack]\nthreads = 0\nwindow = 0\nuseBitmaps = true\n")?;
+    fs::write(repo.join("config"), NATIVE_CONFIG)?;
     Ok(())
 }
 
@@ -151,6 +156,9 @@ fn validate_snapshot_refs(refs: &BTreeMap<String, String>) -> io::Result<()> {
             .is_none_or(|bytes| bytes > MAX_REF_BYTES)
     {
         return Err(io::Error::other("prototype ref limit exceeded"));
+    }
+    for (name, id) in refs {
+        validate_ref(name, id)?;
     }
     Ok(())
 }
@@ -388,7 +396,8 @@ fn file_matches(path: &Path, bytes: &[u8]) -> io::Result<bool> {
     Ok(true)
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default)]
 pub struct Metrics {
     pub requests: u64,
     pub input_bytes: u64,
@@ -416,6 +425,14 @@ pub struct Metrics {
     pub cloud_view_rehydrates: u64,
     pub generation_witness_hits: u64,
     pub generation_witness_fallbacks: u64,
+    pub upload_advertisement_shortcuts: u64,
+    pub upload_advertisement_native_fallbacks: u64,
+    pub upload_advertisement_native_bootstraps: u64,
+    pub upload_advertisement_certificates: u64,
+    pub upload_advertisement_type_checks: u64,
+    pub upload_advertisement_certification_seconds: f64,
+    pub upload_advertisement_template_bytes: u64,
+    pub cache_retained_bytes: u64,
 }
 
 struct CandidatePack {
@@ -460,6 +477,7 @@ pub struct NativeHost {
     cold_view: bool,
     cache: VecDeque<(String, Response)>,
     cache_bytes: usize,
+    advertisement: Option<advertisement::Certificate>,
     view_dirty: bool,
     manifest: Manifest,
     pub metrics: Metrics,
@@ -523,6 +541,7 @@ impl NativeHost {
             cold_view,
             cache: VecDeque::new(),
             cache_bytes: 0,
+            advertisement: None,
             view_dirty: false,
             manifest: Manifest::default(),
             metrics: Metrics::default(),
@@ -532,6 +551,9 @@ impl NativeHost {
     }
 
     fn recover(&mut self) -> io::Result<()> {
+        // Recovery includes ambiguous publications and external generations.
+        // A later full native advertisement must certify this state afresh.
+        self.advertisement = None;
         self.repository.state.stabilize()?;
         let manifest = self.repository.state.load()?;
         validate_snapshot_refs(&manifest.refs)?;
@@ -719,6 +741,12 @@ impl NativeHost {
     }
 
     fn receive(&mut self, request: &Request) -> io::Result<Response> {
+        // Take the certificate out while publication can fail. Only a strict,
+        // confirmed native transaction restores/advances it at the end.
+        let mut certificate = self.advertisement.take().filter(|certificate| {
+            advertisement::eligible_receive(request)
+                && certificate.matches(&self.manifest, advertisement::identity(&self.view))
+        });
         let prepare_start = Instant::now();
         self.cloud_read_view()?;
         if !self
@@ -773,6 +801,7 @@ impl NativeHost {
         let next_refs = refs(&stage)?;
         self.metrics.receive_codec_seconds += codec_start.elapsed().as_secs_f64();
         if response.status != 200 || next_refs == previous.refs {
+            self.advertisement = certificate;
             return Ok(response);
         }
         validate_snapshot_refs(&next_refs)?;
@@ -883,6 +912,11 @@ impl NativeHost {
         self.view_dirty = false;
         self.cache.clear();
         self.cache_bytes = 0;
+        self.advertisement = certificate.take().and_then(|mut certificate| {
+            (certificate.matches(&previous, advertisement::identity(&self.view))
+                && certificate.advance(&previous, &self.manifest))
+            .then_some(certificate)
+        });
         Ok(response)
     }
 
@@ -967,13 +1001,86 @@ impl NativeHost {
             let response = if receive && (protocol.is_empty() || protocol == "version=0") {
                 self.receive_advertisement()?
             } else {
-                self.cloud_read_view()?;
-                git_rpc(&self.view, request)?
+                self.upload_advertisement(request)?
             };
             self.cache_insert(key, &response);
             return Ok(response);
         }
         git_rpc(&self.view, request)
+    }
+
+    fn upload_advertisement(&mut self, request: &Request) -> io::Result<Response> {
+        let eligible =
+            self.cloudflare.is_some() && self.cold_view && advertisement::eligible_request(request);
+        let identity = eligible
+            .then(|| advertisement::identity(&self.view))
+            .flatten();
+        if eligible {
+            if self
+                .advertisement
+                .as_ref()
+                .is_some_and(|certificate| !certificate.matches(&self.manifest, identity))
+            {
+                self.advertisement = None;
+            }
+            if let Some(certificate) = &self.advertisement {
+                // Discovery omits object bytes, never complete metadata checks.
+                validate_snapshot_refs(&self.manifest.refs)?;
+                validate_snapshot_bytes(
+                    self.manifest
+                        .packs
+                        .iter()
+                        .map(|p| (p.pack_bytes, p.index_bytes)),
+                )?;
+                crate::snapshot_chunks(&self.manifest)?;
+                if let Ok(response) = certificate.encode(&self.manifest) {
+                    self.metrics.upload_advertisement_shortcuts += 1;
+                    return Ok(response);
+                }
+                self.advertisement = None;
+            }
+        }
+        let upload = request.target.split_once('?').is_some_and(|(_, query)| {
+            query
+                .split('&')
+                .filter_map(|part| part.split_once('='))
+                .find_map(|(key, value)| (key == "service").then_some(value))
+                == Some("git-upload-pack")
+        });
+        if upload {
+            self.metrics.upload_advertisement_native_fallbacks += 1;
+        }
+        if eligible {
+            self.metrics.upload_advertisement_native_bootstraps += 1;
+        }
+        self.cloud_read_view()?;
+        let response = git_rpc(&self.view, request)?;
+        if let Some(identity) = identity
+            && eligible
+            && Some(identity) == advertisement::identity(&self.view)
+        {
+            let certificate =
+                advertisement::Certificate::learn(&self.manifest, &response, identity);
+            if certificate.is_some() {
+                self.metrics.upload_advertisement_type_checks += 1;
+                let started = Instant::now();
+                self.advertisement = certificate
+                    .filter(|_| advertisement::branch_commits(&self.view, &self.manifest));
+                self.metrics.upload_advertisement_certification_seconds +=
+                    started.elapsed().as_secs_f64();
+            }
+            if self.advertisement.is_some() {
+                self.metrics.upload_advertisement_certificates += 1;
+                self.trim_cache(0);
+            }
+        }
+        Ok(response)
+    }
+
+    fn advertisement_bytes(&self) -> usize {
+        self.advertisement
+            .as_ref()
+            .map_or(0, |certificate| certificate.weight())
     }
 
     fn receive_advertisement(&self) -> io::Result<Response> {
@@ -1057,18 +1164,24 @@ impl NativeHost {
             return;
         }
         let weight = Self::cache_weight(&key, response);
-        if weight > CACHE_BYTES {
+        if weight + self.advertisement_bytes() > CACHE_BYTES {
             return;
         }
-        while self.cache_bytes + weight > CACHE_BYTES || self.cache.len() >= CACHE_ENTRIES {
+        self.trim_cache(weight);
+        self.cache_bytes += weight;
+        self.cache.push_back((key, response.clone()));
+    }
+
+    fn trim_cache(&mut self, incoming: usize) {
+        while self.cache_bytes + self.advertisement_bytes() + incoming > CACHE_BYTES
+            || (incoming != 0 && self.cache.len() >= CACHE_ENTRIES)
+        {
             if let Some((old_key, old)) = self.cache.pop_front() {
                 self.cache_bytes -= Self::cache_weight(&old_key, &old);
             } else {
                 break;
             }
         }
-        self.cache_bytes += weight;
-        self.cache.push_back((key, response.clone()));
     }
 
     pub fn handle(&mut self, request: Request) -> Response {
@@ -1082,7 +1195,11 @@ impl NativeHost {
                 if self.view_dirty {
                     self.recover()?;
                 }
+                self.metrics.upload_advertisement_template_bytes =
+                    self.advertisement_bytes() as u64;
                 self.metrics.cache_bytes = self.cache_bytes as u64;
+                self.metrics.cache_retained_bytes =
+                    (self.cache_bytes + self.advertisement_bytes()) as u64;
                 self.metrics.cache_budget_bytes = CACHE_BYTES as u64;
                 self.metrics.cache_entries = self.cache.len() as u64;
                 self.metrics.cache_entry_limit = CACHE_ENTRIES as u64;
@@ -1123,6 +1240,7 @@ impl NativeHost {
         self.metrics.requests += 1;
         self.metrics.input_bytes += request.body.len() as u64;
         let response = self.dispatch(&request).unwrap_or_else(|error| {
+            self.advertisement = None;
             eprintln!("hosting request failed: {error}");
             Response::error(503, "repository operation failed")
         });
@@ -1213,6 +1331,22 @@ mod tests {
                 assert_eq!(host.handle(request).status, 200);
             }
             assert_eq!(host.manifest.generation, 3);
+            let native = git_rpc(
+                &host.view,
+                &Request {
+                    method: "GET".into(),
+                    target: "/repo.git/info/refs?service=git-upload-pack".into(),
+                    headers: BTreeMap::new(),
+                    body: vec![],
+                },
+            )
+            .unwrap();
+            host.advertisement = advertisement::Certificate::learn(
+                &host.manifest,
+                &native,
+                advertisement::identity(&host.view).unwrap(),
+            );
+            assert!(host.advertisement.is_some());
             let local = LocalServices::new(root.join("services")).unwrap();
             let authoritative = local.state.clone();
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1314,6 +1448,7 @@ mod tests {
             let response = host.handle(pushes.pop().unwrap());
             assert_eq!(response.status, if lose_reply { 503 } else { 200 });
             assert_eq!(host.view_dirty, lose_reply);
+            assert_eq!(host.advertisement.is_none(), lose_reply);
             assert_eq!(authoritative.load().unwrap().generation, 4);
             if !lose_reply {
                 assert_eq!(host.manifest.garbage.len(), 1);
@@ -1330,6 +1465,9 @@ mod tests {
             });
             assert_eq!(response.status, 200);
             assert!(!host.view_dirty);
+            if lose_reply {
+                assert!(host.advertisement.is_none());
+            }
             assert_eq!(host.manifest.generation, 4);
             assert_eq!(refs(&host.view).unwrap()["refs/heads/main"], previous);
             let mut fsck = Command::new("git");

@@ -1482,6 +1482,229 @@ fn real_bulk_read_validates_all_bounds_before_binding_io() {
 
 #[test]
 #[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_manifest_advertisement_skips_only_certified_discovery_reads() {
+    let worker = RealWorker::new("advertisement");
+    let services = worker.services();
+    let directory = Directory(std::env::temp_dir().join(&worker.namespace));
+    let source = directory.0.join("source.git");
+    fs::create_dir_all(&source).unwrap();
+    git(
+        &source,
+        &["init", "--bare", "--quiet", "--object-format=sha1"],
+        &[],
+    );
+    let fixture = native_fixture(&source, 29);
+    let root = directory.0.join("host");
+    let mut host = NativeHost::open_cloudflare(
+        root.clone(),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        true,
+    )
+    .unwrap();
+    let mut push = packet(&format!(
+        "{} {} refs/heads/main\0report-status atomic\n",
+        "0".repeat(40),
+        fixture.tip
+    ));
+    push.extend_from_slice(b"0000");
+    push.extend_from_slice(&fixture.pack);
+    assert_eq!(host.handle(rpc("receive", push)).status, 200);
+    let state = DurableStateStore::new(services.clone());
+    let published = state.load().unwrap();
+    let expected_gets = published.packs.iter().flat_map(StoredPack::chunks).count() as u64;
+    let expected_bytes: u64 = published
+        .packs
+        .iter()
+        .map(|pack| pack.pack_bytes + pack.index_bytes)
+        .sum();
+    let discovery = Request {
+        method: "GET".into(),
+        target: "/repo.git/info/refs?service=git-upload-pack".into(),
+        headers: BTreeMap::new(),
+        body: vec![],
+    };
+    let before = usage(&services);
+    let hydration = host.metrics.cloud_view_rehydrates;
+    let native = host.handle(discovery.clone());
+    assert_eq!(native.status, 200);
+    assert_eq!(host.metrics.cloud_view_rehydrates, hydration + 1);
+    assert_eq!(host.metrics.upload_advertisement_type_checks, 1);
+    assert_eq!(host.metrics.upload_advertisement_certificates, 1);
+    let bootstrap_storage = services.usage().unwrap();
+    let bootstrapped: ServiceUsage = serde_json::from_value(bootstrap_storage.clone()).unwrap();
+    let delta = bootstrapped.checked_workload_delta(&before).unwrap();
+    assert_eq!(
+        (delta.r2_class_b, delta.r2_read_bytes),
+        (expected_gets, expected_bytes)
+    );
+    let mut expected = packet("# service=git-upload-pack\n");
+    expected.extend_from_slice(b"0000");
+    expected.extend(git(
+        &root.join("view/repo.git"),
+        &["upload-pack", "--stateless-rpc", "--advertise-refs", "."],
+        &[],
+    ));
+    assert_eq!(native.body.as_ref(), expected);
+    let mut version_zero = discovery.clone();
+    version_zero
+        .headers
+        .insert("git-protocol".into(), "version=0".into());
+    let shortcut = host.handle(version_zero);
+    assert_eq!(shortcut.body, native.body);
+    assert_eq!(shortcut.headers, native.headers);
+    assert_eq!(host.metrics.cloud_view_rehydrates, hydration + 1);
+    assert_eq!(host.metrics.upload_advertisement_shortcuts, 1);
+    let shortcut_storage = services.usage().unwrap();
+    let cheaper: ServiceUsage = serde_json::from_value(shortcut_storage.clone()).unwrap();
+    assert!(bootstrap_storage["do_sqlite_bytes"].as_u64().unwrap() > 0);
+    for field in ["do_sqlite_bytes", "manifest_bytes", "manifest_generation"] {
+        assert_eq!(shortcut_storage[field], bootstrap_storage[field], "{field}");
+    }
+    let delta = cheaper.checked_workload_delta(&bootstrapped).unwrap();
+    assert_eq!(
+        (
+            delta.r2_class_b,
+            delta.r2_read_bytes,
+            delta.r2_class_a,
+            delta.r2_deletes,
+            delta.do_rows_written
+        ),
+        (0, 0, 0, 0, Some(0))
+    );
+    assert_eq!(cheaper.r2_live_objects, bootstrapped.r2_live_objects);
+    assert_eq!(cheaper.r2_live_bytes, bootstrapped.r2_live_bytes);
+    assert_eq!(cheaper.r2_peak_bytes, bootstrapped.r2_peak_bytes);
+    // Observers consume the existing full view and shift no removed read.
+    for target in ["/metrics", "/_object-stats"] {
+        let response = host.handle(Request {
+            target: target.into(),
+            ..discovery.clone()
+        });
+        assert_eq!(response.status, 200);
+        let metrics: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            metrics["upload_advertisement_template_bytes"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert!(
+            metrics["cache_retained_bytes"].as_u64().unwrap()
+                <= metrics["cache_budget_bytes"].as_u64().unwrap()
+        );
+    }
+    let observed = usage(&services);
+    assert_eq!(observed.calls.r2_class_b, cheaper.calls.r2_class_b);
+    assert_eq!(observed.calls.r2_read_bytes, cheaper.calls.r2_read_bytes);
+    let mut fetch = packet(&format!("want {}\n", fixture.tip));
+    fetch.extend_from_slice(b"0000");
+    fetch.extend(packet("done\n"));
+    let fetched = host.handle(rpc("upload", fetch));
+    assert_eq!(fetched.status, 200);
+    let offset = fetched
+        .body
+        .windows(4)
+        .position(|bytes| bytes == b"PACK")
+        .unwrap();
+    assert_eq!(host.metrics.cloud_view_rehydrates, hydration + 2);
+    let fetched_usage = usage(&services);
+    let delta = fetched_usage.checked_workload_delta(&observed).unwrap();
+    assert_eq!(
+        (delta.r2_class_b, delta.r2_read_bytes),
+        (expected_gets, expected_bytes)
+    );
+    let destination = directory.0.join("fetched.git");
+    fs::create_dir(&destination).unwrap();
+    git(
+        &destination,
+        &["init", "--bare", "--quiet", "--object-format=sha1"],
+        &[],
+    );
+    git(
+        &destination,
+        &["index-pack", "--stdin", "--strict"],
+        &fetched.body[offset..],
+    );
+    git(
+        &destination,
+        &["update-ref", "refs/heads/main", &fixture.tip],
+        &[],
+    );
+    git(&destination, &["fsck", "--strict"], &[]);
+    assert_eq!(
+        git(&destination, &["cat-file", "blob", &fixture.blob], &[]),
+        fixture.data
+    );
+    assert_eq!(
+        git(&destination, &["archive", &fixture.tip], &[]),
+        git(&source, &["archive", &fixture.tip], &[])
+    );
+    assert_eq!(state.load().unwrap(), published);
+    // A validated native branch transaction advances the certificate, clearing
+    // response entries while retaining only the bounded policy template.
+    let mut alias = packet(&format!(
+        "{} {} refs/heads/alias\0report-status atomic\n",
+        "0".repeat(40),
+        fixture.tip
+    ));
+    alias.extend_from_slice(b"0000");
+    alias.extend_from_slice(&fixture.pack);
+    let pushed = host.handle(rpc("receive", alias));
+    assert_eq!(pushed.status, 200);
+    assert!(
+        String::from_utf8_lossy(&pushed.body).contains("ok refs/heads/alias\n"),
+        "{}",
+        String::from_utf8_lossy(&pushed.body)
+    );
+    let metrics = host.handle(Request {
+        target: "/metrics".into(),
+        ..discovery.clone()
+    });
+    assert_eq!(metrics.status, 200);
+    let metrics: serde_json::Value = serde_json::from_slice(&metrics.body).unwrap();
+    assert_eq!(metrics["cache_bytes"], 0);
+    assert_eq!(metrics["cache_entries"], 0);
+    assert_eq!(
+        metrics["cache_retained_bytes"],
+        metrics["upload_advertisement_template_bytes"]
+    );
+    let hydrated = host.metrics.cloud_view_rehydrates;
+    let after_push = usage(&services);
+    let advertisement = host.handle(discovery.clone());
+    assert!(String::from_utf8_lossy(&advertisement.body).contains("refs/heads/alias\n"));
+    assert_eq!(host.metrics.cloud_view_rehydrates, hydrated);
+    assert_eq!(host.metrics.upload_advertisement_certificates, 1);
+    let after_read = usage(&services);
+    let delta = after_read.checked_workload_delta(&after_push).unwrap();
+    assert_eq!(
+        (
+            delta.r2_class_b,
+            delta.r2_read_bytes,
+            delta.r2_class_a,
+            delta.r2_deletes,
+            delta.do_rows_written
+        ),
+        (0, 0, 0, 0, Some(0))
+    );
+    let mut external = state.load().unwrap();
+    let previous_generation = external.generation;
+    external.generation += 1;
+    external.refs.remove("refs/heads/alias");
+    assert!(
+        state
+            .compare_and_swap(previous_generation, &external)
+            .unwrap()
+    );
+    let response = host.handle(discovery);
+    assert_eq!(response.body, native.body);
+    assert_eq!(host.metrics.upload_advertisement_native_bootstraps, 2);
+    assert_eq!(host.metrics.upload_advertisement_certificates, 2);
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
 fn real_native_bundle_uses_one_put_and_survives_restart_and_fetch() {
     let worker = RealWorker::new("bundle");
     let services = worker.services();

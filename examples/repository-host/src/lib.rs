@@ -123,39 +123,7 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
     /// Chunk payloads and reconstructed file payloads each total at most
     /// 128 MiB and remain transient; no blob cache survives this call.
     pub fn read_snapshot_files(&self, manifest: &Manifest) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        let mut chunks = Vec::new();
-        let mut lengths = std::collections::BTreeMap::new();
-        let mut snapshot_bytes = 0u64;
-        for pack in &manifest.packs {
-            let total = pack_total(pack.pack_bytes, pack.index_bytes)?;
-            snapshot_bytes = snapshot_bytes
-                .checked_add(total)
-                .filter(|total| *total <= MAX_PACK_BYTES)
-                .ok_or_else(|| io::Error::other("prototype snapshot limit exceeded"))?;
-            if pack.bundle.is_empty() {
-                validate_chunks(&pack.pack, pack.pack_bytes)?;
-                validate_chunks(&pack.index, pack.index_bytes)?;
-            } else {
-                if !pack.pack.is_empty() || !pack.index.is_empty() {
-                    return Err(io::Error::other("mixed pack chunk representations"));
-                }
-                validate_chunks(&pack.bundle, total)?;
-            }
-            for chunk in pack.chunks() {
-                if chunk.key.len() != 71
-                    || !chunk.key.starts_with("chunks/")
-                    || !chunk.key.as_bytes()[7..]
-                        .iter()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
-                    || lengths
-                        .insert(&chunk.key, chunk.len)
-                        .is_some_and(|len| len != chunk.len)
-                {
-                    return Err(io::Error::other("invalid content-addressed chunk"));
-                }
-                chunks.push(chunk.clone());
-            }
-        }
+        let chunks = snapshot_chunks(manifest)?;
         let data = self.blobs.get_many_verified(&chunks)?.into_data(&chunks)?;
         let mut data = data.into_iter();
         let mut files = Vec::with_capacity(manifest.packs.len());
@@ -249,6 +217,45 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
             result => Ok(result),
         }
     }
+}
+
+/// The complete metadata checks also apply when an operation needs no objects.
+/// Keep them shared with full reconstruction, including unread representations.
+pub(crate) fn snapshot_chunks(manifest: &Manifest) -> io::Result<Vec<Chunk>> {
+    let mut chunks = Vec::new();
+    let mut lengths = std::collections::BTreeMap::new();
+    let mut snapshot_bytes = 0u64;
+    for pack in &manifest.packs {
+        let total = pack_total(pack.pack_bytes, pack.index_bytes)?;
+        snapshot_bytes = snapshot_bytes
+            .checked_add(total)
+            .filter(|total| *total <= MAX_PACK_BYTES)
+            .ok_or_else(|| io::Error::other("prototype snapshot limit exceeded"))?;
+        if pack.bundle.is_empty() {
+            validate_chunks(&pack.pack, pack.pack_bytes)?;
+            validate_chunks(&pack.index, pack.index_bytes)?;
+        } else {
+            if !pack.pack.is_empty() || !pack.index.is_empty() {
+                return Err(io::Error::other("mixed pack chunk representations"));
+            }
+            validate_chunks(&pack.bundle, total)?;
+        }
+        for chunk in pack.chunks() {
+            if chunk.key.len() != 71
+                || !chunk.key.starts_with("chunks/")
+                || !chunk.key.as_bytes()[7..]
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+                || lengths
+                    .insert(&chunk.key, chunk.len)
+                    .is_some_and(|len| len != chunk.len)
+            {
+                return Err(io::Error::other("invalid content-addressed chunk"));
+            }
+            chunks.push(chunk.clone());
+        }
+    }
+    Ok(chunks)
 }
 
 fn validate_chunks(chunks: &[Chunk], expected: u64) -> io::Result<()> {
