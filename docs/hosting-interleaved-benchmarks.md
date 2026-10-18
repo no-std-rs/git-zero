@@ -121,41 +121,63 @@ plateau by itself. A failed final latency guard remains inconclusive rather than
 
 The [isolated workflow](../.github/workflows/hosting-isolated.yml) runs only on explicit pushes to
 `perf/hosting-isolated-ci-20261018`, or dispatches selecting that branch. Each of the four profiles gets
-a standard `ubuntu-24.04` VM. On that same VM, it freshly measures the selected `BASELINE_COMMIT`
-(initially scalar `556b9ecd2aa79197f86b3db2d546eee81696e899`) followed by the pushed candidate, with a
-fresh local Wrangler process and persistent-state directory for each provider. These are a new environment's measurements;
-local-workstation reports must not serve as their baseline.
+a standard `ubuntu-24.04` VM. A screen freshly measures pinned native providers R2, R3, R4 and R5 in that
+order on the same VM, once each with two measured pairs and an excluded warmup per backend. Every
+provider gets a fresh local Wrangler process and persistent-state directory. No reports from an earlier
+workflow attempt or local workstation may substitute for any provider's measurements.
 
-All dependencies and both native variants are built before timing, with two build jobs and no artifact
-or dependency caches. Both providers use the candidate's identical Rust runner, the frozen scalar
+All dependencies and native variants are built before timing, with two compiler jobs and no artifact
+or dependency caches. Every provider uses the frozen checkout's identical final Rust runner and
+backward-compatible Worker, the frozen scalar
 reference wrapper, Git 2.53.0 and the same pinned Worker source/configuration. Standardized absolute build
 paths and one Rust stable toolchain preserve binary identity across profile jobs; the existing Rust
 scorer rejects any mixed native/reference hashes. Health and runtime checks finish before timing, and
 no background benchmark probes run. The complete storage, compaction, cache, fsck and nonempty-pack
 requirements remain enforced by the existing runner and scorer.
 
+Before pushing this batch, validate the common final Worker's backward compatibility: generation
+witnesses must be gated by registration capability so R2/R3 incur no extra DO checks, and 16 MiB chunk
+support must still accept old 8 MiB entries within the unchanged aggregate response limit. Pin that
+validated Worker hash alongside the four actual pushed source refs before starting the batch.
+
 `REFERENCE_COMMIT` stays fixed at scalar `556b9ecd2aa79197f86b3db2d546eee81696e899` for every round.
 Its source remains at `scalar-baseline` and its build at `baseline-target` under the experiment root,
-preserving the reference executable's original build paths and hash. When the comparison baseline
-differs, only its native host is additionally built at fixed `screen-baseline` / `screen-baseline-target`
-paths. Provenance records both commits, source trees, manifest paths/hashes and post-run clean status.
+preserving the reference executable's original build paths and hash. Screen native hosts build from
+their pushed `SCREEN_R2_COMMIT` through `SCREEN_R5_COMMIT` at deterministic `providers/r2` through
+`providers/r5` source paths and corresponding `provider-targets` paths. R4/R5 refs are placeholders
+until their implementations are integrated; duplicate refs or native source trees block the screen.
+Provenance records every label, commit, source tree, manifest path/hash and post-run clean status.
 
-For each later optimization screen, set `BASELINE_COMMIT` to the preceding provisional candidate's
-pushed commit and measure both providers freshly on each profile's VM. For final validation, reset
-`BASELINE_COMMIT` to the original scalar R1 commit and select `full` for the final candidate. The Git
-reference source and executable stay fixed in both cases; a full run rejects a different baseline.
-Earlier reports cannot substitute for fresh
-matching baseline measurements, and a green screen does not formally accept an optimization.
+This is a prospectively declared batch of independently prepared candidates. Preparing later source
+changes before this batch completes does not mean their design was informed by these measurements.
+The same fresh intermediate suite in this workflow attempt may serve as a candidate in one comparison
+and a baseline in the next: R2→R3, R3→R4 and R4→R5. Those are correlated uses of the same observed
+two-pair samples, not independent replications or extra samples. The scorer also emits R4-versus-R2,
+R5-versus-R2 and R5-versus-R3 so a later cumulative candidate can be assessed against the actual last
+provisionally selected baseline if an earlier step is skipped. This reuse is limited to this declared
+batch; subsequent adaptive design must use the resulting evidence and its own declared screen.
+
+Progression is conditional. The coordinator must inspect all resource and latency guards, including
+tails, before selecting a provisional state; a green job does not select all changes. Guard failures
+require review, and every two-pair comparison remains formally inconclusive without establishing a
+formal plateau. Before interpreting comparisons, validate workflow run/attempt, provider refs and
+hashes, common runner/Worker/reference identity and the per-profile shared VM/boot identity. The
+workflow checks those provenance boundaries in addition to the Rust scorer's four-profile identity
+checks. Hardware may differ between profiles; compared providers within each profile must share a VM.
+
+Final validation selects `full`, fixes `BASELINE_COMMIT` to original scalar R1 and compares it with
+current HEAD using five fresh measured pairs on every profile. A full run rejects another baseline.
+No screen samples can be reused for final validation, and the Git reference stays fixed throughout.
 
 Branch pushes default to `screen`, with exactly two measured pairs per provider/profile. For the final
 five-pair run, change the workflow's single `BENCH_STAGE` fallback from `'screen'` to `'full'` in a reviewed
 commit and push that commit to the same branch. This works even when GitHub cannot dispatch a workflow
 that has never existed on the default branch. If dispatch is available, its explicit `stage` input
-overrides the fallback. Stage and sample count are the only workload changes for final validation.
-Future candidates can include the workflow on the same branch and repeat the complete fresh comparison.
+overrides the fallback. Fixture, maintenance, cache budgets and guard policies stay unchanged.
 
-The offline Rust scoring job compares all four profiles and retains every actual resource and latency
-guard in `comparison.json`; a screen remains formally inconclusive. A green workflow only means that
+The offline Rust scoring job requires all four profiles for every provider and retains all actual
+resource and latency guards in provider scores and all six `rN-vs-rM.json` comparisons. Full mode writes
+`comparison.json`; a screen remains formally inconclusive. A green workflow only means that
 measurement and scoring completed. Inspect the comparison decision and reasons before interpreting it.
 Unknown Worker CPU, DO duration, monthly SQLite storage and native compute remain unknown.
 

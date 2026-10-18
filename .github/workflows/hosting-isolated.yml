@@ -22,8 +22,14 @@ concurrency:
 env:
   # Keep this source and its existing build paths fixed across optimization rounds.
   REFERENCE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
-  # Screens compare the preceding candidate; final validation uses REFERENCE_COMMIT.
-  BASELINE_COMMIT: e6f4ad0c35581630d1d44c40aa1d5eb3496d5f92
+  # Full validation always compares the original scalar baseline with current HEAD.
+  BASELINE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
+  SCREEN_R2_COMMIT: e6f4ad0c35581630d1d44c40aa1d5eb3496d5f92
+  SCREEN_R3_COMMIT: afe29484c6513908463f5e027d5f3a4b5be3b9f0
+  # TODO: replace both placeholders with pushed R4/R5 source commits before screening.
+  # Duplicate refs or native source trees fail closed before any build or timing.
+  SCREEN_R4_COMMIT: afe29484c6513908463f5e027d5f3a4b5be3b9f0
+  SCREEN_R5_COMMIT: afe29484c6513908463f5e027d5f3a4b5be3b9f0
   EXPECTED_WORKER_SHA256: a91ac0a693160172ea8b90ff1bc36912feb8043fc29beeef2c92191850aa9f4a
   REFERENCE_GIT_VERSION: 2.53.0
   # Four profile archives plus one score archive: at most 20 MiB per run.
@@ -67,8 +73,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$REPORT_ROOT/provenance" "$BENCH_ROOT/bin/common" \
-            "$BENCH_ROOT/bin/baseline" "$BENCH_ROOT/bin/candidate"
+          mkdir -p "$REPORT_ROOT/provenance" "$BENCH_ROOT/bin/common"
+          case "$BENCH_STAGE" in
+            screen)
+              refs=("$SCREEN_R2_COMMIT" "$SCREEN_R3_COMMIT" "$SCREEN_R4_COMMIT" "$SCREEN_R5_COMMIT")
+              test "$(printf '%s\n' "${refs[@]}" | sort -u | wc -l)" -eq 4
+              for ref in "${refs[@]}"; do
+                [[ "$ref" =~ ^[0-9a-f]{40}$ ]]
+                git merge-base --is-ancestor "$ref" "$GITHUB_SHA"
+                git rev-parse "$ref:examples/repository-host/src"
+              done > "$REPORT_ROOT/provenance/screen-native-source-trees.txt"
+              test "$(sort -u "$REPORT_ROOT/provenance/screen-native-source-trees.txt" | wc -l)" -eq 4
+              ;;
+            full) test "$BASELINE_COMMIT" = "$REFERENCE_COMMIT" ;;
+            *) exit 1 ;;
+          esac
           test "$REFERENCE_GIT_VERSION" = "$(cat tests/git-version.txt)"
           printf '%s  %s\n' "$EXPECTED_WORKER_SHA256" \
             examples/repository-host/cloudflare/src/index.js | sha256sum --check
@@ -87,7 +106,7 @@ jobs:
           fi
           npm ci --prefix examples/repository-host/cloudflare
 
-      - name: Build both native variants and the common Rust tools before timing
+      - name: Build pinned native providers and common Rust tools before timing
         shell: bash
         run: |
           set -euo pipefail
@@ -98,31 +117,45 @@ jobs:
             test "$BASELINE_COMMIT" = "$REFERENCE_COMMIT"
           fi
           git worktree add --detach "$BENCH_ROOT/scalar-baseline" "$REFERENCE_COMMIT"
-          cargo build --release --locked -p git-zero-host --bins -j2
+          cargo build --release --locked -p git-zero-host --bin hosting-bench --bin hosting-cost -j2
           cargo build --manifest-path "$BENCH_ROOT/scalar-baseline/Cargo.toml" \
             --target-dir "$BENCH_ROOT/baseline-target" --release --locked \
             -p git-zero-host --bin repository-host -j2
           cp target/release/hosting-bench target/release/hosting-cost "$BENCH_ROOT/bin/common/"
-          cp target/release/repository-host "$BENCH_ROOT/bin/candidate/repository-host"
           cp "$BENCH_ROOT/baseline-target/release/repository-host" \
             "$BENCH_ROOT/bin/common/reference-host"
-          baseline_source="$BENCH_ROOT/scalar-baseline"
-          if [ "$BASELINE_COMMIT" = "$REFERENCE_COMMIT" ]; then
+          providers="$REPORT_ROOT/provenance/providers.tsv"
+          if [ "$BENCH_STAGE" = full ]; then
+            cargo build --release --locked -p git-zero-host --bin repository-host -j2
+            mkdir -p "$BENCH_ROOT/bin/baseline" "$BENCH_ROOT/bin/candidate"
             cp "$BENCH_ROOT/bin/common/reference-host" "$BENCH_ROOT/bin/baseline/repository-host"
+            cp target/release/repository-host "$BENCH_ROOT/bin/candidate/repository-host"
+            printf 'baseline\t%s\t%s\t%s\n' "$REFERENCE_COMMIT" \
+              "$BENCH_ROOT/scalar-baseline" "$BENCH_ROOT/baseline-target" > "$providers"
+            printf 'candidate\t%s\t%s\t%s\n' "$GITHUB_SHA" \
+              "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/target" >> "$providers"
           else
-            baseline_source="$BENCH_ROOT/screen-baseline"
-            git worktree add --detach "$baseline_source" "$BASELINE_COMMIT"
-            cargo build --manifest-path "$baseline_source/Cargo.toml" \
-              --target-dir "$BENCH_ROOT/screen-baseline-target" --release --locked \
-              -p git-zero-host --bin repository-host -j2
-            cp "$BENCH_ROOT/screen-baseline-target/release/repository-host" \
-              "$BENCH_ROOT/bin/baseline/repository-host"
+            for provider in r2 r3 r4 r5; do
+              case "$provider" in
+                r2) ref="$SCREEN_R2_COMMIT" ;;
+                r3) ref="$SCREEN_R3_COMMIT" ;;
+                r4) ref="$SCREEN_R4_COMMIT" ;;
+                r5) ref="$SCREEN_R5_COMMIT" ;;
+              esac
+              source="$BENCH_ROOT/providers/$provider"
+              target="$BENCH_ROOT/provider-targets/$provider"
+              git worktree add --detach "$source" "$ref"
+              cargo build --manifest-path "$source/Cargo.toml" --target-dir "$target" \
+                --release --locked -p git-zero-host --bin repository-host -j2
+              mkdir -p "$BENCH_ROOT/bin/$provider"
+              cp "$target/release/repository-host" "$BENCH_ROOT/bin/$provider/repository-host"
+              printf '%s\t%s\t%s\t%s\n' "$provider" "$ref" "$source" "$target" >> "$providers"
+            done
           fi
-          echo "BASELINE_SOURCE=$baseline_source" >> "$GITHUB_ENV"
-          for provider in baseline candidate; do
+          while IFS=$'\t' read -r provider ref source target; do
             cp "$BENCH_ROOT/bin/common/hosting-bench" "$BENCH_ROOT/bin/common/hosting-cost" \
               "$BENCH_ROOT/bin/$provider/"
-          done
+          done < "$providers"
 
       - name: Freeze source, binary, runtime and VM provenance
         shell: bash
@@ -132,9 +165,6 @@ jobs:
           {
             printf 'candidate_commit=%s\ncandidate_parent=%s\ncandidate_tree=%s\n' \
               "$(git rev-parse HEAD)" "$(git rev-parse HEAD^)" "$(git rev-parse 'HEAD^{tree}')"
-            printf 'baseline_commit=%s\nbaseline_tree=%s\nbaseline_workspace_manifest=%s\nbaseline_host_manifest=%s\n' \
-              "$BASELINE_COMMIT" "$(git -C "$BASELINE_SOURCE" rev-parse 'HEAD^{tree}')" \
-              "$BASELINE_SOURCE/Cargo.toml" "$BASELINE_SOURCE/examples/repository-host/Cargo.toml"
             printf 'reference_commit=%s\nreference_tree=%s\nreference_workspace_manifest=%s\nreference_host_manifest=%s\n' \
               "$REFERENCE_COMMIT" "$(git -C "$BENCH_ROOT/scalar-baseline" rev-parse 'HEAD^{tree}')" \
               "$BENCH_ROOT/scalar-baseline/Cargo.toml" \
@@ -147,6 +177,7 @@ jobs:
               "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
             printf 'workspace=%s\nreference_binary=%s\n' "$GITHUB_WORKSPACE" \
               "$BENCH_ROOT/bin/common/reference-host"
+            printf 'vm_boot_id=%s\nhostname=%s\n' "$(cat /proc/sys/kernel/random/boot_id)" "$(hostname)"
             printf 'topology=Git client -> local Worker -> native Rust -> Worker R2/SQLite\n'
             printf 'GIT_CONFIG_COUNT=0\nGIT_CONFIG_NOSYSTEM=1\nGIT_CONFIG_GLOBAL=/dev/null\n'
             printf 'worker_cpu=unknown\ndo_duration=unknown\nsqlite_monthly_storage=unknown\nnative_compute=unknown\n'
@@ -177,14 +208,27 @@ jobs:
             "$BENCH_ROOT/scalar-baseline/Cargo.lock" \
             "$BENCH_ROOT/scalar-baseline/Cargo.toml" \
             "$BENCH_ROOT/scalar-baseline/examples/repository-host/Cargo.toml" \
-            "$BASELINE_SOURCE/Cargo.lock" "$BASELINE_SOURCE/Cargo.toml" \
-            "$BASELINE_SOURCE/examples/repository-host/Cargo.toml" \
             "$BENCH_ROOT/bin/common/hosting-bench" "$BENCH_ROOT/bin/common/hosting-cost" \
             "$BENCH_ROOT/bin/common/reference-host" \
-            "$BENCH_ROOT/bin/baseline/repository-host" "$BENCH_ROOT/bin/candidate/repository-host" \
             "$(command -v git)" "$(git --exec-path)/git-http-backend" \
             "$(git --exec-path)/git-remote-http" "$(command -v node)" /usr/bin/time \
             > "$provenance/source-binary-sha256.txt"
+          sha256sum "$BENCH_ROOT/bin/common/hosting-bench" "$BENCH_ROOT/bin/common/hosting-cost" \
+            "$BENCH_ROOT/bin/common/reference-host" examples/repository-host/cloudflare/src/index.js \
+            examples/repository-host/cloudflare/wrangler.toml \
+            examples/repository-host/cloudflare/package-lock.json > "$provenance/common-sha256.txt"
+          while IFS=$'\t' read -r provider ref source target; do
+            test "$(git -C "$source" rev-parse HEAD)" = "$ref"
+            {
+              printf 'label=%s\ncommit=%s\ntree=%s\nsource=%s\ntarget=%s\n' \
+                "$provider" "$ref" "$(git -C "$source" rev-parse 'HEAD^{tree}')" "$source" "$target"
+              printf 'workspace_manifest=%s\nhost_manifest=%s\n' \
+                "$source/Cargo.toml" "$source/examples/repository-host/Cargo.toml"
+            } > "$provenance/$provider-source.txt"
+            sha256sum "$source/Cargo.lock" "$source/Cargo.toml" \
+              "$source/examples/repository-host/Cargo.toml" "$BENCH_ROOT/bin/$provider/"* \
+              >> "$provenance/source-binary-sha256.txt"
+          done < "$provenance/providers.tsv"
           find examples/repository-host/cloudflare/node_modules -path '*/bin/workerd' -type f -print0 |
             while IFS= read -r -d '' binary; do
               "$binary" --version
@@ -192,7 +236,7 @@ jobs:
             done > "$provenance/workerd.txt"
           test -s "$provenance/workerd.txt"
 
-      - name: Run fresh matching baseline and candidate on this VM
+      - name: Run every declared provider once on this VM
         shell: bash
         run: |
           set -euo pipefail
@@ -214,7 +258,7 @@ jobs:
           trap stop_worker EXIT
           # Builds, dependency installation and version probes are complete.
           # Each provider gets a fresh emulator, its own state and fresh namespaces.
-          for provider in baseline candidate; do
+          while IFS=$'\t' read -r provider ref source target; do
             mkdir -p "$REPORT_ROOT/$provider/wrangler"
             persist="$BENCH_ROOT/state-$provider"
             test ! -e "$persist"
@@ -223,7 +267,7 @@ jobs:
               --config examples/repository-host/cloudflare/wrangler.toml --local \
               --ip 127.0.0.1 --port 8808 --persist-to "$persist" \
               --show-interactive-dev-session=false \
-              > "$REPORT_ROOT/$provider/wrangler.log" 2>&1 &
+              > "$REPORT_ROOT/$provider/wrangler.log" 2>&1 < /dev/null &
             worker_pid=$!
             ready=false
             for attempt in {1..120}; do
@@ -239,6 +283,9 @@ jobs:
             printf 'worker_pid=%s\nworker_cwd=%s\nstate=%s\nport=8808\n' \
               "$worker_pid" "$GITHUB_WORKSPACE" "$persist" \
               > "$REPORT_ROOT/$provider/service.txt"
+            printf 'run_id=%s\nrun_attempt=%s\nvm_boot_id=%s\n' \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$(cat /proc/sys/kernel/random/boot_id)" \
+              >> "$REPORT_ROOT/$provider/service.txt"
             sleep 5
             cat /proc/loadavg /proc/pressure/cpu > "$REPORT_ROOT/$provider/contention-before.txt"
             date -u +%FT%TZ > "$REPORT_ROOT/$provider/start.txt"
@@ -253,19 +300,20 @@ jobs:
               --cloudflare-token git-zero-local-services \
               --cloudflare-repo-prefix "ci-$provider-$PROFILE" --monthly-runs 1000 \
               --output "$REPORT_ROOT/$provider/$PROFILE.json" \
-              > "$REPORT_ROOT/$provider/benchmark.log" 2>&1 || status=$?
+              > "$REPORT_ROOT/$provider/benchmark.log" 2>&1 < /dev/null || status=$?
             date -u +%FT%TZ > "$REPORT_ROOT/$provider/end.txt"
             cat /proc/loadavg /proc/pressure/cpu > "$REPORT_ROOT/$provider/contention-after.txt"
             printf 'benchmark_exit=%s\n' "$status" > "$REPORT_ROOT/$provider/status.txt"
             stop_worker
             test "$status" -eq 0
-          done
+          done < "$REPORT_ROOT/provenance/providers.tsv"
           test -z "$(git status --porcelain)"
-          git -C "$BASELINE_SOURCE" status --porcelain \
-            > "$REPORT_ROOT/provenance/baseline-source-status-after.txt"
+          while IFS=$'\t' read -r provider ref source target; do
+            git -C "$source" status --porcelain > "$REPORT_ROOT/provenance/$provider-source-status-after.txt"
+            test ! -s "$REPORT_ROOT/provenance/$provider-source-status-after.txt"
+          done < "$REPORT_ROOT/provenance/providers.tsv"
           git -C "$BENCH_ROOT/scalar-baseline" status --porcelain \
             > "$REPORT_ROOT/provenance/reference-source-status-after.txt"
-          test ! -s "$REPORT_ROOT/provenance/baseline-source-status-after.txt"
           test ! -s "$REPORT_ROOT/provenance/reference-source-status-after.txt"
           sha256sum --check "$REPORT_ROOT/provenance/source-binary-sha256.txt"
 
@@ -320,18 +368,61 @@ jobs:
             mkdir -p "$SUITE_ROOT/$profile"
             tar -xzf "$RUNNER_TEMP/hosting-downloads/hosting-$profile.tar.gz" -C "$SUITE_ROOT/$profile"
             (cd "$SUITE_ROOT/$profile" && sha256sum --check SHA256SUMS)
+            provenance="$SUITE_ROOT/$profile/provenance"
+            grep -Fxq "run_id=$GITHUB_RUN_ID" "$provenance/runtime.txt"
+            grep -Fxq "run_attempt=$GITHUB_RUN_ATTEMPT" "$provenance/runtime.txt"
+            grep -Fxq "candidate_commit=$GITHUB_SHA" "$provenance/runtime.txt"
+            grep -Fxq "stage=$BENCH_STAGE" "$provenance/runtime.txt"
+            grep -Fxq "profile=$profile" "$provenance/runtime.txt"
+            cmp "$SUITE_ROOT/16mib-cold/provenance/providers.tsv" "$provenance/providers.tsv"
+            cmp "$SUITE_ROOT/16mib-cold/provenance/common-sha256.txt" "$provenance/common-sha256.txt"
+            test -f "$provenance/reference-source-status-after.txt"
+            test ! -s "$provenance/reference-source-status-after.txt"
+            vm_identity="$(grep '^vm_boot_id=' "$provenance/runtime.txt")"
+            test -n "$vm_identity"
+            while IFS=$'\t' read -r provider ref source target; do
+              service="$SUITE_ROOT/$profile/$provider/service.txt"
+              grep -Fxq "run_id=$GITHUB_RUN_ID" "$service"
+              grep -Fxq "run_attempt=$GITHUB_RUN_ATTEMPT" "$service"
+              grep -Fxq "$vm_identity" "$service"
+              test -f "$provenance/$provider-source-status-after.txt"
+              test ! -s "$provenance/$provider-source-status-after.txt"
+            done < "$provenance/providers.tsv"
           done
-          target/release/hosting-cost --output "$SUITE_ROOT/output/baseline-score.json" \
-            "$SUITE_ROOT/16mib-cold/baseline/16mib-cold.json" \
-            "$SUITE_ROOT/16mib-warm/baseline/16mib-warm.json" \
-            "$SUITE_ROOT/64mib-cold/baseline/64mib-cold.json" \
-            "$SUITE_ROOT/64mib-warm/baseline/64mib-warm.json"
-          target/release/hosting-cost --baseline "$SUITE_ROOT/output/baseline-score.json" \
-            --output "$SUITE_ROOT/output/comparison.json" \
-            "$SUITE_ROOT/16mib-cold/candidate/16mib-cold.json" \
-            "$SUITE_ROOT/16mib-warm/candidate/16mib-warm.json" \
-            "$SUITE_ROOT/64mib-cold/candidate/64mib-cold.json" \
-            "$SUITE_ROOT/64mib-warm/candidate/64mib-warm.json"
+          read -r expected_cost _ < <(grep '/bin/common/hosting-cost$' \
+            "$SUITE_ROOT/16mib-cold/provenance/common-sha256.txt")
+          printf '%s  target/release/hosting-cost\n' "$expected_cost" | sha256sum --check
+          mapfile -t providers < <(cut -f1 "$SUITE_ROOT/16mib-cold/provenance/providers.tsv")
+          if [ "$BENCH_STAGE" = screen ]; then
+            test "${providers[*]}" = 'r2 r3 r4 r5'
+          else
+            test "$BENCH_STAGE" = full
+            test "${providers[*]}" = 'baseline candidate'
+          fi
+          score_provider() {
+            local provider="$1"
+            shift
+            target/release/hosting-cost "$@" \
+              "$SUITE_ROOT/16mib-cold/$provider/16mib-cold.json" \
+              "$SUITE_ROOT/16mib-warm/$provider/16mib-warm.json" \
+              "$SUITE_ROOT/64mib-cold/$provider/64mib-cold.json" \
+              "$SUITE_ROOT/64mib-warm/$provider/64mib-warm.json"
+          }
+          for provider in "${providers[@]}"; do
+            score_provider "$provider" --output "$SUITE_ROOT/output/$provider-score.json"
+          done
+          # Reuse the same observed intermediate suite; these comparisons are correlated.
+          for ((later=1; later<${#providers[@]}; later++)); do
+            for ((earlier=0; earlier<later; earlier++)); do
+              baseline="${providers[earlier]}"
+              candidate="${providers[later]}"
+              output="$SUITE_ROOT/output/$candidate-vs-$baseline.json"
+              if [ "$BENCH_STAGE" = full ]; then output="$SUITE_ROOT/output/comparison.json"; fi
+              score_provider "$candidate" --baseline "$SUITE_ROOT/output/$baseline-score.json" \
+                --output "$output"
+            done
+          done
+          cp "$SUITE_ROOT/16mib-cold/provenance/providers.tsv" "$SUITE_ROOT/output/"
           {
             printf 'commit=%s\nstage=%s\nrun_id=%s\nrun_attempt=%s\n' \
               "$GITHUB_SHA" "$BENCH_STAGE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
@@ -339,10 +430,10 @@ jobs:
             sha256sum target/release/hosting-cost "$RUNNER_TEMP"/hosting-downloads/*.tar.gz
           } > "$SUITE_ROOT/output/provenance.txt"
           {
-            printf 'Measured stage: **%s**. Baseline and candidate were measured freshly on the same VM for each profile.\n\n' "$BENCH_STAGE"
-            printf 'Read `comparison.json` and its decision/reasons before making a claim. A successful job is not acceptance.\n\n'
+            printf 'Measured stage: **%s**. Every provider was measured freshly once on the same VM for each profile.\n\n' "$BENCH_STAGE"
+            printf 'Review every score, comparison and provenance before making a claim. A successful job is not acceptance.\n\n'
             if [ "$BENCH_STAGE" = screen ]; then
-              printf 'Two-pair screens are provisional and cannot establish acceptance or a formal plateau.\n\n'
+              printf 'All six earlier-to-later comparisons reuse the same two-pair intermediate suites. They are correlated, provisional and cannot establish acceptance or a formal plateau.\n\n'
             fi
             printf 'Worker CPU, DO duration, monthly SQLite storage and native compute remain unknown; the full cost estimate stays null.\n'
           } >> "$GITHUB_STEP_SUMMARY"
