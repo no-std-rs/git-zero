@@ -1024,7 +1024,18 @@ fn git_text(root: &Path, args: &[&str], input: &[u8]) -> String {
 #[test]
 #[ignore = "owns 8833; genuine new Native registration, first timed PUT DDL, partial-debt recovery and Git fsck"]
 fn actual_catalog_pages_native_partial_recovery() {
-    let root = artifacts("native");
+    native_recovery("delete-second");
+}
+
+#[test]
+#[ignore = "owns 8833; same Native next push recovers after a lost successful retirement-sync response"]
+fn actual_catalog_pages_native_ambiguous_retirement_recovery() {
+    native_recovery("retire-sync");
+}
+
+fn native_recovery(fault: &str) {
+    let ambiguous = fault == "retire-sync";
+    let root = artifacts(&format!("native-{fault}"));
     let mut runtime = Runtime::start(&root, 1);
     let worker = Worker::new("native");
     let source = root.join("source.git");
@@ -1089,9 +1100,13 @@ fn actual_catalog_pages_native_partial_recovery() {
         body.extend_from_slice(b"0000");
         body.extend(pack);
         if generation == 4 {
-            worker.page_fault("delete-second");
+            worker.page_fault(fault);
         }
-        let before = worker.usage();
+        let before = if generation == 5 && ambiguous {
+            None
+        } else {
+            Some(worker.usage())
+        };
         let response = host.handle(Request {
             method: "POST".into(),
             target: "/repo.git/git-receive-pack".into(),
@@ -1101,6 +1116,19 @@ fn actual_catalog_pages_native_partial_recovery() {
             )]),
             body,
         });
+        if generation == 4 && ambiguous {
+            fs::write(root.join("push-4-error.body"), &response.body).unwrap();
+            fs::write(root.join("push-4-error.json"),serde_json::to_vec_pretty(&json!({"status":response.status,"fault":fault,"body":String::from_utf8_lossy(&response.body)})).unwrap()).unwrap();
+            assert!(
+                response.status >= 500,
+                "fourth push must retain its ambiguous failure"
+            );
+            partial = before;
+            previous = tip;
+            // No test-side service request, inventory, GC or restart occurs
+            // between this error and the fifth push on this same NativeHost.
+            continue;
+        }
         assert_eq!(
             response.status,
             200,
@@ -1109,7 +1137,9 @@ fn actual_catalog_pages_native_partial_recovery() {
         );
         assert!(String::from_utf8_lossy(&response.body).contains("ok refs/heads/main"));
         let usage = worker.usage();
-        let delta = usage.checked_workload_delta(&before).unwrap();
+        let delta = usage
+            .checked_workload_delta(before.as_ref().or(partial.as_ref()).unwrap())
+            .unwrap();
         let manifest = DurableStateStore::new(worker.services.clone())
             .load()
             .unwrap();
@@ -1136,10 +1166,26 @@ fn actual_catalog_pages_native_partial_recovery() {
                     .checked_workload_delta(partial.as_ref().unwrap())
                     .unwrap()
                     .r2_class_a,
-                2,
-                "authoritative GC LIST plus next actual PUT"
+                if ambiguous { 3 } else { 2 },
+                "authoritative GC LIST plus actual PUTs, without replaying the fourth upload"
             );
-            assert_eq!(usage.operations["r2_delete"].failures, 1);
+            assert_eq!(
+                usage.operations["r2_delete"].failures,
+                u64::from(!ambiguous)
+            );
+            if ambiguous {
+                let previous = partial.as_ref().unwrap();
+                assert_eq!(
+                    usage.operations["manifest_cas"].successes
+                        - previous.operations["manifest_cas"].successes,
+                    2,
+                    "committed fourth CAS is never republished"
+                );
+                assert_eq!(
+                    usage.operations["r2_put"].attempts - previous.operations["r2_put"].attempts,
+                    2
+                );
+            }
             assert!(manifest.garbage.is_empty());
             assert_eq!(worker.state()["certain"], true);
             git(
@@ -1293,6 +1339,170 @@ fn actual_catalog_pages_maximum_retirement_bound() {
     .unwrap();
     runtime.stop();
     println!("maximum debt artifacts: {}", root.display());
+}
+
+#[test]
+#[ignore = "owns 8833; malformed numeric SQL metadata, integer SUM overflow and authoritative reopen recovery"]
+fn actual_catalog_pages_corrupt_numeric_reopen_gc() {
+    let root = artifacts("numeric-recovery");
+    let mut runtime = Runtime::start(&root, 1);
+    let mut cases = Vec::new();
+    let mut reports = Vec::new();
+    let modes: Vec<_> = ["size", "peak_bytes", "fallback"]
+        .into_iter()
+        .flat_map(|field| {
+            ["negative", "unsafe", "fractional"]
+                .into_iter()
+                .map(move |kind| (field, kind))
+        })
+        .chain([
+            ("size", "sum-maxint"),
+            ("size", "sum-safe"),
+            ("peak_bytes", "lost-witness"),
+            ("fallback", "empty-zero"),
+        ])
+        .collect();
+    for (field, kind) in modes {
+        let worker = Worker::new(&format!("numeric-{field}-{kind}"));
+        worker.register(2);
+        let mut live = Vec::new();
+        let expected = if kind == "empty-zero" {
+            worker
+                .blobs()
+                .delete(&format!("chunks/{}", hash(b"absent")))
+                .unwrap();
+            0
+        } else {
+            let a = worker.put(&[1; 100]);
+            let old = worker.put(&[3; 400]);
+            worker.blobs().delete(&old).unwrap();
+            assert_eq!(
+                worker.usage().r2_peak_bytes,
+                500,
+                "historical H comes from actual physical bytes"
+            );
+            live.push(a.clone());
+            let mut rows = vec![encoded_page("", &[(a[7..].to_owned(), 100)], 500)];
+            if kind != "lost-witness" {
+                let legacy = worker.put(&[4; 100]);
+                live.push(legacy.clone());
+                rows.push(json!({"key":legacy,"size":100,"peak_bytes":500,"entries":null}));
+            }
+            if kind == "sum-maxint" {
+                rows.push(json!({"key":format!("chunks/{}",hash(b"extra integer row")),"size":0,"peak_bytes":0,"entries":null}));
+            }
+            if kind == "sum-safe" {
+                for i in 0..1025 {
+                    rows.push(json!({"key":format!("chunks/{}",hash(format!("safe overflowing row {i}").as_bytes())),"size":9_007_199_254_740_991u64,"peak_bytes":0,"entries":null}));
+                }
+            }
+            worker.seed(rows);
+            worker.json(
+                "POST",
+                "/_services/test/orphan",
+                &json!({"key":format!("chunks/{}",hash(&[2;70])),"bytes":vec![2;70]}),
+            );
+            if kind == "lost-witness" { 170 } else { 500 }
+        };
+        if kind != "sum-safe" {
+            let mutation_kind = match kind {
+                "sum-maxint" => "maxint",
+                "lost-witness" => "unsafe",
+                "empty-zero" => "negative",
+                _ => kind,
+            };
+            worker.json("POST","/_services/test/corrupt-number",&json!({"field":field,"kind":mutation_kind,"key":"pages/","all":kind=="sum-maxint"}));
+        }
+        cases.push(json!({"repo":worker.repo,"field":field,"kind":kind,"live":live,"expected_floor":expected,"historical_peak_unknown":kind=="lost-witness"}));
+    }
+    runtime.stop();
+    let mut runtime = Runtime::start(&root, 2);
+    for case in &cases {
+        let worker = Worker::named(case["repo"].as_str().unwrap().to_owned());
+        let initial = worker.state();
+        assert_eq!(initial["certain"], false, "{}", case);
+        let expected = case["expected_floor"].as_u64().unwrap();
+        if case["historical_peak_unknown"] == true {
+            assert_eq!(
+                initial["peak"], 0,
+                "invalid sole H cannot fabricate history"
+            );
+        } else {
+            assert_eq!(
+                initial["peak"], expected,
+                "valid alternate H survives invalid MAX/total"
+            );
+        }
+        let before = worker.usage();
+        assert!(
+            worker
+                .blobs()
+                .put(
+                    &format!("chunks/{}", hash(b"blocked numeric mutation")),
+                    b"blocked numeric mutation"
+                )
+                .is_err()
+        );
+        assert_eq!(
+            worker
+                .request(
+                    "POST",
+                    "/_services/gc",
+                    br#"{"expected_generation":1,"live_keys":[]}"#,
+                    &[]
+                )
+                .0,
+            409
+        );
+        let observed = worker.usage();
+        assert_eq!(
+            observed.calls.do_rows_written, before.calls.do_rows_written,
+            "reads/stale recovery cannot repair metadata"
+        );
+        worker.fault("");
+        worker.page_fault("");
+        let live: Vec<String> = serde_json::from_value(case["live"].clone()).unwrap();
+        worker.gc(0, &live);
+        let state = worker.state();
+        let usage = worker.usage();
+        assert_eq!(state["certain"], true);
+        assert_eq!(state["high_water"][0]["bytes"], expected);
+        assert_eq!(usage.r2_peak_bytes, expected);
+        assert_eq!(usage.r2_live_objects, live.len() as u64);
+        let trace = state["page_fault"]["trace"].as_array().unwrap();
+        let checkpoint = trace
+            .iter()
+            .position(|event| event == "fallback:write")
+            .unwrap();
+        let durable = trace[checkpoint + 1..]
+            .iter()
+            .position(|event| event == "sync:durable")
+            .unwrap()
+            + checkpoint
+            + 1;
+        if !live.is_empty() {
+            assert!(durable < trace.iter().position(|event| event == "r2:delete").unwrap());
+        }
+        reports.push(json!({"case":case,"reopened_invalid":initial,"reconciled":state,"usage":worker.usage_json()}));
+    }
+    runtime.stop();
+    let mut runtime = Runtime::start(&root, 3);
+    for case in &cases {
+        let worker = Worker::named(case["repo"].as_str().unwrap().to_owned());
+        let usage = worker.usage();
+        assert_eq!(
+            usage.r2_peak_bytes,
+            case["expected_floor"].as_u64().unwrap()
+        );
+        assert_eq!(worker.state()["certain"], true);
+    }
+    runtime.stop();
+    fs::write(
+        root.join("numeric-recovery.json"),
+        serde_json::to_vec_pretty(&reports).unwrap(),
+    )
+    .unwrap();
+    println!("numeric recovery artifacts: {}", root.display());
 }
 
 #[test]

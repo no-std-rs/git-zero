@@ -51,3 +51,17 @@ Packing does not strengthen the R11 cross-process gap contract: an R2 PUT that
 never obtained a durable SQL witness requires Native startup or explicit direct
 client authoritative GC after an ambiguous operation/restart. No per-PUT intent,
 new normal R2 operation, larger cache/budget or retained catalog-wide map is added.
+
+Malformed numeric metadata also requires authoritative recovery. Page reload
+rejects negative, unsafe and fractional size/peak values, retains the maximum
+of individually valid peak witnesses, and flags invalid inventory/fallback state
+without preventing construction or GC. REAL summation avoids SQLite integer SUM
+overflow; the resulting nonnegative integer total must still fit the safe range.
+An invalid fallback is replaced and synced before deletion, even at a zero floor.
+Valid ordinary rows keep their existing SQL row counts and fallback-write path.
+
+Recovery preserves the maximum of all still-valid durable historical witnesses,
+the process floor and the complete physical pre-delete inventory. If arbitrary
+corruption destroyed every trustworthy historical witness, an older historical
+maximum is unknowable; current physical inventory cannot reconstruct it. This
+corruption limit is separate from the R11 unrecorded-upload crash gap above.

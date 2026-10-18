@@ -584,17 +584,24 @@ export class RepositoryServices {
     this.catalogPeak = columns.some((column) => column.name === "peak_bytes");
     this.catalogPages = columns.some((column) => column.name === "entries");
     if (this.catalogPages && !this.catalogPeak) throw new Error("catalog pages require durable peak schema");
+    const validSize = "typeof(size) = 'integer' AND size BETWEEN 0 AND 9007199254740991";
+    const validPeak = "typeof(peak_bytes) = 'integer' AND peak_bytes BETWEEN 0 AND 9007199254740991";
     const inventory = this.exec(this.catalogPages
-      ? "SELECT COALESCE(SUM(CASE WHEN entries IS NULL THEN 1 ELSE (LENGTH(entries) - 6) / 40 END), 0) AS objects, COALESCE(SUM(size), 0) AS bytes, COALESCE(MAX(peak_bytes), 0) AS peak, COALESCE(SUM(CASE WHEN entries IS NOT NULL AND (LENGTH(entries) < 46 OR LENGTH(entries) > 1286 OR (LENGTH(entries) - 6) % 40 <> 0) THEN 1 ELSE 0 END), 0) AS invalid FROM blob_catalog"
+      ? `SELECT COALESCE(SUM(CASE WHEN entries IS NULL THEN 1 ELSE (LENGTH(entries) - 6) / 40 END), 0) AS objects, COALESCE(SUM(CASE WHEN ${validSize} THEN 1.0 * size ELSE 0 END), 0) AS bytes, COALESCE(MAX(CASE WHEN ${validPeak} THEN peak_bytes ELSE 0 END), 0) AS peak, COALESCE(MAX(CASE WHEN NOT (${validSize}) OR NOT (${validPeak}) OR (entries IS NOT NULL AND (LENGTH(entries) < 46 OR LENGTH(entries) > 1286 OR (LENGTH(entries) - 6) % 40 <> 0)) THEN 1 ELSE 0 END), 0) AS invalid FROM blob_catalog`
       : this.catalogPeak
       ? "SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes, COALESCE(MAX(peak_bytes), 0) AS peak FROM blob_catalog"
       : "SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes FROM blob_catalog")[0];
-    // Corrupt page bytes block mutation but must not prevent authoritative GC
-    // from reopening the object and replacing that representation.
-    if (inventory.invalid) this.catalogUncertain();
-    this.liveObjects = inventory.invalid ? 0 : count(inventory.objects);
-    this.liveBytes = count(inventory.bytes);
-    this.fallbackPeak = count(this.exec("SELECT bytes FROM high_water WHERE id = 1")[0]?.bytes ?? 0);
+    const fallback = this.exec("SELECT bytes FROM high_water WHERE id = 1")[0]?.bytes ?? 0;
+    const valid = (value) => Number.isSafeInteger(value) && value >= 0;
+    // REAL summation avoids SQLite integer overflow before validation. Within
+    // the safe nonnegative integer range every partial sum remains exact.
+    // Invalid rows/totals cannot certify a live inventory or hide valid H.
+    const inventoryValid = !inventory.invalid && valid(inventory.objects) && valid(inventory.bytes);
+    this.fallbackValid = valid(fallback);
+    if (this.catalogPages && (!inventoryValid || !this.fallbackValid)) this.catalogUncertain();
+    this.liveObjects = this.catalogPages && !inventoryValid ? 0 : count(inventory.objects);
+    this.liveBytes = this.catalogPages && !inventoryValid ? 0 : count(inventory.bytes);
+    this.fallbackPeak = this.catalogPages && !this.fallbackValid ? 0 : count(fallback);
     this.peakBytes = Math.max(this.peakBytes, this.liveBytes, count(inventory.peak ?? 0), this.fallbackPeak);
     this.peakOwner = null;
     // SQL recovers peak witnesses, never certainty about an interrupted R2
@@ -709,10 +716,13 @@ export class RepositoryServices {
   }
 
   async checkpointPeak(peak) {
-    if (this.fallbackPeak >= peak) return;
-    this.exec("INSERT INTO high_water (id, bytes) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET bytes = MAX(high_water.bytes, excluded.bytes)", peak);
+    if (this.fallbackValid && this.fallbackPeak >= peak) return;
+    this.exec(this.fallbackValid
+      ? "INSERT INTO high_water (id, bytes) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET bytes = MAX(high_water.bytes, excluded.bytes)"
+      : "INSERT INTO high_water (id, bytes) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET bytes = excluded.bytes", peak);
     await this.ctx.storage.sync();
     this.fallbackPeak = peak;
+    this.fallbackValid = true;
   }
 
   async remove(key, prefix, knownSize, reconciling = false) {

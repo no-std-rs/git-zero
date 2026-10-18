@@ -65,6 +65,18 @@ export class RepositoryServices extends PeakServices {
 
   async handle(request) {
     const path = new URL(request.url).pathname;
+    if (path === "/_services/test/corrupt-number" && request.method === "POST") {
+      this.currentPhase = "maintenance"; this.bump("do_requests");
+      const body = await request.json();
+      const literal = { negative: "-1", unsafe: "9007199254740992", fractional: "0.5", maxint: "9223372036854775807" }[body.kind];
+      if (!literal || !["size", "peak_bytes", "fallback"].includes(body.field)) throw new Error("invalid test numeric corruption");
+      if (body.field === "fallback") this.exec(`INSERT INTO high_water (id, bytes) VALUES (1, ${literal}) ON CONFLICT(id) DO UPDATE SET bytes = excluded.bytes`);
+      else if (body.all) this.exec(`UPDATE blob_catalog SET ${body.field} = ${literal}`);
+      else this.exec(`UPDATE blob_catalog SET ${body.field} = ${literal} WHERE key = ?`, body.key);
+      // Leave rediscovery to the actual production reload/GC or next process.
+      await this.ctx.storage.sync();
+      return Response.json({ corrupted: true });
+    }
     if (path === "/_services/test/probe-forms" && request.method === "POST") {
       this.currentPhase = "maintenance"; this.bump("do_requests");
       const key = (await request.json()).key, keys = [key, ...ancestors(key.slice(7))];
