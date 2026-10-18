@@ -1,0 +1,13 @@
+d34827045a31fad624d1373925a39a5132c8f5f62f925f0a0cf00bf50d0bb21f  /tmp/git-zero-fit-response-independent-final-review/INPUT_SHA256SUMS
+8102c427d8637aa5a4987c9df01712dc5d5ea47189a583c5d3fb43892f51daba  /tmp/git-zero-fit-response-independent-final-review/INPUT_SHA256_INVENTORY.json
+fe56cbfb0014bd3044626a6be0b556b0c0e3a7006a0d654137ecc6c4ffb782cc  /tmp/git-zero-fit-response-independent-final-review/REVIEW.json
+8993997429a866f529e46aac775b39f9967e6b4b396c58e256483b29bd46e7c1  /tmp/git-zero-fit-response-independent-final-review/REVIEW.md
+d4ec4b3f1474f4debb033fc73602691bed263a3648512ae451ed73500b3b4e3b  /tmp/git-zero-fit-response-independent-final-review/approved-base-to-final.diff
+1e9132b0611c9bde87ce3d4c331f8910bba33a1ac94e221332b01dcc59d48aa7  /tmp/git-zero-fit-response-independent-final-review/audit_cleanup.py
+c77a23246d48ccd247863a48c874a3b2927057bbdc1e7599cf4a988259906c3d  /tmp/git-zero-fit-response-independent-final-review/audit_completion.py
+425098f03953f42817202e9ea129980cb0a37cf4a0171d18f4e6509cf5b84074  /tmp/git-zero-fit-response-independent-final-review/audit_hashes.py
+923ea08c4ceda1c40fa6f2be940d7e4efd15c0ed0da879269d0ef95e355d5021  /tmp/git-zero-fit-response-independent-final-review/cleanup-gap-audit.json
+d9e05496a2707c6e61c1928c69366e3ab0f4f53485ddb62e4a02f40d41538851  /tmp/git-zero-fit-response-independent-final-review/completion-semantic-audit-first-exact-float-comparison.json
+c2bf2c2f14429beaa71f3eb351916d73911ee6247173bdbc724c9bdaea330dc7  /tmp/git-zero-fit-response-independent-final-review/completion-semantic-audit.json
+1deda5408d05a617b64c6722ad0ce51624fbf4c849c8923ab8300c7983eee49f  /tmp/git-zero-fit-response-independent-final-review/hash-audit.json
+79919a8a6e4fb9c90132b3fda9de24b21ac2936e9e2fca98a39be22667455981  /tmp/git-zero-fit-response-independent-final-review/tested-v2-to-final.diff

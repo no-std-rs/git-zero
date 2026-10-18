@@ -1,0 +1,148 @@
+{
+  "kind": "active exact scope/NULL disclosures; original records retained byte-for-byte",
+  "fault_final": {
+    "status": 503,
+    "Native_log_reason": "statistics failed: service accounting is incomplete",
+    "accounting_complete": false,
+    "SQL_rows_read": null,
+    "SQL_rows_written": null,
+    "object_stats": null,
+    "priced_estimate": null,
+    "available_manifest_physical_and_cumulative_receipts": true,
+    "GC_ordering_exclusions": [
+      "unknown-sql",
+      "gateway-lost-reply"
+    ],
+    "excluded_ordering_claim": null
+  },
+  "first16_eviction": {
+    "overall": "FAIL",
+    "trigger": "final combined resource guard",
+    "exact_triggering_threshold": null,
+    "surviving_original_receipt": "PRE",
+    "original_post_measurement": null,
+    "historical_disk_attribution": "preserved original claim, not independently established"
+  },
+  "successful_v0_resource_receipts": {
+    "pre": null,
+    "post": "retained; overwrote original PRE"
+  },
+  "blocked_allocator_v1": {
+    "overall": "blocked PRE guard",
+    "later_separate_v1_02": "PASS"
+  },
+  "original_fault_v1": {
+    "overall": "FAIL",
+    "completed_rows": 38,
+    "final_cumulative": null,
+    "source_after": null,
+    "cleanup": null,
+    "resource_post": null,
+    "later_separate_fault_v2_02": "PASS; does not repair original missing receipts"
+  },
+  "initial_noncanonical_library": {
+    "console": null,
+    "reported_102_32_split": "author report not independently reconstructed",
+    "canonical134_pass_log_and_actual_ELF": "retained"
+  },
+  "unmetered_or_unavailable": {
+    "separate_Git_push_HTTP_response_hashes": null,
+    "peak_object_count": null,
+    "whole_key_ordered_GET_timeline": null
+  },
+  "allocator_scope": {
+    "requested_layout_API_visible_live_peak": true,
+    "internal_realloc_overlap_directly_metered": false,
+    "internal_realloc_overlap": "covered separately by conservative source ring bound",
+    "total_request_heap_bound": null,
+    "reservation_failure_unit": "real capacity overflow, not allocator OOM",
+    "infallible_header_clone_OOM_behavior": "unchanged"
+  },
+  "oversized_repeat": "zero GETs alone does not prove response-cache hit; source-approved exact response-hit control is separate",
+  "tested_to_final": {
+    "utc": "2026-10-18T15:34:39Z",
+    "source_commit": "95fdf58f6bd7298736cfe124725e4f7e6c9aceb9",
+    "parent_and_runtime_tested_source": "8287ef863e8ec78950ed3a9a59d509a7ed6e1dc2",
+    "stage": "final source all-target Clippy/fmt/diff checked; not relinked or runtime rerun",
+    "files": {
+      "native.rs": {
+        "path": "/tmp/git-zero-fit-response-final-source/native.rs",
+        "bytes": 150953,
+        "sha256": "ad04a572eadaec569fae885f781a4f3dd44e1fe9eaed363cbd16e54090894862"
+      },
+      "cli.rs": {
+        "path": "/tmp/git-zero-fit-response-final-source/cli.rs",
+        "bytes": 8088,
+        "sha256": "a7c3fc9c8f685ece6844f60c218e2edb9316b182674ba2888ec72f3f1162ef78"
+      },
+      "runner.rs": {
+        "path": "/tmp/git-zero-fit-response-final-source/runner.rs",
+        "bytes": 95790,
+        "sha256": "e8f3a482adb96ec8f52fccd4f9fe4a66f69d3706c65adba355f478183c0dc73f"
+      }
+    },
+    "actual_runtime_tested_runner": {
+      "path": "/tmp/git-zero-fit-response-build-v2/runner-elf",
+      "sha256": "80df43e2f9c804f878b5f25d6e7cad8e68a191b897d95fc8cc50f3c7cc3e6660"
+    },
+    "actual_Native_ELF_sha256": "2941f19a4f25353b86f1ae3e8e75315480f17151ff9310561b828d0c8ad81369",
+    "Native_tree": "4717edd249bcb85edec47674787aa1ecf9f7d8f1",
+    "Worker_tree": "7f41db4407963ed04e6cbe19556b1416633caf18",
+    "Native_CLI_source_and_actual_Native_ELF_equal_all_preserved_versions": true,
+    "tested_to_final_difference": "only .err().expect(...) -> .expect_err(...); same expected-Err return/control flow, unexpected-Ok panic format differs",
+    "exact_patch": {
+      "path": "/tmp/git-zero-fit-response-runner-final-lint-only.patch",
+      "sha256": "79919a8a6e4fb9c90132b3fda9de24b21ac2936e9e2fca98a39be22667455981"
+    }
+  },
+  "comparison_scope": {
+    "integer_string_bool_NULL": "exact",
+    "floating_exceptions": "ONLY seven enumerated one-ULP timing/advisory-cost paths, three underlying repeated values",
+    "paths": [
+      {
+        "scope": "faults-fit-v2-02",
+        "path": ".final.receive_codec_seconds"
+      },
+      {
+        "scope": "restart-fit-v2-01",
+        "path": ".final_object_stats.estimated_cost.exhausted_allowances_existing_paid_account.durable_object_rows_read.gross_linear_usd"
+      },
+      {
+        "scope": "restart-fit-v2-01",
+        "path": ".final_object_stats.estimated_cost.unused_allowances_new_paid_account.durable_object_rows_read.gross_linear_usd"
+      },
+      {
+        "scope": "restart-fit-v2-01",
+        "path": ".final_estimated_cost.exhausted_allowances_existing_paid_account.durable_object_rows_read.gross_linear_usd"
+      },
+      {
+        "scope": "restart-fit-v2-01",
+        "path": ".final_estimated_cost.unused_allowances_new_paid_account.durable_object_rows_read.gross_linear_usd"
+      },
+      {
+        "scope": "http-fit-v2-01",
+        "path": ".final.receive_publication_seconds"
+      },
+      {
+        "scope": "http-fit-v2-01",
+        "path": ".final_object_stats.receive_publication_seconds"
+      }
+    ],
+    "original_deviations": "reviews/final/completion-semantic-audit.json.gz",
+    "original_exact_failure_draft": "reviews/final/completion-semantic-audit-first-exact-float-comparison.json.gz",
+    "serialization_explanation": "reviewer inference, not priced/speed acceptance",
+    "raw_original_bytes_and_hashes_unchanged": true,
+    "no_blanket_float_tolerance": true
+  },
+  "unknown_cost_scope": {
+    "Native_compute": null,
+    "Worker_CPU": null,
+    "DO_duration": null,
+    "full_bill_USD": null
+  },
+  "future": {
+    "fresh_matching_screen_pairs": "NOTDONE",
+    "mandatory_five_fresh_original_R1_final_all4": "NOTDONE",
+    "cost_speed_promotion_stopping_acceptance": false
+  }
+}

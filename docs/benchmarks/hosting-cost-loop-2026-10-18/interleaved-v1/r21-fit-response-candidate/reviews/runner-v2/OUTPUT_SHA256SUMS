@@ -1,0 +1,9 @@
+5db97993bad8d4469a7f59c8ca8109add5e5b4c84d2b7b99eb5d28a3ca795559  /tmp/git-zero-fit-response-independent-review-supplement-01/INPUT_SHA256SUMS
+41404c04a4cc53f7c29681f9865c8990bcd9e968120dbb908c240eec1f6da026  /tmp/git-zero-fit-response-independent-review-supplement-01/INPUT_SHA256_INVENTORY.json
+8ed822f0c3681864117acbffc28f8fba8fe611d29d80a29248a6fa1c322e2585  /tmp/git-zero-fit-response-independent-review-supplement-01/REVIEW.json
+ca496616b812171b11a9bb7956ecefb8fb289e86ef39f34e35e47e67dcec1f06  /tmp/git-zero-fit-response-independent-review-supplement-01/REVIEW.md
+37eda24fa3ae2cfae09ffefd6ba4830b72a06855dab34bb8d2583e4fa8daec09  /tmp/git-zero-fit-response-independent-review-supplement-01/audit.py
+30894742e0054bdc805c2a5e6c59432f63bc8804367e16aaa208b54ffd4ffc43  /tmp/git-zero-fit-response-independent-review-supplement-01/audit_controls.py
+b74d189f2eda178b254c3572199acc856b358adbb4c6d214a24c73ea390504a8  /tmp/git-zero-fit-response-independent-review-supplement-01/controls-semantic-audit.json
+f46c04063a29bfa813ca6d963c00cf1350dc61d4fe3a6ec5b9f0be724f980397  /tmp/git-zero-fit-response-independent-review-supplement-01/evidence-audit.json
+7601ec0ff41fcb7145a2b0868021238576995917f24c275a6697102b7922c7c4  /tmp/git-zero-fit-response-independent-review-supplement-01/reviewed-runner.diff
