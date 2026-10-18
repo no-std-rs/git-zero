@@ -1,4 +1,6 @@
-//! Linux-only hard watchdog proof and sealed replay plans. No replay entrypoint.
+//! Linux-only watchdog and bounded diagnostic executor. Runtime GO is separate.
+#[path = "fetch-phase-supervisor/replay.rs"]
+mod replay;
 use git_zero_host::{benchmark_cost::interleaved_schedule, hash};
 use serde_json::{Value, json};
 use std::{
@@ -354,15 +356,21 @@ fn supervise(
 ) -> Result<Value> {
     let started = Instant::now();
     fs::create_dir(root)?;
-    let mut command = Command::new("/bin/sh");
-    // A fixed cheap-proof wrapper deliberately ignores TERM; exec preserves the
-    // fresh PID/PGID. No payload or user string is interpolated into shell code.
+    let mut command = if mode == "executor" {
+        let mut c = Command::new(std::env::current_exe()?);
+        c.arg("--internal-executor").arg(root);
+        c
+    } else {
+        // Fixed proof-only wrapper makes the controlled child TERM-resistant.
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", "trap '' TERM; exec \"$@\"", "resistant-proof"])
+            .arg(std::env::current_exe()?)
+            .arg("--internal-worker")
+            .arg(root)
+            .arg(mode);
+        c
+    };
     command
-        .args(["-c", "trap '' TERM; exec \"$@\"", "resistant-proof"])
-        .arg(std::env::current_exe()?)
-        .arg("--internal-worker")
-        .arg(root)
-        .arg(mode)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -456,7 +464,10 @@ fn supervise(
             expired = true;
             cleanup_started = Some(Instant::now());
         }
-        if leader_status.as_ref().is_some_and(|s| !s.success()) && cleanup_started.is_none() {
+        if (leader_status.as_ref().is_some_and(|s| !s.success())
+            || (mode == "executor" && leader_status.is_some()))
+            && cleanup_started.is_none()
+        {
             cleanup_started = Some(Instant::now());
         }
         if let Some(cleanup) = cleanup_started {
@@ -840,6 +851,9 @@ fn main() -> Result<()> {
         .ok_or("use --cheap-supervisor-proof NEW_DIR or --seal-case-plans NEW_DIR")?;
     let root = PathBuf::from(args.get(1).ok_or("missing output directory")?);
     match mode {
+        "--tiny-production-proof" if args.len() == 2 => replay::tiny(&root),
+        "--execute-reviewed-batch" if args.len() == 2 => replay::batch(&root),
+        "--internal-executor" if args.len() == 2 => replay::worker(&root),
         "--cheap-supervisor-proof" if args.len() == 2 => cheap_proof(&root),
         "--seal-case-plans" if args.len() == 2 => seal_case_plans(&root),
         "--internal-worker" if args.len() == 3 => {

@@ -1,0 +1,202 @@
+{
+  "stage": 3,
+  "scope": "bounded executor implementation plus one tiny production wiring proof; final metadata-only build unrerun",
+  "parent_commit": "c964a967ccebf76aa1137412e158630bbe668937",
+  "native_hooks_source": "a827df032e87374737b1ac7e36fb518b507e8411",
+  "provider_source_base": "f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5",
+  "historical_r18_provider_reused": false,
+  "reviewed_stage2": {
+    "path": "/tmp/git-zero-fetch-stage2-independent-review/REVIEW.md",
+    "sha256": "c70bb288cbccc40e6578f0d227926c4659ab9e1e1cc9edebb0b65473dda33b92"
+  },
+  "tiny_tested": {
+    "supervisor_source_sha256": "b8612ce2b39449dd6fa49c196360c8410e9008507b696d47bf95bc3cb86bf425",
+    "executor_source_sha256": "bdb69e34f1399fc0eef4ad4393bc88afd3fa0464392df60681d63274a8ca5076",
+    "actual_supervisor_elf_sha256": "c3d142bb55a2cad1f1115ab0be401c0556bd57952b2da428adc134de16c73cf7",
+    "archive": "/tmp/git-zero-fetch-diagnostics-immutable/stage3-tiny01-tested-v1",
+    "relocation_map_sha256": "0d0d13a92d32ce1cf317a2efdd549994c37fb82d002ca76f19132c89531cc7a1",
+    "pass": true,
+    "proof_path": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-01/proof.json",
+    "proof_sha256": "5dbdfc0c65584e6435384961261349337b3f70b8d66cf12743b746cf049c32f0",
+    "plan_sha256": "cb98865a65c1d714fb56b9424a2ec81f19198d18fd13ef1a13fcde774f978547",
+    "operations": 9,
+    "generation_count": 3,
+    "fixture_working_tree_bytes_including_attributes": 32790,
+    "elapsed_diagnostic_ms": 37440,
+    "case_pgid": 993491,
+    "actual_request_hash_records": 61,
+    "native_phase_records": 127,
+    "fixture_reconstruction_verified": true,
+    "fixtures": [
+      {
+        "expected_tip": "251d6a964118be89f5ef600728b38c73569ed755",
+        "expected_tree": "99d8b9553583c66deef2eb4c870344a59a234233",
+        "generation": 1,
+        "pass": true,
+        "tip": "251d6a964118be89f5ef600728b38c73569ed755",
+        "tree": "99d8b9553583c66deef2eb4c870344a59a234233"
+      },
+      {
+        "expected_tip": "2d286831e542700b67e830ea66d63fabab7c93a5",
+        "expected_tree": "4b83bbf3852f4b92269c358dca09bde21c894d71",
+        "generation": 2,
+        "pass": true,
+        "tip": "2d286831e542700b67e830ea66d63fabab7c93a5",
+        "tree": "4b83bbf3852f4b92269c358dca09bde21c894d71"
+      },
+      {
+        "expected_tip": "02fcada1fbc1ce4e931c765db850f16517321524",
+        "expected_tree": "4130603aa8dd155fd172ea6ccd0820906c7ea3ce",
+        "generation": 3,
+        "pass": true,
+        "tip": "02fcada1fbc1ce4e931c765db850f16517321524",
+        "tree": "4130603aa8dd155fd172ea6ccd0820906c7ea3ce"
+      }
+    ],
+    "environment": {
+      "git_environment_names": [
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_TERMINAL_PROMPT",
+        "GIT_ZERO_PHASE_LEDGER"
+      ],
+      "identity_environment_eligible": true,
+      "invalid_git_names": [],
+      "pid": 994750,
+      "source": "/proc/994750/environ",
+      "values_recorded": false
+    },
+    "scope_closure_complete": true,
+    "counter_phase_checks": 12,
+    "native_cpu_ms": null,
+    "child_cpu_ms": null,
+    "worker_cpu_ms": null,
+    "do_gb_seconds": null,
+    "full_bill_usd": null
+  },
+  "final_metadata_only": {
+    "supervisor_source_sha256": "b8612ce2b39449dd6fa49c196360c8410e9008507b696d47bf95bc3cb86bf425",
+    "executor_source_sha256": "08630d52326e76941c210b1474608bc01579a0e606bf7cb4ef656be6505d1528",
+    "actual_supervisor_elf_sha256": "7e5db2316b8cc7def45805cee3c2cb4373475a47a95bc61577546802d0b5ee4b",
+    "production_rerun": false,
+    "supervisor_runtime_controls_rerun": false,
+    "only_metadata_assignments_changed": true,
+    "diff_path": "/tmp/git-zero-fetch-stage3-handoff-20261018/tested-to-final-metadata-only.diff",
+    "diff_sha256": "12130a8def209d111ddf35860847d749f2ce54e0777c491891a842a8c72b4796",
+    "build_pass": true,
+    "format_check_pass": true,
+    "archive_and_clean_commit_receipt": "/tmp/git-zero-fetch-stage3-handoff-20261018/final-source-receipt.json"
+  },
+  "unchanged_actual_elfs": {
+    "native": "3ccf43bb5cca872294191fef57df9d4469ddd5dad41e9b5abf4cd6e270d1f060",
+    "stage1_runner": "d2e21856771f7fb3b8bb0e15517c4ab150645dc623255880d90699663a1db943"
+  },
+  "supervisor_controls": {
+    "path": "/tmp/git-zero-fetch-stage3-supervisor-controls-20261018-01/proof.json",
+    "sha256": "5519b5206bc66d4541eb4e91f179d58ad546193368b840a80bfa89b4cb05ef8d",
+    "pass": true,
+    "normal_ms": 113,
+    "socket_stall_ms": 2385,
+    "orphan_pipe_ms": 2368,
+    "injected_controller_error_cleanup": true,
+    "tested_before_metadata_only_change": true
+  },
+  "authorization_negative_check": {
+    "path": "/tmp/git-zero-fetch-stage3-authorization-check-20261018.json",
+    "sha256": "6034a4db9fb2a2a16d3302552a2827c97aae77b2f0974000a03bd8aeb96fdbb9",
+    "prefix_created": false,
+    "large_fixture_generated": false
+  },
+  "evidence_manifests": {
+    "tiny01": {
+      "root": "/tmp/git-zero-fetch-stage3-tiny-production-20261018-01",
+      "manifest": "/tmp/git-zero-fetch-stage3-handoff-20261018/tiny01.inputs.sha256",
+      "files": 549,
+      "sha256": "068e41d713ec71d9fb3e21fae5a2b136b808795514b68729868adbfc3254877f",
+      "total_logical_bytes": 1737370
+    },
+    "supervisor-controls": {
+      "root": "/tmp/git-zero-fetch-stage3-supervisor-controls-20261018-01",
+      "manifest": "/tmp/git-zero-fetch-stage3-handoff-20261018/supervisor-controls.inputs.sha256",
+      "files": 26,
+      "sha256": "9def33fb3f29cf325cdc306b4bf78b9ce71b0a39e2946db8f9fc07f9826d2307",
+      "total_logical_bytes": 410355
+    }
+  },
+  "large_replays": {
+    "authorized": false,
+    "generated": 0,
+    "executed": 0,
+    "fixture_reconstruction_verified": null,
+    "actual_request_hashes": null,
+    "actual_pack_hashes": null,
+    "cases": [
+      {
+        "profile": "64mib-cold",
+        "target": "history_no_haves_16",
+        "prefix_operations": 42,
+        "pushes": 16,
+        "fetches": 26,
+        "target_want": "38d11e717df6687e26ade7033be62a56a408595c",
+        "sealed_input_sha256": "852558c0bcd8491061b762ac2a50352a89565d927fe2ae367e9e9dc22ad713a4"
+      },
+      {
+        "profile": "16mib-warm",
+        "target": "history_no_haves_32",
+        "prefix_operations": 86,
+        "pushes": 32,
+        "fetches": 54,
+        "target_want": "6d55590087ff6851e7e37884c864b854d1c43f51",
+        "sealed_input_sha256": "5f720f8368e75f4d9447871ce6809330e4f8db188d561c3457de51e21bf3072d"
+      }
+    ],
+    "maximum_replicas_each": 2,
+    "maximum_cases": 4,
+    "work_deadline_seconds_each": 1200,
+    "additional_fixed_cleanup_grace_seconds_each": 5,
+    "stop_after_timeout_or_failed_observer": true,
+    "automatic_retry": false
+  },
+  "resources": {
+    "disk_reserve_bytes": 2147483648,
+    "future_owned_aggregate_raw_cap_bytes": 8589934592,
+    "future_minimum_available_memory_bytes": 8589934592,
+    "future_peak_per_live_case_forecast_bytes": 2147483648,
+    "forecast_is_not_measured_peak": true,
+    "raw_cap_is_boundary_sampled_not_filesystem_quota": true,
+    "new_tmpfs_authorized": false,
+    "new_tmpfs_used": false,
+    "tiny_final": {
+      "available_disk_bytes": 4041924608,
+      "available_memory_bytes": 55924842496,
+      "case_byte_cap": 16777216,
+      "case_logical_bytes": 1662850,
+      "disk_reserve_bytes": 2147483648,
+      "large_fixture_bytes": 0,
+      "proof_output_cap_bytes_per_stream": 131072
+    },
+    "final_build": {
+      "command": [
+        "cargo",
+        "build",
+        "-j2",
+        "-p",
+        "git-zero-host",
+        "--bin",
+        "fetch-phase-supervisor"
+      ],
+      "returncode": 0,
+      "disk_free_before": 2617548800,
+      "disk_free_after": 2617548800,
+      "production_runtime_rerun": false
+    }
+  },
+  "protected_source_or_policy_changed": false,
+  "new_dependency_or_unsafe": false,
+  "historical_receipts_rewritten": false,
+  "performance_claim": false,
+  "cpu_ms": null,
+  "full_bill_usd": null,
+  "next_action": "STOP for independent review; large runtime and new owned raw prefix require separate root GO"
+}
