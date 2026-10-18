@@ -11,3 +11,6 @@ __pycache__/
 
 # Generated hosting benchmark evidence belongs in local storage or CI artifacts.
 /docs/benchmarks/
+
+# Downloaded or generated Git repository datasets.
+/test-repositories/

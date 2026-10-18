@@ -5,6 +5,11 @@ with a tuned Git smart HTTP server. Generated reports belong in `/tmp` or CI
 artifacts, outside the source tree. The [isolated workflow](../.github/workflows/hosting-isolated.yml)
 retains reports as artifacts instead of committing them.
 
+The runner generates deterministic repository fixtures in the system temporary
+directory; no sample repository download is needed. Successful runs remove them
+unless `--keep` is set; failed runs retain them for diagnosis. Larger upstream
+datasets should be downloaded on demand into `/tmp` or `test-repositories/`.
+
 ## Reproduce
 
 Build both runners and the host:
