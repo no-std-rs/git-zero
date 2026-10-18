@@ -1,0 +1,20 @@
+{
+  "all_four_profiles_reviewed": true,
+  "resource_guard_checks": 216,
+  "resource_guard_failures": 0,
+  "profile_cost_guard_checks": 24,
+  "profile_cost_guard_failures": 0,
+  "paired_git_latency_workload_profile_checks": 144,
+  "paired_git_median_and_p95_limit_checks": 288,
+  "all_six_comparisons_have_latency_failures": true,
+  "provisional_promotion_supported_by_all_guards": false,
+  "formal_result": "Every comparison is inconclusive and ineligible for plateau; every candidate has a failed latency guard in the complete screen. No promotion, acceptance, speed claim or formal plateau is supported by this attempt.",
+  "observer_physical_work": {
+    "all_warmup_and_measured_final_stats_counter_deltas_preserved": true,
+    "r2_read_bytes_after_last_timed_operation": 0,
+    "note": "Actual R10/R11 final observer restore R2 GET/read-byte deltas and native history restore events are zero in this attempt because the measured history selection never activated. Zero is retained as observed; no hypothetical restoration, correction or saving is substituted. All observer receipts, including list/SQL work, remain visible and excluded from fixed and whole non-stats traffic."
+  },
+  "scope_accounting": "Fixed counters and known fixed dollars cover exactly 32 pushes and 56 fetches per measured trial. Whole observer-excluded traffic includes startup and has separately named counters/dollars. All billing dimensions not measured by the runner remain null.",
+  "sqlite_pages": "Measured final SQLite databaseSize is 24576 bytes on every provider/profile. The frozen runner did not independently query page_size/page_count, so physical SQL page count remains null.",
+  "latency_warning": "Retain all tails without pruning. Local Git client elapsed time and native timing components are not billed Worker CPU or DO duration."
+}

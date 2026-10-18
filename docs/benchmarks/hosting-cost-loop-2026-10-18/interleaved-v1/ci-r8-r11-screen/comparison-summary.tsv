@@ -1,0 +1,7 @@
+comparison	baseline_fixed_known_usd	candidate_fixed_known_usd	known_cost_reduction_fraction	conservative_one_percent_threshold_passed	resource_guard_failures	profile_cost_guard_failures	latency_workload_profile_failures	decision	plateau_eligible
+r9-vs-r8	2.05461643618	1.9970154361799999	0.028034916389111264	True	0	0	3	inconclusive	False
+r10-vs-r8	2.05461643618	1.9970214361799998	0.028031996136019588	True	0	0	3	inconclusive	False
+r10-vs-r9	1.9970154361799999	1.9970214361799998	-3.0044835361842104e-06	False	0	0	6	inconclusive	False
+r11-vs-r8	2.05461643618	1.94098593618	0.055304969822622896	True	0	0	4	inconclusive	False
+r11-vs-r9	1.9970154361799999	1.94098593618	0.028056618384070364	True	0	0	7	inconclusive	False
+r11-vs-r10	1.9970214361799998	1.94098593618	0.028059538563185216	True	0	0	6	inconclusive	False

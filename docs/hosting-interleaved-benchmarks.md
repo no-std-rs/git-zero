@@ -124,7 +124,7 @@ The [isolated workflow](../.github/workflows/hosting-isolated.yml) runs only on 
 `perf/hosting-isolated-ci-20261018`, or dispatches selecting that branch. Each of the four profiles gets
 a standard `ubuntu-24.04` VM. A screen freshly measures its declared ordered native providers on
 the same VM, once each with two measured pairs and an excluded warmup per backend. The completed
-R2–R5 and R5–R8 batches each used four providers. Every provider gets a fresh local
+R2–R5, R5–R8 and R8–R11 batches each used four providers. Every provider gets a fresh local
 Wrangler process and persistent-state directory. No reports from an earlier
 workflow attempt or local workstation may substitute for any provider's measurements.
 
@@ -141,7 +141,7 @@ Before pushing each batch, validate the common final Worker's backward compatibi
 validated hash alongside every actual pushed source ref. For the earlier R2–R5 batch, generation
 witnesses were gated by registration capability so R2/R3 incurred no extra DO checks, and 16 MiB chunk
 support still accepted old 8 MiB entries within the unchanged aggregate response limit. The completed R5–R8 batch
-kept R5 scalar retirement unless negotiated. The next R8–R11 batch keeps older
+kept R5 scalar retirement unless negotiated. The completed R8–R11 batch kept older
 clients on their negotiated upload path and fresh v1 catalog; only R11 requests
 the peak-catalog schema, with migration charged to its first eligible mutation.
 
@@ -286,17 +286,17 @@ records the 138.5-second sample alongside its 143.6 ms native codec time and zer
 R2 reads. Response completion and client waiting were not traced, so the cause
 remains unresolved.
 
-## Prepared next candidates
+## Candidate implementation evidence
 
 The [R9 upload/publication record](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r9-upload-candidate/README.md)
 retains clean and independent combined correctness checks, including transport
 failures and the actual CLI restart. The
 [historical-prefix proposal](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/history-prefix-design/README.md)
 uses ephemeral lineage and explicitly prices the final full inventory restore.
-Neither candidate has benchmark results. Their implementation preparation used
-completed R5 evidence. The complete R5–R8 guard review now permits preparing the
-next fresh screen; source pins and backward compatibility must be reviewed
-before triggering it. No reports carry into later trials.
+Their implementation preparation used completed R5 evidence. Both were measured
+in the completed R8–R11 screen below; the history classifier did not activate for
+real Git clients. Its correction requires a new screen. No reports carry into
+later trials.
 
 The [bounded response experiment](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/fetch-transport-diagnosis/README.md)
 did not reproduce the retained response stalls. It also disproved a proposed
@@ -320,9 +320,10 @@ finds a remaining potential SQL representation saving after R11. It reproduces
 all 704 fresh R8 operation rows and specifies bounded pages and routing, with no
 empty-page growth under churn. Its $0.056 gross projection needs actual migration,
 page, failure-recovery and cursor checks. This viable next design prevents a
-plateau claim; it has no implementation or benchmark result yet.
+plateau claim. An isolated implementation is undergoing source and recovery
+review; it has no benchmark result yet.
 
-## Next declared screen: upload, historical selection and catalog peak
+## Completed R8–R11 screen: upload, historical selection and catalog peak
 
 After complete R5–R8 guard review, this fresh batch compares provisional R8
 (`0f9f62e`), R9 staged upload/publication (`8af8c48`), R10 certified historical
@@ -341,3 +342,34 @@ schema mutation belongs inside the timed first push. Actual legacy controls and
 current R8/R9 contracts pass under this Worker; the independent source review
 and root combined R10/R11 production-Worker contract pass. Full final validation
 still uses five fresh pairs of original R1 and the selected final candidate.
+
+[Run 39092442019](https://github.com/no-std-rs/git-zero/actions/runs/39092442019)
+completed all four profiles and scoring at `7e7856a`. Its fresh known fixed
+scores are R8 $2.05461643618, R9 $1.99701543618, R10 $1.99702143618 and R11
+$1.94098593618. R9 is 2.803492% below R8; R11 is 5.530497% below R8 and
+2.805954% below R10. All 216 resource and 24 per-profile cost guards pass.
+R9 saves 32 Worker/DO callbacks per trial. R11 removes 56 SQL writes across
+the four profiles after charging its four migrations. Storage, R2 work and
+transfer sizes are unchanged; SQLite remains at 24,576 bytes.
+
+Every comparison remains inconclusive and ineligible for plateau evidence.
+R11 versus R8 fails four latency groups: 16 MiB warm large pushes, 64 MiB cold
+historical fetches without haves and large pushes, and 64 MiB warm latest
+fetches. R11's 136.237-second warm historical-fetch tail, versus paired Git's
+0.802 seconds, remains visible. No speed win or formal promotion is established.
+
+Both cold R10/R11 profiles perform zero historical projections, including
+warmups. Git 2.53 automatically echoes the advertised `deepen-since` and
+`deepen-not` capabilities, which the strict classifier omitted. The measured
+full-read fallback and flat R10-versus-R9 cost are retained; actual final
+observer restore GETs and read bytes are zero. A separately reviewed two-token
+correction now has a real-client production-Worker regression with and without
+haves. Its correctness proof does not replace this screen or establish savings.
+
+[Published evidence](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r8-r11-screen/README.md)
+contains all five original archives, complete guards/ratios/tails, migration and
+observer receipts, the activation diagnosis, and exact independent Rust offline
+reproduction. After reviewing every guard, R11 is only the next provisional
+known-cost comparison anchor. The corrected history path and later catalog
+changes need their own fresh, prospectively pinned screen. Final validation
+still requires five fresh original-R1/final pairs across all four profiles.

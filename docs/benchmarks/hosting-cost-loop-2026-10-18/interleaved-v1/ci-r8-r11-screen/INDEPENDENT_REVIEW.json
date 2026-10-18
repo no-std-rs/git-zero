@@ -1,0 +1,171 @@
+{
+  "run_id": 39092442019,
+  "attempt": 1,
+  "head": "7e7856a3f6c279a8f97956a4475cb12f847b1f7e",
+  "run_url": "https://github.com/no-std-rs/git-zero/actions/runs/39092442019",
+  "benchmark_execution": "Free standard ubuntu-24.04 GitHub-hosted VMs; local workerd/R2/SQLite only; no local measurements or paid production deployment by verifier.",
+  "raw_reports": 16,
+  "profile_vms": 4,
+  "providers_per_shared_vm": 4,
+  "pairs_per_provider_profile": 2,
+  "warmups_per_backend": 1,
+  "fixed_pushes_per_trial": 32,
+  "verified_fetches_per_trial": 56,
+  "internal_checksums_verified": 264,
+  "source_binary_runtime_identity": "Pinned full provider commit and tree refs, four distinct native source trees and native binary hashes, common runner/scorer/Worker/reference Git, strict report binary and source SHA256 ties.",
+  "fresh_state": "All providers share a profile VM but use distinct Worker PIDs, state directories and report namespaces. All warmup and measured first pushes start generation 0. All sources clean after measurements.",
+  "receipts": "Complete accounting, no binding failures, complete 32-push/56-fetch schedules and backend verification; fetches retain nonempty packs with strict fsck, archive and tree/want verification. Every original report and full tail retained.",
+  "counter_scope": "Fixed objective prices exactly summed measured push/fetch row receipts. Whole observed workload counters also include startup and are separately labelled. No whole counter is paired with the fixed objective.",
+  "offline_reproduction": "Frozen evaluator 01b36df2f5f2019eeb09ebe79eb8ae80e9f86d0cdf39667c9fec9b0584e61fb8 has unchanged evaluator source; all four scores and all six comparisons match CI byte for byte.",
+  "correlation": "Intermediate suites were freshly measured once in this prospectively declared batch and are shared across all six comparisons; they are correlated observations, not additional independent pairs.",
+  "formal_result": "All two-pair screen comparisons are inconclusive; no formal plateau or speed claim. Full five-pair validation is separate.",
+  "full_hosting_cost_usd": null,
+  "unknown_billing_dimensions": [
+    "Worker CPU-ms",
+    "Durable Object duration",
+    "monthly SQLite storage",
+    "native codec compute"
+  ],
+  "timing_limit": "Client elapsed time is never inferred as billed CPU. Workerd header timing does not establish full HTTP completion.",
+  "history_selection_activation": {
+    "result": "Measured history-selection activation failure in both cold profiles for R10 and R11.",
+    "scope": "All fresh warmups and measured trials; unchanged raw reports remain authoritative. No corrected implementation or hypothetical estimate substitutes for these samples.",
+    "facts": [
+      {
+        "provider": "r10",
+        "profile": "16mib-cold",
+        "sample": -1,
+        "warmup": true,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r10",
+        "profile": "16mib-cold",
+        "sample": 0,
+        "warmup": false,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r10",
+        "profile": "16mib-cold",
+        "sample": 1,
+        "warmup": false,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r10",
+        "profile": "64mib-cold",
+        "sample": -1,
+        "warmup": true,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r10",
+        "profile": "64mib-cold",
+        "sample": 0,
+        "warmup": false,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r10",
+        "profile": "64mib-cold",
+        "sample": 1,
+        "warmup": false,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r11",
+        "profile": "16mib-cold",
+        "sample": -1,
+        "warmup": true,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r11",
+        "profile": "16mib-cold",
+        "sample": 0,
+        "warmup": false,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r11",
+        "profile": "16mib-cold",
+        "sample": 1,
+        "warmup": false,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r11",
+        "profile": "64mib-cold",
+        "sample": -1,
+        "warmup": true,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r11",
+        "profile": "64mib-cold",
+        "sample": 0,
+        "warmup": false,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      },
+      {
+        "provider": "r11",
+        "profile": "64mib-cold",
+        "sample": 1,
+        "warmup": false,
+        "history_projections": 0,
+        "history_full_restores": 0,
+        "cloud_view_rehydrates": 81
+      }
+    ],
+    "source_review": {
+      "path": "examples/repository-host/src/native/history.rs",
+      "observation": "The pinned strict plan capability allowlist omits deepen-since and deepen-not.",
+      "coordinator_finding": "Coordinator verified real Git 2.53 requests advertise those capabilities and therefore use the ordinary full path.",
+      "verification_limit": "The benchmark raw reports expose actual zero activation counters and actual R2 receipts, but do not retain full HTTP request bodies to independently reconstruct the capability rejection."
+    },
+    "formal_effect": "All comparisons remain two-pair screens; activation failure establishes neither formal plateau eligibility nor a speed claim."
+  },
+  "independent_assessment": {
+    "all_four_profiles_reviewed": true,
+    "resource_guard_checks": 216,
+    "resource_guard_failures": 0,
+    "profile_cost_guard_checks": 24,
+    "profile_cost_guard_failures": 0,
+    "paired_git_latency_workload_profile_checks": 144,
+    "paired_git_median_and_p95_limit_checks": 288,
+    "all_six_comparisons_have_latency_failures": true,
+    "provisional_promotion_supported_by_all_guards": false,
+    "formal_result": "Every comparison is inconclusive and ineligible for plateau; every candidate has a failed latency guard in the complete screen. No promotion, acceptance, speed claim or formal plateau is supported by this attempt.",
+    "observer_physical_work": {
+      "all_warmup_and_measured_final_stats_counter_deltas_preserved": true,
+      "r2_read_bytes_after_last_timed_operation": 0,
+      "note": "Actual R10/R11 final observer restore R2 GET/read-byte deltas and native history restore events are zero in this attempt because the measured history selection never activated. Zero is retained as observed; no hypothetical restoration, correction or saving is substituted. All observer receipts, including list/SQL work, remain visible and excluded from fixed and whole non-stats traffic."
+    },
+    "scope_accounting": "Fixed counters and known fixed dollars cover exactly 32 pushes and 56 fetches per measured trial. Whole observer-excluded traffic includes startup and has separately named counters/dollars. All billing dimensions not measured by the runner remain null.",
+    "sqlite_pages": "Measured final SQLite databaseSize is 24576 bytes on every provider/profile. The frozen runner did not independently query page_size/page_count, so physical SQL page count remains null.",
+    "latency_warning": "Retain all tails without pruning. Local Git client elapsed time and native timing components are not billed Worker CPU or DO duration."
+  }
+}

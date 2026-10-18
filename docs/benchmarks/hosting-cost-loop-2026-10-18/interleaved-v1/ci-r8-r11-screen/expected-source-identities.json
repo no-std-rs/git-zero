@@ -1,0 +1,80 @@
+{
+  "head": "7e7856a3f6c279a8f97956a4475cb12f847b1f7e",
+  "sources": {
+    "Cargo.lock": {
+      "current_sha256": "29f82b6c33ed8dece62460cfa73752f025215130ffa5377e6d7170cc0b6d1af5",
+      "prior_sha256": "29f82b6c33ed8dece62460cfa73752f025215130ffa5377e6d7170cc0b6d1af5"
+    },
+    "Cargo.toml": {
+      "current_sha256": "91b4ab01c7f9b554b6cfbe445f25f9c69a6501bc1da255e3c29c12faa100dbfe",
+      "prior_sha256": "91b4ab01c7f9b554b6cfbe445f25f9c69a6501bc1da255e3c29c12faa100dbfe"
+    },
+    "examples/repository-host/Cargo.toml": {
+      "current_sha256": "336a79704487da8c19cad6ca8b155c5f2847db7cb19b8647a65d9a3393804ec2",
+      "prior_sha256": "336a79704487da8c19cad6ca8b155c5f2847db7cb19b8647a65d9a3393804ec2"
+    },
+    "examples/repository-host/src/bin/hosting-bench.rs": {
+      "current_sha256": "6c430861588e94d278bc5541d4f3b8196ce75888d5d11e658c2cccf37a6220ea",
+      "prior_sha256": "6c430861588e94d278bc5541d4f3b8196ce75888d5d11e658c2cccf37a6220ea"
+    },
+    "examples/repository-host/src/bin/hosting-cost.rs": {
+      "current_sha256": "5840e26bf04c3d3672823cfdd4ac26395060d05162462087d5e850a805e6c3e2",
+      "prior_sha256": "5840e26bf04c3d3672823cfdd4ac26395060d05162462087d5e850a805e6c3e2"
+    },
+    "examples/repository-host/src/benchmark_cost.rs": {
+      "current_sha256": "0dc340f39d51c4baf86e7d8b142f0a02ffaf9dc10345af7c22b27d59fc581401",
+      "prior_sha256": "0dc340f39d51c4baf86e7d8b142f0a02ffaf9dc10345af7c22b27d59fc581401"
+    },
+    "examples/repository-host/cloudflare/src/index.js": {
+      "current_sha256": "f5f72b40ec605814be6a6a0311df44e255ffdc3b402afec2e66454aa5711a811",
+      "prior_sha256": "b5ed0af945a3497d31dfbfb449f52e387ddb1f2821a6cdb750656458cc7528d6"
+    },
+    "examples/repository-host/cloudflare/wrangler.toml": {
+      "current_sha256": "4d35c7af5e0725605b99801be715e53405689036a53c9df2682eba411cea353d",
+      "prior_sha256": "4d35c7af5e0725605b99801be715e53405689036a53c9df2682eba411cea353d"
+    },
+    "examples/repository-host/cloudflare/package.json": {
+      "current_sha256": "ef8d4c4df3f22459cae080c251515b20b134a0196deed3c48740832eb52b54f8",
+      "prior_sha256": "ef8d4c4df3f22459cae080c251515b20b134a0196deed3c48740832eb52b54f8"
+    },
+    "examples/repository-host/cloudflare/package-lock.json": {
+      "current_sha256": "c68ee57e4922151c5b6c0e34eeb6042ed405633e1e249881b2dedef9b2b1d7cd",
+      "prior_sha256": "c68ee57e4922151c5b6c0e34eeb6042ed405633e1e249881b2dedef9b2b1d7cd"
+    },
+    ".github/workflows/hosting-isolated.yml": {
+      "current_sha256": "4732c0ad43a806efee9c44f6d70bfc9dbd37be4af475094dac3aca85f2f84ae2",
+      "prior_sha256": "4332ab453e6e6b01aef5fd0f4b78b0d3324fc7063d29347e7fc11a2fa52a3a81"
+    }
+  },
+  "providers": {
+    "r8": {
+      "commit": "0f9f62e2079ef984d56ca5d50c8a61c18c97f1ff",
+      "tree": "1952760cff803ad09cb6190a3f61cd35477be5b4",
+      "native_source_tree": "6005ffdcaed502b6c4b6cfe6910c27e41d9a2ff3"
+    },
+    "r9": {
+      "commit": "8af8c48fb272624bb67a0cb3923fad154c3a6dcf",
+      "tree": "d848f8d7f9dcf7018aacb894ab1c93ed9900b728",
+      "native_source_tree": "52a04f38cd4d70d478b8d23edfef6bd83f040aa0"
+    },
+    "r10": {
+      "commit": "e30e9c324fe12e9bbbd86959b1710cc9ea5b270e",
+      "tree": "face8637949780626d5512533e7631cba408a253",
+      "native_source_tree": "bab19f95e16d6f871f702c5dff8bbc62964bdb41"
+    },
+    "r11": {
+      "commit": "26e3d61c6fecbf92a709a089ed2f1270182ae625",
+      "tree": "643665744a8ddcb5196d6a35a9d616d9a97d47d9",
+      "native_source_tree": "5c0a9c25198b930597e4968019bb901a19301e2f"
+    }
+  },
+  "reference_commit": "556b9ecd2aa79197f86b3db2d546eee81696e899",
+  "reference_tree": "fe9e3413c7332eabbae631141fc699d899d27e1d",
+  "head_tree": "a471d62d7b78d95b3db9eb06d04b32074cd46192",
+  "head_parent": "26e3d61c6fecbf92a709a089ed2f1270182ae625",
+  "pricing_source": {
+    "path": "examples/repository-host/src/cost.rs",
+    "current_sha256": "fd27fe75cb9a87117151eb779ff561ddf8a02b550e10f5d7b1ddd4b2181b6756",
+    "prior_sha256": "fd27fe75cb9a87117151eb779ff561ddf8a02b550e10f5d7b1ddd4b2181b6756"
+  }
+}
