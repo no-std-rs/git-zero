@@ -461,6 +461,9 @@ pub struct Metrics {
     pub history_full_restores: u64,
     pub cache_evictions: u64,
     pub receive_noop_shortcuts: u64,
+    pub gateway_receive_plans: u64,
+    pub gateway_receive_unsupported: u64,
+    pub gateway_receive_consumed: u64,
     pub gateway_read_plans: u64,
     pub gateway_read_unsupported: u64,
     pub gateway_read_consumed: u64,
@@ -519,10 +522,92 @@ impl Drop for Quarantine {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct AuthorityFingerprint {
     generation: u64,
     published: [u8; 32],
     local: [u8; 32],
+}
+
+// Created only by an authenticated matched receive continuation after all Full
+// bytes are verified/materialized. Owned, one-call preparation, never a cache.
+struct ValidatedFullReceive {
+    authority: AuthorityFingerprint,
+    request_hash: String,
+    selection: String,
+    key: crate::first_read::Key,
+    nonce: String,
+    prepare_start: Instant,
+}
+
+fn eligible_small_receive(request: &Request) -> bool {
+    use git_zero_core::pktline::{Packet, read};
+    if !advertisement::eligible_receive(request)
+        || request.body.len() > crate::first_read::MAX_ORIGINAL
+    {
+        return false;
+    }
+    let mut body = request.body.as_slice();
+    let mut commands = 0;
+    while let Ok(Some(packet)) = read(&mut body) {
+        match packet {
+            Packet::Flush => {
+                return commands > 0
+                    && body.len() >= 12 + 20
+                    && body.starts_with(b"PACK")
+                    && matches!(u32::from_be_bytes(body[4..8].try_into().unwrap()), 2 | 3)
+                    && u32::from_be_bytes(body[8..12].try_into().unwrap()) > 0;
+            }
+            Packet::Data(data) => {
+                let data = data.strip_suffix(b"\n").unwrap_or(data);
+                let mut parts = data.split(|b| *b == 0);
+                let command = parts.next().unwrap_or_default();
+                if let Some(caps) = parts.next() {
+                    // Native send-pack uses NUL followed by one separator space.
+                    let caps = caps.strip_prefix(b" ").unwrap_or(caps);
+                    if commands != 0
+                        || parts.next().is_some()
+                        || caps.len() > 1024
+                        || !caps.iter().all(|b| (32..127).contains(b))
+                        || caps.split(|b| *b == b' ').any(|c| {
+                            !matches!(
+                                c,
+                                b"report-status"
+                                    | b"report-status-v2"
+                                    | b"side-band-64k"
+                                    | b"quiet"
+                                    | b"atomic"
+                                    | b"ofs-delta"
+                                    | b"object-format=sha1"
+                            ) && !c.starts_with(b"agent=")
+                        })
+                    {
+                        return false;
+                    }
+                }
+                if command.len() < 83
+                    || command[40] != b' '
+                    || command[81] != b' '
+                    || !command[..40]
+                        .iter()
+                        .chain(&command[41..81])
+                        .all(u8::is_ascii_hexdigit)
+                    || !command[82..].starts_with(b"refs/")
+                    || !command[82..].iter().all(|b| *b > 32 && *b != 127)
+                {
+                    return false;
+                }
+                if std::str::from_utf8(&command[82..])
+                    .ok()
+                    .is_none_or(|name| git_zero_core::repository::validate_ref_name(name).is_err())
+                {
+                    return false;
+                }
+                commands += 1;
+            }
+        }
+    }
+    false
 }
 
 pub struct NativeHost {
@@ -574,6 +659,7 @@ impl NativeHost {
         let root = root.canonicalize()?;
         let services = Arc::new(HttpServices::new(origin, repo, token)?);
         services.enable_first_read(cold_view);
+        services.enable_first_receive(cold_view);
         let mut repository = Repository::new(
             HostBlobs::Cloudflare(R2BlobStore::new(services.clone()), services.clone()),
             HostState::Cloudflare(DurableStateStore::new(services.clone())),
@@ -960,6 +1046,14 @@ impl NativeHost {
     }
 
     fn receive(&mut self, request: &Request) -> io::Result<Response> {
+        self.receive_prepared(request, None)
+    }
+
+    fn receive_prepared(
+        &mut self,
+        request: &Request,
+        prepared: Option<ValidatedFullReceive>,
+    ) -> io::Result<Response> {
         // Native receive-pack returns exactly an empty successful result for
         // this complete no-command probe under the fixed policy. Authority was
         // checked by dispatch; validate ALL metadata, but consume no payload.
@@ -997,6 +1091,15 @@ impl NativeHost {
                 });
             }
         }
+        if let Some(prepared) = &prepared
+            && self
+                .gateway_plan(request)?
+                .is_none_or(|(plan, projection)| {
+                    projection.is_some() || plan.selection != prepared.selection
+                })
+        {
+            return Err(io::Error::other("prepared receive selection changed"));
+        }
         let lineage = self.lineage.take().filter(|proof| {
             advertisement::eligible_receive(request)
                 && proof.matches(&self.manifest, advertisement::identity(&self.view))
@@ -1004,7 +1107,7 @@ impl NativeHost {
         self.pending_lineage_bytes = lineage.as_ref().map_or(0, |proof| proof.weight());
         self.trim_cache(0);
         self.publication_active = true;
-        let result = self.receive_transaction(request, lineage);
+        let result = self.receive_transaction(request, lineage, prepared);
         self.publication_active = false;
         self.pending_lineage_bytes = 0;
         self.pending_advertisement_bytes = 0;
@@ -1015,6 +1118,7 @@ impl NativeHost {
         &mut self,
         request: &Request,
         lineage: Option<history::Certificate>,
+        prepared: Option<ValidatedFullReceive>,
     ) -> io::Result<Response> {
         // Take the certificate out while publication can fail. Only a strict,
         // confirmed native transaction restores/advances it at the end.
@@ -1023,8 +1127,30 @@ impl NativeHost {
                 && certificate.matches(&self.manifest, advertisement::identity(&self.view))
         });
         self.pending_advertisement_bytes = certificate.as_ref().map_or(0, |proof| proof.weight());
-        let prepare_start = Instant::now();
-        self.cloud_read_view()?;
+        let prepare_start = if let Some(prepared) = prepared {
+            if self.view_dirty
+                || !matches!(self.scope, ViewScope::Full { generation } if generation == self.manifest.generation)
+                || self.authority_fingerprint != Some(prepared.authority)
+                || prepared.authority.local != crate::first_read::manifest_digest(&self.manifest)
+                || prepared.request_hash != crate::first_read::request_hash(request)
+                || prepared.nonce.len() != 32
+                || self
+                    .cloudflare
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("missing prepared provider"))?
+                    .first_read_key()?
+                    != Some(prepared.key)
+            {
+                return Err(io::Error::other(
+                    "prepared receive no longer matches Full view",
+                ));
+            }
+            prepared.prepare_start
+        } else {
+            let start = Instant::now();
+            self.cloud_read_view()?;
+            start
+        };
         self.lineage = None;
         // Scalar cleanup can change provider debt before returning an error.
         // Preserve recovery even though publication has not started yet.
@@ -1561,7 +1687,7 @@ impl NativeHost {
             + self.cloudflare.as_ref().map_or(0, |_| {
                 HttpServices::retirement_proof_storage_bytes()
                     + size_of::<std::sync::Mutex<Option<crate::first_read::Key>>>()
-                    + size_of::<std::sync::atomic::AtomicBool>()
+                    + 2 * size_of::<std::sync::atomic::AtomicBool>()
             })
     }
 
@@ -1607,15 +1733,22 @@ impl NativeHost {
         }) else {
             return Ok(None);
         };
-        let identity = advertisement::identity(&self.view);
-        let Some(selection) = self
-            .lineage
-            .as_ref()
-            .and_then(|proof| proof.selection(request, &self.manifest, identity))
-        else {
-            return Ok(None);
+        let projection = if request.target == "/repo.git/git-receive-pack" {
+            if !eligible_small_receive(request) {
+                return Ok(None);
+            }
+            None
+        } else {
+            let identity = advertisement::identity(&self.view);
+            let Some(selection) = self
+                .lineage
+                .as_ref()
+                .and_then(|proof| proof.selection(request, &self.manifest, identity))
+            else {
+                return Ok(None);
+            };
+            (selection.packs.len() < self.manifest.packs.len()).then_some(selection)
         };
-        let projection = (selection.packs.len() < self.manifest.packs.len()).then_some(selection);
         let selected = projection
             .as_ref()
             .map(|p| p.packs.clone())
@@ -1675,6 +1808,10 @@ impl NativeHost {
                 return Err(io::Error::other("unexpected plan payload"));
             }
             let mut logical = meta.request.request(body)?;
+            let receive = logical.target == "/repo.git/git-receive-pack";
+            if receive && !key.receive {
+                return Err(io::Error::other("receive preparation not negotiated"));
+            }
             let request_hash = fr::request_hash(&logical);
             let witness = services
                 .witness_for(&logical, self.manifest.generation)?
@@ -1682,17 +1819,23 @@ impl NativeHost {
             logical
                 .headers
                 .insert("x-git-zero-internal-generation-witness".into(), witness);
-            let hit = self
-                .cache
-                .iter()
-                .any(|(k, _)| k == &self.cache_key(&logical));
+            let hit = !receive
+                && self
+                    .cache
+                    .iter()
+                    .any(|(k, _)| k == &self.cache_key(&logical));
             let plan = if hit {
                 None
             } else {
                 self.gateway_plan(&logical)?.map(|(p, _)| p)
             };
-            self.metrics.gateway_read_plans += 1;
-            self.metrics.gateway_read_unsupported += u64::from(plan.is_none());
+            if receive {
+                self.metrics.gateway_receive_plans += 1;
+                self.metrics.gateway_receive_unsupported += u64::from(plan.is_none());
+            } else {
+                self.metrics.gateway_read_plans += 1;
+                self.metrics.gateway_read_unsupported += u64::from(plan.is_none());
+            }
             let result = fr::Planned {
                 version: 1,
                 session: meta.session,
@@ -1721,6 +1864,10 @@ impl NativeHost {
                 services.repo(),
             )?;
             let mut logical = meta.request.request(body)?;
+            let receive = logical.target == "/repo.git/git-receive-pack";
+            if receive && !key.receive {
+                return Err(io::Error::other("receive preparation not negotiated"));
+            }
             if fr::request_hash(&logical) != meta.request_hash
                 || meta.generation > 9_007_199_254_740_991
             {
@@ -1745,13 +1892,15 @@ impl NativeHost {
             }
             // Authenticate the entire frame first; then prove every real byte
             // against exact signed chunk keys before any fallback or files.
+            let prepare_start = Instant::now();
             let verified = crate::cloudflare::decode_bulk_response(&meta.plan.first, &bulk)?;
             drop(bulk);
             let current = self.gateway_plan(&logical)?;
-            let cache_hit = self
-                .cache
-                .iter()
-                .any(|(k, _)| k == &self.cache_key(&logical));
+            let cache_hit = !receive
+                && self
+                    .cache
+                    .iter()
+                    .any(|(k, _)| k == &self.cache_key(&logical));
             let Some((plan, projection)) = current.filter(|(p, _)| *p == meta.plan && !cache_hit)
             else {
                 drop(verified);
@@ -1764,6 +1913,31 @@ impl NativeHost {
             self.metrics.requests += 1;
             self.metrics.input_bytes += logical.body.len() as u64;
             self.metrics.generation_witness_hits += 1;
+            if receive {
+                services.set_phase("push")?;
+                let was_projection = matches!(self.scope, ViewScope::Projection { .. });
+                self.materialize_view_prefetched(
+                    &self.manifest.clone(),
+                    None,
+                    Some((plan.first.len(), verified)),
+                )?;
+                self.metrics.cloud_view_rehydrates += 1;
+                self.metrics.history_full_restores += u64::from(was_projection);
+                let prepared = ValidatedFullReceive {
+                    authority: self
+                        .authority_fingerprint
+                        .ok_or_else(|| io::Error::other("missing prepared authority"))?,
+                    request_hash: fr::request_hash(&logical),
+                    selection: plan.selection,
+                    key,
+                    nonce: meta.nonce,
+                    prepare_start,
+                };
+                self.metrics.gateway_receive_consumed += 1;
+                let response = self.receive_prepared(&logical, Some(prepared))?;
+                self.metrics.output_bytes += response.body.len() as u64;
+                return Ok(response);
+            }
             self.metrics.cache_misses += 1;
             services.set_phase("fetch")?;
             let key = self.cache_key(&logical);
@@ -1786,15 +1960,32 @@ impl NativeHost {
         }
     }
 
+    fn request_error_cleanup(&mut self) {
+        self.advertisement = None;
+        self.lineage = None;
+        if self.view_dirty || !matches!(self.scope, ViewScope::Full { .. }) {
+            self.view_dirty = true;
+            self.scope = ViewScope::Invalid;
+        }
+    }
+
     pub fn handle(&mut self, request: Request) -> Response {
         if matches!(
             request.target.as_str(),
             crate::first_read::PLAN_PATH | crate::first_read::CONTINUE_PATH
         ) {
+            let requests_before = self.metrics.requests;
             return self.gateway_private(request).unwrap_or_else(|error| {
                 self.metrics.gateway_read_errors += 1;
-                eprintln!("private fetch failed: {error}");
-                Response::error(503, "private fetch failed")
+                eprintln!("private request failed: {error}");
+                let response = Response::error(503, "private request failed");
+                // Planning/auth calls are private overhead. Once a continuation
+                // begins its logical request, errors count output like dispatch.
+                if self.metrics.requests != requests_before {
+                    self.request_error_cleanup();
+                    self.metrics.output_bytes += response.body.len() as u64;
+                }
+                response
             });
         }
         if request.method == "GET"
@@ -1876,12 +2067,7 @@ impl NativeHost {
         self.metrics.requests += 1;
         self.metrics.input_bytes += request.body.len() as u64;
         let response = self.dispatch(&request).unwrap_or_else(|error| {
-            self.advertisement = None;
-            self.lineage = None;
-            if self.view_dirty || !matches!(self.scope, ViewScope::Full { .. }) {
-                self.view_dirty = true;
-                self.scope = ViewScope::Invalid;
-            }
+            self.request_error_cleanup();
             eprintln!("hosting request failed: {error}");
             Response::error(503, "repository operation failed")
         });
@@ -1893,6 +2079,67 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_receive_classifier_only_prepares_supported_nonempty_command_pack_requests() {
+        fn request(command: &[u8], tail: &[u8]) -> Request {
+            let mut body = format!("{:04x}", command.len() + 4).into_bytes();
+            body.extend(command);
+            body.extend(b"0000");
+            body.extend(tail);
+            Request {
+                method: "POST".into(),
+                target: "/repo.git/git-receive-pack".into(),
+                headers: BTreeMap::from([(
+                    "content-type".into(),
+                    "application/x-git-receive-pack-request".into(),
+                )]),
+                body,
+            }
+        }
+        let command = format!(
+            "{} {} refs/heads/main\0 report-status-v2 side-band-64k quiet object-format=sha1 agent=git/2.53.0",
+            "0".repeat(40),
+            "1".repeat(40)
+        );
+        let mut pack = b"PACK".to_vec();
+        pack.extend(2u32.to_be_bytes());
+        pack.extend(1u32.to_be_bytes());
+        pack.extend([0; 20]);
+        let mut good = request(command.as_bytes(), &pack);
+        assert!(eligible_small_receive(&good));
+        assert!(!eligible_small_receive(&request(command.as_bytes(), b"")));
+        assert!(!eligible_small_receive(&request(b"invalid", &pack)));
+        assert!(!eligible_small_receive(&request(
+            command.replace("quiet", "push-options").as_bytes(),
+            &pack
+        )));
+        assert!(!eligible_small_receive(&request(
+            command
+                .replace("refs/heads/main", "refs/heads/a..b")
+                .as_bytes(),
+            &pack
+        )));
+        let mut bad = pack.clone();
+        bad[7] = 4;
+        assert!(!eligible_small_receive(&request(command.as_bytes(), &bad)));
+        bad = pack.clone();
+        bad[11] = 0;
+        assert!(!eligible_small_receive(&request(command.as_bytes(), &bad)));
+        assert!(!eligible_small_receive(&request(
+            command.as_bytes(),
+            &pack[..31]
+        )));
+        good.body = b"0000".to_vec();
+        assert!(!eligible_small_receive(&good));
+        good = request(command.as_bytes(), &pack);
+        good.headers
+            .insert("git-protocol".into(), "version=2".into());
+        assert!(!eligible_small_receive(&good));
+        good.headers.remove("git-protocol");
+        good.body.resize(crate::first_read::MAX_ORIGINAL + 1, 0);
+        assert!(!eligible_small_receive(&good));
+    }
 
     #[test]
     fn gateway_cache_normalization_preserves_semantics_and_ignores_only_named_transport_fields() {
@@ -1976,7 +2223,7 @@ mod tests {
             host.metadata_bytes() - metadata,
             HttpServices::retirement_proof_storage_bytes()
                 + size_of::<std::sync::Mutex<Option<crate::first_read::Key>>>()
-                + size_of::<std::sync::atomic::AtomicBool>()
+                + 2 * size_of::<std::sync::atomic::AtomicBool>()
         );
         host.trim_cache(0);
         assert_eq!(host.metrics.cache_evictions, 1);
@@ -2039,7 +2286,7 @@ mod tests {
             body: vec![],
         };
         assert!(!host.view_dirty);
-        assert!(host.receive_transaction(&request, None).is_err());
+        assert!(host.receive_transaction(&request, None, None).is_err());
         assert!(host.view_dirty);
         server.join().unwrap();
         fs::remove_dir_all(root).unwrap();
