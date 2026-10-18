@@ -233,11 +233,31 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
     /// Chunk payloads and reconstructed file payloads each total at most
     /// 128 MiB and remain transient; no blob cache survives this call.
     pub fn read_snapshot_files(&self, manifest: &Manifest) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        let chunks = snapshot_chunks(manifest)?;
+        self.read_snapshot_selection(manifest, &(0..manifest.packs.len()).collect::<Vec<_>>())
+    }
+
+    /// Private selection boundary: validate the entire descriptor graph before
+    /// reading even one selected chunk. The native host supplies ordered pack
+    /// positions from its private provenance proof, never client metadata.
+    pub(crate) fn read_snapshot_selection(
+        &self,
+        manifest: &Manifest,
+        selected: &[usize],
+    ) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        snapshot_chunks(manifest)?;
+        if selected.iter().any(|i| *i >= manifest.packs.len())
+            || selected.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(io::Error::other("invalid ordered pack selection"));
+        }
+        let chunks: Vec<_> = selected
+            .iter()
+            .flat_map(|i| manifest.packs[*i].chunks().cloned())
+            .collect();
         let data = self.blobs.get_many_verified(&chunks)?.into_data(&chunks)?;
         let mut data = data.into_iter();
-        let mut files = Vec::with_capacity(manifest.packs.len());
-        for pack in &manifest.packs {
+        let mut files = Vec::with_capacity(selected.len());
+        for pack in selected.iter().map(|i| &manifest.packs[*i]) {
             let mut read = |count: usize, size: u64| {
                 if count == 0 {
                     return Vec::new();
@@ -335,7 +355,11 @@ pub(crate) fn snapshot_chunks(manifest: &Manifest) -> io::Result<Vec<Chunk>> {
     let mut chunks = Vec::new();
     let mut lengths = std::collections::BTreeMap::new();
     let mut snapshot_bytes = 0u64;
+    let mut ids = std::collections::BTreeSet::new();
     for pack in &manifest.packs {
+        if !ids.insert(&pack.id) {
+            return Err(io::Error::other("duplicate snapshot pack ID"));
+        }
         let total = pack_total(pack.pack_bytes, pack.index_bytes)?;
         snapshot_bytes = snapshot_bytes
             .checked_add(total)
@@ -982,8 +1006,10 @@ mod tests {
         let bundled = repository
             .store_bundled_pack("bundle".into(), b"other", b"index", 0)
             .unwrap();
+        let mut repeated = legacy.clone();
+        repeated.id = "repeated-legacy".into();
         let manifest = Manifest {
-            packs: vec![legacy.clone(), bundled.clone(), legacy.clone()],
+            packs: vec![legacy.clone(), bundled.clone(), repeated],
             ..Manifest::default()
         };
         assert_eq!(

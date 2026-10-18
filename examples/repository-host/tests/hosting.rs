@@ -512,7 +512,7 @@ fn recovery_rejects_corrupted_authoritative_chunks() {
     };
     assert!(error.to_string().contains("corrupt chunk"), "{error}");
     assert_eq!(manifest(&root), published);
-    assert!(refs(&root.join("view/repo.git")).unwrap().is_empty());
+    assert!(!root.join("view/repo.git").exists());
 }
 
 #[test]

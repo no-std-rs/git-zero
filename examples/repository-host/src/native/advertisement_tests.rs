@@ -1,15 +1,15 @@
 use super::*;
 use git_zero_core::pktline::{self, Packet};
 
-struct Fixture {
-    root: PathBuf,
-    source: PathBuf,
-    tip: String,
-    blob: String,
+pub(super) struct Fixture {
+    pub(super) root: PathBuf,
+    pub(super) source: PathBuf,
+    pub(super) tip: String,
+    pub(super) blob: String,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
             "git-zero-advertisement-{}-{}",
             std::process::id(),
@@ -50,7 +50,7 @@ impl Fixture {
         }
     }
 
-    fn manifest(&self) -> Manifest {
+    pub(super) fn manifest(&self) -> Manifest {
         Manifest {
             generation: 1,
             // main is deliberately neither first nor last; aliases share OIDs.
@@ -62,12 +62,12 @@ impl Fixture {
         }
     }
 
-    fn native(&self, manifest: &Manifest) -> Response {
+    pub(super) fn native(&self, manifest: &Manifest) -> Response {
         write_refs(&self.source, &manifest.refs).unwrap();
         git_rpc(&self.source, &discovery()).unwrap()
     }
 
-    fn push(&self, old: &str, new: &str, name: &str) -> Request {
+    pub(super) fn push(&self, old: &str, new: &str, name: &str) -> Request {
         let mut body =
             packet(format!("{old} {new} {name}\0report-status atomic ofs-delta\n").as_bytes());
         body.extend_from_slice(b"0000");
@@ -99,7 +99,7 @@ impl Fixture {
         }
     }
 
-    fn host(&self) -> NativeHost {
+    pub(super) fn host(&self) -> NativeHost {
         let mut host = NativeHost::open(self.root.join("host")).unwrap();
         assert_eq!(
             host.handle(self.push(&"0".repeat(40), &self.tip, "refs/heads/main"))
@@ -122,20 +122,20 @@ impl Drop for Fixture {
     }
 }
 
-fn git(source: &Path, args: &[&str], input: &[u8]) -> Vec<u8> {
+pub(super) fn git(source: &Path, args: &[&str], input: &[u8]) -> Vec<u8> {
     let mut process = Command::new("git");
     process.arg("-C").arg(source).args(args);
     command(process, input).unwrap().stdout
 }
 
-fn text(source: &Path, args: &[&str], input: &[u8]) -> String {
+pub(super) fn text(source: &Path, args: &[&str], input: &[u8]) -> String {
     String::from_utf8(git(source, args, input))
         .unwrap()
         .trim()
         .into()
 }
 
-fn discovery() -> Request {
+pub(super) fn discovery() -> Request {
     Request {
         method: "GET".into(),
         target: "/repo.git/info/refs?service=git-upload-pack".into(),
@@ -144,7 +144,7 @@ fn discovery() -> Request {
     }
 }
 
-fn packet(bytes: &[u8]) -> Vec<u8> {
+pub(super) fn packet(bytes: &[u8]) -> Vec<u8> {
     let mut body = format!("{:04x}", bytes.len() + 4).into_bytes();
     body.extend_from_slice(bytes);
     body

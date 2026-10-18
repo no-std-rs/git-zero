@@ -30,6 +30,9 @@ const NATIVE_CONFIG: &[u8] = b"[core]\nrepositoryformatversion = 0\nbare = true\
 mod advertisement;
 #[cfg(test)]
 mod advertisement_tests;
+mod history;
+#[cfg(test)]
+mod history_tests;
 
 pub fn command(mut command: Command, input: &[u8]) -> io::Result<Output> {
     command
@@ -160,6 +163,25 @@ fn validate_snapshot_refs(refs: &BTreeMap<String, String>) -> io::Result<()> {
     for (name, id) in refs {
         validate_ref(name, id)?;
     }
+    Ok(())
+}
+
+/// Validate ALL metadata before either a full or selective object read.
+fn validate_snapshot(manifest: &Manifest) -> io::Result<()> {
+    validate_snapshot_refs(&manifest.refs)?;
+    validate_snapshot_bytes(manifest.packs.iter().map(|p| (p.pack_bytes, p.index_bytes)))?;
+    // Native filenames must never escape the disposable pack directory.
+    for pack in &manifest.packs {
+        if pack.id.is_empty()
+            || !pack
+                .id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(io::Error::other("invalid native pack identity"));
+        }
+    }
+    crate::snapshot_chunks(manifest)?;
     Ok(())
 }
 
@@ -433,6 +455,12 @@ pub struct Metrics {
     pub upload_advertisement_certification_seconds: f64,
     pub upload_advertisement_template_bytes: u64,
     pub cache_retained_bytes: u64,
+    pub history_lineage_bytes: u64,
+    pub history_pending_lineage_bytes: u64,
+    pub history_projections: u64,
+    pub history_full_restores: u64,
+    pub cache_evictions: u64,
+    pub receive_noop_shortcuts: u64,
 }
 
 struct CandidatePack {
@@ -442,6 +470,22 @@ struct CandidatePack {
     pack: PathBuf,
     index: PathBuf,
     bytes: u64,
+    floor: u64,
+}
+
+#[derive(Clone, Copy)]
+enum ViewScope {
+    Invalid,
+    Full {
+        generation: u64,
+    },
+    Projection {
+        generation: u64,
+        cutoff: u64,
+        binding: [u8; 32],
+        packs: usize,
+        bytes: u64,
+    },
 }
 
 fn compaction_selection(packs: &[CandidatePack], level: u32) -> Vec<usize> {
@@ -479,6 +523,11 @@ pub struct NativeHost {
     cache_bytes: usize,
     advertisement: Option<advertisement::Certificate>,
     view_dirty: bool,
+    scope: ViewScope,
+    lineage: Option<history::Certificate>,
+    pending_lineage_bytes: usize,
+    pending_advertisement_bytes: usize,
+    publication_active: bool,
     manifest: Manifest,
     pub metrics: Metrics,
 }
@@ -543,6 +592,11 @@ impl NativeHost {
             cache_bytes: 0,
             advertisement: None,
             view_dirty: false,
+            scope: ViewScope::Invalid,
+            lineage: None,
+            pending_lineage_bytes: 0,
+            pending_advertisement_bytes: 0,
+            publication_active: false,
             manifest: Manifest::default(),
             metrics: Metrics::default(),
         };
@@ -554,6 +608,9 @@ impl NativeHost {
         // Recovery includes ambiguous publications and external generations.
         // A later full native advertisement must certify this state afresh.
         self.advertisement = None;
+        self.lineage = None;
+        self.scope = ViewScope::Invalid;
+        self.view_dirty = true;
         self.repository.state.stabilize()?;
         let manifest = self.repository.state.load()?;
         validate_snapshot_refs(&manifest.refs)?;
@@ -562,27 +619,70 @@ impl NativeHost {
         self.metrics.retired_chunk_deletes +=
             self.repository.blobs.reclaim_unreferenced(&manifest)? as u64;
         self.manifest = manifest;
-        self.cache.clear();
+        self.cache = VecDeque::new();
         self.cache_bytes = 0;
         self.view_dirty = false;
         Ok(())
     }
 
     fn rebuild_view(&mut self, manifest: &Manifest) -> io::Result<()> {
+        self.materialize_view(manifest, None)?;
+        if self.cloudflare.is_some() && self.cold_view {
+            let identity = advertisement::identity(&self.view);
+            if self
+                .lineage
+                .as_ref()
+                .is_some_and(|proof| !proof.matches(manifest, identity))
+            {
+                self.lineage = None;
+            }
+            if self.lineage.is_none()
+                && !self.publication_active
+                && let Some(identity) = identity
+                && let Some(bound) = history::Certificate::allocation_bound(
+                    manifest.packs.len(),
+                    manifest.refs.len(),
+                )
+                && manifest
+                    .refs
+                    .keys()
+                    .all(|name| name.starts_with("refs/heads/"))
+                && advertisement::branch_commits(&self.view, manifest)
+            {
+                self.reserve_metadata(bound);
+                self.lineage = history::Certificate::bootstrap(manifest, identity);
+                self.trim_cache(0);
+            }
+        }
+        Ok(())
+    }
+
+    fn materialize_view(
+        &mut self,
+        manifest: &Manifest,
+        projection: Option<&history::Projection>,
+    ) -> io::Result<()> {
         self.view_dirty = true;
-        validate_snapshot_refs(&manifest.refs)?;
-        validate_snapshot_bytes(manifest.packs.iter().map(|p| (p.pack_bytes, p.index_bytes)))?;
-        // The alternate object DB must contain only published data. In
-        // particular, a pre-CAS crash can leave native pack links that are not
-        // in the authoritative manifest. Never let a later push depend on them.
+        self.scope = ViewScope::Invalid;
+        validate_snapshot(manifest)?;
+        let all;
+        let selected = if let Some(projection) = projection {
+            &projection.packs
+        } else {
+            all = (0..manifest.packs.len()).collect::<Vec<_>>();
+            &all
+        };
+        // Remove the old disposable view, then verify every selected byte
+        // against exact ordered descriptors BEFORE writing any native file.
         if self.view.exists() {
             fs::remove_dir_all(&self.view)?;
         }
+        let files = self
+            .repository
+            .read_snapshot_selection(manifest, selected)?;
         init(&self.view)?;
-        let files = self.repository.read_snapshot_files(manifest)?;
-        for (pack, (data, index)) in manifest.packs.iter().zip(files) {
+        for (pack, (data, index)) in selected.iter().map(|i| &manifest.packs[*i]).zip(files) {
             let directory = self.view.join("objects/pack");
-            fs::create_dir_all(&directory)?;
             for (extension, chunks, bytes) in
                 [("pack", &pack.pack, &data), ("idx", &pack.index, &index)]
             {
@@ -596,17 +696,84 @@ impl NativeHost {
                 }
             }
         }
-        write_refs(&self.view, &manifest.refs)?;
+        if let Some(projection) = projection {
+            let refs = self
+                .lineage
+                .as_ref()
+                .ok_or_else(|| io::Error::other("missing lineage proof"))?
+                .projected_refs(manifest, projection.cutoff);
+            write_refs(&self.view, &refs)?;
+            self.scope = ViewScope::Projection {
+                generation: manifest.generation,
+                cutoff: projection.cutoff,
+                binding: projection.binding,
+                packs: selected.len(),
+                bytes: selected
+                    .iter()
+                    .map(|i| manifest.packs[*i].pack_bytes + manifest.packs[*i].index_bytes)
+                    .sum(),
+            };
+        } else {
+            write_refs(&self.view, &manifest.refs)?;
+            self.scope = ViewScope::Full {
+                generation: manifest.generation,
+            };
+        }
         self.view_dirty = false;
         Ok(())
     }
 
     fn cloud_read_view(&mut self) -> io::Result<()> {
         if self.cloudflare.is_some() && self.cold_view {
+            let was_projection = matches!(self.scope, ViewScope::Projection { .. });
             self.rebuild_view(&self.manifest.clone())?;
             self.metrics.cloud_view_rehydrates += 1;
+            self.metrics.history_full_restores += u64::from(was_projection);
         }
         Ok(())
+    }
+
+    fn require_full_view(&mut self) -> io::Result<()> {
+        if !matches!(self.scope, ViewScope::Full { generation } if generation == self.manifest.generation)
+        {
+            self.cloud_read_view()?;
+        }
+        Ok(())
+    }
+
+    fn fetch_read_view(&mut self, request: &Request) -> io::Result<()> {
+        if self.cloudflare.is_none() || !self.cold_view {
+            return self.require_full_view();
+        }
+        validate_snapshot(&self.manifest)?;
+        let identity = advertisement::identity(&self.view);
+        if self
+            .lineage
+            .as_ref()
+            .is_some_and(|proof| !proof.matches(&self.manifest, identity))
+        {
+            self.lineage = None;
+        }
+        let plan = self
+            .lineage
+            .as_ref()
+            .and_then(|proof| proof.plan(request, &self.manifest, identity));
+        if let Some(plan) = plan {
+            // Even the identical existing projection is read from R2 anew on
+            // every cold miss. This is selection, never an object byte cache.
+            self.materialize_view(&self.manifest.clone(), Some(&plan))?;
+            self.metrics.cloud_view_rehydrates += 1;
+            self.metrics.history_projections += 1;
+            return Ok(());
+        }
+        self.cloud_read_view()
+    }
+
+    fn native_read(&mut self, request: &Request) -> io::Result<Response> {
+        git_rpc(&self.view, request).inspect_err(|_| {
+            self.view_dirty = true;
+            self.scope = ViewScope::Invalid;
+        })
     }
 
     fn import_pack(
@@ -701,6 +868,7 @@ impl NativeHost {
                 .view
                 .join(format!("objects/pack/pack-{}.idx", stored.id)),
             bytes: stored.pack_bytes,
+            floor: 0,
         }
     }
 
@@ -731,6 +899,11 @@ impl NativeHost {
             fs::write(&path, &data)?;
             fs::write(&index, index_data)?;
             let result_bytes = data.len() as u64;
+            let floor = selected
+                .iter()
+                .map(|i| packs[*i].floor)
+                .min()
+                .expect("nonempty compaction");
             for i in selected.into_iter().rev() {
                 packs.remove(i);
             }
@@ -741,6 +914,7 @@ impl NativeHost {
                 pack: path,
                 index,
                 bytes: result_bytes,
+                floor,
             });
             self.metrics.compactions += 1;
             self.metrics.compaction_input_bytes += bytes;
@@ -753,14 +927,63 @@ impl NativeHost {
     }
 
     fn receive(&mut self, request: &Request) -> io::Result<Response> {
+        // Native receive-pack returns exactly an empty successful result for
+        // this complete no-command probe under the fixed policy. Authority was
+        // checked by dispatch; validate ALL metadata, but consume no payload.
+        // In particular, a partial view stays honestly partial until the real
+        // nonempty push performs its ordinary single cold full reconstruction.
+        if self.cloudflare.is_some()
+            && self.cold_view
+            && advertisement::eligible_receive(request)
+            && request.body == b"0000"
+            && !request.headers.contains_key("transfer-encoding")
+            && request
+                .headers
+                .get("content-length")
+                .is_none_or(|length| length == "4")
+        {
+            validate_snapshot(&self.manifest)?;
+            if advertisement::identity(&self.view).is_some() {
+                self.metrics.receive_noop_shortcuts += 1;
+                return Ok(Response {
+                    status: 200,
+                    headers: BTreeMap::from([(
+                        "Content-Type".into(),
+                        "application/x-git-receive-pack-result".into(),
+                    )]),
+                    body: Arc::from([]),
+                });
+            }
+        }
+        let lineage = self.lineage.take().filter(|proof| {
+            advertisement::eligible_receive(request)
+                && proof.matches(&self.manifest, advertisement::identity(&self.view))
+        });
+        self.pending_lineage_bytes = lineage.as_ref().map_or(0, |proof| proof.weight());
+        self.trim_cache(0);
+        self.publication_active = true;
+        let result = self.receive_transaction(request, lineage);
+        self.publication_active = false;
+        self.pending_lineage_bytes = 0;
+        self.pending_advertisement_bytes = 0;
+        result
+    }
+
+    fn receive_transaction(
+        &mut self,
+        request: &Request,
+        lineage: Option<history::Certificate>,
+    ) -> io::Result<Response> {
         // Take the certificate out while publication can fail. Only a strict,
         // confirmed native transaction restores/advances it at the end.
         let mut certificate = self.advertisement.take().filter(|certificate| {
             advertisement::eligible_receive(request)
                 && certificate.matches(&self.manifest, advertisement::identity(&self.view))
         });
+        self.pending_advertisement_bytes = certificate.as_ref().map_or(0, |proof| proof.weight());
         let prepare_start = Instant::now();
         self.cloud_read_view()?;
+        self.lineage = None;
         if !self
             .manifest
             .collect_garbage(&self.repository.blobs)
@@ -813,14 +1036,36 @@ impl NativeHost {
         let next_refs = refs(&stage)?;
         self.metrics.receive_codec_seconds += codec_start.elapsed().as_secs_f64();
         if response.status != 200 || next_refs == previous.refs {
+            // Git's HTTP transport sends a successful empty receive probe
+            // before streaming a large push. No authoritative transaction or
+            // storage write occurred: preserve only the exact unchanged proof.
+            if response.status == 200 && next_refs == previous.refs {
+                self.lineage = lineage
+                    .filter(|proof| proof.matches(&previous, advertisement::identity(&self.view)));
+            }
             self.advertisement = certificate;
             return Ok(response);
         }
         validate_snapshot_refs(&next_refs)?;
         self.view_dirty = true;
-        let mut packs: Vec<_> = previous.packs.iter().map(|p| self.native_pack(p)).collect();
-        for entry in fs::read_dir(stage.join("objects/pack"))? {
-            let path = entry?.path();
+        let generation = previous
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("generation overflow"))?;
+        let incoming_paths = fs::read_dir(stage.join("objects/pack"))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<io::Result<Vec<_>>>()?;
+        let plan_capacity = previous.packs.len() + incoming_paths.len();
+        let plan_floor_bytes = plan_capacity * size_of::<u64>();
+        self.pending_lineage_bytes += plan_floor_bytes;
+        self.trim_cache(0);
+        let mut packs = Vec::with_capacity(plan_capacity);
+        packs.extend(previous.packs.iter().enumerate().map(|(i, p)| {
+            let mut pack = self.native_pack(p);
+            pack.floor = lineage.as_ref().map_or(0, |proof| proof.floor(i));
+            pack
+        }));
+        for path in incoming_paths {
             if path.extension().and_then(|s| s.to_str()) != Some("pack") {
                 continue;
             }
@@ -838,6 +1083,7 @@ impl NativeHost {
                     index: path.with_extension("idx"),
                     bytes: path.metadata()?.len(),
                     pack: path,
+                    floor: generation,
                 });
             }
         }
@@ -854,13 +1100,24 @@ impl NativeHost {
         validate_snapshot_bytes(sizes.into_iter())?;
         let storage_start = Instant::now();
         let mut next = Manifest {
-            generation: previous.generation + 1,
+            generation,
             refs: next_refs,
             packs: Vec::new(),
             garbage: Vec::new(),
         };
+        let lineage_bound = lineage
+            .as_ref()
+            .and_then(|_| history::Certificate::allocation_bound(packs.len(), next.refs.len()));
+        if let Some(bound) = lineage_bound {
+            self.pending_lineage_bytes += bound;
+            self.trim_cache(0);
+        }
+        let mut floors = lineage_bound.map(|_| Vec::with_capacity(packs.len()));
         let mut pending = None;
         for pack in packs {
+            if let Some(floors) = &mut floors {
+                floors.push(pack.floor);
+            }
             let stored = if let Some(stored) = pack.stored.clone() {
                 stored
             } else {
@@ -896,9 +1153,20 @@ impl NativeHost {
             };
             next.packs.push(stored);
         }
+        self.pending_lineage_bytes -= plan_floor_bytes;
         self.metrics.receive_storage_seconds += storage_start.elapsed().as_secs_f64();
         let publication_start = Instant::now();
         next.retire_replaced(&previous);
+        let candidate = lineage.as_ref().zip(floors).and_then(|(proof, floors)| {
+            proof.advance(
+                &previous,
+                &next,
+                advertisement::identity(&self.view),
+                floors,
+            )
+        });
+        drop(lineage);
+        self.pending_lineage_bytes = candidate.as_ref().map_or(0, |proof| proof.weight());
         // A manifest write can become visible before an I/O error is reported.
         // Recover from authoritative state before serving any later request.
         self.view_dirty = true;
@@ -934,8 +1202,13 @@ impl NativeHost {
             .collect();
         self.metrics.receive_publication_seconds += publication_start.elapsed().as_secs_f64();
         self.view_dirty = false;
-        self.cache.clear();
+        self.cache = VecDeque::new();
         self.cache_bytes = 0;
+        self.scope = ViewScope::Full {
+            generation: self.manifest.generation,
+        };
+        self.lineage = candidate;
+        self.pending_lineage_bytes = 0;
         self.advertisement = certificate.take().and_then(|mut certificate| {
             (certificate.matches(&previous, advertisement::identity(&self.view))
                 && certificate.advance(&previous, &self.manifest))
@@ -994,9 +1267,9 @@ impl NativeHost {
                 return Ok(response.clone());
             }
             self.metrics.cache_misses += 1;
-            self.cloud_read_view()?;
+            self.fetch_read_view(request)?;
             let codec_start = Instant::now();
-            let response = git_rpc(&self.view, request)?;
+            let response = self.native_read(request)?;
             self.metrics.upload_codec_seconds += codec_start.elapsed().as_secs_f64();
             self.cache_insert(key, &response);
             return Ok(response);
@@ -1030,7 +1303,8 @@ impl NativeHost {
             self.cache_insert(key, &response);
             return Ok(response);
         }
-        git_rpc(&self.view, request)
+        self.require_full_view()?;
+        self.native_read(request)
     }
 
     fn upload_advertisement(&mut self, request: &Request) -> io::Result<Response> {
@@ -1049,14 +1323,7 @@ impl NativeHost {
             }
             if let Some(certificate) = &self.advertisement {
                 // Discovery omits object bytes, never complete metadata checks.
-                validate_snapshot_refs(&self.manifest.refs)?;
-                validate_snapshot_bytes(
-                    self.manifest
-                        .packs
-                        .iter()
-                        .map(|p| (p.pack_bytes, p.index_bytes)),
-                )?;
-                crate::snapshot_chunks(&self.manifest)?;
+                validate_snapshot(&self.manifest)?;
                 if let Ok(response) = certificate.encode(&self.manifest) {
                     self.metrics.upload_advertisement_shortcuts += 1;
                     return Ok(response);
@@ -1078,11 +1345,12 @@ impl NativeHost {
             self.metrics.upload_advertisement_native_bootstraps += 1;
         }
         self.cloud_read_view()?;
-        let response = git_rpc(&self.view, request)?;
+        let response = self.native_read(request)?;
         if let Some(identity) = identity
             && eligible
             && Some(identity) == advertisement::identity(&self.view)
         {
+            self.reserve_metadata(advertisement::Certificate::allocation_bound());
             let certificate =
                 advertisement::Certificate::learn(&self.manifest, &response, identity);
             if certificate.is_some() {
@@ -1149,33 +1417,35 @@ impl NativeHost {
         for field in [
             request.method.as_bytes(),
             request.target.as_bytes(),
-            request
-                .headers
-                .get("git-protocol")
-                .map_or(b"".as_slice(), |value| value.as_bytes()),
-            request
-                .headers
-                .get("content-type")
-                .map_or(b"".as_slice(), |value| value.as_bytes()),
-            request
-                .headers
-                .get("content-encoding")
-                .map_or(b"".as_slice(), |value| value.as_bytes()),
             &request.body,
         ] {
             digest.update((field.len() as u64).to_le_bytes());
             digest.update(field);
         }
+        for (name, value) in &request.headers {
+            for field in [name.as_bytes(), value.as_bytes()] {
+                digest.update((field.len() as u64).to_le_bytes());
+                digest.update(field);
+            }
+        }
         format!("{:x}", digest.finalize())
     }
 
-    fn cache_weight(key: &str, response: &Response) -> usize {
-        key.len()
+    fn cache_weight(key_capacity: usize, response: &Response) -> usize {
+        key_capacity
             + response.body.len()
+            + 2 * size_of::<usize>()
             + response
                 .headers
                 .iter()
-                .map(|(name, value)| name.len() + value.len())
+                // A conservative owning-allocation bound for std's opaque
+                // BTree nodes: one maximum-size node per header entry.
+                .map(|(name, value)| {
+                    name.capacity()
+                        + value.capacity()
+                        + 12 * size_of::<(String, String)>()
+                        + 16 * size_of::<usize>()
+                })
                 .sum::<usize>()
             + 256
     }
@@ -1187,21 +1457,61 @@ impl NativeHost {
         {
             return;
         }
-        let weight = Self::cache_weight(&key, response);
-        if weight + self.advertisement_bytes() > CACHE_BYTES {
+        let upper_weight = Self::cache_weight(key.capacity(), response);
+        if upper_weight + self.metadata_bytes() > CACHE_BYTES {
             return;
+        }
+        // Reserve against original capacities before cloning; then charge the
+        // exact cloned allocations that eviction will later subtract.
+        self.trim_cache(upper_weight);
+        let retained = response.clone();
+        let weight = Self::cache_weight(key.capacity(), &retained);
+        // Charge both old and new rings across a possible growth allocation.
+        if self.cache.len() == self.cache.capacity() {
+            let ring_bound = (self.cache.capacity().max(4) * 2) * size_of::<(String, Response)>();
+            self.trim_cache(weight + ring_bound);
+            self.cache.reserve(1);
         }
         self.trim_cache(weight);
         self.cache_bytes += weight;
-        self.cache.push_back((key, response.clone()));
+        self.cache.push_back((key, retained));
+    }
+
+    fn lineage_bytes(&self) -> usize {
+        self.lineage.as_ref().map_or(0, |proof| proof.weight())
+    }
+
+    fn metadata_bytes(&self) -> usize {
+        self.advertisement_bytes()
+            + self.lineage_bytes()
+            + self.pending_lineage_bytes
+            + self.pending_advertisement_bytes
+            + self.cache.capacity() * size_of::<(String, Response)>()
+            + size_of::<VecDeque<(String, Response)>>()
+            + size_of::<ViewScope>()
+            + size_of::<Option<advertisement::Certificate>>()
+            + size_of::<Option<history::Certificate>>()
+            + 2 * size_of::<usize>()
+    }
+
+    fn reserve_metadata(&mut self, incoming: usize) {
+        while self.cache_bytes + self.metadata_bytes() + incoming > CACHE_BYTES {
+            if let Some((key, response)) = self.cache.pop_front() {
+                self.cache_bytes -= Self::cache_weight(key.capacity(), &response);
+                self.metrics.cache_evictions += 1;
+            } else {
+                break;
+            }
+        }
     }
 
     fn trim_cache(&mut self, incoming: usize) {
-        while self.cache_bytes + self.advertisement_bytes() + incoming > CACHE_BYTES
+        while self.cache_bytes + self.metadata_bytes() + incoming > CACHE_BYTES
             || (incoming != 0 && self.cache.len() >= CACHE_ENTRIES)
         {
             if let Some((old_key, old)) = self.cache.pop_front() {
-                self.cache_bytes -= Self::cache_weight(&old_key, &old);
+                self.cache_bytes -= Self::cache_weight(old_key.capacity(), &old);
+                self.metrics.cache_evictions += 1;
             } else {
                 break;
             }
@@ -1216,23 +1526,47 @@ impl NativeHost {
                 if let Some(services) = &self.cloudflare {
                     services.set_phase("stats")?;
                 }
-                if self.view_dirty {
-                    self.recover()?;
+                if request.target == "/_object-stats" {
+                    if self.view_dirty {
+                        self.recover()?;
+                    }
+                    self.require_full_view()?;
                 }
+                self.metrics.history_lineage_bytes = self.lineage_bytes() as u64;
+                self.metrics.history_pending_lineage_bytes = self.pending_lineage_bytes as u64;
                 self.metrics.upload_advertisement_template_bytes =
                     self.advertisement_bytes() as u64;
                 self.metrics.cache_bytes = self.cache_bytes as u64;
                 self.metrics.cache_retained_bytes =
-                    (self.cache_bytes + self.advertisement_bytes()) as u64;
+                    (self.cache_bytes + self.metadata_bytes()) as u64;
                 self.metrics.cache_budget_bytes = CACHE_BYTES as u64;
                 self.metrics.cache_entries = self.cache.len() as u64;
                 self.metrics.cache_entry_limit = CACHE_ENTRIES as u64;
                 let mut value = serde_json::to_value(&self.metrics)?;
                 value["native_view_policy"] = serde_json::json!(if self.cold_view {
-                    "full-rehydrate-on-codec-cache-miss"
+                    "strict-v0-lineage-selection-on-cold-cache-miss"
                 } else {
                     "persistent-native-view-up-to128MiB-packs-and-indexes"
                 });
+                let total_bytes: u64 = self.manifest.packs.iter().fold(0u64, |sum, p| {
+                    sum.saturating_add(p.pack_bytes)
+                        .saturating_add(p.index_bytes)
+                });
+                value["native_view"] = match self.scope {
+                    ViewScope::Invalid => serde_json::json!({"scope":"invalid"}),
+                    ViewScope::Full { generation } => {
+                        serde_json::json!({"scope":"full", "generation":generation, "selected_packs":self.manifest.packs.len(),"total_packs":self.manifest.packs.len(),"selected_bytes":total_bytes,"total_bytes":total_bytes})
+                    }
+                    ViewScope::Projection {
+                        generation,
+                        cutoff,
+                        binding,
+                        packs,
+                        bytes,
+                    } => {
+                        serde_json::json!({"scope":"projection", "generation":generation,"cutoff":cutoff,"selected_packs":packs,"total_packs":self.manifest.packs.len(),"selected_bytes":bytes,"total_bytes":total_bytes,"snapshot_binding":binding.iter().map(|byte| format!("{byte:02x}")).collect::<String>()})
+                    }
+                };
                 if request.target == "/_object-stats" {
                     value["manifest"] = serde_json::to_value(&self.manifest)?;
                     value["objects"] = crate::objects::inventory(&self.view, &self.manifest)?;
@@ -1265,6 +1599,11 @@ impl NativeHost {
         self.metrics.input_bytes += request.body.len() as u64;
         let response = self.dispatch(&request).unwrap_or_else(|error| {
             self.advertisement = None;
+            self.lineage = None;
+            if self.view_dirty || !matches!(self.scope, ViewScope::Full { .. }) {
+                self.view_dirty = true;
+                self.scope = ViewScope::Invalid;
+            }
             eprintln!("hosting request failed: {error}");
             Response::error(503, "repository operation failed")
         });
@@ -1371,6 +1710,11 @@ mod tests {
                 advertisement::identity(&host.view).unwrap(),
             );
             assert!(host.advertisement.is_some());
+            host.lineage = history::Certificate::bootstrap(
+                &host.manifest,
+                advertisement::identity(&host.view).unwrap(),
+            );
+            assert!(host.lineage.is_some());
             let local = LocalServices::new(root.join("services")).unwrap();
             let authoritative = local.state.clone();
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1473,6 +1817,9 @@ mod tests {
             assert_eq!(response.status, if lose_reply { 503 } else { 200 });
             assert_eq!(host.view_dirty, lose_reply);
             assert_eq!(host.advertisement.is_none(), lose_reply);
+            assert_eq!(host.lineage.is_none(), lose_reply);
+            assert_eq!(host.pending_lineage_bytes, 0);
+            assert_eq!(host.pending_advertisement_bytes, 0);
             assert_eq!(authoritative.load().unwrap().generation, 4);
             if !lose_reply {
                 assert_eq!(host.manifest.garbage.len(), 1);
@@ -1491,7 +1838,9 @@ mod tests {
             assert!(!host.view_dirty);
             if lose_reply {
                 assert!(host.advertisement.is_none());
+                assert!(host.lineage.is_none());
             }
+            assert!(matches!(host.scope, ViewScope::Full { generation: 4 }));
             assert_eq!(host.manifest.generation, 4);
             assert_eq!(refs(&host.view).unwrap()["refs/heads/main"], previous);
             let mut fsck = Command::new("git");
@@ -1673,13 +2022,7 @@ mod tests {
             io::ErrorKind::NotFound
         );
         assert!(host.view_dirty);
-        assert_eq!(
-            fs::read_dir(host.view.join("objects/pack"))
-                .unwrap()
-                .count(),
-            0
-        );
-        assert!(refs(&host.view).unwrap().is_empty());
+        assert!(!host.view.exists());
         // A same-length corrupt later pack also rejects the entire snapshot
         // before materializing the valid first pack or either index.
         host.repository
@@ -1693,13 +2036,7 @@ mod tests {
                 .contains("corrupt chunk")
         );
         assert!(host.view_dirty);
-        assert_eq!(
-            fs::read_dir(host.view.join("objects/pack"))
-                .unwrap()
-                .count(),
-            0
-        );
-        assert!(refs(&host.view).unwrap().is_empty());
+        assert!(!host.view.exists());
         host.rebuild_view(&Manifest::default()).unwrap();
         assert!(!host.view_dirty);
         fs::remove_dir_all(root).unwrap();
@@ -1769,6 +2106,7 @@ mod tests {
                 pack: root.join("must-not-read.pack"),
                 index: root.join("must-not-read.idx"),
                 bytes,
+                floor: 0,
             })
             .collect();
         host.compact(&root, &mut packs).unwrap();
@@ -1789,6 +2127,7 @@ mod tests {
                 pack: PathBuf::new(),
                 index: PathBuf::new(),
                 bytes,
+                floor: 0,
             })
             .collect();
         let selected = compaction_selection(&packs, 0);

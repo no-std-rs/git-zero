@@ -54,7 +54,7 @@ pub(super) fn eligible_receive(request: &Request) -> bool {
         && standard_encoding_and_protocol(request)
 }
 
-fn standard_encoding_and_protocol(request: &Request) -> bool {
+pub(super) fn standard_encoding_and_protocol(request: &Request) -> bool {
     request
         .headers
         .get("git-protocol")
@@ -239,6 +239,10 @@ impl Certificate {
         }
         self.generation = next.generation;
         true
+    }
+
+    pub(super) fn allocation_bound() -> usize {
+        MAX_CAPABILITIES + 256
     }
 
     pub(super) fn weight(&self) -> usize {

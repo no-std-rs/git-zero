@@ -432,7 +432,8 @@ to be commits. The learned native agent and capability template retain no refs
 or objects. Strict native branch publications can advance the certificate;
 recovery, external generations or changed codec/configuration invalidate it.
 Tags, unborn repositories, other protocols and unrecognized requests or policies
-keep the ordinary native path. Fetch POSTs still reconstruct the complete view.
+keep the ordinary native path. Fetch POSTs retain native Git negotiation and
+encoding; the bounded historical selection below can narrow their cold inputs.
 
 `/metrics` reports advertisement shortcuts, native bootstrap attempts and the
 one-time type-check count/time. `cache_bytes` and `cache_entries` describe the
@@ -440,3 +441,122 @@ existing response cache and clear after publication. The separate
 `upload_advertisement_template_bytes` and `cache_retained_bytes` include the
 bounded certificate in the same 32 MiB allocation budget. No certificate is
 persisted, and eligible discovery writes no authoritative state or blobs.
+
+### Ephemeral historical prefix views
+
+Cold Cloudflare fetches may reconstruct a conservative subset of current packs
+for a narrowly classified protocol-v0 upload POST. Warm views keep their existing
+full reconstruction behavior. This candidate changes no durable manifest field,
+SQLite schema/row, R2 object, physical chunk size, compaction budget, request/ref
+limit, or benchmark/scorer/pricing input. It retains no object payload cache,
+object map, old snapshot, duplicated ref names, or duplicated object IDs.
+
+A private process-local certificate binds the authoritative generation, exact
+ordered live pack descriptors (including representations, split lengths, levels,
+and ordered chunk keys/lengths), and exact sorted current ref name/value pairs.
+Retirement debt is deliberately excluded because deleting confirmed non-live
+debt cannot change the live object universe. Existing full snapshots bootstrap
+with floor zero for every pack and current-generation stamps for every ref;
+known-empty generation zero starts with empty arrays. Restart, dirty/ambiguous
+recovery, external generation, changed native policy/identity, and invalid binding
+lose selectivity. No pack name, position, size, timestamp, or inferred ancestry
+establishes provenance.
+
+Only this process's strict confirmed native publication advances the proof. An
+incoming self-contained pack gets the new generation as its floor. Compaction
+transfers the **minimum floor of every selected input**, including duplicate-only
+inputs and incoming packs, through the actual `CandidatePack` plan. An unchanged
+exact ref name/value keeps its stamp; adding, changing, deleting/re-adding an
+alias, or updating a ref without a new pack receives the new publication stamp.
+The candidate proof is installed only after validated staged-upload/CAS and
+retirement receipts, native ref replacement/pruning, and cache invalidation.
+Errors or ambiguous replies drop it. A successful no-change receive may preserve
+an exact unchanged proof without advancing it. Retirement and recovery always
+use the full authoritative manifest.
+
+The bounded classifier accepts only the exact upload POST path/MIME, identity
+encoding, v0, the fixed native configuration/environment, branch-only refs, and
+complete pkt-lines containing wants, a flush, ordinary haves, and terminal
+`done` or flush. It requires at least one want, at most 128 KiB and 2,048 OID
+commands, and an explicit ordinary capability allowlist. Every wanted and have
+OID must exactly decode to a **current** published ref value. The maximum witness
+across all commands and matching aliases selects every current pack whose floor
+is no greater than that witness, in original order. Unknown OIDs, unsupported
+capabilities/protocols/tags/shallow/filter/encoding/round state, or unsupported
+provenance select Full before object I/O. An all-pack selection also uses Full.
+This does not expose unadvertised OIDs or enable arbitrary-SHA1 wants.
+
+Every selective read validates **all** refs, IDs/unique pack identities, sizes,
+representations, chunk keys/lengths, repeated-key length agreement, split framing,
+and total bounds, including omitted packs. It then consumes exact ordered
+`VerifiedChunks` for selected packs. All selected payload lengths, SHA-256s and
+request identity/order verify before **any** native file (including config/HEAD)
+is created. Missing/corrupt selected data leaves Invalid and returns an error;
+there is no hidden Full retry. Legacy separate pack/index files, bundles and
+oversized scalar reads retain the shared verified storage path. Selected reads
+authenticate consumed payloads; they do not promise to sweep unrelated omitted
+payload corruption on every historical fetch.
+
+The disposable native view explicitly records Full, Projection, or Invalid.
+Projection writes only original current refs whose stamps are within its cutoff;
+the fixed HEAD may be a dangling main symref in this POST-only view. Cache keys
+bind the full authoritative generation and exact method/target/body/sorted header
+map. A response cache hit leaves scope unchanged. Every cold miss performs real
+selected R2 reads even when the same projection is already on disk. Same-generation
+Full reads preserve valid lineage. Real receives establish Full before quarantine
+alternates; unsupported native RPCs, native discovery fallback, and global object
+inventory establish Full as well. Lightweight `/metrics` never restores it.
+`/_object-stats` records its required actual Full restore before scanning every
+authoritative pack, including when a cached latest response left a prior partial
+view in place.
+
+The optional certificate is capped at 32 KiB **inside** the existing 32 MiB joint
+budget. The accounting includes owning struct sizes, array capacities, temporary
+simultaneous old/new certificate storage, candidate-plan floor capacity, R8
+advertisement templates and pending templates, response allocations and headers,
+and the cache ring capacity/fixed bookkeeping. Opaque standard B-tree node
+allocations receive a conservative per-header owning-allocation bound. Responses
+are charged from the exact retained clone/key capacities so eviction subtracts
+the same allocation charge. Optional metadata and ring growth reserve space
+before allocation and evict through the existing response policy. `cache_bytes`
+remains response-only (zero after a successful push); serde-default lineage,
+pending-lineage, eviction and `cache_retained_bytes` fields report the joint
+charge. View metrics expose selected/total pack counts and bytes and actual Full
+restoration counts. No provenance is persisted.
+
+The exact successful empty receive probe `0000` has an additional bounded cold
+Cloudflare shortcut. After normal dirty recovery/authoritative generation checks,
+complete metadata validation, exact path/MIME/v0/identity encoding, fixed native
+policy identity, no transfer encoding, and absent-or-exact-4 content length, it
+returns the byte/header-equivalent native 200 empty receive result. It preserves
+Full/Projection scope, both certificates, cache, generation, refs and retirement
+debt. The next nonempty or ref-only push still reconstructs Full once. Unsupported
+policy/framing/protocol/shape uses the ordinary strict path. In native Git 2.53,
+`0000` yields FLUSH (`pkt-line.c:434`), `read_head_info` returns no commands
+(`builtin/receive-pack.c:2167`), stateless mode suppresses advertisement, and no
+commands bypass unpack/ref/hooks/GC/report work; the untouched sideband flag emits
+nothing before success (`builtin/receive-pack.c:2647`). Direct native comparisons
+cover unborn, nonempty Full and partial views. `receive_noop_shortcuts` counts
+these operations; no unrelated payload authentication is claimed.
+
+The explicit ignored Rust integration driver `history_cloudflare.rs` runs against
+a separately started fresh local production Worker at port 8831. It performs real
+registered gateway pushes and cold fetches, historical wants with/without haves,
+a latest cache hit leaving Projection, no-I/O metrics, exact global-stat GET
+restoration receipts, a default-client large streamed push after Projection
+(including Git's real empty probe), strict fsck and identical source/client tar
+archives. It asserts no read-side R2 writes/live/peak growth or SQLite growth.
+The broad storage and fault tests still cover ordered chunk integrity, large
+legacy scalar reads, retirement failure/lost replies and staged publication.
+
+This is implementation/correctness preparation, **not a measured cost or speed
+candidate**. The earlier R5 arithmetic projects fixed savings of 138 R2 GETs plus
+15 callbacks ($0.05643 in its stated scenario); mandatory final Full inventories
+add 24 GETs and eight callbacks ($0.01224), leaving $0.04419 in that separately
+charged complete physical scope. Those are unmeasured conditional projections,
+not full bills or CPU estimates. The benchmark's large `http.postBuffer` avoids
+the empty receive probe, so that related shortcut changes none of this fixed
+projection. Default-client probe savings are separate observed operations, not
+scored workload savings. Full four-profile fresh screens and final paired
+validation remain required; cache/latency/transfer/storage guards can reject the
+candidate regardless of arithmetic.
