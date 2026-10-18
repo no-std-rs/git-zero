@@ -149,6 +149,12 @@ their pushed `SCREEN_R2_COMMIT` through `SCREEN_R5_COMMIT` at deterministic `pro
 integrated source commits; duplicate refs or native source trees block the screen.
 Provenance records every label, commit, source tree, manifest path/hash and post-run clean status.
 
+The workflow accepts an ordered `SCREEN_PROVIDERS` list of two to four labels, with a pinned
+`SCREEN_RN_COMMIT` for each label. It rejects repeated labels, commits or native source trees
+before timing. Later batches use fresh suites and declare their candidate sequence before running;
+no screen samples carry over between workflow attempts. Full mode always measures two fresh
+providers, the original scalar baseline and the final candidate, with five pairs each.
+
 This is a prospectively declared batch of independently prepared candidates. Preparing later source
 changes before this batch completes does not mean their design was informed by these measurements.
 The same fresh intermediate suite in this workflow attempt may serve as a candidate in one comparison

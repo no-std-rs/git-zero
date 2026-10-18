@@ -24,6 +24,8 @@ env:
   REFERENCE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
   # Full validation always compares the original scalar baseline with current HEAD.
   BASELINE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
+  # Ordered providers, measured once each per VM; adjacent comparisons share suites.
+  SCREEN_PROVIDERS: r2 r3 r4 r5
   SCREEN_R2_COMMIT: e6f4ad0c35581630d1d44c40aa1d5eb3496d5f92
   SCREEN_R3_COMMIT: afe29484c6513908463f5e027d5f3a4b5be3b9f0
   # Duplicate refs or native source trees fail closed before any build or timing.
@@ -75,14 +77,23 @@ jobs:
           mkdir -p "$REPORT_ROOT/provenance" "$BENCH_ROOT/bin/common"
           case "$BENCH_STAGE" in
             screen)
-              refs=("$SCREEN_R2_COMMIT" "$SCREEN_R3_COMMIT" "$SCREEN_R4_COMMIT" "$SCREEN_R5_COMMIT")
-              test "$(printf '%s\n' "${refs[@]}" | sort -u | wc -l)" -eq 4
+              read -r -a providers <<< "$SCREEN_PROVIDERS"
+              test "${#providers[@]}" -ge 2
+              test "${#providers[@]}" -le 4
+              test "$(printf '%s\n' "${providers[@]}" | sort -u | wc -l)" -eq "${#providers[@]}"
+              refs=()
+              for provider in "${providers[@]}"; do
+                [[ "$provider" =~ ^r[0-9]+$ ]]
+                ref_name="SCREEN_${provider^^}_COMMIT"
+                refs+=("${!ref_name}")
+              done
+              test "$(printf '%s\n' "${refs[@]}" | sort -u | wc -l)" -eq "${#providers[@]}"
               for ref in "${refs[@]}"; do
                 [[ "$ref" =~ ^[0-9a-f]{40}$ ]]
                 git merge-base --is-ancestor "$ref" "$GITHUB_SHA"
                 git rev-parse "$ref:examples/repository-host/src"
               done > "$REPORT_ROOT/provenance/screen-native-source-trees.txt"
-              test "$(sort -u "$REPORT_ROOT/provenance/screen-native-source-trees.txt" | wc -l)" -eq 4
+              test "$(sort -u "$REPORT_ROOT/provenance/screen-native-source-trees.txt" | wc -l)" -eq "${#providers[@]}"
               ;;
             full) test "$BASELINE_COMMIT" = "$REFERENCE_COMMIT" ;;
             *) exit 1 ;;
@@ -134,13 +145,9 @@ jobs:
             printf 'candidate\t%s\t%s\t%s\n' "$GITHUB_SHA" \
               "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/target" >> "$providers"
           else
-            for provider in r2 r3 r4 r5; do
-              case "$provider" in
-                r2) ref="$SCREEN_R2_COMMIT" ;;
-                r3) ref="$SCREEN_R3_COMMIT" ;;
-                r4) ref="$SCREEN_R4_COMMIT" ;;
-                r5) ref="$SCREEN_R5_COMMIT" ;;
-              esac
+            for provider in $SCREEN_PROVIDERS; do
+              ref_name="SCREEN_${provider^^}_COMMIT"
+              ref="${!ref_name}"
               source="$BENCH_ROOT/providers/$provider"
               target="$BENCH_ROOT/provider-targets/$provider"
               git worktree add --detach "$source" "$ref"
@@ -393,7 +400,7 @@ jobs:
           printf '%s  target/release/hosting-cost\n' "$expected_cost" | sha256sum --check
           mapfile -t providers < <(cut -f1 "$SUITE_ROOT/16mib-cold/provenance/providers.tsv")
           if [ "$BENCH_STAGE" = screen ]; then
-            test "${providers[*]}" = 'r2 r3 r4 r5'
+            test "${providers[*]}" = "$SCREEN_PROVIDERS"
           else
             test "$BENCH_STAGE" = full
             test "${providers[*]}" = 'baseline candidate'
@@ -432,7 +439,7 @@ jobs:
             printf 'Measured stage: **%s**. Every provider was measured freshly once on the same VM for each profile.\n\n' "$BENCH_STAGE"
             printf 'Review every score, comparison and provenance before making a claim. A successful job is not acceptance.\n\n'
             if [ "$BENCH_STAGE" = screen ]; then
-              printf 'All six earlier-to-later comparisons reuse the same two-pair intermediate suites. They are correlated, provisional and cannot establish acceptance or a formal plateau.\n\n'
+              printf 'All earlier-to-later comparisons reuse the same two-pair intermediate suites. They are correlated, provisional and cannot establish acceptance or a formal plateau.\n\n'
             fi
             printf 'Worker CPU, DO duration, monthly SQLite storage and native compute remain unknown; the full cost estimate stays null.\n'
           } >> "$GITHUB_STEP_SUMMARY"
