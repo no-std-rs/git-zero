@@ -620,7 +620,7 @@ impl HttpServices {
         let response = self.json(
             "POST",
             "register",
-            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1})),
+            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1})),
             Some("stats"),
         )?;
         *self
@@ -1565,6 +1565,9 @@ mod tests {
                         serde_json::from_value::<Vec<Chunk>>(value["chunks"].clone()).unwrap(),
                         chunks
                     );
+                } else if method.starts_with("POST /_services/register ") {
+                    let value: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(value["catalog_peak"], 1);
                 } else if !method.starts_with("POST") {
                     assert!(body.is_empty());
                 }

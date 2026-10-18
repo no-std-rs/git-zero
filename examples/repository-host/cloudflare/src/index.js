@@ -20,6 +20,7 @@ const UPLOAD_CAPABILITY = { version: 1, wire_bytes: MAX_BULK_RESPONSE_BYTES,
   metadata_bytes: MAX_MANIFEST_BYTES, chunk_bytes: MAX_BLOB_BYTES, retirement_keys: MAX_RETIREMENT_KEYS };
 const WITNESS_PREFIX = "x-git-zero-internal-";
 const WITNESS_HEADER = `${WITNESS_PREFIX}generation-witness`;
+const CATALOG_PEAK_HEADER = `${WITNESS_PREFIX}catalog-peak`;
 const WITNESS_DOMAIN = "git-zero-generation-witness";
 const USAGE_HEADER = "x-git-zero-service-usage";
 const OPERATIONS = new Set(["r2_get", "r2_head", "r2_put", "r2_list", "r2_delete", "manifest_get", "manifest_cas"]);
@@ -409,10 +410,11 @@ export default {
             fail(409, "a different local codec is already registered; unregister it first");
           }
           if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
-          registry.set(repo, { origin, witness: witness?.private });
+          registry.set(repo, { origin, witness: witness?.private, catalogPeak: body.catalog_peak === 1 });
           return json({ registered: true, repository: repo, codec_origin: origin,
             ...(body.manifest_retire === 1 ? { manifest_retire: { version: 1 } } : {}),
             ...(body.manifest_upload_retire === 1 ? { manifest_upload_retire: UPLOAD_CAPABILITY } : {}),
+            ...(body.catalog_peak === 1 ? { catalog_peak: { version: 1 } } : {}),
             ...(witness ? { generation_witness: witness.response } : {}) });
         }
         if (url.pathname === "/_services/unregister" && request.method === "POST") {
@@ -420,6 +422,10 @@ export default {
           return json({ registered: false, repository: repo });
         }
         const headers = new Headers(request.headers);
+        for (const name of [...headers.keys()]) {
+          if (name.startsWith(WITNESS_PREFIX)) headers.delete(name);
+        }
+        if (registry.get(repo)?.catalogPeak) headers.set(CATALOG_PEAK_HEADER, "1");
         headers.set("x-hosting-repo", repo);
         headers.set("x-hosting-phase", currentPhase);
         // Bound and finish this small JSON upload before entering the DO gate.
@@ -485,10 +491,10 @@ export class RepositoryServices {
     this.exec("CREATE TABLE IF NOT EXISTS repository_state (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, manifest TEXT NOT NULL)");
     this.exec("CREATE TABLE IF NOT EXISTS blob_catalog (key TEXT PRIMARY KEY, size INTEGER NOT NULL) WITHOUT ROWID");
     this.exec("CREATE TABLE IF NOT EXISTS high_water (id INTEGER PRIMARY KEY, bytes INTEGER NOT NULL)");
-    const inventory = this.exec("SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes FROM blob_catalog")[0];
-    this.liveObjects = inventory.objects;
-    this.liveBytes = inventory.bytes;
-    this.peakBytes = Math.max(this.liveBytes, this.exec("SELECT bytes FROM high_water WHERE id = 1")[0]?.bytes ?? 0);
+    this.peakBytes = 0;
+    this.catalogCertain = true;
+    this.peakOwner = null;
+    this.reloadCatalog();
   }
 
   bump(name, value = 1) {
@@ -498,8 +504,16 @@ export class RepositoryServices {
   }
 
   exec(statement, ...bindings) {
-    const cursor = this.ctx.storage.sql.exec(statement, ...bindings);
-    const result = cursor.toArray();
+    let cursor, result;
+    try {
+      cursor = this.ctx.storage.sql.exec(statement, ...bindings);
+      result = cursor.toArray();
+    } catch (error) {
+      // A failed cursor provides no authoritative row counts. Preserve actual
+      // binding receipts while making the SQL component explicitly unknown.
+      this.sqlRowsKnown = false;
+      throw error;
+    }
     if (typeof cursor.rowsRead === "number" && typeof cursor.rowsWritten === "number") {
       this.bump("do_rows_read", cursor.rowsRead);
       this.bump("do_rows_written", cursor.rowsWritten);
@@ -560,23 +574,104 @@ export class RepositoryServices {
     }
   }
 
-  async remove(key, prefix, knownSize) {
-    const catalog = this.exec("SELECT size FROM blob_catalog WHERE key = ?", key)[0];
+  reloadCatalog() {
+    this.catalogPeak = this.exec("PRAGMA table_info(blob_catalog)").some((column) => column.name === "peak_bytes");
+    const inventory = this.exec(this.catalogPeak
+      ? "SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes, COALESCE(MAX(peak_bytes), 0) AS peak FROM blob_catalog"
+      : "SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes FROM blob_catalog")[0];
+    this.liveObjects = inventory.objects;
+    this.liveBytes = inventory.bytes;
+    this.fallbackPeak = this.exec("SELECT bytes FROM high_water WHERE id = 1")[0]?.bytes ?? 0;
+    this.peakBytes = Math.max(this.peakBytes, this.liveBytes, inventory.peak ?? 0, this.fallbackPeak);
+    this.peakOwner = null;
+    // SQL recovers peak witnesses, never certainty about an interrupted R2
+    // operation. Only a generation-checked physical inventory clears dirty.
+  }
+
+  requireCatalogCertain() {
+    if (!this.catalogCertain) fail(409, "physical inventory reconciliation required before mutation");
+  }
+
+  catalogUncertain() {
+    this.catalogCertain = false;
+    this.peakOwner = null;
+  }
+
+  enableCatalogPeak(request, reconciling = false) {
+    if (!reconciling) this.requireCatalogCertain();
+    if (!this.catalogPeak && request.headers.get(CATALOG_PEAK_HEADER) === "1") {
+      try {
+        this.exec("ALTER TABLE blob_catalog ADD COLUMN peak_bytes INTEGER NOT NULL DEFAULT 0");
+        this.catalogPeak = true;
+      } catch (error) {
+        this.catalogUncertain();
+        throw error;
+      }
+    }
+  }
+
+  async preservePeak(excludedKey) {
+    if (this.fallbackPeak >= this.peakBytes) return;
+    if (this.peakOwner?.key !== excludedKey && this.peakOwner?.peak >= this.peakBytes) return;
+    const witness = this.exec("SELECT key, peak_bytes FROM blob_catalog WHERE key <> ? AND peak_bytes >= ? LIMIT 1", excludedKey, this.peakBytes)[0];
+    if (witness) { this.peakOwner = { key: witness.key, peak: witness.peak_bytes }; return; }
+    await this.checkpointPeak(this.peakBytes);
+  }
+
+  async checkpointPeak(peak) {
+    if (this.fallbackPeak >= peak) return;
+    this.exec("INSERT INTO high_water (id, bytes) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET bytes = MAX(high_water.bytes, excluded.bytes)", peak);
+    await this.ctx.storage.sync();
+    this.fallbackPeak = peak;
+  }
+
+  async remove(key, prefix, knownSize, reconciling = false) {
+    if (this.catalogPeak && !reconciling) this.requireCatalogCertain();
+    const catalog = this.exec(this.catalogPeak ? "SELECT size, peak_bytes FROM blob_catalog WHERE key = ?" : "SELECT size FROM blob_catalog WHERE key = ?", key)[0];
     let size = knownSize ?? catalog?.size;
     if (size === undefined) {
       const object = await this.operation("r2_head", () => this.env.BLOBS.head(prefix + key), () => 0, 0, key);
       size = object?.size;
+      if (this.catalogPeak && object && !reconciling) {
+        this.catalogUncertain();
+        fail(409, "uncataloged physical object requires inventory reconciliation");
+      }
     }
-    await this.operation("r2_delete", () => this.env.BLOBS.delete(prefix + key), () => 0, 0, key);
-    this.exec("DELETE FROM blob_catalog WHERE key = ?", key);
-    if (size !== undefined) {
-      this.liveObjects = Math.max(0, this.liveObjects - 1);
-      this.liveBytes = Math.max(0, this.liveBytes - size);
+    try {
+      if (this.catalogPeak) await this.preservePeak(key);
+      await this.operation("r2_delete", () => this.env.BLOBS.delete(prefix + key), () => 0, 0, key);
+      this.exec("DELETE FROM blob_catalog WHERE key = ?", key);
+      if (this.catalogPeak && this.peakOwner?.key === key) this.peakOwner = null;
+      if (size !== undefined) {
+        this.liveObjects = Math.max(0, this.liveObjects - 1);
+        this.liveBytes = Math.max(0, this.liveBytes - size);
+      }
+    } catch (error) {
+      if (this.catalogPeak) this.catalogUncertain();
+      throw error;
     }
   }
 
   async put(key, data, prefix) {
+    if (this.catalogPeak) this.requireCatalogCertain();
     const previous = this.exec("SELECT size FROM blob_catalog WHERE key = ?", key)[0];
+    if (this.catalogPeak) {
+      try {
+        await this.operation("r2_put", () => this.env.BLOBS.put(prefix + key, data), () => 0, data.byteLength, key);
+        const nextLive = this.liveBytes + data.byteLength - (previous?.size ?? 0);
+        if (!Number.isSafeInteger(nextLive) || nextLive < 0) throw new Error("catalog byte total exceeds safe integer bound");
+        this.peakBytes = Math.max(this.peakBytes, nextLive);
+        this.exec("INSERT INTO blob_catalog (key, size, peak_bytes) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size, peak_bytes = MAX(blob_catalog.peak_bytes, excluded.peak_bytes)", key, data.byteLength, this.peakBytes);
+        await this.ctx.storage.sync();
+        this.liveObjects += previous ? 0 : 1;
+        this.liveBytes = nextLive;
+        this.peakOwner = { key, peak: this.peakBytes };
+        return;
+      } catch (error) {
+        this.catalogUncertain();
+        throw error;
+      }
+    }
     await this.operation("r2_put", () => this.env.BLOBS.put(prefix + key, data), () => 0, data.byteLength, key);
     this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size", key, data.byteLength);
     if (!previous) this.liveObjects++;
@@ -593,12 +688,14 @@ export class RepositoryServices {
       try { await this.remove(key, prefix); deleted = true; } catch { /* Durable debt remains retryable. */ }
       outcomes.push({ key, deleted });
     }
-    await this.ctx.storage.sync();
+    try { await this.ctx.storage.sync(); }
+    catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
     return { generation, outcomes };
   }
 
   async publishManifest(expected, next) {
-    return this.operation("manifest_cas", async () => {
+    if (this.catalogPeak) this.requireCatalogCertain();
+    try { return await this.operation("manifest_cas", async () => {
       const published = this.ctx.storage.transactionSync(() => {
         const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
         if (generation !== expected) return false;
@@ -608,7 +705,7 @@ export class RepositoryServices {
       });
       await this.ctx.storage.sync();
       return published;
-    });
+    }); } catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
   }
 
   async handle(request) {
@@ -683,18 +780,22 @@ export class RepositoryServices {
         const sha = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
         const hex = Array.from(sha, (byte) => byte.toString(16).padStart(2, "0")).join("");
         if (key !== `chunks/${hex}`) fail(409, "content does not match immutable blob key");
+        this.enableCatalogPeak(request);
         await this.put(key, data, prefix);
         return new Response(null, { status: 204 });
       }
       if (request.method === "DELETE") {
+        this.enableCatalogPeak(request);
         await this.remove(key, prefix);
-        await this.ctx.storage.sync();
+        try { await this.ctx.storage.sync(); }
+        catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
         return new Response(null, { status: 204 });
       }
       return json({ error: "method not allowed" }, 405);
     }
     if (path === "/_services/manifest/upload-retire" && request.method === "POST") {
       const { body, keys, data } = await uploadFrame(request);
+      this.enableCatalogPeak(request);
       await this.put(body.chunk.key, data, prefix);
       const published = await this.publishManifest(body.expected, body.next);
       // A stale upload is a durable orphan; a winning manifest may share it.
@@ -707,6 +808,7 @@ export class RepositoryServices {
       const keys = retirementKeys(body);
       const published = await this.publishManifest(body.expected, body.next);
       if (!published) return json({ version: 1, published: false, retirement: null });
+      if (keys.length) this.enableCatalogPeak(request);
       // CAS success is complete before retirement starts. Real failures keep
       // their accounting and durable debt, without relabeling successful CAS.
       return json({ version: 1, published: true,
@@ -732,31 +834,58 @@ export class RepositoryServices {
       const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
       if (!Number.isSafeInteger(body.expected_generation) || body.expected_generation < 0) fail(400, "GC requires expected_generation");
       if (body.expected_generation !== generation) fail(409, "stale GC generation");
+      // A stale/invalid recovery request never migrates. Recovery itself is
+      // allowed while dirty; ordinary mutation remains blocked until its sync.
+      if (this.catalogPeak || !this.catalogCertain) this.reloadCatalog();
+      if (!this.catalogPeak && request.headers.get(CATALOG_PEAK_HEADER) === "1") this.enableCatalogPeak(request, true);
       const live = new Set(body.live_keys);
       const objects = await this.inventory(prefix);
-      let removed = 0;
-      for (const object of objects) {
-        const key = object.key.slice(prefix.length);
-        if (!live.has(key)) { await this.remove(key, prefix, object.size); removed++; }
+      const physicalBytes = objects.reduce((sum, object) => sum + object.size, 0);
+      if (!Number.isSafeInteger(physicalBytes)) throw new Error("inventory byte total exceeds safe integer bound");
+      if (this.catalogPeak) {
+        this.peakBytes = Math.max(this.peakBytes, physicalBytes);
+        try {
+          // Inventory includes every orphan before deletion. A fallback is the
+          // durable witness while the subsequent catalog reset is incomplete.
+          await this.checkpointPeak(this.peakBytes);
+          // Also stabilize a previously uncertain visible fallback, even when
+          // it already covers H. SQL visibility alone is not a sync barrier.
+          if (!this.catalogCertain) await this.ctx.storage.sync();
+        } catch (error) { this.catalogUncertain(); throw error; }
       }
-      // Reconcile catalog state after interrupted put/catalog updates as well.
-      this.ctx.storage.transactionSync(() => {
-        this.exec("DELETE FROM blob_catalog");
+      let removed = 0;
+      try {
         for (const object of objects) {
           const key = object.key.slice(prefix.length);
-          if (live.has(key)) this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?)", key, object.size);
+          if (!live.has(key)) { await this.remove(key, prefix, object.size, true); removed++; }
         }
-      });
-      this.liveObjects = objects.filter((object) => live.has(object.key.slice(prefix.length))).length;
-      this.liveBytes = objects.filter((object) => live.has(object.key.slice(prefix.length))).reduce((sum, object) => sum + object.size, 0);
-      this.updatePeak();
-      await this.ctx.storage.sync();
+        // Reconcile catalog state after interrupted put/catalog updates as well.
+        this.ctx.storage.transactionSync(() => {
+          this.exec("DELETE FROM blob_catalog");
+          for (const object of objects) {
+            const key = object.key.slice(prefix.length);
+            if (live.has(key)) {
+              if (this.catalogPeak) this.exec("INSERT INTO blob_catalog (key, size, peak_bytes) VALUES (?, ?, ?)", key, object.size, this.peakBytes);
+              else this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?)", key, object.size);
+            }
+          }
+        });
+        const retained = objects.filter((object) => live.has(object.key.slice(prefix.length)));
+        const retainedBytes = retained.reduce((sum, object) => sum + object.size, 0);
+        if (!this.catalogPeak) { this.liveBytes = retainedBytes; this.updatePeak(); }
+        await this.ctx.storage.sync();
+        this.liveObjects = retained.length;
+        this.liveBytes = retainedBytes;
+        this.peakOwner = this.catalogPeak && retained.length ? { key: retained[0].key.slice(prefix.length), peak: this.peakBytes } : null;
+        this.catalogCertain = true;
+      } catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
       return json({ deleted: removed });
     }
     if (path === "/_services/metrics" && request.method === "GET") {
       const objects = await this.inventory(prefix);
       const liveBytes = objects.reduce((sum, object) => sum + object.size, 0);
       this.peakBytes = Math.max(this.peakBytes, liveBytes);
+      if (this.catalogPeak && (objects.length !== this.liveObjects || liveBytes !== this.liveBytes)) this.catalogUncertain();
       const row = this.exec("SELECT generation, LENGTH(CAST(manifest AS BLOB)) AS bytes FROM repository_state WHERE id = 1")[0];
       const counters = { ...this.totals };
       if (!this.sqlRowsKnown) { counters.do_rows_read = null; counters.do_rows_written = null; }

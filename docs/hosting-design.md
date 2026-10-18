@@ -83,6 +83,20 @@ implemented and tested.
   ambiguous replies force authoritative Native recovery before another request.
   Default/local and older adapters retain CAS followed by scalar cleanup. See
   the [service contract](../examples/repository-host/cloudflare/README.md).
+- New Native registration requests `catalog_peak: 1` in the existing callback.
+  The authenticated Worker stores this exact capability per repository and
+  strips caller private headers before minting its internal catalog capability.
+  Old fresh repositories keep the original v1 catalog and high-water writes.
+  Counted, read-only schema discovery runs on every DO construction; only a
+  fully validated catalog mutation may add v2 `peak_bytes`. Registration,
+  reads, plain manifest CAS and stale GC never perform this migration. The
+  first mutation pays the actual ALTER cursor cost in its own phase.
+  V2 PUTs carry the aggregate historical peak in the existing catalog upsert,
+  sync before CAS and retain a surviving durable witness before retirement.
+  Deleting the last witness first checkpoints and syncs the existing monotone
+  high-water fallback. Authoritative GC checkpoints the complete physical
+  pre-delete inventory, including orphans, before deletion or catalog reset.
+  These are correctness changes pending matched performance acceptance.
 - Downloads reuse existing compressed streams with `pack.window=0`. Requests
   containing framed client `have` lines use a one-entry delta search instead,
   producing useful thin deltas without a full-history delta search.
@@ -113,6 +127,25 @@ The R2/Durable Object wrappers have mock tests and a runnable
 Its Worker gateway forwards Git HTTP to the Rust native codec, which uses actual
 locally emulated R2 and Durable Object SQLite services. Object inventory,
 per-binding operation counters and dated cost scenarios are exposed as JSON.
+
+V2 schema ownership survives registry loss, unregister, process restart and old
+Native clients under the new Worker. Rolling back to an old Worker requires an
+explicit durable `high_water` checkpoint first: old code ignores catalog peaks
+and can erase their last witness. SQL/catalog or R2/barrier divergence marks the
+running v2 DO uncertain; later ordinary mutations fail until generation-checked
+inventory reconciliation succeeds. A partial retirement can therefore return
+`[true, false, false]` after two actual DELETE attempts; the unattempted key stays
+in durable debt. Failed SQL cursors expose unknown row counts rather than zero.
+
+The existing cross-service crash boundary remains: a process can die after R2
+PUT succeeds but before SQLite records its catalog row. SQL reload recovers
+durable peak witnesses, but cannot reconstruct that physical inventory. Native
+startup/dirty recovery must still run its existing generation-checked GC before
+further mutations. That GC durably preserves the pre-delete physical aggregate
+before removing orphans, and a second process restart retains the recovered
+peak. There is no new per-PUT intent write or ordinary inventory LIST. Direct
+clients restarting after an ambiguous crash must follow the same recovery
+contract; history that vanished externally before any observation is unknown.
 Cold mode fully reloads the native view through counted R2 reads; warm mode
 explicitly retains that filesystem cache. This is a local hybrid, without a
 deployable Worker Git codec. The sections below describe the scalable service

@@ -179,128 +179,139 @@ fn usage(services: &HttpServices) -> ServiceUsage {
 #[test]
 #[ignore = "requires local workerd with cloudflare/test/upload-fault.toml"]
 fn faulted_upload_barriers_catalog_partial_retirement_and_lost_receipt_preserve_authority() {
-    for mode in [
-        "put",
-        "catalog",
-        "uploadsync",
-        "cassync",
-        "delete",
-        "lost",
-        "corrupt",
-    ] {
-        let worker = RealWorker::new(&format!("upload-{mode}"));
-        let services = worker.services();
-        services.register("http://127.0.0.1:1").unwrap();
-        let repository = Repository::new(
-            R2BlobStore::new(services.clone()),
-            DurableStateStore::new(services.clone()),
-        );
-        let mut previous = Manifest {
-            generation: 1,
-            ..Manifest::default()
-        };
-        for i in 0..3 {
-            previous.packs.push(
-                repository
-                    .store_bundled_pack(
-                        format!("old-{i}"),
-                        format!("old-{i}").as_bytes(),
-                        b"index",
-                        0,
-                    )
-                    .unwrap(),
-            );
-        }
-        assert!(
-            repository
-                .publish(&Manifest::default(), previous.clone())
-                .unwrap()
-        );
-        let (stored, pending) = repository
-            .stage_bundled_pack("new".into(), b"new-pack", b"new-index", 1)
-            .unwrap()
-            .into_parts();
-        let key = pending.chunk().key.clone();
-        let mut next = Manifest {
-            generation: 2,
-            packs: vec![stored],
-            ..Manifest::default()
-        };
-        next.retire_replaced(&previous);
-        let before = usage(&services);
-        let result = repository.publish_staged_retiring(&previous, next.clone(), Some(pending));
-        if mode == "delete" {
-            let RetiringCas::Published(receipt) = result.unwrap() else {
-                panic!("partial retirement failed publication");
-            };
-            assert_eq!(
-                receipt
-                    .outcomes
-                    .iter()
-                    .map(|o| o.deleted)
-                    .collect::<Vec<_>>(),
-                [true, false, true]
-            );
-        } else {
-            assert!(result.is_err(), "fault {mode} did not fire");
-        }
-        let after = usage(&services);
-        let delta = after.checked_workload_delta(&before).unwrap();
-        assert_eq!(delta.worker_service_requests, 1, "{mode}");
-        assert_eq!(delta.do_requests, 1, "{mode}");
-        let puts = operation(&after, "r2_put");
-        let prior_puts = operation(&before, "r2_put");
-        assert_eq!(puts.attempts - prior_puts.attempts, 1, "{mode}");
-        assert_eq!(
-            puts.failures - prior_puts.failures,
-            u64::from(mode == "put")
-        );
-        let published = !matches!(mode, "put" | "catalog" | "uploadsync");
-        assert_eq!(
-            repository.state.load().unwrap(),
-            if published {
-                next.clone()
-            } else {
-                previous.clone()
-            },
-            "{mode}"
-        );
-        let cas = operation(&after, "manifest_cas");
-        let prior_cas = operation(&before, "manifest_cas");
-        assert_eq!(cas.attempts - prior_cas.attempts, u64::from(published));
-        assert_eq!(
-            cas.failures - prior_cas.failures,
-            u64::from(mode == "cassync")
-        );
-        // CAS errors finish before retirement, including an ambiguous reply to
-        // its own sync; no fallback PUT/CAS or blind orphan delete is issued.
-        assert_eq!(
-            delta.r2_deletes,
-            if matches!(mode, "delete" | "lost" | "corrupt") {
-                3
-            } else {
-                0
+    for catalog_peak in [false, true] {
+        for mode in [
+            "put",
+            "catalog",
+            "uploadsync",
+            "cassync",
+            "delete",
+            "lost",
+            "corrupt",
+        ] {
+            let worker = RealWorker::new(&format!("upload-{mode}-peak{catalog_peak}"));
+            let services = worker.services();
+            services.register("http://127.0.0.1:1").unwrap();
+            if !catalog_peak {
+                register_legacy_worker(&worker);
             }
-        );
-        assert_eq!(
-            operation(&after, "r2_delete").failures - operation(&before, "r2_delete").failures,
-            u64::from(mode == "delete")
-        );
-        if mode != "put" {
-            assert!(repository.blobs.get(&key).is_ok());
-        }
-        let authoritative = repository.state.load().unwrap();
-        // This authoritative listing also reconciles a PUT whose catalog
-        // write was interrupted. Live shared chunks remain untouched.
-        let(status,body)=local_request(&worker.origin,"POST","/_services/gc",&[("x-hosting-token",&worker.token),("x-hosting-repo",&worker.namespace)],
+            let repository = Repository::new(
+                R2BlobStore::new(services.clone()),
+                DurableStateStore::new(services.clone()),
+            );
+            let mut previous = Manifest {
+                generation: 1,
+                ..Manifest::default()
+            };
+            for i in 0..3 {
+                previous.packs.push(
+                    repository
+                        .store_bundled_pack(
+                            format!("old-{i}"),
+                            format!("old-{i}").as_bytes(),
+                            b"index",
+                            0,
+                        )
+                        .unwrap(),
+                );
+            }
+            assert!(
+                repository
+                    .publish(&Manifest::default(), previous.clone())
+                    .unwrap()
+            );
+            let (stored, pending) = repository
+                .stage_bundled_pack("new".into(), b"new-pack", b"new-index", 1)
+                .unwrap()
+                .into_parts();
+            let key = pending.chunk().key.clone();
+            let mut next = Manifest {
+                generation: 2,
+                packs: vec![stored],
+                ..Manifest::default()
+            };
+            next.retire_replaced(&previous);
+            let before = usage(&services);
+            let result = repository.publish_staged_retiring(&previous, next.clone(), Some(pending));
+            if mode == "delete" {
+                let RetiringCas::Published(receipt) = result.unwrap() else {
+                    panic!("partial retirement failed publication");
+                };
+                assert_eq!(
+                    receipt
+                        .outcomes
+                        .iter()
+                        .map(|o| o.deleted)
+                        .collect::<Vec<_>>(),
+                    [true, false, !catalog_peak]
+                );
+            } else {
+                assert!(result.is_err(), "fault {mode} did not fire");
+            }
+            let after = usage(&services);
+            let delta = after.checked_workload_delta(&before).unwrap();
+            assert_eq!(delta.worker_service_requests, 1, "{mode}");
+            assert_eq!(delta.do_requests, 1, "{mode}");
+            let puts = operation(&after, "r2_put");
+            let prior_puts = operation(&before, "r2_put");
+            assert_eq!(puts.attempts - prior_puts.attempts, 1, "{mode}");
+            assert_eq!(
+                puts.failures - prior_puts.failures,
+                u64::from(mode == "put")
+            );
+            let published = !matches!(mode, "put" | "catalog" | "uploadsync");
+            assert_eq!(
+                repository.state.load().unwrap(),
+                if published {
+                    next.clone()
+                } else {
+                    previous.clone()
+                },
+                "{mode}"
+            );
+            let cas = operation(&after, "manifest_cas");
+            let prior_cas = operation(&before, "manifest_cas");
+            assert_eq!(cas.attempts - prior_cas.attempts, u64::from(published));
+            assert_eq!(
+                cas.failures - prior_cas.failures,
+                u64::from(mode == "cassync")
+            );
+            // CAS errors finish before retirement, including an ambiguous reply to
+            // its own sync; no fallback PUT/CAS or blind orphan delete is issued.
+            assert_eq!(
+                delta.r2_deletes,
+                if mode == "delete" && catalog_peak {
+                    2
+                } else if matches!(mode, "delete" | "lost" | "corrupt") {
+                    3
+                } else {
+                    0
+                }
+            );
+            assert_eq!(
+                operation(&after, "r2_delete").failures - operation(&before, "r2_delete").failures,
+                u64::from(mode == "delete")
+            );
+            if mode != "put" {
+                assert!(repository.blobs.get(&key).is_ok());
+            }
+            let authoritative = repository.state.load().unwrap();
+            // This authoritative listing also reconciles a PUT whose catalog
+            // write was interrupted. Live shared chunks remain untouched.
+            let(status,body)=local_request(&worker.origin,"POST","/_services/gc",&[("x-hosting-token",&worker.token),("x-hosting-repo",&worker.namespace)],
             &serde_json::to_vec(&serde_json::json!({"expected_generation":authoritative.generation,"live_keys":authoritative.packs.iter().flat_map(StoredPack::chunks).map(|c|&c.key).collect::<Vec<_>>()})).unwrap());
-        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
-        for pack in &authoritative.packs {
-            repository.read_pack_files(pack).unwrap();
+            assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+            for pack in &authoritative.packs {
+                repository.read_pack_files(pack).unwrap();
+            }
+            let reconciled = usage(&services);
+            assert_eq!(reconciled.r2_live_objects, authoritative.packs.len() as u64);
+            assert_eq!(reconciled.accounting_complete, Some(true));
+            assert_eq!(
+                reconciled.r2_peak_bytes,
+                if mode == "put" { 30 } else { 47 }
+            );
         }
-        let reconciled = usage(&services);
-        assert_eq!(reconciled.r2_live_objects, authoritative.packs.len() as u64);
-        assert_eq!(reconciled.accounting_complete, Some(true));
     }
 }
 
@@ -868,6 +879,7 @@ fn real_fused_retirement_matches_scalar_work_and_removes_three_callbacks() {
         let services = worker.services();
         if fused {
             services.register("http://127.0.0.1:1").unwrap();
+            register_legacy_worker(&worker);
         }
         let repository = Repository::new(
             R2BlobStore::new(services.clone()),
@@ -956,6 +968,7 @@ fn faulted_fused_retirement_preserves_cas_and_failed_r2_accounting() {
     let worker = RealWorker::new("retire-fault");
     let services = worker.services();
     services.register("http://127.0.0.1:1").unwrap();
+    register_legacy_worker(&worker);
     let repository = Repository::new(
         R2BlobStore::new(services.clone()),
         DurableStateStore::new(services.clone()),
@@ -1179,6 +1192,20 @@ fn local_request(
         .unwrap();
     output.stdout.truncate(boundary);
     (status, output.stdout)
+}
+
+fn register_legacy_worker(worker: &RealWorker) {
+    let (status, body) = local_request(
+        &worker.origin,
+        "POST",
+        "/_services/register",
+        &[
+            ("x-hosting-token", &worker.token),
+            ("x-hosting-repo", &worker.namespace),
+        ],
+        br#"{"codec_origin":"http://127.0.0.1:1","manifest_retire":1,"manifest_upload_retire":1}"#,
+    );
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
 }
 
 fn gateway_exchange(
