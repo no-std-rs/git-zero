@@ -138,7 +138,10 @@ no background benchmark probes run. The complete storage, compaction, cache, fsc
 requirements remain enforced by the existing runner and scorer.
 
 Before pushing each batch, validate the common final Worker's backward compatibility and pin its
-validated hash alongside every actual pushed source ref. For the earlier R2–R5 batch, generation
+complete source tree and index hash alongside every actual pushed source ref.
+The next workflow records SHA256s for every tracked Worker source module,
+checks them again after timing and compares that manifest across profile VMs.
+For the earlier R2–R5 batch, generation
 witnesses were gated by registration capability so R2/R3 incurred no extra DO checks, and 16 MiB chunk
 support still accepted old 8 MiB entries within the unchanged aggregate response limit. The completed R5–R8 batch
 kept R5 scalar retirement unless negotiated. The completed R8–R11 batch kept older
@@ -331,7 +334,11 @@ would fold an all-success retirement's page update into a following upload.
 Its $0.028 gross opportunity must pay for actual proof, recovery and cursor
 work. Private receipts, durable replay protection and same-key pre-upload
 barriers are explicit gates; observer inventory cannot certify or repair it.
-Implementation is being prepared in isolation.
+The [reviewed implementation](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r13-deferred-catalog-candidate/README.md)
+now passes seven final actual contracts, four Native fault cases and the combined
+real-Git check. Review corrected a supported >256-key scalar-fallback wedge;
+actual interrupted cleanup, reopen and GC now succeed. Normal realistic storage
+remains 24,576 bytes. These checks establish no replay cost or latency saving.
 
 A separate [residual-cost audit](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/post-deferral-design-audit/README.md)
 finds no further concrete 1% saving within the retained Native Git views,
@@ -389,3 +396,40 @@ reproduction. After reviewing every guard, R11 is only the next provisional
 known-cost comparison anchor. The corrected history path and later catalog
 changes need their own fresh, prospectively pinned screen. Final validation
 still requires five fresh original-R1/final pairs across all four profiles.
+
+## Next declared screen: corrected history and catalog updates
+
+After the complete R8–R11 review, this fresh two-pair batch compares these
+prospectively pinned providers in order:
+
+| Label | Change | Pushed source commit | Native source tree |
+| --- | --- | --- | --- |
+| r11 | Provisional known-cost anchor | `26e3d61c6fecbf92a709a089ed2f1270182ae625` | `5c0a9c25198b930597e4968019bb901a19301e2f` |
+| r111 (R11.1) | Real Git history capability correction | `d27848bda5f1089814839a276ee320739afcfc92` | `3b81fc646d78eedb09646bce7cdc24ea90feb313` |
+| r12 | Packed catalog and numeric recovery | `134fad2b20f6e7d50ff215f08341deacbe786137` | `9c5d1a2b0036d8020a729171903b45a1b8badda2` |
+| r13 | Deferred survivor update and scalar-fallback correction | `774adce8795577f4ed7f4a21c3239106abeb21e0` | `47b1a58dd852fe1492b58c739dd32d35fe529fd7` |
+
+No earlier samples carry forward. Each provider gets new service state, one
+warmup and two measured pairs on each of the four shared profile VMs. All six
+comparisons reuse these freshly measured intermediate suites and are correlated.
+Every comparison remains a screen; none can establish acceptance or a plateau.
+
+The common final Worker source tree is
+`22902cf4688aa7ee5da3705adceaaee0a2f08caa`, with index SHA256
+`dfa5d305b6dc511cdb85eb8b7ee717d09f70e7a0435160f29cecf75126c865c1`.
+The complete source manifest also freezes `catalog-pages.js` and
+`retirement-proof.js`; index-only hashing cannot identify the whole Worker.
+Source, runtime, reference and binary provenance checks remain mandatory.
+
+R11/R11.1 request peak schema only. Fresh R12 requests pages but remains eager;
+fresh R13 additionally negotiates deferred updates. Schema work belongs to each
+first eligible timed mutation, and durable formats remain readable after
+registration loss. Actual final proof/fallback contracts and source review
+preserve older-client behavior. Storage, cache, body, compaction, price and
+latency guards remain unchanged. The corrected cold providers must be assessed
+for actual historical projection activation, with final observer restoration
+work retained separately. No projected saving substitutes for a receipt.
+
+The original scalar reference remains `556b9ecd2aa79197f86b3db2d546eee81696e899`.
+After actual screen review and a substantiated stopping condition, final
+validation still requires five fresh original-R1/final pairs on all profiles.

@@ -1,0 +1,34 @@
+{
+  "kind": "reviewed R13 plus real Git capability correction, correctness only",
+  "isolated_commit": "5508a5a940ec90f5b9fe34499fe4325a6ee30b4f",
+  "integrated_commit": "ce517b5923fc695d725dca0f3469097e182ccaa3",
+  "entire_example_diff": "empty (git diff --exit-code)",
+  "worker_source_tree": "22902cf4688aa7ee5da3705adceaaee0a2f08caa",
+  "native_source_tree": "47b1a58dd852fe1492b58c739dd32d35fe529fd7",
+  "status": "PASS",
+  "test_seconds": 11.14,
+  "git_version": "2.53.0",
+  "git_policy": {
+    "GIT_CONFIG_COUNT": "0",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null"
+  },
+  "runner": "cargo test -p git-zero-host --test history_cloudflare production_history_prefix_contract --offline -j2 -- --ignored --exact --nocapture",
+  "owned_origin": "http://127.0.0.1:8834",
+  "wrangler_override": "/tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js",
+  "runtime_stopped": {
+    "ss": "no 8834 listener",
+    "pgrep_owned_paths": "exit1/no processes"
+  },
+  "raw_contract_sha256": "19e72bfb87f2dbeabf882842d8b9c9a469e290ae1c4962909c8bde5d64615f70",
+  "native_executable_sha256": "4214dca7d807a17c2144397519b459056bb4db9f650f674c28e8f18df244ab22",
+  "actual_checks": [
+    "real Git fresh and seeded Projection, strictfsck/archive, no authoritative writes",
+    "default streamed 10MiB push and empty receive probe",
+    "cache/metrics/full inventory restoration with actual counters"
+  ],
+  "final_tiny_sqlite_bytes": 20480,
+  "actual_r2_head_attempts": 0,
+  "cost_or_speed_claim": null
+}

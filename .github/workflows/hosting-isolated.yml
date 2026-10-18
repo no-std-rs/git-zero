@@ -25,13 +25,16 @@ env:
   # Full validation always compares the original scalar baseline with current HEAD.
   BASELINE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
   # Ordered providers, measured once each per VM; adjacent comparisons share suites.
-  SCREEN_PROVIDERS: r8 r9 r10 r11
+  SCREEN_PROVIDERS: r11 r111 r12 r13
+  # R11.1 corrects real Git capability classification; R12 pages; R13 deferral.
   # Duplicate refs or native source trees fail closed before any build or timing.
-  SCREEN_R8_COMMIT: 0f9f62e2079ef984d56ca5d50c8a61c18c97f1ff
-  SCREEN_R9_COMMIT: 8af8c48fb272624bb67a0cb3923fad154c3a6dcf
-  SCREEN_R10_COMMIT: e30e9c324fe12e9bbbd86959b1710cc9ea5b270e
   SCREEN_R11_COMMIT: 26e3d61c6fecbf92a709a089ed2f1270182ae625
-  EXPECTED_WORKER_SHA256: f5f72b40ec605814be6a6a0311df44e255ffdc3b402afec2e66454aa5711a811
+  SCREEN_R111_COMMIT: d27848bda5f1089814839a276ee320739afcfc92
+  SCREEN_R12_COMMIT: 134fad2b20f6e7d50ff215f08341deacbe786137
+  SCREEN_R13_COMMIT: 774adce8795577f4ed7f4a21c3239106abeb21e0
+  # Index hash plus the complete tracked Worker source tree, including imported modules.
+  EXPECTED_WORKER_SOURCE_TREE: 22902cf4688aa7ee5da3705adceaaee0a2f08caa
+  EXPECTED_WORKER_SHA256: dfa5d305b6dc511cdb85eb8b7ee717d09f70e7a0435160f29cecf75126c865c1
   REFERENCE_GIT_VERSION: 2.53.0
   # Four profile archives plus one score archive: at most 20 MiB per run.
   ARTIFACT_MAX_BYTES: '4194304'
@@ -101,6 +104,11 @@ jobs:
           test "$REFERENCE_GIT_VERSION" = "$(cat tests/git-version.txt)"
           printf '%s  %s\n' "$EXPECTED_WORKER_SHA256" \
             examples/repository-host/cloudflare/src/index.js | sha256sum --check
+          test "$(git rev-parse HEAD:examples/repository-host/cloudflare/src)" = "$EXPECTED_WORKER_SOURCE_TREE"
+          test -z "$(git ls-files --others --ignored --exclude-standard -- examples/repository-host/cloudflare/src)"
+          git ls-files -z -- examples/repository-host/cloudflare/src | sort -z |
+            xargs -0 -r sha256sum > "$REPORT_ROOT/provenance/worker-source-sha256.txt"
+          test -s "$REPORT_ROOT/provenance/worker-source-sha256.txt"
           if [ "$(git --version)" != "git version $REFERENCE_GIT_VERSION" ]; then
             sudo apt-get update
             sudo apt-get install -y libcurl4-openssl-dev zlib1g-dev
@@ -171,6 +179,7 @@ jobs:
           {
             printf 'candidate_commit=%s\ncandidate_parent=%s\ncandidate_tree=%s\n' \
               "$(git rev-parse HEAD)" "$(git rev-parse HEAD^)" "$(git rev-parse 'HEAD^{tree}')"
+            printf 'worker_source_tree=%s\n' "$EXPECTED_WORKER_SOURCE_TREE"
             printf 'reference_commit=%s\nreference_tree=%s\nreference_workspace_manifest=%s\nreference_host_manifest=%s\n' \
               "$REFERENCE_COMMIT" "$(git -C "$BENCH_ROOT/scalar-baseline" rev-parse 'HEAD^{tree}')" \
               "$BENCH_ROOT/scalar-baseline/Cargo.toml" \
@@ -223,6 +232,9 @@ jobs:
             "$BENCH_ROOT/bin/common/reference-host" examples/repository-host/cloudflare/src/index.js \
             examples/repository-host/cloudflare/wrangler.toml \
             examples/repository-host/cloudflare/package-lock.json > "$provenance/common-sha256.txt"
+          cat "$provenance/worker-source-sha256.txt" >> "$provenance/source-binary-sha256.txt"
+          cat "$provenance/worker-source-sha256.txt" >> "$provenance/common-sha256.txt"
+          sha256sum --check "$provenance/worker-source-sha256.txt"
           while IFS=$'\t' read -r provider ref source target; do
             test "$(git -C "$source" rev-parse HEAD)" = "$ref"
             {
@@ -321,6 +333,8 @@ jobs:
           git -C "$BENCH_ROOT/scalar-baseline" status --porcelain \
             > "$REPORT_ROOT/provenance/reference-source-status-after.txt"
           test ! -s "$REPORT_ROOT/provenance/reference-source-status-after.txt"
+          test "$(git rev-parse HEAD:examples/repository-host/cloudflare/src)" = "$EXPECTED_WORKER_SOURCE_TREE"
+          sha256sum --check "$REPORT_ROOT/provenance/worker-source-sha256.txt"
           sha256sum --check "$REPORT_ROOT/provenance/source-binary-sha256.txt"
 
       - name: Compress only reports, incomplete journals, provenance and logs
@@ -380,6 +394,8 @@ jobs:
             grep -Fxq "candidate_commit=$GITHUB_SHA" "$provenance/runtime.txt"
             grep -Fxq "stage=$BENCH_STAGE" "$provenance/runtime.txt"
             grep -Fxq "profile=$profile" "$provenance/runtime.txt"
+            grep -Fxq "worker_source_tree=$EXPECTED_WORKER_SOURCE_TREE" "$provenance/runtime.txt"
+            cmp "$SUITE_ROOT/16mib-cold/provenance/worker-source-sha256.txt" "$provenance/worker-source-sha256.txt"
             cmp "$SUITE_ROOT/16mib-cold/provenance/providers.tsv" "$provenance/providers.tsv"
             cmp "$SUITE_ROOT/16mib-cold/provenance/common-sha256.txt" "$provenance/common-sha256.txt"
             test -f "$provenance/reference-source-status-after.txt"
