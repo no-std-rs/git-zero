@@ -232,6 +232,11 @@ impl Certificate {
                                     | b"ofs-delta"
                                     | b"no-progress"
                                     | b"no-done"
+                                    // Git echoes these advertised capabilities
+                                    // even on ordinary, non-shallow fetches.
+                                    // Actual deepen commands remain unsupported.
+                                    | b"deepen-since"
+                                    | b"deepen-not"
                                     | b"object-format=sha1"
                             ) && !(capability.starts_with(b"agent=")
                                 && capability.len() > 6
@@ -419,10 +424,15 @@ mod tests {
             .advance(&prior, &current, Some([1; 32]), vec![0, 2])
             .unwrap();
         let want = format!(
-            "want {} multi_ack_detailed thin-pack side-band-64k ofs-delta no-progress no-done object-format=sha1 agent=git/2.53.0\n",
+            "want {} multi_ack_detailed no-done side-band-64k thin-pack no-progress ofs-delta deepen-since deepen-not agent=git/2.53.0-Linux\n",
             "b".repeat(40)
         );
         let have = format!("have {}\n", "B".repeat(40));
+        let plan = proof
+            .plan(&request(&[&want, "", "done\n"]), &current, Some([1; 32]))
+            .unwrap();
+        assert_eq!(plan.cutoff, 1);
+        assert_eq!(plan.packs, [0]);
         for last in ["done\n", ""] {
             let plan = proof
                 .plan(&request(&[&want, "", &have, last]), &current, Some([1; 32]))
@@ -463,6 +473,8 @@ mod tests {
             "filter",
             "shallow",
             "deepen-relative",
+            "deepen-since=1",
+            "deepen-not=refs/heads/old",
             "allow-any-sha1-in-want",
             "unknown",
             "agent=",
@@ -476,6 +488,27 @@ mod tests {
                     .is_none(),
                 "{capability}"
             );
+        }
+        // Capability acknowledgement does not authorize shallow command
+        // packets in either phase of the bounded request grammar.
+        for command in [
+            format!("shallow {}\n", "b".repeat(40)),
+            "deepen 1\n".into(),
+            "deepen-since 1735689600\n".into(),
+            "deepen-not refs/heads/old\n".into(),
+            "filter blob:none\n".into(),
+        ] {
+            for lines in [
+                vec![want.as_str(), &command, "", "done\n"],
+                vec![want.as_str(), "", &command, "done\n"],
+            ] {
+                assert!(
+                    proof
+                        .plan(&request(&lines), &current, Some([1; 32]))
+                        .is_none(),
+                    "{lines:?}"
+                );
+            }
         }
         let valid = request(&[&want, "", "done\n"]);
         for (header, value) in [
