@@ -1,0 +1,144 @@
+{
+  "kind": "independent_R18_conditional_design_review_NOT_measurement",
+  "source_commit_inspected": "c128197cc2cf1761e93832c63eec4c25c1268249",
+  "source_approved": false,
+  "current_fresh_screen_read_or_changed": false,
+  "inputs": {
+    "/tmp/git-zero-post-r17-next-design-audit-data.json": "5bf4940996dbba23a87747621c3c6a512da02c596d30b91d3c365099a74807a9",
+    "/tmp/git-zero-post-r17-next-design-audit.md": "79def940b3daae7dbceda8d0188559e8b9b100dd0bd8d4c2d7f63f992cdc9a1e"
+  },
+  "source_files": {
+    "examples/repository-host/src/native.rs": {
+      "sha256": "b8e160ad0494156279be5ab5e6c7640e642d8da55abedeeba07852703f99ec4b",
+      "bytes": 113829
+    },
+    "examples/repository-host/src/native/history.rs": {
+      "sha256": "b30f3432e3d6b09d872fd0d10271c90b9398d75a335bb1a1775a1c7449e66d93",
+      "bytes": 21101
+    },
+    "examples/repository-host/src/lib.rs": {
+      "sha256": "c16b17fa37165273d4e8ea739a898b89efebbf54f407e8a902e379dbd0650b61",
+      "bytes": 49237
+    },
+    "examples/repository-host/src/storage.rs": {
+      "sha256": "31cb3e8bdba18ee7f48f951164763e0d1c536192f685ca21179cd8166a36d8c0",
+      "bytes": 50248
+    },
+    "examples/repository-host/src/cloudflare.rs": {
+      "sha256": "3ba886c9827e5e2d5f064c899245bb19f00b03c114c63c5568086b6a3f4a34ab",
+      "bytes": 109205
+    },
+    "examples/repository-host/src/socket_rpc.rs": {
+      "sha256": "64d6c5b4732772bd1e14017e55103a2307e59ef2d543f7e82406579847019ef6",
+      "bytes": 18106
+    },
+    "examples/repository-host/src/first_read.rs": {
+      "sha256": "502d6513633fa1845f6c97c1883914c21aaa08347adb25d7bb9dd71581280947",
+      "bytes": 25758
+    },
+    "examples/repository-host/cloudflare/src/first-read.js": {
+      "sha256": "3535717a794e0c0b0fcf3f4777271124ce51fc74b47db7d094843396e06374ac",
+      "bytes": 11900
+    },
+    "examples/repository-host/cloudflare/src/index.js": {
+      "sha256": "0b3183bb89d7920c9f1d0868895ec13414d74e74e096f8181b30654e418c0bbd",
+      "bytes": 91566
+    }
+  },
+  "actual_failed_attempt_complete_R15_cold_samples": [
+    {
+      "profile": "16mib-cold",
+      "sample": 0,
+      "report_sha256": "e3b4738fca85e07d414d9b0d2f3c84ade4f9591e55de90f57e329c7695e13595",
+      "measured_rows": 88,
+      "positive_GET_rows": 79,
+      "positive_rows_by_group": {
+        "latest_fetch": 32,
+        "small_push": 24,
+        "history_no_haves": 8,
+        "history_with_haves": 8,
+        "large_push": 7
+      },
+      "GETs": 425,
+      "initial_chunk": {
+        "key": "chunks/55a74e2b21791d94a876584e763e6216d1e75f5a8a65d5f714a18153066592bc",
+        "len": 8544710
+      },
+      "max_recorded_response_cache_boundary_bytes": 12824068,
+      "remaining_after_chunk_response_and_socket_before_other_ownership": 11923510
+    },
+    {
+      "profile": "16mib-cold",
+      "sample": 1,
+      "report_sha256": "e3b4738fca85e07d414d9b0d2f3c84ade4f9591e55de90f57e329c7695e13595",
+      "measured_rows": 88,
+      "positive_GET_rows": 79,
+      "positive_rows_by_group": {
+        "latest_fetch": 32,
+        "small_push": 24,
+        "history_no_haves": 8,
+        "history_with_haves": 8,
+        "large_push": 7
+      },
+      "GETs": 425,
+      "initial_chunk": {
+        "key": "chunks/55a74e2b21791d94a876584e763e6216d1e75f5a8a65d5f714a18153066592bc",
+        "len": 8544710
+      },
+      "max_recorded_response_cache_boundary_bytes": 12824048,
+      "remaining_after_chunk_response_and_socket_before_other_ownership": 11923530
+    },
+    {
+      "profile": "64mib-cold",
+      "sample": 0,
+      "report_sha256": "c20e1785c6d7c64572f17b979e2ee6d51c93ed51e6358d07072be8a6fc007737",
+      "measured_rows": 88,
+      "positive_GET_rows": 79,
+      "positive_rows_by_group": {
+        "latest_fetch": 32,
+        "small_push": 24,
+        "history_no_haves": 8,
+        "history_with_haves": 8,
+        "large_push": 7
+      },
+      "GETs": 585,
+      "initial_chunk": {
+        "key": "chunks/255d2806f79291f5be5948184604634cf9d62ff7bcb99c0a0d0ff86966f5ae40",
+        "len": 16777216
+      },
+      "max_recorded_response_cache_boundary_bytes": 12815525,
+      "remaining_after_chunk_response_and_socket_before_other_ownership": 3699547
+    },
+    {
+      "profile": "64mib-cold",
+      "sample": 1,
+      "report_sha256": "c20e1785c6d7c64572f17b979e2ee6d51c93ed51e6358d07072be8a6fc007737",
+      "measured_rows": 88,
+      "positive_GET_rows": 79,
+      "positive_rows_by_group": {
+        "latest_fetch": 32,
+        "small_push": 24,
+        "history_no_haves": 8,
+        "history_with_haves": 8,
+        "large_push": 7
+      },
+      "GETs": 585,
+      "initial_chunk": {
+        "key": "chunks/255d2806f79291f5be5948184604634cf9d62ff7bcb99c0a0d0ff86966f5ae40",
+        "len": 16777216
+      },
+      "max_recorded_response_cache_boundary_bytes": 12815520,
+      "remaining_after_chunk_response_and_socket_before_other_ownership": 3699552
+    }
+  ],
+  "conditional_once_protected_cohort_GETs_avoided_per_four_profile_replay": 156,
+  "conditional_gross_R2_GET_usd": 0.05616,
+  "proven_net_savings_lower_bound": 0,
+  "full_bill": null,
+  "blockers_if_unaddressed": [
+    "Current prefix-only prefetch API cannot merge arbitrary missing batch with cached chunks.",
+    "Current receive_prepared re-plans after materialization; cache admission can invalidate its own cache-sensitive selection.",
+    "No proof yet that all owning budget/entry/pressure paths preserve useful cache admission or response hits."
+  ],
+  "implementation_and_runtime_performed": false
+}

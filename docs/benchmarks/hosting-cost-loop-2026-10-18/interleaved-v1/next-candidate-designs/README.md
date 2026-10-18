@@ -1,22 +1,30 @@
 # Reviewed next-candidate designs
 
-This bundle separates actual R13 receipt replay from unmeasured proposals.
+These files preserve design-time evidence and conditional hypotheses. Statuses
+inside older records describe their writing time. The [benchmark report](../../../../hosting-interleaved-benchmarks.md)
+records subsequent implementation and measurement.
 
-R14 atomic metadata and R15 first-fetch callback implementations have local
-correctness approval; their fresh screen is pending. R16 prepares a Full view
-for a small receive once. R17 proposes bounded socket service RPCs. Neither
-proposal's request-count arithmetic is a measured net saving.
+The R13 replay reproduces all 704 measured rows and its known fixed objective.
+R14–R17 designs, independent reviews and implementation preparations retain their
+original bytes. Their fresh screens are published separately; none establishes
+a speed win or global minimum.
 
-The fresh R13 replay reproduces all 704 measured rows and its known fixed
-$1.80461843618 objective. R16's 48 structural callbacks require fresh classifier
-and receive controls. R17's post-R15/R16 cohort is conditional; every actual
-Upgrade, fallback and recovery must be counted.
+The [protected-chunk design](protected-chunk-cost-design.md), independent review
+and preparation describe one bounded immutable GET cache. Its exact R18 source
+is now independently approved; ledger review is complete and fresh measurement is declared.
+It is absent from the completed R15–R17 screen.
 
-Each design has an independent review and implementation preparation. All
-retain existing memory/storage/API limits and unknown compute costs. These
-records establish no speed win, global minimum or stopping result. Verify
-publication files with `sha256sum --check SHA256SUMS`.
+The [multi-chunk audit](multi-chunk-next-design.md), [independent review](multi-chunk-independent-design-review.md)
+and [implementation preparation](multi-chunk-implementation-prep.md) extend the
+hypothesis to first-fit secondary admission under the same memory budget. The
+modeled $0.12168 extra GET saving is conditional, with a zero unconditional net
+lower bound. A hard 14 MiB response cap is rejected; eligible responses up to
+16 MiB may reclaim chunks under actual joint pressure. Pruning requires trusted
+current Full authority. The preparation's provisional source snapshot is
+historical; the isolated R19 implementation starts at approved R18 `f1ba8f5`.
+R19 source approval, ownership/fault controls and fresh measurement are pending.
 
-The protected-chunk design, independent review and implementation preparation are prospective evidence for one bounded immutable GET cache. Its candidate source is excluded from the R15–R17 screen. Conditional GET counts and cache-survival arithmetic are hypotheses; only a later fresh screen can establish net cost.
-
-The multi-chunk audit extends that hypothesis to bounded secondary admission. Its modeled GET savings require independent design review, real ownership/pressure gates and fresh measurement; the current screen enables neither chunk-cache design.
+All retain existing memory/storage/API limits and unknown compute costs. No
+acceptance or stopping conclusion follows. Verify this bundle with
+`sha256sum --check SHA256SUMS`; [scope.json](scope.json) distinguishes historical
+records from current status.

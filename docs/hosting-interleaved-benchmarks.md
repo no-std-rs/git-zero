@@ -576,7 +576,7 @@ failed earlier attempt remains separate evidence above. Unknown compute and
 SQLite retention keep the full hosting bill null; five fresh original/final
 pairs on all four profiles remain mandatory.
 
-## Next declared screen: small receiving and Worker service sockets
+## Declared R15–R17 screen: small receiving and Worker service sockets
 
 After the complete fresh R13–R15 review, a new three-provider screen measures:
 
@@ -620,3 +620,96 @@ not enabled by these three source pins. No stopping condition is established.
 All two-pair comparisons remain formally inconclusive; final validation still
 requires five fresh original-R1/final pairs on every profile, with full unknown
 cloud and Native compute left unknown.
+
+## Completed screen: small receiving and Worker service sockets
+
+[Run 39109536794](https://github.com/no-std-rs/git-zero/actions/runs/39109536794),
+at exact head `becec3f57b74ae19c9251ad3ddea25e62de07c84`, completed all four
+profiles and scoring. These are fresh two-pair measurements of the three source
+pins declared above; no sample from an earlier attempt is included.
+
+The known fixed objective uses the same four-profile 32-push/56-fetch mix,
+1,000 repetitions and one observed peak held for 30 days:
+
+| Provider | Known fixed objective | Change versus R15 |
+| --- | ---: | ---: |
+| R15 | $1.64123743618 | — |
+| R16 | $1.61963943618 | −1.315958% |
+| R17 | $1.49963343618 | −8.627880% |
+
+R17 is 7.409427% below R16. All three conservative cost envelopes pass 1%,
+all 108 resource guards and all 12 profile-cost guards pass. Cold small receiving
+consumes 24 preparations per trial, removing 24 Worker/DO callbacks without
+changing GETs, bytes, PUTs, deletions or SQL writes. Warm preparation remains off.
+
+Per-trial Worker/DO requests are 319/319→295/295→184/295 for cold16,
+444/444→420/420→192/420 for cold64, 208/208→208/208→178/208 for warm16,
+and 210/210→210/210→179/210 for warm64. Socket messages retain their ordinary
+DO HTTP charge. Every actual Upgrade, including rotations, is counted; ACKs and
+physical frames remain separate diagnostics. Cold GETs/read bytes stay 425 /
+1,771,600,643B and 585 / 3,831,138,627B, respectively; warm payload reads stay zero.
+SQL writes remain 35/39, and every final SQLite file is 24,576 B. The 256 KiB socket
+reservation counts inside the unchanged 32 MiB owning cache budget.
+
+All comparisons remain **inconclusive and plateau-ineligible**. R16/R15,
+R17/R15 and R17/R16 fail 8, 10 and 10 latency groups respectively: 28 groups and 43
+limits overall. R16's worst operation is 161.428 seconds versus paired Git's
+0.789 seconds; R17's is 68.531 seconds versus 0.408 seconds. Every slow operation
+is retained; no cause, uniform speed win, formal promotion or stopping follows.
+
+[Fresh evidence and analysis](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r15-r17-fresh-screen/README.md) preserves all five unchanged original archives
+(5,099,721 B), 12 reports, three scores/comparisons, 2,112 individual ratios, 96
+selected tails and all 1,664 baseline/candidate pairs in the failed latency
+groups. Root review independently rebuilds all 24 priced trials, resource and
+latency guards, every tail selection, and startup/fixed-scope arithmetic.
+Startup adds an observed known subtotal of $0.045628 across the four-profile
+objective, separately visible. Worker CPU, DO duration, monthly SQLite retention
+and Native hosting remain unknown, so the full bill stays null. Final validation
+still requires five fresh original-R1/final pairs on all four profiles.
+
+After complete source, receipt-scope, guard and tail review, R17 is only the
+provisional known-cost anchor for the next fresh comparison. The R18 protected
+chunk cache is source-approved separately; its ledger is independently approved and the fresh screen is declared below. The bounded multi-chunk design is being implemented in isolation. No
+stopping condition is established.
+
+## Next declared screen: one protected verified chunk
+
+After the complete R15–R17 source, receipt-scope, guard and tail review, a fresh
+screen compares the provisional R17 cost anchor with the source-reviewed R18
+cache. Each of the four profiles uses a fresh standard GitHub VM, separate
+provider processes and state, two measured pairs, and an excluded warmup.
+
+| Label | Change | Exact source commit | Native source tree |
+| --- | --- | --- | --- |
+| r17 | Provisional known-cost anchor: service socket reuse | `c128197cc2cf1761e93832c63eec4c25c1268249` | `328a5bd64b51e2335d5aa3432d46c07d1d022655` |
+| r18 | One protected immutable chunk admitted from a required verified GET | `f1ba8f548507dca1e5ab78e5c5d20d8360ecee21` | `c5b06db80540cc21a80e1ad19b4b8d1086425749` |
+
+The common six-module Worker remains `7f41db4407963ed04e6cbe19556b1416633caf18`,
+with index SHA256 `0b3183bb89d7920c9f1d0868895ec13414d74e74e096f8181b30654e418c0bbd`.
+Whole-source before/after and cross-profile checks stay enabled. The Rust runner,
+original scalar reference, Git 2.53 maintenance policy, dated price card, workload,
+cache and storage caps, two-pair stage, and all resource/latency guards are fixed.
+
+R18 retains at most one independently verified chunk of at most 16 MiB, within
+the same joint 32 MiB/256-entry budget as responses, metadata, certificates and
+the 256 KiB service socket reservation. Admission occurs only after a required
+ordinary request GET verifies digest and length. Startup, observers, PUT and
+warm preloading do not populate it. Exact ordered resolution merges the retained
+chunk with all required missing chunks before materialization. Full-receive
+validation survives its own admission; a stale cache mask causes a counted
+prefetch discard and ordinary safe reconstruction. New published chunks remain
+uncached, so cold latest-after-push reads still make naturally required GETs.
+
+[Candidate evidence](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r18-protected-chunk-candidate/README.md)
+separates correctness controls from these new measurements. Local matched
+controls, full-size ownership and response pressure, an actual in-flight eviction,
+true thin receiving, ambiguity/GC, unknown receipts and warm/HTTP compatibility
+passed independent source and ledger review. These controls establish no net
+cost or speed result. Actual GETs, bytes, admissions, evictions, joint ownership,
+all socket Upgrades/RPCs, startup, observer work and slow fetches remain visible.
+
+R19's bounded multi-chunk pool is being implemented separately and is absent
+from both source pins. No stopping condition is established. The screen remains
+formally inconclusive and plateau-ineligible; five fresh original-R1/final pairs
+on all four profiles are still mandatory, and unknown compute keeps the full
+hosting bill null.

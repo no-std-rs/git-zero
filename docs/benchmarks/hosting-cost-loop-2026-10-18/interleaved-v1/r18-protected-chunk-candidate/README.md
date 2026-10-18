@@ -14,3 +14,5 @@ The final local correctness pair records GETs **46→29**, identical Git respons
 Large Git bodies, fixture/state payloads and ELF binaries remain local-only; their SHA256/size identities and precise exclusions are recorded inside the capsule. Historical overwritten binaries and unavailable runner versions are not represented as retained payloads.
 
 Source approval precedes a separate ledger continuity review. No benchmark result, net-cost/speed win, promotion or stopping conclusion follows. The $0.05616 opportunity is conditional; full bill stays NULL.
+
+Independent [ledger review](ledger-review.md) verifies all 4,006 local files and 2,007 capsule members. Its [compressed verification](ledger-review-verification.json.gz) and the [design review](independent-design-review.md) are added with exact identities in [root provenance](root-review-provenance.json). The seven-file author bundle is preserved at ledger commit `64c70cf`; current checksums include these additions. Large payloads remain local-only as documented.
