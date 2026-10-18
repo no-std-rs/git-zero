@@ -903,7 +903,8 @@ owners. Its conditional replay saves 70 GETs ($0.0252); a larger-pressure
 counterexample regresses three GETs. Actual ownership and a fresh screen must
 settle the result. Exact source `95fdf58` has now passed final independent
 correctness review, including allocator, fault, restart, warm and HTTP controls.
-Its ledger publication and fresh R20/R21 priced screen remain pending. The
+Its [ledger publication and independent review](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r21-fit-response-root-review/README.md)
+are approved. The fresh R20/R21 priced screen is now declared below. The
 fresh-schema proposal has isolated implementation authorization for focused
 tests and a cheap actual 16/64 MiB startup/first-push proof. Neither change
 enters this completed screen.
@@ -1004,3 +1005,17 @@ rejects its fully journaled transparent legacy-writer variant: at least $0.050
 extra SQL writes exceed the $0.005275 remaining margin. A separate versioned
 new-Native-only writer contract remains unresolved; no global minimum follows.
 No container implementation or runtime was authorized.
+
+## Declared R20/R21 screen
+
+The next screen compares R20 source `b74c917` with Fit source `95fdf58` and its
+approved docs commit `d573f463`. Fit's Native source tree is
+`4717edd249bcb85edec47674787aa1ecf9f7d8f1`; the common six-module Worker remains
+`7f41db4407963ed04e6cbe19556b1416633caf18`. The workflow changes only provider
+pins and their description. Original reference/full baseline `556b9ecd`, two
+pairs on each 16/64 MiB cold/warm profile, 32 pushes/56 fetches, prices, memory,
+storage, transfer and Git-normalized latency guards remain unchanged.
+
+No new measured benefit is claimed. The isolated bootstrap and diagnostic
+changes are excluded. Review all four fresh profiles before selecting another
+provisional cost anchor; final five-pair validation remains separate and pending.

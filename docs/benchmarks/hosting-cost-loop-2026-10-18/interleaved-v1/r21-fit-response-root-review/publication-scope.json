@@ -1,0 +1,148 @@
+{
+  "utc": "2026-10-18T16:30:11.657115+00:00",
+  "decision": "Root approves integrating exact SOURCE95f and LEDGERd573 for a fresh two-pair R20/R21 experimental screen",
+  "source": "95fdf58f6bd7298736cfe124725e4f7e6c9aceb9",
+  "ledger": "d573f463655083885a3cd51a76761c7967834777",
+  "original_author_folder_unchanged": true,
+  "screen_stage": "screen",
+  "samples": 2,
+  "four_profiles": [
+    "16mib-cold",
+    "16mib-warm",
+    "64mib-cold",
+    "64mib-warm"
+  ],
+  "comparison_anchor": "R20 provisional known-cost only",
+  "final_five_original_R1_final_all4": "NOTDONE",
+  "speed_cost_acceptance_promotion_stopping": false,
+  "files": [
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/INPUT_SHA256SUMS",
+      "published": "independent-INPUT_SHA256SUMS.gz",
+      "source_bytes": 41076,
+      "source_sha256": "95dedfdb6a145affbaa69e6f158db838c1963e31ed842b1ca40e3e40f60275a9",
+      "published_bytes": 10518,
+      "published_sha256": "5550860cf63d639bdfc3421003f030fca3913e77d86b516765a4ace3b1a8f3a0"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/INPUT_SHA256_INVENTORY.json",
+      "published": "independent-INPUT_SHA256_INVENTORY.json.gz",
+      "source_bytes": 553925,
+      "source_sha256": "638be679da0d1635b8109ef577f09c29e7bfd79f3db9e4afa93284913c24bc45",
+      "published_bytes": 51816,
+      "published_sha256": "aac427ca42ba54e2f0b6d6b4dae6caa2048a623773cbdc8799d8945a254557c9"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/OUTPUT_SHA256SUMS",
+      "published": "independent-OUTPUT_SHA256SUMS.gz",
+      "source_bytes": 1514,
+      "source_sha256": "9cc91717197e9bd4923db86181a6bfc0c581b47ad321e37826c1d9119af48f91",
+      "published_bytes": 667,
+      "published_sha256": "8c4eeb6b25c711ea928a6cd46f56c15504c22c10d780f17a3a031b347e2f0438"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/REVIEW.json",
+      "published": "independent-REVIEW.json.gz",
+      "source_bytes": 8759,
+      "source_sha256": "1675050054693b886a3b69c5bbdc578b618f1134c445a5546e9ba198be279543",
+      "published_bytes": 3239,
+      "published_sha256": "ff659b18db97a98287ec58c19ca11cbf20f72764b6c3537489ddd69f4b359447"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/REVIEW.md",
+      "published": "independent-REVIEW.md",
+      "source_bytes": 6138,
+      "source_sha256": "9b9c1c63806258b9f435571a96bbb3c1c0afb5babec0dcdf9e6a9eda23e1a28e",
+      "published_bytes": 6138,
+      "published_sha256": "9b9c1c63806258b9f435571a96bbb3c1c0afb5babec0dcdf9e6a9eda23e1a28e"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/audit_publication.py",
+      "published": "independent-audit_publication.py",
+      "source_bytes": 13327,
+      "source_sha256": "ba9d72e1d7140fab0ea4b17ad9a3858dd34481b0c8cc3da08e9c63a29a5757b2",
+      "published_bytes": 13327,
+      "published_sha256": "ba9d72e1d7140fab0ea4b17ad9a3858dd34481b0c8cc3da08e9c63a29a5757b2"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/finalize_review.py",
+      "published": "independent-finalize_review.py",
+      "source_bytes": 15450,
+      "source_sha256": "4493ff802f05906e677e7be6bd91ea541accc2c9f7f7b3bb1f6367c4260c6401",
+      "published_bytes": 15450,
+      "published_sha256": "4493ff802f05906e677e7be6bd91ea541accc2c9f7f7b3bb1f6367c4260c6401"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/independent-committed-diff-check.log",
+      "published": "independent-independent-committed-diff-check.log.gz",
+      "source_bytes": 0,
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "published_bytes": 20,
+      "published_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/publication-audit-first-path-normalization.json",
+      "published": "independent-publication-audit-first-path-normalization.json.gz",
+      "source_bytes": 1402300,
+      "source_sha256": "51b7fb3a2e1114f45e2d72ef235e0dc66b31b45830f4a7e7072b106bef3c4615",
+      "published_bytes": 39903,
+      "published_sha256": "36597c6cc6be4f97053fb85f2cf2d880410ac6bc151df407f507300c1339a1b7"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/publication-audit.json",
+      "published": "independent-publication-audit.json.gz",
+      "source_bytes": 1402266,
+      "source_sha256": "33e6c5790ecd8df09a477852fbc1d55ecba2014ab61ec4655f140cbe2fe832db",
+      "published_bytes": 39873,
+      "published_sha256": "b30013f97b038b33731e125bb914797dfee821db2f7830d2dfbe28b532bddc3d"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/reconstruction-audit.json",
+      "published": "independent-reconstruction-audit.json.gz",
+      "source_bytes": 192525,
+      "source_sha256": "354217006ee1686fc9c6ba43b54ff28b9a4b96a8948ad9e9d3dd5f1afacdd4d1",
+      "published_bytes": 32442,
+      "published_sha256": "872e283ec4f5345a3be8c3463dc5da918b3dfa9fac863b269f97bacffda3fcac"
+    },
+    {
+      "source": "/tmp/git-zero-r21-fit-ledger-independent-review/reconstruction.log",
+      "published": "independent-reconstruction.log.gz",
+      "source_bytes": 177,
+      "source_sha256": "f9ea73abbe765195e965b55501a457263a57454fef49fdbfb666a2f6212267f6",
+      "published_bytes": 148,
+      "published_sha256": "7106c9e97891540f60028091bbee7967a54a55b4286e19d410cbe05aedc8a0df"
+    },
+    {
+      "source": "/tmp/git-zero-fit-response-ledger-handoff.md",
+      "published": "author-ledger-handoff.md",
+      "source_bytes": 4220,
+      "source_sha256": "2fdce49fb5d0007d7daa90cd4eb4bc9487aa34328a41b63c27cfeb26459f7d7c",
+      "published_bytes": 4220,
+      "published_sha256": "2fdce49fb5d0007d7daa90cd4eb4bc9487aa34328a41b63c27cfeb26459f7d7c"
+    },
+    {
+      "source": "/tmp/git-zero-fit-response-ledger-handoff.json",
+      "published": "author-ledger-handoff.json.gz",
+      "source_bytes": 45694,
+      "source_sha256": "26619847e64bccc979804b4651c3fb63af946a78fcc2c679413bd843e3421368",
+      "published_bytes": 12419,
+      "published_sha256": "066cc561efe3329c0127ded29a07f2162e0df964f3bc65111360b0a9914e680d"
+    },
+    {
+      "source": "/tmp/git-zero-fit-response-r21-ledger-file-map.json",
+      "published": "author-ledger-file-map.json.gz",
+      "source_bytes": 39274,
+      "source_sha256": "039c26ad1a399d19da1ded27a70d4b0e14cbf5203aca4af91ad3b837d1d57c84",
+      "published_bytes": 10076,
+      "published_sha256": "e992bbb282039e02cb09aab9c9c42a46fc7a570e79e27ec8da17d67c74c2e281"
+    },
+    {
+      "source": "/tmp/git-zero-r21-root-preintegration-check.json",
+      "published": "root-preintegration-check.json.gz",
+      "source_bytes": 508,
+      "source_sha256": "d6a887ab918780819411927aa49d5928ae933b8ba95ed492681d646eaedac66a",
+      "published_bytes": 346,
+      "published_sha256": "6371f9aae77770e31d7a09f793e199c33fb11037a0517760e354b91eff986caa"
+    }
+  ]
+}
