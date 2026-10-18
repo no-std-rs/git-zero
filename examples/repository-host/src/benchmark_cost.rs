@@ -319,6 +319,27 @@ fn snapshot(value: &Value) -> io::Result<ServiceUsage> {
     Ok(result)
 }
 
+fn r2_get_attempts(usage: &ServiceUsage) -> io::Result<u64> {
+    // snapshot() validates every present operation before deserialization. The
+    // Worker creates entries on the first attempt, so absence can mean zero.
+    let get = usage.operations.get("r2_get");
+    let gets = get.map_or(0, |operation| operation.attempts);
+    let heads = usage
+        .operations
+        .get("r2_head")
+        .map_or(0, |operation| operation.attempts);
+    require(
+        gets.checked_add(heads) == Some(usage.calls.r2_class_b),
+        "R2 Class B counters do not reconcile with GET and HEAD attempts",
+    )?;
+    require(
+        usage.calls.r2_read_bytes == get.map_or(0, |operation| operation.read_bytes)
+            && (gets > 0 || usage.calls.r2_read_bytes == 0),
+        "R2 read bytes do not reconcile with GET attempts",
+    )?;
+    Ok(gets)
+}
+
 fn sum(values: &[UsageCounters]) -> io::Result<UsageCounters> {
     let mut result = json!({});
     for key in [
@@ -837,14 +858,12 @@ fn profile_cost(report: &Value) -> io::Result<ProfileCost> {
                         "read changed actual R2 inventory",
                     )?;
                     if view == "cold" && operation["group"] == "latest_fetch" {
-                        let get_attempts = |snapshot: &Value| {
-                            count(field(field(snapshot, "operations")?, "r2_get")?, "attempts")
-                        };
+                        let before_gets = r2_get_attempts(&before)?;
+                        let after_gets = r2_get_attempts(&after)?;
                         require(
                             delta.r2_class_b > 0
                                 && delta.r2_read_bytes > 0
-                                && get_attempts(field(row, "cloudflare_services_after")?)?
-                                    > get_attempts(field(row, "cloudflare_services_before")?)?,
+                                && after_gets > before_gets,
                             "cold latest fetch bypassed actual R2 GETs",
                         )?;
                     }
@@ -1683,6 +1702,120 @@ mod tests {
             .decision,
             Decision::Improved
         );
+    }
+
+    #[test]
+    fn interleaved_accepts_first_get_without_a_prior_zero_operation() {
+        let mut report = interleaved_report(16, true, 2, "screen");
+        for row in report["raw"].as_array_mut().unwrap() {
+            if row["backend"] == "cloudflare-local" && row["workload"] == "latest_fetch_01" {
+                let before = &mut row["cloudflare_services_before"];
+                assert_eq!(before["r2_class_b"], 0);
+                assert_eq!(before["r2_read_bytes"], 0);
+                before["operations"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("r2_get");
+                assert_eq!(r2_get_attempts(&snapshot(before).unwrap()).unwrap(), 0);
+                assert!(
+                    row["cloudflare_services_after"]["operations"]["r2_get"]["attempts"]
+                        .as_u64()
+                        .unwrap()
+                        > 0
+                );
+            }
+        }
+        profile_cost(&report).unwrap();
+
+        // Existing HEAD traffic may account for Class B before the first GET.
+        for row in report["raw"].as_array_mut().unwrap() {
+            if row["backend"] == "cloudflare-local" && row["workload"] == "latest_fetch_01" {
+                for side in ["cloudflare_services_before", "cloudflare_services_after"] {
+                    let snapshot = &mut row[side];
+                    snapshot["r2_class_b"] = json!(snapshot["r2_class_b"].as_u64().unwrap() + 2);
+                    snapshot["operations"]["r2_head"] = json!({"attempts":2,"successes":2,"failures":0,"read_bytes":0,"written_bytes":0});
+                }
+            }
+        }
+        profile_cost(&report).unwrap();
+    }
+
+    #[test]
+    fn interleaved_rejects_inconsistent_or_malformed_get_accounting() {
+        for mutation in 0..13 {
+            let mut report = interleaved_report(16, true, 2, "screen");
+            let row = &mut report["raw"][1];
+            assert_eq!(row["workload"], "latest_fetch_01");
+            match mutation {
+                0 => {
+                    row["cloudflare_services_before"]["operations"]["r2_get"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("attempts");
+                }
+                1 => row["cloudflare_services_before"]["operations"]["r2_get"] = Value::Null,
+                2 => {
+                    row["cloudflare_services_before"]["operations"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("r2_get");
+                    row["cloudflare_services_before"]["r2_class_b"] = json!(1);
+                    row["cloudflare_services_after"]["r2_class_b"] = json!(2);
+                }
+                3 => {
+                    row["cloudflare_services_before"]["operations"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("r2_get");
+                    row["cloudflare_services_before"]["r2_read_bytes"] = json!(1);
+                    row["cloudflare_services_after"]["r2_read_bytes"] = json!(101);
+                }
+                4 => {
+                    row["cloudflare_services_after"]["operations"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("r2_get");
+                }
+                5 => {
+                    row["cloudflare_services_after"]["operations"]["r2_get"]["read_bytes"] =
+                        json!(99)
+                }
+                6 => {
+                    row["cloudflare_services_after"]["operations"]["r2_get"]["failures"] = json!(1)
+                }
+                7 => row["cloudflare_services_before"]["accounting_complete"] = json!(false),
+                8 => {
+                    row["cloudflare_services_before"]["accounting_errors"] =
+                        json!(["missing receipt"])
+                }
+                9 => {
+                    row["cloudflare_services_after"]["operations"]["r2_get"]["attempts"] = json!(-1)
+                }
+                10 => {
+                    row["cloudflare_services_after"]["r2_read_bytes"] = json!(0);
+                    row["cloudflare_services_after"]["operations"]["r2_get"]["read_bytes"] =
+                        json!(0);
+                    row["cloudflare_workload_delta"]["r2_read_bytes"] = json!(0);
+                }
+                11 => {
+                    row["cloudflare_services_after"]["operations"]["r2_get"]["attempts"] = json!(0);
+                    row["cloudflare_services_after"]["operations"]["r2_get"]["successes"] =
+                        json!(0);
+                    row["cloudflare_services_after"]["operations"]["r2_head"] = json!({"attempts":1,"successes":1,"failures":0,"read_bytes":0,"written_bytes":0});
+                }
+                _ => {
+                    row["cloudflare_services_before"]["r2_class_b"] = json!(1);
+                    row["cloudflare_services_before"]["r2_read_bytes"] = json!(100);
+                    row["cloudflare_services_before"]["operations"]["r2_get"] = json!({"attempts":1,"successes":1,"failures":0,"read_bytes":100,"written_bytes":0});
+                    row["cloudflare_services_after"]["r2_class_b"] = json!(2);
+                    row["cloudflare_services_after"]["r2_read_bytes"] = json!(200);
+                    row["cloudflare_services_after"]["operations"]["r2_get"]["read_bytes"] =
+                        json!(200);
+                    row["cloudflare_services_after"]["operations"]["r2_head"] = json!({"attempts":1,"successes":1,"failures":0,"read_bytes":0,"written_bytes":0});
+                }
+            }
+            assert!(profile_cost(&report).is_err(), "mutation {mutation}");
+        }
     }
 
     #[test]
