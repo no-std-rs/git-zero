@@ -1,0 +1,136 @@
+{
+  "scope": "Exact read-time audit and input hashes. Some inspected mutable isolated test-helper paths can subsequently change; no timeless current-input verification claim. No proven production latency fix, no CPU-from-elapsed inference. Root later authorized only isolated opt-in diagnostic hooks plus a tiny real-Git phase/framing/failure proof; expensive replays require source review and root GO. No main benchmark or provider source changes.",
+  "records": [
+    {
+      "source": "/tmp/git-zero-fetch-latency-audit-20261018/AUDIT.md",
+      "published": "AUDIT.md",
+      "source_bytes": 15140,
+      "source_sha256": "7050b285ecf790d3072f207c4794cede0289b621864b0c9204796377ac13dd86",
+      "published_sha256": "7050b285ecf790d3072f207c4794cede0289b621864b0c9204796377ac13dd86"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-latency-audit-20261018/audit.json",
+      "published": "audit.json.gz",
+      "source_bytes": 23730,
+      "source_sha256": "2e9d3ec088f2d902dc97dcbc8182ba3e04da2897adca78495f0a31e9833447e0",
+      "published_sha256": "08dc336b2a14693ebd2631a04b300d7572aed1a77627374a7bb039a4944d1ada"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-latency-audit-20261018/inputs.sha256",
+      "published": "inputs.sha256",
+      "source_bytes": 4083,
+      "source_sha256": "120bd7af34e5fd14c2552471def5831827a8dde75e0e42106fae07e2429fe8b5",
+      "published_sha256": "120bd7af34e5fd14c2552471def5831827a8dde75e0e42106fae07e2429fe8b5"
+    }
+  ],
+  "stage1_records": [
+    {
+      "source": "/tmp/git-zero-fetch-phase-independent-review-20261018-source-stage1/REVIEW.md",
+      "published": "stage1-independent-review.md",
+      "source_bytes": 8040,
+      "source_sha256": "72597e9adca697085d3bb6c2d697b1f7b11419b332193aca66e488ebdef1ff8a",
+      "published_sha256": "72597e9adca697085d3bb6c2d697b1f7b11419b332193aca66e488ebdef1ff8a",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-phase-independent-review-20261018-source-stage1/REVIEW.json",
+      "published": "stage1-independent-review.json",
+      "source_bytes": 7297,
+      "source_sha256": "2b4458d0da6a9d7b9c3622dc42b83a5a445c9ba794047a524d8ee71ea391274f",
+      "published_sha256": "2b4458d0da6a9d7b9c3622dc42b83a5a445c9ba794047a524d8ee71ea391274f",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-phase-stage1-proof-20261018-03/proof.json",
+      "published": "stage1-final-proof.json",
+      "source_bytes": 3644,
+      "source_sha256": "acf5d66043180176a27156f1539237e70df8745bdbb4377c2cb020feb5066de1",
+      "published_sha256": "acf5d66043180176a27156f1539237e70df8745bdbb4377c2cb020feb5066de1",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-diagnostics-immutable/stage1-a827df032e87374737b1ac7e36fb518b507e8411-v1/relocation-map.json",
+      "published": "stage1-immutable-relocation-map.json.gz",
+      "source_bytes": 334944,
+      "source_sha256": "420c4a5aa3327daf19dbdf02eb77d168767e8acabf6aa02d75f63d366c5e8840",
+      "published_sha256": "6e7c05f3d830ec653b8094ec7e489e6473d7d94913f229a7bef4a1d80a4ddcb0",
+      "encoding": "gzip of exact original bytes"
+    }
+  ],
+  "stage1_scope": "Independent SOURCE + tiny proof approval only for isolated a827df032e87374737b1ac7e36fb518b507e8411 (parentf124); no production fix or expensive replay approval. Final proof03 only. Failed01forcedExpect and earlier02unsupportedEditor environment retained locally and scoped by review. Disabled actual proc environment receipt absent/NULL; enabled actualproc known-only and supported metrics positive. Gitv2 discovery leaves v0cert/gatewaycontinuation untested. Original source/ELF paths historical and reusable; exact independent readonly682file source/ELF relocation archive preserves actual approved bytes. Large Git/R2/SQLite/raw runtime and actual ELF files remain local-only; public metadata does not recreate them. Supervisor implementation and cheap hard-deadline proof separately under review; no replay CLI, no large fixture generation authorized. CPU/duration/fullbill NULL; elapsed diagnostics cannot replace unchanged benchmark. Main provider pins/Worker source unchanged.",
+  "stage2_records": [
+    {
+      "source": "/tmp/git-zero-hosting-fetch-diagnostics/docs/diagnostics/fetch-phase-stage2-2026-10-18.md",
+      "published": "stage2-handoff.md",
+      "source_bytes": 8956,
+      "source_sha256": "9bf6bc7a6e0fec801e58c465cd2501e9c895e4636c6196b38b32b0ce7be8ddc5",
+      "published_sha256": "9bf6bc7a6e0fec801e58c465cd2501e9c895e4636c6196b38b32b0ce7be8ddc5",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-hosting-fetch-diagnostics/docs/diagnostics/fetch-phase-stage2-2026-10-18.json",
+      "published": "stage2-handoff.json",
+      "source_bytes": 11435,
+      "source_sha256": "ac3b33574a43b71c3ffbb342e02a8245051262842ab3db59caf41b90bc175b9f",
+      "published_sha256": "ac3b33574a43b71c3ffbb342e02a8245051262842ab3db59caf41b90bc175b9f",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-stage2-independent-review/REVIEW.md",
+      "published": "stage2-independent-review.md",
+      "source_bytes": 10711,
+      "source_sha256": "c70bb288cbccc40e6578f0d227926c4659ab9e1e1cc9edebb0b65473dda33b92",
+      "published_sha256": "c70bb288cbccc40e6578f0d227926c4659ab9e1e1cc9edebb0b65473dda33b92",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-stage2-independent-review/REVIEW.json",
+      "published": "stage2-independent-review.json",
+      "source_bytes": 8470,
+      "source_sha256": "72227c8bd3dd5e45e3b53b910cdfc1a6edd3f09bd4e9483638cf32d5f21bc3c9",
+      "published_sha256": "72227c8bd3dd5e45e3b53b910cdfc1a6edd3f09bd4e9483638cf32d5f21bc3c9",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-stage2-independent-review/inputs.sha256",
+      "published": "stage2-review-inputs.sha256.gz",
+      "source_bytes": 490731,
+      "source_sha256": "cf4cb6627e5fb2748a115106df9049365a18442e0aaa8b3f3b02f9875930bd38",
+      "published_sha256": "2f8c4274186cea70c950f7a0e268ca453ee9918eebca9018395ad7d8c09ea5b0",
+      "encoding": "gzip of exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-stage2-supervisor-proof-20261018-02/proof.json",
+      "published": "stage2-supervisor-proof.json",
+      "source_bytes": 7567,
+      "source_sha256": "059039c04858808bb4029ebd4d280f48517d6cfd55a98313ffbb4383818f0b9a",
+      "published_sha256": "059039c04858808bb4029ebd4d280f48517d6cfd55a98313ffbb4383818f0b9a",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-stage2-case-plans-20261018-02/plans.json",
+      "published": "stage2-case-plans.json",
+      "source_bytes": 1207,
+      "source_sha256": "223467e7408aa170ae845ce029d4429a16e05afcab98184d618c1c79393d865a",
+      "published_sha256": "223467e7408aa170ae845ce029d4429a16e05afcab98184d618c1c79393d865a",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-stage2-case-plans-20261018-02/64mib-cold-history_no_haves_16.json",
+      "published": "stage2-plan-64mib-cold-history_no_haves_16.json.gz",
+      "source_bytes": 94010,
+      "source_sha256": "852558c0bcd8491061b762ac2a50352a89565d927fe2ae367e9e9dc22ad713a4",
+      "published_sha256": "bd39cba0281e43039d5c56d0471ebc485ed518bcdd151f3c2c49f64fc2b969c4",
+      "encoding": "gzip of exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-stage2-case-plans-20261018-02/16mib-warm-history_no_haves_32.json",
+      "published": "stage2-plan-16mib-warm-history_no_haves_32.json.gz",
+      "source_bytes": 133604,
+      "source_sha256": "5f720f8368e75f4d9447871ce6809330e4f8db188d561c3457de51e21bf3072d",
+      "published_sha256": "fa19c36d7eb0b2ce322f1bb7f8d4ec2628c0bec779bd851ad59c2b5bf634be3f",
+      "encoding": "gzip of exact original bytes"
+    }
+  ],
+  "stage2_scope": "Independent SOURCE + cheap supervisor proof approval only for isolated c964a967ccebf76aa1137412e158630bbe668937 exactparenta827. Source/ELF archive and all scoped read-time inputs verified by fresh reviewer; original targetpaths historical/reusable, immutable aliases retained locally. Two sealed case plans preserve logical88op schedules/42and86 prefixes but fixture reconstruction remains NULL. Twelve historical context wall_ms values differ by one ULP on JSON reserialization (max5.684341886080802e-14ms); sealed original reports authoritative. Root subsequently authorized only bounded executor implementation plus tiny <=3generation/64KiB real-path proof; large fixture/replay/resourceprefix remain unauthorized. New executor must itself be frozen and reviewed. Native/hooks/Worker/benchmark/provider pins remain unchanged; no performance/cost/fullbill claim."
+}

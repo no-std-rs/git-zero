@@ -25,7 +25,9 @@ lower bound. A hard 14 MiB response cap is rejected; eligible responses up to
 current Full authority. The preparation's provisional source snapshot is
 historical; the isolated R19 implementation starts at approved R18 `f1ba8f5`.
 R19 source, ownership/fault controls and corrected ledger review are approved.
-The next fresh R18/R19 screen remains unmeasured.
+The [fresh R18/R19 screen](../ci-r18-r19-fresh-screen/README.md) measures
+a 9.1899% known-cost reduction, with three p95 limits failing. R19 is only the
+provisional cost anchor.
 
 All retain existing memory/storage/API limits and unknown compute costs. No
 acceptance or stopping conclusion follows. Verify this bundle with
@@ -52,3 +54,18 @@ unconditional net bound: larger resident sets can also lose later hits. R20 is
 this isolated Joint policy; actual same-source controls precede source review and
 a fresh priced screen. The bootstrap's earlier tentative R20 label never had code
 or a source pin.
+
+The [bootstrap implementation preparation](fresh-bootstrap-implementation-prep.md)
+pins the approved R19 source and stages a cheap real startup/first-push proof
+before broader implementation. Its conditional strict R19 cost margin is
+$0.00307144563820; schema changes alone fall below the 1% target. Actual R20
+source approval, measured costs and root implementation GO remain prerequisites.
+
+The [response-retention audit](fit-response-design.md), [independent replay and review](fit-response-independent-design-review.md)
+and [implementation preparation](fit-response-implementation-prep.md) propose
+skipping optional upload response retention when it would evict existing cache
+owners. Conditional savings are 70 GETs ($0.0252); a larger pressure stress
+regresses three GETs, so the measured result remains open. The independent
+review corrects the audit's ownership labels; production must use actual source
+capacities. This candidate follows exact Joint source approval and root GO.
+Bootstrap remains deferred. No implementation or benchmark is included here.

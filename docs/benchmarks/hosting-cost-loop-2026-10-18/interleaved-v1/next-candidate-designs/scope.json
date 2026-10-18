@@ -14,9 +14,9 @@
   "historical_scope_notice": "Earlier status descriptions record design/preparation time. They are not current implementation or measurement status; original proposal and review bytes are preserved.",
   "current_status_2026_10_18": {
     "r15_r16_r17": "Fresh run39109536794 completed. R17 is provisional known-cost anchor only; all comparisons Inconclusive, 28 failed latency groups, no speed or stopping claim. See ../ci-r15-r17-fresh-screen/.",
-    "r18": "Fresh run39113545149 completed. Known objective5.0936%lower versusR17; all36resource4profilecostguards pass,5latencygroupsfail. R18ONLYprovisionalknowncostanchor afterwhole-source/scopes/guards/tails review, no formalpromotion/speed/stopping.",
-    "r19": "SOURCE f124 and corrected docs ledger3b265 independently approved; all5135 local files freshly rehashed, d565 blocked inventory omission preserved. Integrated for next fresh R18/R19 two-pair screen. No measured saving yet.",
-    "r20": "Joint-only policy independently design-approved and isolated implementation authorized at exact R19 f124; real same-source MULTI/Joint16/64 controls are running. No source/ledger approval or priced benchmark yet."
+    "r18": "Fresh R18/R19 run39118509165 completed; R18 is historical comparison baseline. Its source and one-chunk ledger remain approved.",
+    "r19": "Fresh run39118509165 independently and root reviewed all four sources/scopes/guards/tails: known9.18993%lower,36resources4profilecost/envelopepass,3p95limitsfail. R19onlyprovisionalknowncostanchor; no acceptance/speed/stop. See ../ci-r18-r19-fresh-screen/.",
+    "r20": "Exact SOURCEb74 and corrected docs ledger61d (docsparent066/sourceancestorb74) independently and root approved; all canonical and bounded controls plus exact publication pass. Next two-pair all-four R19/R20 screen is declared; no priced R20 measurement yet. Limits/failed records preserved, no speed/formal acceptance/stopping claim."
   },
   "r19_records": {
     "multi-chunk-independent-design-review.md": "/tmp/git-zero-multi-chunk-independent-design-review.md",
@@ -109,5 +109,92 @@
       "encoding": "gzip of exact original bytes"
     }
   ],
-  "joint_chunk_scope": "R20 generic admission policy removes only unallocated15MiB secondary-admission heuristic; same actual32MiB/256/pool32/socket/response caps and required-pressure/current-Full-prune rules. Independent replay193GET/$.06948 conditional at1MiB nonchunk stress; measured boundary is not actual peak, residency is not a superset, hidden response/authority/pruning pressure makes unconditional net bound0. Source-approved R19 prerequisite met. Fresh bootstrap is deferred unnumbered design; earlier R20 bootstrap label was prospective only, no code or source pin."
+  "joint_chunk_scope": "R20 generic admission policy removes only unallocated15MiB secondary-admission heuristic; same actual32MiB/256/pool32/socket/response caps and required-pressure/current-Full-prune rules. Independent replay193GET/$.06948 conditional at1MiB nonchunk stress; measured boundary is not actual peak, residency is not a superset, hidden response/authority/pruning pressure makes unconditional net bound0. Source-approved R19 prerequisite met. Fresh bootstrap is deferred unnumbered design; earlier R20 bootstrap label was prospective only, no code or source pin.",
+  "fresh_bootstrap_implementation_prep": [
+    {
+      "source": "/tmp/git-zero-fresh-bootstrap-implementation-prep.md",
+      "published": "fresh-bootstrap-implementation-prep.md",
+      "source_sha256": "a7e6db5a98ee529e469058e9f2de9a68c2d1fd60ac8a80f37971a4f76dce71a8",
+      "published_sha256": "a7e6db5a98ee529e469058e9f2de9a68c2d1fd60ac8a80f37971a4f76dce71a8",
+      "source_bytes": 16268,
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fresh-bootstrap-implementation-prep.json",
+      "published": "fresh-bootstrap-implementation-prep.json.gz",
+      "source_sha256": "0576937e71efdc45bd509df75af389fe4cda31bd4a836d819bc81605d6500ad8",
+      "published_sha256": "19da9bba7c22b886823c95f894d38fc8b484c24a8d7a6f2b73d904c7531870a7",
+      "source_bytes": 54424,
+      "encoding": "gzip of exact original bytes"
+    }
+  ],
+  "fresh_bootstrap_current_prep": "Read-only prep complete against approvedR19, no mutableR20 inspection/code/worktree/runtime. Eventual codebase exactR20sourceapproval plus rootGO. ExactR19 strictconditionalmargin$.00307144563820 vsmean$.00307542563820; schemaonly$.012=.9284638445% below1%. ActualpostR20denominator/cursorproof stillrequired.",
+  "fit_response_records": [
+    {
+      "source": "/tmp/git-zero-after-joint-residual-audit.md",
+      "published": "fit-response-design.md",
+      "source_bytes": 14194,
+      "source_sha256": "7867167a919210d950d790c755010892405ac835d2808ae3a7eca6cf17030d8e",
+      "published_sha256": "7867167a919210d950d790c755010892405ac835d2808ae3a7eca6cf17030d8e",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-after-joint-residual-audit.json",
+      "published": "fit-response-design-data.json.gz",
+      "source_bytes": 98722,
+      "source_sha256": "51c9502c4d41c169d1a9c0f42f55e8dfab91d63235fb48a2bc7a9b9a83d9958f",
+      "published_sha256": "07f1cf314af2ea9fd3ef3c20c020c32c7c2e938927e011b80430454686099bf1",
+      "encoding": "gzip of exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fit-response-independent-design-review.md",
+      "published": "fit-response-independent-design-review.md",
+      "source_bytes": 9781,
+      "source_sha256": "c8ef6daa7eb6a410c1ceeec12e884eb954d2db7e04c84a0b92f4498d3d5774ff",
+      "published_sha256": "c8ef6daa7eb6a410c1ceeec12e884eb954d2db7e04c84a0b92f4498d3d5774ff",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fit-response-independent-design-review.json",
+      "published": "fit-response-independent-design-review.json.gz",
+      "source_bytes": 36749,
+      "source_sha256": "80dc8664e99fe6f9717636a1c682952a1b8485d4b6f163c7f4a548575e233966",
+      "published_sha256": "b38e366e3086ffc81c5be2e713c6169dec50ed4ee52122f5b952b1df6d8c4006",
+      "encoding": "gzip of exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fit-response-independent-design-review.py",
+      "published": "fit-response-independent-replay.py",
+      "source_bytes": 19176,
+      "source_sha256": "49cd0db16d7eb787860dbf9c80adfb7c256216712897dc258f33f0212bb1da4c",
+      "published_sha256": "49cd0db16d7eb787860dbf9c80adfb7c256216712897dc258f33f0212bb1da4c",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fit-response-independent-design-review.calculation.json",
+      "published": "fit-response-independent-calculation.json.gz",
+      "source_bytes": 2672476,
+      "source_sha256": "0c62156658e2ef1ff0b0b04be4505801609e767df71f567c6966589bc5f3991d",
+      "published_sha256": "43da58d95b78dd4c817c7ec86c946002c4ee1fba947b18ff2ad1389f2662fe4b",
+      "encoding": "gzip of exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fit-response-implementation-prep.md",
+      "published": "fit-response-implementation-prep.md",
+      "source_bytes": 14729,
+      "source_sha256": "1acf922326f3996e55abc78bd9339c72d22ca7d698bfa10d0cdc2d27abc7affe",
+      "published_sha256": "1acf922326f3996e55abc78bd9339c72d22ca7d698bfa10d0cdc2d27abc7affe",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fit-response-implementation-prep.json",
+      "published": "fit-response-implementation-prep.json.gz",
+      "source_bytes": 36316,
+      "source_sha256": "4e54971d52e28081633f0c854379fdb6e7ddb3ca1d27a0dbc7ee9adee114550a",
+      "published_sha256": "307e8d4b3a8b55852cac37878881bfa44a3cfacc3f915afafe19a566ae53c330",
+      "encoding": "gzip of exact original bytes"
+    }
+  ],
+  "fit_response_scope": "Conditionally independently reviewed design and read-only prep only. No implementation/worktree/runtime/benchmark GO until exact approved Joint SOURCE and root ordering. Generic optional upload POST retention skips when retaining would evict current owners, using actual source capacities/ownership/ring overlap; discovery/no-chunk/mandatory pressure unchanged. Conditional 70GET/$0.0252 saving at analytical 0.5/1/2MiB stress, minus3GET/$0.00108 at4MiB; no positive guaranteed net credit or resident superset. Original audit labels corrected by independent review: advertisement438B/certificate478B, cloned discovery/POST overhead1095/1088B. No analytical stress/calibrated labels become production reservation. Read-only replay is offline arithmetic; production runners remain Rust. Fresh four-profile cost/resource/latency screen and independent source/fault/ownership/ledger reviews required; fully reviewed Inconclusive screens permit further experiments but no formal promotion/speed/stopping claim. Mandatory five fresh R1/final pairs across four profiles still undone.",
+  "fit_response_current_status": "Root implementation GO granted only in isolated worktree from exact approvedR20b74; no primary integration or benchmark yet. Same source-based ownership/optional-retention rule, caps and required correctness/review gates unchanged. Large local fixture resource forecast still requires root acknowledgment; no tmpfs prefix yet."
 }

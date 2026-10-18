@@ -1,0 +1,28 @@
+{
+  "frozen_generator_sha256": "6c430861588e94d278bc5541d4f3b8196ce75888d5d11e658c2cccf37a6220ea",
+  "frozen_schedule_sha256": "0dc340f39d51c4baf86e7d8b142f0a02ffaf9dc10345af7c22b27d59fc581401",
+  "immutable_stage1_relocation_map": "/tmp/git-zero-fetch-diagnostics-immutable/stage1-a827df032e87374737b1ac7e36fb518b507e8411-v1/relocation-map.json",
+  "large_generation_performed": false,
+  "max_cases_total": 4,
+  "max_serial_work_plus_cleanup_seconds": 4820,
+  "plans": [
+    {
+      "fixture_reconstruction_verified": null,
+      "operations_including_target": 42,
+      "path": "/tmp/git-zero-fetch-stage2-case-plans-20261018-02/64mib-cold-history_no_haves_16.json",
+      "replicas_max": 2,
+      "sha256": "852558c0bcd8491061b762ac2a50352a89565d927fe2ae367e9e9dc22ad713a4"
+    },
+    {
+      "fixture_reconstruction_verified": null,
+      "operations_including_target": 86,
+      "path": "/tmp/git-zero-fetch-stage2-case-plans-20261018-02/16mib-warm-history_no_haves_32.json",
+      "replicas_max": 2,
+      "sha256": "5f720f8368e75f4d9447871ce6809330e4f8db188d561c3457de51e21bf3072d"
+    }
+  ],
+  "raw_prefix_location": null,
+  "replay_cli_available": false,
+  "root_go_required": true,
+  "schema": 1
+}

@@ -1,0 +1,16 @@
+{
+  "scope": "Independent root corrected publication/actual mapped-original validation; no source, cost or performance acceptance",
+  "ledger": "61d3a984efd0b9750538ca466dbf3f0a7fb046af",
+  "source": "b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0",
+  "public_checksums": 14,
+  "safe_unique_regular_capsule_members": 4096,
+  "mapped_originals_exact": 4094,
+  "mapped_original_bytes": 31115080,
+  "small_PACK_members": 62,
+  "small_PACK_member_total_bytes": 39445,
+  "small_PACK_member_max_bytes": 2767,
+  "capsule_sha256": "051c008d04dd0a0553a5aee8bf6405b37b9f3574668a4915c41bcea2e8aeb07c",
+  "large_raw_ELF_SQL_state_uploaded": false,
+  "full_bill_usd": null,
+  "separate_source_and_ledger_review_required": true
+}

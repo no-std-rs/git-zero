@@ -770,7 +770,7 @@ follow-ups. No stopping condition is established, and five fresh original-R1/fin
 pairs on all four profiles are still mandatory.
 
 
-## Next declared screen: bounded secondary chunks
+## Declared R18–R19 screen: bounded secondary chunks
 
 After complete review of fresh R17–R18 sources, scopes, guards and tails, a new
 two-provider screen compares the provisional R18 cost anchor with R19. Each of
@@ -820,3 +820,123 @@ unmeasured designs and are absent from both source pins. The screen is formally
 inconclusive and plateau-ineligible. No stopping condition is established; five
 fresh original-R1/final pairs across all four profiles remain mandatory. Unknown
 cloud and Native compute keep the full hosting bill null.
+
+
+## Completed screen: bounded secondary chunks
+
+Fresh [run 39118509165](https://github.com/no-std-rs/git-zero/actions/runs/39118509165)
+measured approved R18 and R19 on four fresh standard GitHub VMs, with two pairs
+and one excluded warmup per profile. Both providers used the same six-module
+Worker, common Rust runner/scorer and prepared Git 2.53 reference. All four
+profiles, the score job and all eleven required CI checks passed.
+
+| Provider | Known fixed objective | Change from R18 |
+| --- | ---: | ---: |
+| R18: one verified chunk | $1.42325343618 | — |
+| R19: bounded verified chunk pool | $1.29245743618 | −9.1899% |
+
+This objective repeats each 32-push/56-fetch profile 1,000 times and prices its
+observed peak storage for 30 days under the frozen rate card. It is a known
+subtotal: Worker CPU, DO duration, monthly SQLite storage and Native compute
+remain unknown, so the full hosting bill stays null. Actual startup and observer
+work remain separately visible; startup contributes $0.011407 per profile when
+priced at the same repeat multiplier, outside the fixed workload.
+
+Across the cold-profile means, R19 avoids 345 GETs ($0.1242), 38 DO dispatches
+($0.0057) and three Worker requests ($0.0009), while four additional SQL rows
+read cost $0.000004. The net saving is $0.130796. It is the measured result,
+rather than the earlier conditional 338-GET replay.
+
+| Cold profile, each trial | R18 | R19 |
+| --- | ---: | ---: |
+| 16 MiB GETs | 346 | 153 |
+| 16 MiB R2 bytes read | 1,096,568,553 | 569,108,040 |
+| 64 MiB GETs | 506 | 354 |
+| 64 MiB R2 bytes read | 2,505,738,563 | 2,449,962,286 |
+
+Warm ordinary reads still use zero R2 GETs. Written bytes, peak/live storage,
+SQL writes and SQLite footprint remain equal; all 36 resource guards, four
+profile-cost guards and the conservative 1% cost envelope pass. Actual pool
+admission, pruning and rejection vary by profile. The maximum observed joint
+gauge is 30,683,668 bytes, with source-reported peak 30,686,434, under the same
+32 MiB/256-entry budget. The later-admission 17 MiB preference remains
+unallocated space, rather than fictitious owned memory or a response-size cap.
+Observer hits do not become new admissions or pruning. Naturally new cold
+latest reads still need real GETs.
+
+All 24 median latency guards pass, but three p95 guards fail: cold16 large
+pushes, cold16 history with haves, and warm16 history without haves. The largest
+R19 elapsed operation remains a cold64 historical fetch at 141,599.712 ms,
+versus 794.698 ms for its paired Git operation. These tails remain in the
+results. The screen is **inconclusive and plateau-ineligible**; there is no
+general speed win or stopping conclusion.
+
+[Fresh evidence and analysis](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r18-r19-fresh-screen/README.md)
+preserve all five original archives, frozen byte-exact score reproduction,
+source/runtime identities, request scopes, all 1,408 ratios, 64 selected tails
+and all 96 individual pairs in failed latency groups. Root independently
+reconstructed all 16 priced trials, 36 resource/four cost guards, 24 latency
+groups, startup/observer scope algebra, selected tails and publication bytes.
+After this complete review, R19 is only the provisional known-cost comparison
+anchor. Five fresh original-R1/final pairs across all four profiles remain
+mandatory.
+
+The isolated Joint-only admission candidate remains under local correctness
+validation. Its first16 pair reduces actual GETs with unchanged mutation and
+storage totals; one response has proven identical decoded objects with a
+17-byte pack-encoding difference. The clean64 pair also passes: 375→282 ordinary
+GETs with identical mutations/storage and supported read/receive preparation.
+Its one 45-byte response variance has exact decoded-object proof. A first64
+attempt failed during an observer request and is excluded, with missing
+error-body evidence disclosed. A separate traced pair exercised fallback only;
+it does not establish optimized-path performance. Correctness controls use
+separately scoped volatile temporary storage; their timings are not performance
+measurements. Exact Joint source `b74c917` and all six bounded controls have
+passed independent review. The [corrected ledger](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r20-joint-chunk-candidate/ledger-review-final.md)
+also passed independent review; only the fresh priced screen remains. Its
+bounded small synthetic wire samples are explicitly disclosed alongside the
+local-only large payloads and state.
+
+The next [response-retention design](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/next-candidate-designs/fit-response-independent-design-review.md)
+would skip optional upload response retention when it would evict existing
+owners. Its conditional replay saves 70 GETs ($0.0252); a larger-pressure
+counterexample regresses three GETs. Actual ownership and a fresh screen must
+settle the result. Isolated implementation has begun from approved Joint source;
+there is no candidate result or integration yet.
+The fresh-schema proposal is deferred. None enters this completed screen.
+
+A [read-only fetch phase audit](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/fetch-latency-audit/AUDIT.md)
+shows that the codec elapsed counter excludes view preparation and response
+delivery. Several warm tails have zero R2 reads, so storage reads do not explain
+every slow request. The cause remains unresolved. A separate small Rust
+diagnostic proof has independently approved phase records, including actual
+failed HTTP bodies and partial-write stages. Its first runner had a cooperative
+deadline; a [separate hard supervisor](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/fetch-latency-audit/stage2-independent-review.md)
+has passed independent review and tiny stall/cleanup controls. The bounded
+executor and a tiny same-path proof come next; neither large case has run.
+Diagnostic timings cannot replace the unchanged benchmark.
+
+## Declared R19/R20 screen
+
+The next screen compares approved Joint source with the provisional R19
+known-cost anchor. Source and corrected-ledger reviews are complete; the workflow
+pins only these two providers. There are no R20 priced measurements yet.
+
+| Provider | Exact source commit | Native source tree |
+| --- | --- | --- |
+| R19 | `f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5` | `521d427a056711a58b757c9e52f3d5e047937f92` |
+| R20 | `b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0` | `ff99eaf58a5e4f68e744d0b50ddee2af67aff1cf` |
+
+Both providers use the same six Worker modules, source tree
+`7f41db4407963ed04e6cbe19556b1416633caf18`, frozen rates and Rust runner/scorer
+logic. Each fresh VM measures both providers sequentially for one of the four
+16/64 MiB cold/warm profiles. Two pairs per provider retain all 32 pushes and
+56 interleaved fetches, their paired tuned-Git operations, separately charged
+startup/observer scopes, and every latency tail.
+
+The objective, 1% resource/profile-cost limits, conservative cost separation,
+Git-normalized latency guards and artifact limits remain unchanged. All four
+profiles must be reviewed before selecting another provisional cost anchor.
+This screen cannot establish a plateau. The separate response-retention
+implementation and diagnostic executor are excluded. Five fresh original-R1
+versus final pairs across all four profiles remain required.
