@@ -1,0 +1,38 @@
+{
+  "run": 39104016332,
+  "attempt": 1,
+  "head": "82b64319bf9d39958c861b6fb7a9a6bae25fda9b",
+  "decision": "INVALID_INCOMPLETE_ATTEMPT_NO_SELECTION_NO_PLATEAU",
+  "root_independently_rebuilt_from_complete_original_reports": {
+    "complete_reports": 10,
+    "individual_paired_ratios": 1760,
+    "resource_guards": 81,
+    "latency_groups": 54,
+    "latency_limits": 108,
+    "failed_latency_groups": 13,
+    "every_group_tail": 60
+  },
+  "limits": [
+    "Only10 of12 reports are complete;64MiBwarmR14failedexcludedwarmup,R15missing. No all-profile scores, costwin or formal guard acceptance.",
+    "Surviving samples cannot be reused as replacements in another attempt.",
+    "Failed physical callback has unknown outer billing and lost Native stderr; unchanged observed service counters do not prove no inflight/billablework.",
+    "Full cloud bill remains null; mandatoryfivefreshoriginalR1/finalpairsallfour profiles remain undone."
+  ],
+  "worst_available_complete_operation": {
+    "profile": "64mib-cold",
+    "provider": "r15",
+    "sample": 1,
+    "workload": "history_no_haves_12",
+    "group": "history_no_haves",
+    "host_ms": 135853.497073,
+    "git_ms": 754.735489,
+    "ratio": 180.00146945918956
+  },
+  "root_publication_review": {
+    "artifact_map_payloads_exact_original_or_gzip": 70,
+    "capsule_file_bytes_match_publication": true,
+    "original_archives": 4,
+    "capsule_sha256": "f023faaab05572bb599012bf7670a0e5dd2de6c164280f464f729b0b8f18e89e",
+    "publication_logical_bytes": 9025703
+  }
+}

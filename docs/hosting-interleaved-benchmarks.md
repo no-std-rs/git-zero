@@ -470,10 +470,35 @@ stopping condition is established; final validation still requires five fresh
 original-R1/final pairs on every profile. Unknown cloud and Native compute
 keep the full bill null.
 
-## Next declared screen: atomic metadata and first fetch batch
+## Failed R13–R15 attempt and fresh verification
 
-After the complete R11–R13 receipt, resource and latency review, this fresh
-three-provider two-pair screen will compare:
+[Run 39104016332, attempt 1](https://github.com/no-std-rs/git-zero/actions/runs/39104016332),
+at `82b64319bf9d39958c861b6fb7a9a6bae25fda9b`, is invalid. Three profile jobs
+completed; R14 failed during excluded 64 MiB warm warmup at push 13, before
+its measured pairs. Git returned HTTP 503 and the upload-retire ProxyWorker
+reported a lost connection. No root cause is established. The native stderr
+remained on the destroyed VM, and the failed outer callback's billing is
+unknown. Observed zero binding deltas cannot establish zero inflight work.
+
+[Preserved original evidence](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r13-r15-failed-attempt/README.md)
+contains all four unchanged archives, ten complete reports, one incomplete
+report, 1,760 available ratios, all 81 partial resource diagnostics and all
+54 latency diagnostics, including every pair in 13 failed groups. Root review
+independently reproduced those diagnostics. The missing two reports prevent
+an all-profile cost comparison; scoring was skipped. This attempt supplies
+no selection, acceptance or plateau evidence. No samples are reused below.
+
+The reviewed [failure-only Rust runner amendment](hosting-failure-diagnostics.md)
+exports stopped-host stderr tails beside incomplete reports, outside workload
+timers. Successful workload logic, reference, Native providers, all five Worker
+modules, rates and scoring stay fixed. The 4 MiB archive cap remains unchanged.
+
+## Fresh declared screen: atomic metadata and first fetch batch
+
+After reviewing all four original outcomes, the fresh three-provider two-pair
+screen will compare the same pinned sources below. Each provider and all four
+profiles are newly measured within one new workflow attempt:
+
 
 | Label | Change | Source commit | Native source tree |
 | --- | --- | --- | --- |
