@@ -1,0 +1,1004 @@
+{
+  "kind": "isolated_R13_implementation_correctness_and_local_row_cost_gate_not_benchmark",
+  "reviewed_R12_base": "f90f54617bc4a4a1ff75ddab1870615163119fb4",
+  "initial_implementation_commit": "6c1d1648f0d3db96e865bdc5ef5dca8545a1754e",
+  "corrected_implementation_commit": "d84c2f6f85249ff7c6cb457f3e3f079b176e8b78",
+  "implementation_tree": "83db94f211da13a9920fca025860eb2577fb16ef",
+  "native_src_tree": "70c661265d559d1fd08ebb4970b0e239af70594f",
+  "whole_worker_src_tree": "22902cf4688aa7ee5da3705adceaaee0a2f08caa",
+  "all_worker_src_sha256": {
+    "examples/repository-host/cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+    "examples/repository-host/cloudflare/src/index.js": "dfa5d305b6dc511cdb85eb8b7ee717d09f70e7a0435160f29cecf75126c865c1",
+    "examples/repository-host/cloudflare/src/retirement-proof.js": "3ce5c71f08af064d65c712c38d64bf1c2ad75fbf861708d882f8bb14348a182c"
+  },
+  "independent_review": {
+    "report": "/tmp/git-zero-deferred-catalog-source-review.md",
+    "report_sha256_before_ledger_continuity_append": "89bd3c333d5ce13f42b8eed536d7a81f12170002065386112938e9de912acb3f",
+    "initial_result": "P1 oversized scalar fallback regression at 6c1d1648",
+    "focused_corrected_result": "original P1 resolved; no remaining focused blocker at d84c2f6f"
+  },
+  "protocol_limits": {
+    "opaque_proof_hex_bytes": 178,
+    "public_proof_header_limit": 512,
+    "retirement_bookkeeping_keys": 256,
+    "page_members": 32,
+    "page_blob_bytes_cap": 1286,
+    "v2_maximum_encoded_bytes": 1166,
+    "blob_bytes_cap": 16777216,
+    "native_joint_cache_bytes_cap": 33554432,
+    "normal_sqlite_bytes_limit": 24821.76
+  },
+  "tests": {
+    "library": {
+      "command": "CARGO_TARGET_DIR=/tmp/git-zero-deferred-catalog-target CARGO_BUILD_JOBS=2 cargo test -p git-zero-host --lib",
+      "passed": 103,
+      "failed": 0,
+      "scope": "Final unchanged Rust library source; initial sandbox-only socket bind EPERM corrected by scoped unsandboxed rerun."
+    },
+    "clippy": {
+      "command": "CARGO_TARGET_DIR=/tmp/git-zero-deferred-catalog-target CARGO_BUILD_JOBS=2 cargo clippy -p git-zero-host --all-targets -- -D warnings",
+      "status": "PASS",
+      "seconds": 0.31,
+      "scope": "Corrected final implementation and SDK contract sources."
+    },
+    "actual_deferred_contracts": {
+      "command": "CARGO_TARGET_DIR=/tmp/git-zero-deferred-catalog-target CARGO_BUILD_JOBS=2 cargo test -p git-zero-host --test deferred_catalog <exact test name> -- --ignored --nocapture --test-threads=1",
+      "passed": 7,
+      "failed": 0,
+      "source_manifest_sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e",
+      "runtime_port": 8834,
+      "scope": "Each exact contract ran separately using fresh state; all seven source manifests are identical and match corrected implementation."
+    },
+    "actual_registered_native": {
+      "command": "CARGO_TARGET_DIR=/tmp/git-zero-deferred-catalog-target CARGO_BUILD_JOBS=2 cargo test -p git-zero-host --test deferred_native -- --ignored --test-threads=1",
+      "passed": 1,
+      "fault_cases": 4,
+      "failed": 0,
+      "seconds": 3.86,
+      "runtime_port": 8833,
+      "scope": "Corrected final Worker; true registered Native partial DELETE, catalog ambiguity, sync ambiguity and unknown SQL cursor; next-push recovery and fsck."
+    },
+    "actual_R12_compatibility": {
+      "command": "CARGO_TARGET_DIR=/tmp/git-zero-deferred-catalog-target CARGO_BUILD_JOBS=2 cargo test -p git-zero-host --test catalog_pages -- --ignored --test-threads=1",
+      "passed": 9,
+      "failed": 0,
+      "seconds": 50.89,
+      "runtime_port": 8833,
+      "scope": "Earlier exact recorded Worker hash before stale-CAS and oversized correction; retained as supplementary eager/legacy/numeric/routing/Native evidence, not relabeled as corrected final Worker."
+    }
+  },
+  "normal_local_cost_gate": [
+    {
+      "deferred": false,
+      "three_call_actual_totals": {
+        "worker_requests": 3,
+        "do_requests": 3,
+        "do_rows_read": 9,
+        "do_rows_written": 4,
+        "r2_class_a": 1,
+        "r2_class_b": 0,
+        "r2_deletes": 3,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 21
+      },
+      "retirement_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 6,
+        "do_rows_written": 2,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 3,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      },
+      "put_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 1,
+        "do_rows_written": 1,
+        "r2_class_a": 1,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 21,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      },
+      "cas_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 2,
+        "do_rows_written": 1,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      },
+      "final_live_bytes": 53,
+      "final_peak_bytes": 128,
+      "accounting_complete": true,
+      "final_garbage": []
+    },
+    {
+      "deferred": true,
+      "three_call_actual_totals": {
+        "worker_requests": 3,
+        "do_requests": 3,
+        "do_rows_read": 8,
+        "do_rows_written": 3,
+        "r2_class_a": 1,
+        "r2_class_b": 0,
+        "r2_deletes": 3,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 21
+      },
+      "retirement_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 5,
+        "do_rows_written": 1,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 3,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      },
+      "put_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 1,
+        "do_rows_written": 1,
+        "r2_class_a": 1,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 21,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      },
+      "cas_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 2,
+        "do_rows_written": 1,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      },
+      "final_live_bytes": 53,
+      "final_peak_bytes": 128,
+      "accounting_complete": true,
+      "final_garbage": []
+    }
+  ],
+  "normal_gate_interpretation": "One written row and one read row saved in this bounded three-call correctness fixture; physical calls/bytes unchanged. No four-profile score, latency acceptance, promotion or net saving is established.",
+  "normal_realistic_storage": [
+    {
+      "case": "realistic-thirteen-key-shape",
+      "initial": {
+        "accounting_complete": true,
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5467,
+        "r2_live_bytes": 68157518,
+        "r2_live_objects": 13,
+        "r2_peak_bytes": 68157518
+      },
+      "final": {
+        "accounting_complete": true,
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5267,
+        "r2_live_bytes": 52432971,
+        "r2_live_objects": 11,
+        "r2_peak_bytes": 68157518
+      }
+    },
+    {
+      "case": "realistic-shape-reopened",
+      "metrics": {
+        "accounting_complete": true,
+        "do_sqlite_bytes": 24576,
+        "manifest_bytes": 5267,
+        "r2_live_bytes": 52432971,
+        "r2_live_objects": 11,
+        "r2_peak_bytes": 68157518
+      }
+    }
+  ],
+  "oversized_scalar_correction_gate": [
+    {
+      "case": "257-key-scalar-CAS-flushes-prior-small-debt",
+      "delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 5,
+        "do_rows_written": 2,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      }
+    },
+    {
+      "case": "eager-scalar-DELETE",
+      "delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 10,
+        "do_rows_written": 1,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 1,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      }
+    },
+    {
+      "case": "eager-scalar-DELETE",
+      "delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 2,
+        "do_rows_written": 1,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 1,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      }
+    },
+    {
+      "case": "eager-scalar-DELETE",
+      "delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 2,
+        "do_rows_written": 1,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 1,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      }
+    },
+    {
+      "case": "restart-mid-eager-debt-and-generation-checked-GC",
+      "gc_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 22,
+        "do_rows_written": 20,
+        "r2_class_a": 1,
+        "r2_class_b": 0,
+        "r2_deletes": 254,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      },
+      "stale_gc_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 1,
+        "do_rows_written": 0,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      },
+      "put_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 1,
+        "do_rows_read": 2,
+        "do_rows_written": 1,
+        "r2_class_a": 1,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 69,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 1,
+        "worker_service_requests": 1
+      }
+    },
+    {
+      "case": "restart-after-GC-next-normal-mutation",
+      "delta": {
+        "do_gb_seconds": null,
+        "do_requests": 2,
+        "do_rows_read": 3,
+        "do_rows_written": 2,
+        "r2_class_a": 1,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 61,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 2,
+        "worker_service_requests": 2
+      },
+      "sqlite_shape_note": "257-key stress fixture is outside the normal thirteen-key SQLite shape guard"
+    },
+    {
+      "case": "SDK-Unsupported-before-IO-then-Repository-scalar-fallback",
+      "delta": {
+        "do_gb_seconds": null,
+        "do_requests": 258,
+        "do_rows_read": 535,
+        "do_rows_written": 259,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 257,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 258,
+        "worker_service_requests": 258
+      },
+      "unsupported_delta": {
+        "do_gb_seconds": null,
+        "do_requests": 0,
+        "do_rows_read": 0,
+        "do_rows_written": 0,
+        "r2_class_a": 0,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 0,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 0,
+        "worker_service_requests": 0
+      }
+    },
+    {
+      "case": "SDK-full-scalar-cleanup-reopened-next-normal-mutation",
+      "delta": {
+        "do_gb_seconds": null,
+        "do_requests": 2,
+        "do_rows_read": 4,
+        "do_rows_written": 2,
+        "r2_class_a": 1,
+        "r2_class_b": 0,
+        "r2_deletes": 0,
+        "r2_read_bytes": 0,
+        "r2_written_bytes": 66,
+        "worker_cpu_ms": null,
+        "worker_gateway_requests": 0,
+        "worker_observer_requests": 0,
+        "worker_requests": 2,
+        "worker_service_requests": 2
+      }
+    }
+  ],
+  "oversized_stress_storage_note": "The 257-key stress fixture reaches 36,864 SQLite bytes before restart and 20,480 afterward. It is explicitly separate from the normal realistic 13-key shape, which remains 24,576 final/reopened; no cap waiver or benchmark substitution is claimed.",
+  "artifacts": {
+    "normal": {
+      "root": "/tmp/git-zero-deferred-normal-4114849-1792297925051075977",
+      "source_manifest_sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e",
+      "recorded_sources_match_implementation": {
+        "cloudflare/src/catalog-pages.js": true,
+        "cloudflare/src/index.js": true,
+        "cloudflare/src/retirement-proof.js": true,
+        "cloudflare/test/deferred-catalog-worker.js": true,
+        "cloudflare/test/deferred-catalog.toml": true,
+        "src/cloudflare.rs": true,
+        "tests/deferred_catalog.rs": true
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-deferred-normal-4114849-1792297925051075977/normal.json",
+          "bytes": 140922,
+          "sha256": "f8ec9c725f081082e16cfa41d2c6550ef4111785336209a40d4aad621c220ad4"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-normal-4114849-1792297925051075977/source.json",
+          "bytes": 729,
+          "sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-normal-4114849-1792297925051075977/wrangler-1.log",
+          "bytes": 5571,
+          "sha256": "1128da73f101b3199ed192723bc74cfb046d39ca2ed0e1af77ed30a69a5ca1e9"
+        }
+      ],
+      "native_logs": []
+    },
+    "resurrection": {
+      "root": "/tmp/git-zero-deferred-resurrection-4115044-1792297927848630721",
+      "source_manifest_sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e",
+      "recorded_sources_match_implementation": {
+        "cloudflare/src/catalog-pages.js": true,
+        "cloudflare/src/index.js": true,
+        "cloudflare/src/retirement-proof.js": true,
+        "cloudflare/test/deferred-catalog-worker.js": true,
+        "cloudflare/test/deferred-catalog.toml": true,
+        "src/cloudflare.rs": true,
+        "tests/deferred_catalog.rs": true
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-deferred-resurrection-4115044-1792297927848630721/resurrection.json",
+          "bytes": 487708,
+          "sha256": "432494ad3d3aa68b71e4ec7a08b2f01b3c1c3f19376f35aed7378bed79b9fe62"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-resurrection-4115044-1792297927848630721/source.json",
+          "bytes": 729,
+          "sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-resurrection-4115044-1792297927848630721/wrangler-1.log",
+          "bytes": 6069,
+          "sha256": "670930b6bd62d6e39e40a9e3f1bc1b7b72dcbfd253aa2b55d2dac9521790b7a4"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-resurrection-4115044-1792297927848630721/wrangler-2.log",
+          "bytes": 4162,
+          "sha256": "118e92f08d1b70535be97268b9aa5c0e7179a0aebf7c75252d108b8ae7e61cfa"
+        }
+      ],
+      "native_logs": []
+    },
+    "proofs": {
+      "root": "/tmp/git-zero-deferred-proofs-4115346-1792297931901416659",
+      "source_manifest_sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e",
+      "recorded_sources_match_implementation": {
+        "cloudflare/src/catalog-pages.js": true,
+        "cloudflare/src/index.js": true,
+        "cloudflare/src/retirement-proof.js": true,
+        "cloudflare/test/deferred-catalog-worker.js": true,
+        "cloudflare/test/deferred-catalog.toml": true,
+        "src/cloudflare.rs": true,
+        "tests/deferred_catalog.rs": true
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-deferred-proofs-4115346-1792297931901416659/proofs.json",
+          "bytes": 129250,
+          "sha256": "882c5934aa1ead33f8476ed2d7e29045abaf280308fa8a4787cdb8c7007976be"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-proofs-4115346-1792297931901416659/source.json",
+          "bytes": 729,
+          "sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-proofs-4115346-1792297931901416659/wrangler-1.log",
+          "bytes": 16949,
+          "sha256": "2563f4369ca450733b0180dc06084b548f96fdbd1c87170e76785ef27971e671"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-proofs-4115346-1792297931901416659/wrangler-2.log",
+          "bytes": 1343,
+          "sha256": "da35ee9cb983c79d84bf60149c20d0a74a868b941a0a128910c3cdf1ff1bb415"
+        }
+      ],
+      "native_logs": []
+    },
+    "flush": {
+      "root": "/tmp/git-zero-deferred-flush-4115766-1792297936666923248",
+      "source_manifest_sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e",
+      "recorded_sources_match_implementation": {
+        "cloudflare/src/catalog-pages.js": true,
+        "cloudflare/src/index.js": true,
+        "cloudflare/src/retirement-proof.js": true,
+        "cloudflare/test/deferred-catalog-worker.js": true,
+        "cloudflare/test/deferred-catalog.toml": true,
+        "src/cloudflare.rs": true,
+        "tests/deferred_catalog.rs": true
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-deferred-flush-4115766-1792297936666923248/flush.json",
+          "bytes": 1226229,
+          "sha256": "6cdd3c8cf0477de4df69c57aeac84970ecb01fa1b6b2a2f2ada7aedab61eec6f"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-flush-4115766-1792297936666923248/source.json",
+          "bytes": 729,
+          "sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-flush-4115766-1792297936666923248/wrangler-1.log",
+          "bytes": 12979,
+          "sha256": "d7734c9717374f4d87986548a171c50377d3425eae9c99f4f5930694837adc48"
+        }
+      ],
+      "native_logs": []
+    },
+    "failures": {
+      "root": "/tmp/git-zero-deferred-failures-4116017-1792297939890423422",
+      "source_manifest_sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e",
+      "recorded_sources_match_implementation": {
+        "cloudflare/src/catalog-pages.js": true,
+        "cloudflare/src/index.js": true,
+        "cloudflare/src/retirement-proof.js": true,
+        "cloudflare/test/deferred-catalog-worker.js": true,
+        "cloudflare/test/deferred-catalog.toml": true,
+        "src/cloudflare.rs": true,
+        "tests/deferred_catalog.rs": true
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-deferred-failures-4116017-1792297939890423422/failures.json",
+          "bytes": 327040,
+          "sha256": "3f56d774a890ec623f976b713f600ffbd72d51074f4c035c3b4cf6ef2769acb8"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-failures-4116017-1792297939890423422/source.json",
+          "bytes": 729,
+          "sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-failures-4116017-1792297939890423422/wrangler-1.log",
+          "bytes": 12106,
+          "sha256": "2871b3f44f4ff11e031c7d9efb1a7a721fd030487f4624f893e96ade077844bf"
+        }
+      ],
+      "native_logs": []
+    },
+    "storage": {
+      "root": "/tmp/git-zero-deferred-storage-4116292-1792297943276367750",
+      "source_manifest_sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e",
+      "recorded_sources_match_implementation": {
+        "cloudflare/src/catalog-pages.js": true,
+        "cloudflare/src/index.js": true,
+        "cloudflare/src/retirement-proof.js": true,
+        "cloudflare/test/deferred-catalog-worker.js": true,
+        "cloudflare/test/deferred-catalog.toml": true,
+        "src/cloudflare.rs": true,
+        "tests/deferred_catalog.rs": true
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-deferred-storage-4116292-1792297943276367750/source.json",
+          "bytes": 729,
+          "sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-storage-4116292-1792297943276367750/storage.json",
+          "bytes": 599367,
+          "sha256": "b0574fac47c230e65c0616c7a6af84fa213bcd08c00dcbe4af81007a2a63aa5f"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-storage-4116292-1792297943276367750/wrangler-1.log",
+          "bytes": 15637,
+          "sha256": "1e343c383d8c156e8a5ca01368926168aebc0e352044fe246ee1470e6f0c4785"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-storage-4116292-1792297943276367750/wrangler-2.log",
+          "bytes": 1582,
+          "sha256": "130e09648133847c31a17681059d815318051589fa4b886043c56bd05418a772"
+        }
+      ],
+      "native_logs": []
+    },
+    "eager-257": {
+      "root": "/tmp/git-zero-deferred-eager-257-4113605-1792297888254881372",
+      "source_manifest_sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e",
+      "recorded_sources_match_implementation": {
+        "cloudflare/src/catalog-pages.js": true,
+        "cloudflare/src/index.js": true,
+        "cloudflare/src/retirement-proof.js": true,
+        "cloudflare/test/deferred-catalog-worker.js": true,
+        "cloudflare/test/deferred-catalog.toml": true,
+        "src/cloudflare.rs": true,
+        "tests/deferred_catalog.rs": true
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-deferred-eager-257-4113605-1792297888254881372/eager-257.json",
+          "bytes": 6782726,
+          "sha256": "135b5e679ad9748a9ee6ffb90ee17ffe07f75f88bb34ca5d4168d08aa1ab9b47"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-eager-257-4113605-1792297888254881372/source.json",
+          "bytes": 729,
+          "sha256": "b133228464aa451219ba690430a0f5b9a20c9b3421e2c23c9c5cefb440e56c6e"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-eager-257-4113605-1792297888254881372/wrangler-1.log",
+          "bytes": 36348,
+          "sha256": "fefafc0166455669d0c4766361df87d975d0a4f82f033bfc44739c9ee2717901"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-eager-257-4113605-1792297888254881372/wrangler-2.log",
+          "bytes": 2141,
+          "sha256": "c799f840ba4e69ee042c2c57a562fc3c969fc81f7c272cfdcb665e219e748756"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-eager-257-4113605-1792297888254881372/wrangler-3.log",
+          "bytes": 69505,
+          "sha256": "42ea85162bf795cfca0e5e5d930ac4762780ade363a09f5c20bfe0dcb3fd567b"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-eager-257-4113605-1792297888254881372/wrangler-4.log",
+          "bytes": 1332,
+          "sha256": "a0d7b2844fb3b4e6910e8e18df7cc09a81475fbd78ffadec76dc1cd2de31ff68"
+        }
+      ],
+      "native_logs": []
+    },
+    "registered-native": {
+      "root": "/tmp/git-zero-deferred-native-4092867-1792297629747904707",
+      "source_manifest_sha256": "f0633f20c815435d9d5bf2337a0d7962aa9b857aa8e57cbce923f9cc6f2098c7",
+      "recorded_sources_match_implementation": {
+        "cloudflare/src/catalog-pages.js": true,
+        "cloudflare/src/index.js": true,
+        "cloudflare/test/deferred-catalog-worker.js": true,
+        "src/cloudflare.rs": true,
+        "src/native.rs": true,
+        "tests/deferred_native.rs": true
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-deferred-native-4092867-1792297629747904707/report.json",
+          "bytes": 486609,
+          "sha256": "cd9b253ae62546a7be959812c9459163077d9f197a21d2d88cfe710e52141f41"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-native-4092867-1792297629747904707/source.json",
+          "bytes": 596,
+          "sha256": "f0633f20c815435d9d5bf2337a0d7962aa9b857aa8e57cbce923f9cc6f2098c7"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-native-4092867-1792297629747904707/wrangler.log",
+          "bytes": 11994,
+          "sha256": "728fc67307768093a0771f6975c2c0cdee95a5291e218ac0e3eba22adaf59e2c"
+        }
+      ],
+      "native_logs": [
+        {
+          "path": "/tmp/git-zero-deferred-native-4092867-1792297629747904707/cursor-unknown/native.log",
+          "bytes": 149,
+          "sha256": "17b4acc617f3d15cfb0752775d5753bf9223e4364c9e821cdfba885962f6409c"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-native-4092867-1792297629747904707/delete-second/native.log",
+          "bytes": 148,
+          "sha256": "013518f11bca62f463c9651844c5514753568dddf866837123b078795dcb4754"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-native-4092867-1792297629747904707/retire-catalog/native.log",
+          "bytes": 272,
+          "sha256": "be96f112d9f35e18613faf95129a3afdde0392516dd98164cf8bacafe261f62d"
+        },
+        {
+          "path": "/tmp/git-zero-deferred-native-4092867-1792297629747904707/retire-sync/native.log",
+          "bytes": 262,
+          "sha256": "f55078035e16e1af1bb6a86c2bc9cd12c1c528229ec00656d97a2ba4b524b5f3"
+        }
+      ]
+    }
+  },
+  "earlier_actual_R12_artifacts": [
+    {
+      "root": "/tmp/git-zero-catalog-faults-4027496",
+      "source_manifest_sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb",
+      "source_sha256": {
+        "cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+        "cloudflare/src/index.js": "aef8ba933a888aa2ef3ddb9ac764bd7bb03f0aa153d3c8ed429d2e370b33403d",
+        "src/cloudflare.rs": "e9f15b71577a9073303d7f7647500d7ec89b0efbb8a07c072eedd768569d5e05"
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-catalog-faults-4027496/faults-restart.json",
+          "bytes": 1581605,
+          "sha256": "5da9bfca25d11bcedd09978b88a395696970c19eea7452fbee85c099483b6df8"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-faults-4027496/source.json",
+          "bytes": 295,
+          "sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb"
+        }
+      ]
+    },
+    {
+      "root": "/tmp/git-zero-catalog-legacy-controls-4027496",
+      "source_manifest_sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb",
+      "source_sha256": {
+        "cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+        "cloudflare/src/index.js": "aef8ba933a888aa2ef3ddb9ac764bd7bb03f0aa153d3c8ed429d2e370b33403d",
+        "src/cloudflare.rs": "e9f15b71577a9073303d7f7647500d7ec89b0efbb8a07c072eedd768569d5e05"
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-catalog-legacy-controls-4027496/source.json",
+          "bytes": 295,
+          "sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb"
+        }
+      ]
+    },
+    {
+      "root": "/tmp/git-zero-catalog-lookup-4027496",
+      "source_manifest_sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb",
+      "source_sha256": {
+        "cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+        "cloudflare/src/index.js": "aef8ba933a888aa2ef3ddb9ac764bd7bb03f0aa153d3c8ed429d2e370b33403d",
+        "src/cloudflare.rs": "e9f15b71577a9073303d7f7647500d7ec89b0efbb8a07c072eedd768569d5e05"
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-catalog-lookup-4027496/lookup-forms.json",
+          "bytes": 3453,
+          "sha256": "d9ae7c4c8b84a7c7ab04e30448b08c585b1132e3276a9f35d99f7399c5c33071"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-lookup-4027496/source.json",
+          "bytes": 295,
+          "sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb"
+        }
+      ]
+    },
+    {
+      "root": "/tmp/git-zero-catalog-maximum-debt-4027496",
+      "source_manifest_sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb",
+      "source_sha256": {
+        "cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+        "cloudflare/src/index.js": "aef8ba933a888aa2ef3ddb9ac764bd7bb03f0aa153d3c8ed429d2e370b33403d",
+        "src/cloudflare.rs": "e9f15b71577a9073303d7f7647500d7ec89b0efbb8a07c072eedd768569d5e05"
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-catalog-maximum-debt-4027496/response.json",
+          "bytes": 24905,
+          "sha256": "398da15f6feb60376196b86227464d20ac5cac6a04f6d20bffe28f0ed7675c63"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-maximum-debt-4027496/source.json",
+          "bytes": 295,
+          "sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-maximum-debt-4027496/state.json",
+          "bytes": 355927,
+          "sha256": "42050d6c6141639bd3edb1881ac12e6ec029a15c429545e7630342cb16dcbb35"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-maximum-debt-4027496/usage.json",
+          "bytes": 6338,
+          "sha256": "97f7b03be6b169921c723cc4d62784a9d486ed1cb35a08e26f411798b6bf218e"
+        }
+      ]
+    },
+    {
+      "root": "/tmp/git-zero-catalog-mutations-4027496",
+      "source_manifest_sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb",
+      "source_sha256": {
+        "cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+        "cloudflare/src/index.js": "aef8ba933a888aa2ef3ddb9ac764bd7bb03f0aa153d3c8ed429d2e370b33403d",
+        "src/cloudflare.rs": "e9f15b71577a9073303d7f7647500d7ec89b0efbb8a07c072eedd768569d5e05"
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-catalog-mutations-4027496/mutations.json",
+          "bytes": 1371201,
+          "sha256": "e7fdf9fe54b2fc77da9e5645ad7c94afc7f6c6532f6d656d7e150dffe8571bb3"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-mutations-4027496/source.json",
+          "bytes": 295,
+          "sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb"
+        }
+      ]
+    },
+    {
+      "root": "/tmp/git-zero-catalog-native-delete-second-4027496",
+      "source_manifest_sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb",
+      "source_sha256": {
+        "cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+        "cloudflare/src/index.js": "aef8ba933a888aa2ef3ddb9ac764bd7bb03f0aa153d3c8ed429d2e370b33403d",
+        "src/cloudflare.rs": "e9f15b71577a9073303d7f7647500d7ec89b0efbb8a07c072eedd768569d5e05"
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-catalog-native-delete-second-4027496/native.json",
+          "bytes": 416376,
+          "sha256": "c5ffc7d7a1157196df52d4c9a97e2ff2c6969eb00415882e980e20ff5107d578"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-native-delete-second-4027496/source.json",
+          "bytes": 295,
+          "sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb"
+        }
+      ]
+    },
+    {
+      "root": "/tmp/git-zero-catalog-native-retire-sync-4027496",
+      "source_manifest_sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb",
+      "source_sha256": {
+        "cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+        "cloudflare/src/index.js": "aef8ba933a888aa2ef3ddb9ac764bd7bb03f0aa153d3c8ed429d2e370b33403d",
+        "src/cloudflare.rs": "e9f15b71577a9073303d7f7647500d7ec89b0efbb8a07c072eedd768569d5e05"
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-catalog-native-retire-sync-4027496/native.json",
+          "bytes": 300560,
+          "sha256": "085cf4e5e9d5480fa31350536231d684187ce1650a982852776fa64daafa856b"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-native-retire-sync-4027496/push-4-error.json",
+          "bytes": 86,
+          "sha256": "8edcfb7e5ad7198d579d86a3542ecef3f9ddde40750c8962403d3c3bab0fc620"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-native-retire-sync-4027496/source.json",
+          "bytes": 295,
+          "sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb"
+        }
+      ]
+    },
+    {
+      "root": "/tmp/git-zero-catalog-numeric-recovery-4027496",
+      "source_manifest_sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb",
+      "source_sha256": {
+        "cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+        "cloudflare/src/index.js": "aef8ba933a888aa2ef3ddb9ac764bd7bb03f0aa153d3c8ed429d2e370b33403d",
+        "src/cloudflare.rs": "e9f15b71577a9073303d7f7647500d7ec89b0efbb8a07c072eedd768569d5e05"
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-catalog-numeric-recovery-4027496/numeric-recovery.json",
+          "bytes": 474225,
+          "sha256": "b7241028aa3dd227d9cb8f1892e08d5299f17b491e79d1b979bfa53f9551a70e"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-numeric-recovery-4027496/source.json",
+          "bytes": 295,
+          "sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb"
+        }
+      ]
+    },
+    {
+      "root": "/tmp/git-zero-catalog-shape-4027496",
+      "source_manifest_sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb",
+      "source_sha256": {
+        "cloudflare/src/catalog-pages.js": "6b230178afc1d6d9f8362b973b7274ff30a963db137ec783816c44e0928a27cd",
+        "cloudflare/src/index.js": "aef8ba933a888aa2ef3ddb9ac764bd7bb03f0aa153d3c8ed429d2e370b33403d",
+        "src/cloudflare.rs": "e9f15b71577a9073303d7f7647500d7ec89b0efbb8a07c072eedd768569d5e05"
+      },
+      "files": [
+        {
+          "path": "/tmp/git-zero-catalog-shape-4027496/shape.json",
+          "bytes": 924308,
+          "sha256": "9c9d9540652af63e060a9d228e6d0fb1a78456c4034e6de1248fecc77aeb4a22"
+        },
+        {
+          "path": "/tmp/git-zero-catalog-shape-4027496/source.json",
+          "bytes": 295,
+          "sha256": "653cf8cf05e1feefc224036bfe5782d203d6279123411c486b7cb81fff762adb"
+        }
+      ]
+    }
+  ],
+  "preserved_initial_findings_and_fixture_runs": [
+    {
+      "kind": "production correction",
+      "finding": "SQL reload must discard resolved volatile pending deltas with its replaced live counters. Fixed before initial source freeze; final resolved-pending reload regression charges three actual HEADs and preserves H."
+    },
+    {
+      "kind": "production correction",
+      "finding": "Stale CAS-only unresolved debt must check authoritative generation before physical recovery/flush. Fixed before initial source freeze; final stale-CAS gate confirms zero HEAD/PUT/DELETE/catalog write."
+    },
+    {
+      "kind": "independent P1 production correction",
+      "finding": "Unconditionally bounded setDebtContext broke supported >256 scalar fallback after durable publication and on GC/reopen. Corrected at d84c2f6f with bounded eager marker; actual SDK and interrupted restart gates pass."
+    },
+    {
+      "kind": "fixture correction",
+      "root": "/tmp/git-zero-deferred-proofs-4026907-1792297037623233916",
+      "finding": "Resident exact all-success outcomes need no HEAD merely because proof is missing; cold eviction was required to test fallback."
+    },
+    {
+      "kind": "fixture correction",
+      "root": "/tmp/git-zero-deferred-proofs-4049542-1792297250580194737",
+      "finding": "Raw Class A included observer LIST; assertion changed to actual PUT operation attempts."
+    },
+    {
+      "kind": "fixture correction",
+      "root": "/tmp/git-zero-deferred-eager-257-4104067-1792297861739139678",
+      "finding": "SDK Manifest serialization omits empty garbage; final fixture accepts the canonical absent empty field. SDK physical fallback had already passed."
+    },
+    {
+      "kind": "supplementary earlier manual 257 pass",
+      "root": "/tmp/git-zero-deferred-eager-257-4096858-1792297685080115402",
+      "finding": "Retained first successful manual interrupted scalar route before adding actual SDK facet."
+    }
+  ],
+  "accounting_scope": {
+    "normal_receipts": "complete; actual binding attempts/bytes and actual cursor counts retained",
+    "intentional_DO_abort_cases": "Receiptless test abort marks aggregate accounting incomplete; tests compare subsequent actual deltas without claiming complete aggregate. This is retained in raw reports.",
+    "SQL_cursor_failure_cases": "Unknown SQL rows remain NULL, never zero; no proof minted.",
+    "observer": "Excluded observer LIST never repairs/certifies/mints/flushes production state. Constructor receipts retain actual triggering phases.",
+    "remaining_unknown_dimensions": [
+      "Worker CPU",
+      "Durable Object active duration",
+      "monthly SQLite retention",
+      "Native compute"
+    ],
+    "full_bill": null
+  },
+  "conditional_opportunity": {
+    "gross_four_profile_written_rows": 28,
+    "gross_usd_per_1000_four_profile_replays": 0.028,
+    "measured_net_saving": null,
+    "cost_screen_status": "not run",
+    "latency_acceptance": null
+  },
+  "runtime_cleanup": {
+    "8833": "owned runtime stopped; process owner cleanup completed",
+    "8834": "R13-team-owned runtime stopped; parent subsequently owns this port for its separate combined integration check.",
+    "paid_deployment": false,
+    "push": false,
+    "benchmark": false
+  },
+  "remaining_work": "Parent integration, fresh source-pinned independent screen and required original-R1/final validation; no acceptance, stopping bound or plateau claimed here."
+}
