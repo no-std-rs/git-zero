@@ -122,9 +122,10 @@ plateau by itself. A failed final latency guard remains inconclusive rather than
 
 The [isolated workflow](../.github/workflows/hosting-isolated.yml) runs only on explicit pushes to
 `perf/hosting-isolated-ci-20261018`, or dispatches selecting that branch. Each of the four profiles gets
-a standard `ubuntu-24.04` VM. A screen freshly measures pinned native providers R2, R3, R4 and R5 in that
-order on the same VM, once each with two measured pairs and an excluded warmup per backend. Every
-provider gets a fresh local Wrangler process and persistent-state directory. No reports from an earlier
+a standard `ubuntu-24.04` VM. A screen freshly measures its declared ordered native providers on
+the same VM, once each with two measured pairs and an excluded warmup per backend. The earlier
+R2–R5 batch used four providers; the next R5–R7 batch uses three. Every provider gets a fresh local
+Wrangler process and persistent-state directory. No reports from an earlier
 workflow attempt or local workstation may substitute for any provider's measurements.
 
 All dependencies and native variants are built before timing, with two compiler jobs and no artifact
@@ -136,17 +137,19 @@ scorer rejects any mixed native/reference hashes. Health and runtime checks fini
 no background benchmark probes run. The complete storage, compaction, cache, fsck and nonempty-pack
 requirements remain enforced by the existing runner and scorer.
 
-Before pushing this batch, validate the common final Worker's backward compatibility: generation
-witnesses must be gated by registration capability so R2/R3 incur no extra DO checks, and 16 MiB chunk
-support must still accept old 8 MiB entries within the unchanged aggregate response limit. Pin that
-validated Worker hash alongside the four actual pushed source refs before starting the batch.
+Before pushing each batch, validate the common final Worker's backward compatibility and pin its
+validated hash alongside every actual pushed source ref. For the earlier R2–R5 batch, generation
+witnesses were gated by registration capability so R2/R3 incurred no extra DO checks, and 16 MiB chunk
+support still accepted old 8 MiB entries within the unchanged aggregate response limit. The next batch
+also requires R5 to retain scalar retirement behavior unless its client negotiates the new capability.
 
 `REFERENCE_COMMIT` stays fixed at scalar `556b9ecd2aa79197f86b3db2d546eee81696e899` for every round.
 Its source remains at `scalar-baseline` and its build at `baseline-target` under the experiment root,
 preserving the reference executable's original build paths and hash. Screen native hosts build from
-their pushed `SCREEN_R2_COMMIT` through `SCREEN_R5_COMMIT` at deterministic `providers/r2` through
-`providers/r5` source paths and corresponding `provider-targets` paths. The workflow pins all four
-integrated source commits; duplicate refs or native source trees block the screen.
+their pushed `SCREEN_RN_COMMIT` refs at deterministic `providers/rN` source paths and corresponding
+`provider-targets/rN` build paths. The earlier R2–R5 batch used `providers/r2` through `providers/r5`;
+the next batch retains `providers/r5` and adds `providers/r6` and `providers/r7`. Duplicate refs or
+native source trees block the screen.
 Provenance records every label, commit, source tree, manifest path/hash and post-run clean status.
 
 The workflow accepts an ordered `SCREEN_PROVIDERS` list of two to four labels, with a pinned
@@ -155,9 +158,9 @@ before timing. Later batches use fresh suites and declare their candidate sequen
 no screen samples carry over between workflow attempts. Full mode always measures two fresh
 providers, the original scalar baseline and the final candidate, with five pairs each.
 
-This is a prospectively declared batch of independently prepared candidates. Preparing later source
+The earlier R2–R5 batch was prospectively declared with independently prepared candidates. Preparing later source
 changes before this batch completes does not mean their design was informed by these measurements.
-The same fresh intermediate suite in this workflow attempt may serve as a candidate in one comparison
+The same fresh intermediate suite in that workflow attempt serves as a candidate in one comparison
 and a baseline in the next: R2→R3, R3→R4 and R4→R5. Those are correlated uses of the same observed
 two-pair samples, not independent replications or extra samples. The scorer also emits R4-versus-R2,
 R5-versus-R2 and R5-versus-R3 so a later cumulative candidate can be assessed against the actual last
@@ -183,7 +186,8 @@ that has never existed on the default branch. If dispatch is available, its expl
 overrides the fallback. Fixture, maintenance, cache budgets and guard policies stay unchanged.
 
 The offline Rust scoring job requires all four profiles for every provider and retains all actual
-resource and latency guards in provider scores and all six `rN-vs-rM.json` comparisons. Full mode writes
+resource and latency guards in provider scores and all earlier-to-later `rN-vs-rM.json` comparisons
+(six for four providers, three for the next three-provider batch). Full mode writes
 `comparison.json`; a screen remains formally inconclusive. A green workflow only means that
 measurement and scoring completed. Inspect the comparison decision and reasons before interpreting it.
 Unknown Worker CPU, DO duration, monthly SQLite storage and native compute remain unknown.
@@ -198,3 +202,30 @@ Initial workflow run [39081449226](https://github.com/no-std-rs/git-zero/actions
 at `e2a54d69ebcd79a157c77c1979d265fbfd44ee81`, failed workflow validation because job-level `env` does
 not expose the `runner` context. No jobs started and no measurements were collected. Experiment paths
 now use the available `github.workspace` context at job scope, retaining stable paths outside checkout.
+
+## Next declared screen: retirement and verification
+
+After the R2–R5 screen is complete and reviewed, the prepared next batch measures
+R5 (`086229b`), R6 fused retirement (`e4cdb32`) and R7 single verification
+(`50e2fd8`). It uses fresh service state and two pairs per provider on each of
+the same four profile VMs, with one warmup per backend. The one freshly measured
+R6 suite serves both adjacent comparisons; these comparisons are correlated.
+All three earlier-to-later comparisons remain visible. No earlier run's reports
+are substituted. The common Worker is pinned to
+`b5ed0af945a3497d31dfbfb449f52e387ddb1f2821a6cdb750656458cc7528d6`;
+R5 registrations do not negotiate the new retirement capability.
+
+R6 preserves actual R2 deletions, catalog writes and durable retirement debt while
+combining cleanup with the CAS callback. Its three-key real-workerd contract uses
+one Worker/DO callback rather than four, with identical R2/SQL work. R7 passes
+owned verified chunks through the service wrappers, avoiding a second SHA-256
+pass while preserving corruption and exact ordered-identity checks before any
+native file materialization. It changes no storage operation or priced counter.
+The independent combined correctness record covers 80 package tests, strict
+Clippy, and nine real-workerd contracts, including push/fetch, compaction,
+HMAC/cache invalidation, typed 16 MiB reads and restart rehydration.
+
+Neither candidate has benchmark results yet. R6's callback saving is projected;
+R7's CPU reduction has no known-dollar saving in this model. Warm transport/client
+stalls remain unexplained. Final validation still uses five fresh pairs of the
+original scalar R1 and the selected final candidate across all four profiles.

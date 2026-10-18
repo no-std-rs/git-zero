@@ -1,0 +1,221 @@
+Independent combined R6/R7 verification
+Source frozen: /tmp/git-zero-hosting-cost-loop
+Expected HEAD: 50e2fd8d46473c9dfdec2eb693c2c92fdfeeaeb4
+Expected Worker SHA256: b5ed0af945a3497d31dfbfb449f52e387ddb1f2821a6cdb750656458cc7528d6
+Owned endpoint: http://127.0.0.1:8825
+Fresh isolated persist state: /tmp/git-zero-r6-r7-combined-8825-state
+No source edits, commits, pushes, deployment, paid activity, or timed benchmarks.
+Preflight: tracked/untracked status clean; HEAD and Worker hash match. Reused installed Wrangler package-lock matches primary exactly (SHA256 c68ee57e4922151c5b6c0e34eeb6042ed405633e1e249881b2dedef9b2b1d7cd). No repository AGENTS.md found. Fresh state/report absent as expected before setup.
+Scope: package all-target tests, strict package all-target Clippy, package fmt, and nine existing real workerd Rust contracts. Contracts exercise registered binary gateway push/fetch through four-generation compaction, fused 3-key retirement, HMAC/cache/recovery, bulk typed reads and 16 MiB boundaries. Skip the already independently validated generic idle-eviction, scalar R2 immutability, legacy CAS-only, fault-injection fixture and two-phase Worker restart contracts because combined changes do not affect their distinct paths; normal package failure/corruption fixtures still run.
+50e2fd8d46473c9dfdec2eb693c2c92fdfeeaeb4
+b5ed0af945a3497d31dfbfb449f52e387ddb1f2821a6cdb750656458cc7528d6  examples/repository-host/cloudflare/src/index.js
+1b467de51f0d427be8affe60188fe98dbb581032fa50390660d60e40b3ca107d  examples/repository-host/src/lib.rs
+fc892f23fba1cdcae9de4ee157106c68d12b814345318c1f802d7b4634a68771  examples/repository-host/src/cloudflare.rs
+12347a2893df73c07af32402759c2bfce35de7e01082148565e9e3a036b718f7  examples/repository-host/src/storage.rs
+2ef784e5ab1746189cd1a5984dbdcc879a4988378ac2b13f998c46afc18b04b5  examples/repository-host/src/native.rs
+5500639a12fbe1a1e3e78904e7ccd0d29a746be70e9ffe9f033cb474f09c5e4e  examples/repository-host/tests/cloudflare.rs
+
+UTC 2026-10-18T01:08:54Z
+COMMAND: cargo fmt -p git-zero-host -- --check
+EXIT: 0 UTC 2026-10-18T01:08:55Z
+Owned Wrangler process group: 1733228
+
+UTC 2026-10-18T01:09:00Z
+COMMAND: cargo test -p git-zero-host --all-targets -j2 --locked
+   Compiling git-zero-host v0.1.0 (/tmp/git-zero-hosting-cost-loop/examples/repository-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.18s
+     Running unittests src/lib.rs (target/debug/deps/git_zero_host-feb89125f50acfdf)
+
+running 67 tests
+test accounting::tests::incomplete_receipts_are_rejected_but_complete_do_evictions_are_supported ... ok
+test accounting::tests::wire_snapshot_keeps_physical_inventory_and_observer_work_separate ... ok
+test accounting::tests::a_runtime_reset_cannot_be_mistaken_for_negative_usage_or_free_work ... ok
+test benchmark_cost::tests::interleaved_schedule_only_reads_published_history_and_strict_ancestors ... ok
+test cloudflare::tests::bulk_bridge_fails_closed_on_malformed_frame_and_missing_object ... ok
+test cloudflare::tests::bulk_decoder_rejects_count_length_hash_truncation_trailing_and_overflow ... ok
+test cloudflare::tests::bulk_planning_bounds_payload_framing_keys_and_legacy_fallback ... ok
+test cloudflare::tests::service_bridge_rejects_nonlocal_origins_and_header_injection ... ok
+test cloudflare::tests::unknown_registration_capability_uses_scalar_cas_without_probing_fused_route ... ok
+test cost::tests::billing_rounds_after_remaining_account_allowances ... ok
+test cost::tests::invalid_periods_overflow_and_unphysical_measurements_are_rejected ... ok
+test cost::tests::peaks_and_traffic_are_separate_and_unknown_compute_stays_unknown ... ok
+test cost::tests::service_report_excludes_observers_and_keeps_free_tier_account_wide ... ok
+test cost::tests::zero_usage_costs_nothing_and_unknown_is_not_free ... ok
+test cloudflare::tests::generation_witness_registration_compatibility_defaults_to_callbacks ... ok
+test cloudflare::tests::retirement_capability_and_bounds_choose_fallback_before_io ... ok
+test cloudflare::tests::host_blob_wrapper_reads_verified_http_snapshot_in_order ... ok
+test cloudflare::tests::retirement_decoder_requires_exact_complete_ordered_receipts ... ok
+test native::tests::fetch_haves_use_packet_boundaries_in_both_protocols ... ok
+test cloudflare::tests::generation_witness_matches_standard_hmac_and_binds_authority_and_exact_request ... ok
+test cloudflare::tests::retirement_http_errors_never_return_unsupported ... ok
+test native::tests::large_old_pack_does_not_starve_small_appends ... ok
+test native::tests::snapshot_limits_include_ref_only_growth_and_indexes ... ok
+test packed::tests::delta_graph_requires_existing_bases_and_no_cycles ... ok
+test packed::tests::empty_pack_and_truncated_inputs_are_checked ... ok
+test cloudflare::tests::bulk_bridge_rejects_corrupt_first_batch_before_any_later_read ... ok
+test native::tests::checksum_reuse_requires_exact_file_bytes ... ok
+test benchmark_cost::tests::interleaved_accepts_first_get_without_a_prior_zero_operation ... ok
+test storage::tests::old_manifests_without_retirement_debt_remain_readable ... ok
+test benchmark_cost::tests::interleaved_requires_recorded_fetch_pack_retention ... ok
+test storage::tests::r2_wrapper_forwards_verified_reads_after_validating_every_key ... ok
+test benchmark_cost::tests::missing_data_incomplete_accounting_and_changed_cache_fail_closed ... ok
+test benchmark_cost::tests::fixed_mix_uses_linear_prices_and_unknown_compute_stays_unknown ... ok
+test native::tests::cloud_chunk_policy_does_not_expand_compaction_budget ... ok
+test storage::tests::verified_chunks_require_complete_ordered_content_and_exact_consumption ... ok
+test storage::tests::verified_defaults_preserve_batch_calls_and_reject_untrusted_results ... ok
+test tests::attempted_fusion_never_republishes_or_double_collects_partial_failure ... ok
+test cloudflare::tests::bulk_decoder_accepts_full_payload_and_rejects_excess_within_wire_bound ... ok
+test tests::legacy_and_bundled_pack_files_round_trip ... ok
+test tests::pack_files_reject_mixed_missing_overflowing_and_corrupt_chunks ... ok
+test cloudflare::tests::bulk_bridge_batches_two_full_chunks_before_the_next_byte ... ok
+test tests::snapshot_consumes_verified_override_and_rejects_valid_proof_substitution ... ok
+test tests::snapshot_reads_flatten_mixed_packs_and_preserve_repeated_keys_in_order ... ok
+test tests::snapshot_validates_all_metadata_before_io_and_rejects_missing_or_corrupt_data ... ok
+test cloudflare::tests::bulk_bridge_batches_repeated_keys_and_preserves_large_legacy_scalar_reads ... ok
+test cloudflare::tests::bulk_bridge_reads_one_full_cloud_chunk_before_the_next_byte ... ok
+test tests::bundled_pack_and_index_share_the_eight_mib_chunk_boundary ... ok
+test storage::tests::immutable_codec_outputs_can_be_imported_without_another_write ... ok
+test benchmark_cost::tests::fewer_paid_operations_win_but_faster_wall_time_alone_does_not ... ok
+test cloudflare::tests::bulk_bridge_rejects_corrupt_scalar_fallback_before_resuming_bulk_reads ... ok
+test storage::tests::only_one_concurrent_generation_is_published ... ok
+test benchmark_cost::tests::interleaved_rejects_inconsistent_or_malformed_get_accounting ... ok
+test benchmark_cost::tests::fixture_and_measurement_masks_must_match_and_latency_noise_is_inconclusive ... ok
+test native::tests::witness_only_skips_dispatch_load_and_never_skips_dirty_recovery ... ok
+test storage::tests::recovery_removes_abandoned_state_snapshots_without_publishing_them ... ok
+test native::tests::failed_snapshot_rebuild_stays_dirty_without_materializing_partial_packs ... ok
+test storage::tests::recovery_scan_removes_unpublished_and_retired_chunks ... ok
+test storage::tests::bundled_cas_loser_recovery_keeps_shared_published_chunks ... ok
+test storage::tests::retirement_survives_interruption_and_preserves_shared_chunks ... ok
+test tests::retiring_publication_default_preserves_live_representations_and_stale_cas ... ok
+test benchmark_cost::tests::interleaved_rejects_changed_or_unrecorded_reference_policy_and_measurements ... ok
+test packed::tests::compressed_merge_deduplicates_and_git_strictly_validates_it ... ok
+test benchmark_cost::tests::interleaved_preserves_unknown_reference_resources_and_frozen_reference_identity ... ok
+test storage::tests::local_and_cloudflare_wrappers_share_the_storage_contract ... ok
+test benchmark_cost::tests::interleaved_rejects_incomplete_mixed_or_unverified_traces ... ok
+test benchmark_cost::tests::interleaved_prices_the_full_mix_and_keeps_separate_latency_groups ... ok
+test native::tests::fused_partial_failure_retains_debt_and_lost_committed_reply_recovers_before_read ... ok
+
+test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.09s
+
+     Running unittests src/bin/hosting-bench.rs (target/debug/deps/hosting_bench-7e435ba9877acaef)
+
+running 3 tests
+test tests::reference_policy_is_flow_specific ... ok
+test tests::maintenance_resources_sum_cpu_and_take_peak_rss_with_explicit_unknowns ... ok
+test tests::interleaved_fetch_clients_retain_initial_and_incremental_http_packs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.23s
+
+     Running unittests src/bin/hosting-cost.rs (target/debug/deps/hosting_cost-facab35e4245fb61)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/repository-host.rs (target/debug/deps/repository_host-d0df412a8d3ea61b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cloudflare.rs (target/debug/deps/cloudflare-84709271a47875f5)
+
+running 16 tests
+test codec_origin_fallback_keeps_one_authoritative_callback_without_prefetch ... ignored, requires workerd CODEC_ORIGIN and matching GIT_ZERO_CLOUDFLARE_CODEC_ORIGIN loopback origin
+test faulted_fused_retirement_preserves_cas_and_failed_r2_accounting ... ignored, requires local workerd with cloudflare/test/retirement-fault.toml, on a fresh persist-dir
+test real_bulk_read_fits_two_full_chunks_and_charges_each_repeated_get ... ignored, requires real local Wrangler/workerd; see module-level invocation
+test real_bulk_read_validates_all_bounds_before_binding_io ... ignored, requires real local Wrangler/workerd; see module-level invocation
+test real_do_idle_eviction_keeps_complete_cumulative_accounting ... ignored, requires real local Wrangler/workerd and its 10-second idle DO eviction
+test real_durable_object_cas_and_failed_publication_recovery ... ignored, requires real local Wrangler/workerd; see module-level invocation
+test real_full_cloud_chunk_put_and_bulk_read_charge_one_binding_each ... ignored, requires real local Wrangler/workerd; see module-level invocation
+test real_fused_retirement_matches_scalar_work_and_removes_three_callbacks ... ignored, requires real local Wrangler R2 and Durable Object bindings
+test real_fused_retirement_validates_before_cas_and_preserves_all_live_representations ... ignored, requires real local Wrangler R2 and Durable Object bindings
+test real_gateway_generation_witness_receipts_compatibility_and_queued_generation ... ignored, requires real local Wrangler/workerd; see module-level invocation
+test real_native_bundle_uses_one_put_and_survives_restart_and_fetch ... ignored, requires real local Wrangler/workerd; see module-level invocation
+test real_r2_immutability_namespaces_and_operation_accounting ... ignored, requires real local Wrangler/workerd; see module-level invocation
+test real_registered_gateway_push_fetch_invalidates_cache_and_recovers_after_codec_restart ... ignored, requires real local Wrangler/workerd; see module-level invocation
+test real_snapshot_bulk_reads_cross_packs_and_account_partial_missing_reads ... ignored, requires real local Wrangler/workerd; see module-level invocation
+test seed_before_workerd_restart ... ignored, two-phase real Wrangler restart test; run seed, restart same persist-dir, then verify
+test verify_after_workerd_restart ... ignored, two-phase real Wrangler restart test; seed and restart same persist-dir first
+
+test result: ok. 0 passed; 0 failed; 16 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hosting.rs (target/debug/deps/hosting-228e257fa02c96ca)
+
+running 9 tests
+test discovery_uses_the_first_service_parameter_consistently ... ok
+test recovery_rejects_corrupted_authoritative_chunks ... ok
+test deleting_the_last_ref_publishes_and_recovers_an_empty_ref_set ... ok
+test query_on_receive_route_cannot_bypass_durable_publication ... ok
+test large_pack_checksum_overlap_preserves_authoritative_bytes_and_recovery ... ok
+test recovery_discards_unpublished_packs_before_validating_later_pushes ... ok
+test stale_and_corrupt_pushes_leave_the_manifest_and_refs_unchanged ... ok
+test upload_cache_reuses_responses_and_invalidates_after_publication ... ok
+test incremental_pushes_compact_and_recover_from_authoritative_chunks ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.29s
+
+     Running tests/storage_lifecycle.rs (target/debug/deps/storage_lifecycle-d0b42c82c3ccc1c8)
+
+running 1 test
+
+UTC 2026-10-18T01:10:04Z
+COMMAND: cargo clippy -p git-zero-host --all-targets -j2 --locked -- -D warnings
+    Checking git-zero-host v0.1.0 (/tmp/git-zero-hosting-cost-loop/examples/repository-host)
+
+UTC 2026-10-18T01:10:06Z
+COMMAND: curl --fail --silent --show-error http://127.0.0.1:8825/health
+{"ready":true,"runtime":"workerd","local_only":true}EXIT: 0 UTC 2026-10-18T01:10:06Z
+
+UTC 2026-10-18T01:10:08Z
+COMMAND: env GIT_ZERO_CLOUDFLARE_ORIGIN=http://127.0.0.1:8825 GIT_ZERO_CLOUDFLARE_TOKEN=<local fixture token from config> cargo test -p git-zero-host -j2 --locked --test cloudflare real_ -- --ignored --test-threads=1 --skip real_do_idle_eviction_keeps_complete_cumulative_accounting --skip real_r2_immutability_namespaces_and_operation_accounting --skip real_durable_object_cas_and_failed_publication_recovery
+    Blocking waiting for file lock on build directory
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.32s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.14s
+     Running tests/cloudflare.rs (target/debug/deps/cloudflare-84709271a47875f5)
+
+running 9 tests
+test real_bulk_read_fits_two_full_chunks_and_charges_each_repeated_get ... EXIT: 0 UTC 2026-10-18T01:10:11Z
+ok
+test real_bulk_read_validates_all_bounds_before_binding_io ... ok
+test real_full_cloud_chunk_put_and_bulk_read_charge_one_binding_each ... ok
+test real_fused_retirement_matches_scalar_work_and_removes_three_callbacks ... ok
+test real_fused_retirement_validates_before_cas_and_preserves_all_live_representations ... ok
+test real_gateway_generation_witness_receipts_compatibility_and_queued_generation ... ok
+test real_native_bundle_uses_one_put_and_survives_restart_and_fetch ... test repeated_pushes_recovery_and_varied_fetches_keep_storage_bounded ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.87s
+
+EXIT: 0 UTC 2026-10-18T01:10:31Z
+ok
+test real_registered_gateway_push_fetch_invalidates_cache_and_recovers_after_codec_restart ... ok
+test real_snapshot_bulk_reads_cross_packs_and_account_partial_missing_reads ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 37.99s
+
+EXIT: 0 UTC 2026-10-18T01:10:49Z
+    PID    PPID    PGID     SID COMMAND
+1733228 1733225 1733228 1733228 node /tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js dev --config /tmp/git-zero-hosting-cost-loop/examples/repository-host/cloudflare/wrangler.toml --local --ip 127.0.0.1 --port 8825 --inspector-port 0 --persist-to /tmp/git-zero-r6-r7-combined-8825-state --show-interactive-dev-session=false
+All checks complete; stopped owned Wrangler PGID 1733228.
+STOP: owned process group 1733228 has no remaining processes
+State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+FINAL OUTCOME: PASS, no test failures or retries.
+Package all-target tests: 67 library + 3 hosting-bench binary + 9 hosting integration + 1 storage lifecycle = 80 passed, 0 failed. Sixteen opt-in real/lifecycle fixture tests ignored in the default command, then nine focused real_ tests explicitly passed in 37.99s (7 filtered out).
+Package formatting: PASS. Strict package all-target Clippy (-D warnings, -j2, --locked): PASS.
+Combined real end-to-end proof: registered repository-host binary performed four Git pushes, compaction on generation four, exactly three successful retirement deletes, zero retirement failures, invalidated response caches, matching HMAC witnesses with zero fallback, exact cloned refs/tree/blob bytes and git fsck, then codec restart plus typed authoritative rehydration and verified clone/fsck.
+Fused-vs-scalar contract: same three successful R2 deletes and identical SQL rows read/written, with Worker/DO request counts reduced from 4/4 to 1/1; stale CAS did no R2 work. Invalid/bounded manifests rejected before CAS; every live pack/index/bundle representation preserved and successfully read through typed reads.
+Typed read contracts: 16 MiB max PUT/read, repeated 8 MiB GET ordering/charging, bulk validation before binding I/O, snapshot cross-pack reads and partial-missing accounting, and native ~9 MiB one-PUT bundle recovery/fetch passed. Package tests additionally rejected corrupt first batches and scalar fallbacks before later reads, malformed/count/length/hash/truncation/overflow frames, proof substitution, and corrupt authoritative recovery. Partial retirement and lost committed reply tests passed with dirty recovery before next read and no duplicate publication/deletion.
+Owned Wrangler invocation:
+setsid env WRANGLER_SEND_METRICS=false WRANGLER_HIDE_BANNER=true WRANGLER_LOG_PATH=/tmp/git-zero-r6-r7-combined-wrangler-internal.log X_LOCAL_EXPLORER=false X_LOCAL_OBSERVABILITY=false CI=true node /tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js dev --config /tmp/git-zero-hosting-cost-loop/examples/repository-host/cloudflare/wrangler.toml --local --ip 127.0.0.1 --port 8825 --inspector-port 0 --persist-to /tmp/git-zero-r6-r7-combined-8825-state --show-interactive-dev-session=false
+All bindings local. No fault-worker wrapper or production fault hook used. Captured group was verified by exact port/persist command arguments before SIGTERM; intentional Wrangler shutdown returned 143; process group absent and no 8825 listener afterward. Public fixture token redacted from saved logs; private witness keys/responses were never printed by runners. Original bench reports and other servers untouched.
+Final source freeze check and hashes:
+50e2fd8d46473c9dfdec2eb693c2c92fdfeeaeb4
+b5ed0af945a3497d31dfbfb449f52e387ddb1f2821a6cdb750656458cc7528d6  examples/repository-host/cloudflare/src/index.js
+1b467de51f0d427be8affe60188fe98dbb581032fa50390660d60e40b3ca107d  examples/repository-host/src/lib.rs
+fc892f23fba1cdcae9de4ee157106c68d12b814345318c1f802d7b4634a68771  examples/repository-host/src/cloudflare.rs
+12347a2893df73c07af32402759c2bfce35de7e01082148565e9e3a036b718f7  examples/repository-host/src/storage.rs
+2ef784e5ab1746189cd1a5984dbdcc879a4988378ac2b13f998c46afc18b04b5  examples/repository-host/src/native.rs
+5500639a12fbe1a1e3e78904e7ccd0d29a746be70e9ffe9f033cb474f09c5e4e  examples/repository-host/tests/cloudflare.rs
+Final git status clean; tracked diff empty. Source unchanged.
+cb783b63d3780957dfcacbeee7b8834dbf1c9364fe02c66b8cfb5054ec3f0ff9  /tmp/git-zero-r6-r7-combined-8825-worker.log
+220430072ff21c19b08635a5f65fda9354dd35cd3228ed35a156c116ee3ceb1f  /tmp/git-zero-r6-r7-combined-wrangler-internal.log

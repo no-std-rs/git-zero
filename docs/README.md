@@ -15,7 +15,7 @@ read/write hosting work and its local verification.
 | Read/write hosting, service boundaries, pack storage, repacking | [Hosting design](hosting-design.md) |
 | Local hosting comparisons and storage economics | [Hosting performance](hosting-performance.md) |
 | Pushable local Worker gateway, R2/DO counters and cost estimates | [Cloudflare emulator](../examples/repository-host/cloudflare/README.md), [measurements](hosting-cloudflare-benchmarks.md) |
-| Commit, measure and compare fixed-workload hosting costs | [Optimization loop](hosting-optimization-loop.md) |
+| Commit, measure and compare hosting costs | [Optimization loop](hosting-optimization-loop.md), [interleaved push/history-fetch protocol](hosting-interleaved-benchmarks.md) |
 | Build checks and interoperability | [Validation](validation.md) |
 
 Existing native benchmark methodology and decoder measurements live in the
