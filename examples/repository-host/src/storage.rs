@@ -154,9 +154,15 @@ impl LocalBlobStore {
                 let key = path
                     .strip_prefix(&self.root)
                     .expect("blob entry is inside its root")
-                    .to_str()
-                    .ok_or_else(|| io::Error::other("non-UTF-8 blob key"))?;
-                if !live.contains(key) {
+                    .components()
+                    .map(|part| {
+                        part.as_os_str()
+                            .to_str()
+                            .ok_or_else(|| io::Error::other("non-UTF-8 blob key"))
+                    })
+                    .collect::<io::Result<Vec<_>>>()?
+                    .join("/");
+                if !live.contains(key.as_str()) {
                     fs::remove_file(&path)?;
                     changed = true;
                     removed += 1;
@@ -657,6 +663,42 @@ mod tests {
         assert_eq!(services.blobs.reclaim_unreferenced(&current).unwrap(), 3);
         assert_eq!(services.blobs.get("chunks/live").unwrap(), b"x");
         assert_eq!(services.blobs.reclaim_unreferenced(&current).unwrap(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_scan_preserves_live_chunks_in_existing_repository() {
+        let root = temporary_root();
+        // Existing directories avoid the local writer's directory-sync support
+        // requirements, so recovery's path comparison is exercised on Windows.
+        fs::create_dir_all(root.join("blobs/chunks")).unwrap();
+        fs::write(root.join("blobs/chunks/live"), b"live").unwrap();
+        let services = LocalServices::new(root.clone()).unwrap();
+        let current = Manifest {
+            packs: vec![stored_pack("current", &["chunks/live"], &[])],
+            ..Manifest::default()
+        };
+        assert_eq!(services.blobs.reclaim_unreferenced(&current).unwrap(), 0);
+        assert_eq!(services.blobs.get("chunks/live").unwrap(), b"live");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_scan_distinguishes_unix_backslashes_from_separators() {
+        let root = temporary_root();
+        fs::create_dir_all(root.join("blobs/chunks")).unwrap();
+        fs::write(root.join("blobs/chunks/live"), b"live").unwrap();
+        let orphan = root.join(r"blobs/chunks\live");
+        fs::write(&orphan, b"orphan").unwrap();
+        let services = LocalServices::new(root.clone()).unwrap();
+        let current = Manifest {
+            packs: vec![stored_pack("current", &["chunks/live"], &[])],
+            ..Manifest::default()
+        };
+        assert_eq!(services.blobs.reclaim_unreferenced(&current).unwrap(), 1);
+        assert_eq!(services.blobs.get("chunks/live").unwrap(), b"live");
+        assert!(!orphan.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
