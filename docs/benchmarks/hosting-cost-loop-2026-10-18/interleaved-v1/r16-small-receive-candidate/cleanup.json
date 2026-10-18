@@ -1,0 +1,11 @@
+{
+  "owned_ports": [
+    8837,
+    8838
+  ],
+  "listening_ports": "State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess\n",
+  "owned_live_processes": [],
+  "all_runtime_watchers_stopped": true,
+  "checked_utc": "2026-10-18T06:41:17.450147+00:00",
+  "source_head": "a624a789b98570fabd324ab0a16b803daa4641be"
+}
