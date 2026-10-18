@@ -288,3 +288,11 @@ The [bounded response experiment](benchmarks/hosting-cost-loop-2026-10-18/interl
 did not reproduce the retained response stalls. It also disproved a proposed
 Expect-header deletion workaround with a strict interim-response client. No
 production transport change was integrated from these controls.
+
+The [R10 correctness record](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r10-history-candidate/README.md)
+now covers the implementation, honest final restoration receipts and a generic
+metadata-only empty receive probe. The fixed workload does not send that probe,
+so its actual default-client benefit is kept separate. The
+[peak-in-catalog design](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/peak-catalog-design/README.md)
+proposes reducing SQL writes with explicit capability and recovery gates. It
+remains unimplemented pending the preceding complete screen review.

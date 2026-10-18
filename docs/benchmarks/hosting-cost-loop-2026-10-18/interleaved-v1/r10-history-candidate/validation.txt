@@ -1,0 +1,79 @@
+Historical prefix isolated candidate validation, 2026-10-18T02:32:14.081711+00:00
+Candidate SHA: 45018bac16ea20e578c2a98d17aa336a7fdcec5d
+Anchor: 457e2fa97b10cf57e47eea7e1c0fcb849d90780b
+Worktree: /tmp/git-zero-hosting-history-prefix; branch perf/hosting-history-prefix; no push.
+Scope: implementation/correctness only. No broad hosting benchmark, cloud deployment, scorer/pricing/objective edit, or measured performance/cost/lifecycle claim.
+
+Environment for Rust/Git validation:
+GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null LC_ALL=C CARGO_TARGET_DIR=/tmp/git-zero-history-prefix-target
+All cargo invocations use -j2. Native Git: 2.53.0. Node: v24.10.0.
+
+Final checks:
+cargo test -p git-zero-host -j2: PASS /tmp/git-zero-history-prefix-alltests-reviewed-final.log
+  97 library tests, 3 hosting-cost binary tests, 9 hosting integration tests, 1 storage_lifecycle integration test; all pass.
+  27 pre-existing explicit Cloudflare benchmark tests remain ignored; the 1 explicit production driver is ignored in ordinary runs.
+cargo clippy -p git-zero-host --all-targets -j2 -- -D warnings: PASS /tmp/git-zero-history-prefix-clippy-reviewed-final.log
+cargo fmt --all -- --check: PASS. git diff HEAD^ HEAD --check: PASS. Worktree clean after local commit.
+
+Production correctness driver (NOT a benchmark):
+Installed CLI (no dependency download): node /tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js
+Final Worker command:
+GIT_CONFIG_COUNT=0 GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null LC_ALL=C WRANGLER_LOG_PATH=/tmp/git-zero-history-prefix-wrangler-logs WRANGLER_SEND_METRICS=false X_LOCAL_EXPLORER=false X_LOCAL_OBSERVABILITY=false BROWSER=none setsid node /tmp/git-zero-hosting-fused-retirement/examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js dev --config /tmp/git-zero-hosting-history-prefix/examples/repository-host/cloudflare/wrangler.toml --ip 127.0.0.1 --port 8831 --local --persist-to /tmp/git-zero-history-prefix-worker-state-reviewed-final --show-interactive-dev-session=false
+Final driver command (plus environment above):
+GIT_ZERO_HISTORY_CLOUDFLARE_ORIGIN=http://127.0.0.1:8831 GIT_ZERO_HISTORY_ARTIFACTS=/tmp/git-zero-history-prefix-production-reviewed-final cargo test -p git-zero-host --test history_cloudflare -j2 -- --ignored --exact production_history_prefix_contract --nocapture
+PASS: /tmp/git-zero-history-prefix-production-reviewed-final.log; Rust driver assertions passed, actual registered gateway + production Worker/DO/R2.
+Artifacts: /tmp/git-zero-history-prefix-production-reviewed-final/contract.json plus all request/header/body snapshots, native.stdout/native.stderr.
+Worker log: /tmp/git-zero-history-prefix-worker-reviewed-final.log. Final own Worker PGID 2919622 stopped via kill -TERM -- -2919622; no unrelated process groups targeted.
+
+Exact final fixture receipts (cumulative counters; observer R2 LIST calls remain in raw receipts):
+before-reads: {"R2_GET": 24, "R2_live_bytes": 9448326, "R2_peak_bytes": 9448326, "R2_read_bytes": 75559369, "R2_written_bytes": 9452663, "SQL_rows_written": 31, "SQLite_bytes": 20480, "bytes": "9448326/9448326", "full_restores": 0, "generation": 8, "joint_retained_bytes": 3297, "lineage_bytes": 232, "manifest_CAS": 8, "noop_shortcuts": 1, "packs": "5/5", "projections": 0, "rehydrates": 9, "response_cache_bytes": 2003, "scope": "full", "stats_service_callbacks": 1}
+after-history-no-haves: {"R2_GET": 31, "R2_live_bytes": 9448326, "R2_peak_bytes": 9448326, "R2_read_bytes": 94451683, "R2_written_bytes": 9452663, "SQL_rows_written": 31, "SQLite_bytes": 20480, "bytes": "9443988/9448326", "full_restores": 0, "generation": 8, "joint_retained_bytes": 18888475, "lineage_bytes": 232, "manifest_CAS": 8, "noop_shortcuts": 1, "packs": "2/5", "projections": 1, "rehydrates": 11, "response_cache_bytes": 18887181, "scope": "projection", "stats_service_callbacks": 1}
+after-history-with-haves: {"R2_GET": 33, "R2_live_bytes": 9448326, "R2_peak_bytes": 9448326, "R2_read_bytes": 103895671, "R2_written_bytes": 9452663, "SQL_rows_written": 31, "SQLite_bytes": 20480, "bytes": "9443988/9448326", "full_restores": 0, "generation": 8, "joint_retained_bytes": 18889902, "lineage_bytes": 232, "manifest_CAS": 8, "noop_shortcuts": 1, "packs": "2/5", "projections": 2, "rehydrates": 12, "response_cache_bytes": 18888608, "scope": "projection", "stats_service_callbacks": 1}
+after-latest-recheck: {"R2_GET": 33, "R2_live_bytes": 9448326, "R2_peak_bytes": 9448326, "R2_read_bytes": 103895671, "R2_written_bytes": 9452663, "SQL_rows_written": 31, "SQLite_bytes": 20480, "bytes": "9443988/9448326", "full_restores": 0, "generation": 8, "joint_retained_bytes": 18889902, "lineage_bytes": 232, "manifest_CAS": 8, "noop_shortcuts": 1, "packs": "2/5", "projections": 2, "rehydrates": 12, "response_cache_bytes": 18888608, "scope": "projection", "stats_service_callbacks": 1}
+metrics-no-restore: {"R2_GET": 33, "R2_live_bytes": 9448326, "R2_peak_bytes": 9448326, "R2_read_bytes": 103895671, "R2_written_bytes": 9452663, "SQL_rows_written": 31, "SQLite_bytes": 20480, "bytes": "9443988/9448326", "full_restores": 0, "generation": 8, "joint_retained_bytes": 18889902, "lineage_bytes": 232, "manifest_CAS": 8, "noop_shortcuts": 1, "packs": "2/5", "projections": 2, "rehydrates": 12, "response_cache_bytes": 18888608, "scope": "projection", "stats_service_callbacks": 1}
+first-stats-restore: {"R2_GET": 38, "R2_live_bytes": 9448326, "R2_peak_bytes": 9448326, "R2_read_bytes": 113343997, "R2_written_bytes": 9452663, "SQL_rows_written": 31, "SQLite_bytes": 20480, "bytes": "9448326/9448326", "full_restores": 1, "generation": 8, "joint_retained_bytes": 18889902, "lineage_bytes": 232, "manifest_CAS": 8, "noop_shortcuts": 1, "packs": "5/5", "projections": 2, "rehydrates": 13, "response_cache_bytes": 18888608, "scope": "full", "stats_service_callbacks": 2}
+before-large-push: {"R2_GET": 40, "R2_live_bytes": 9448326, "R2_peak_bytes": 9448326, "R2_read_bytes": 122787985, "R2_written_bytes": 9452663, "SQL_rows_written": 31, "SQLite_bytes": 20480, "bytes": "9443988/9448326", "full_restores": 1, "generation": 8, "joint_retained_bytes": 28331877, "lineage_bytes": 232, "manifest_CAS": 8, "noop_shortcuts": 1, "packs": "2/5", "projections": 3, "rehydrates": 14, "response_cache_bytes": 28330295, "scope": "projection", "stats_service_callbacks": 2}
+after-partial-noop: {"R2_GET": 40, "R2_live_bytes": 9448326, "R2_peak_bytes": 9448326, "R2_read_bytes": 122787985, "R2_written_bytes": 9452663, "SQL_rows_written": 31, "SQLite_bytes": 20480, "bytes": "9443988/9448326", "full_restores": 1, "generation": 8, "joint_retained_bytes": 28331877, "lineage_bytes": 232, "manifest_CAS": 8, "noop_shortcuts": 2, "packs": "2/5", "projections": 3, "rehydrates": 14, "response_cache_bytes": 28330295, "scope": "projection", "stats_service_callbacks": 2}
+after-large-push: {"R2_GET": 45, "R2_live_bytes": 19938799, "R2_peak_bytes": 19938799, "R2_read_bytes": 132236311, "R2_written_bytes": 19943136, "SQL_rows_written": 34, "SQLite_bytes": 20480, "bytes": "19938799/19938799", "full_restores": 2, "generation": 9, "joint_retained_bytes": 1022, "lineage_bytes": 248, "manifest_CAS": 9, "noop_shortcuts": 3, "packs": "6/6", "projections": 3, "rehydrates": 15, "response_cache_bytes": 0, "scope": "full", "stats_service_callbacks": 2}
+final-partial: {"R2_GET": 53, "R2_live_bytes": 19938799, "R2_peak_bytes": 19938799, "R2_read_bytes": 161619098, "R2_written_bytes": 19943136, "SQL_rows_written": 34, "SQLite_bytes": 20480, "bytes": "9443988/19938799", "full_restores": 2, "generation": 9, "joint_retained_bytes": 2736, "lineage_bytes": 248, "manifest_CAS": 9, "noop_shortcuts": 3, "packs": "2/6", "projections": 4, "rehydrates": 17, "response_cache_bytes": 1426, "scope": "projection", "stats_service_callbacks": 2}
+final-stats-restore: {"R2_GET": 59, "R2_live_bytes": 19938799, "R2_peak_bytes": 19938799, "R2_read_bytes": 181557897, "R2_written_bytes": 19943136, "SQL_rows_written": 34, "SQLite_bytes": 20480, "bytes": "19938799/19938799", "full_restores": 3, "generation": 9, "joint_retained_bytes": 2736, "lineage_bytes": 248, "manifest_CAS": 9, "noop_shortcuts": 3, "packs": "6/6", "projections": 4, "rehydrates": 18, "response_cache_bytes": 1426, "scope": "full", "stats_service_callbacks": 4}
+
+Proven receipt deltas:
+At generation8, historical no-have cutoff3 and with-have cutoff4 each select2/5 packs, consuming2 actual R2 GETs rather than5. No-have row also follows a full latest read; see ordered snapshot counters.
+Cached latest recheck and repeated metrics leave Projection with no new R2 GET/read bytes or rehydrate. Cache keys bind exact original method/target/body/all sorted headers plus authoritative generation.
+First global stats restore: +5 actual GETs, +9,448,326 read bytes, +1 stats service read callback. Final global stats restore: +6 GETs, +19,938,799 read bytes, +2 read callbacks. These are explicitly charged observer restores, not hidden/discarded.
+Direct exact noop while partial: zero new GET/read bytes/rehydrates, same Projection/cache/certificates/generation/debt, shortcut increments1; R2 writes/live/peak and SQLite/SQL writes unchanged.
+Subsequent actual default Git large push sends its own empty0000 probe and chunked10MiB pack. Shortcuts +1, Full rehydrates +1, Full restores +1, old-snapshot GETs +5 exactly once; response cache clears0, joint retained1022 bytes, lineage248 bytes. No extra true-push read suppression.
+Final strict source/client/native fsck pass, source/client tar archives identical, all requested commits load. No read-side R2 writes/live/peak growth, no read-side manifest CAS/SQL write increase, SQLite stays20480 bytes.
+Final maximum observed response/joint cache boundary in this fixture: 28,330,295 / 28,331,877 bytes; lineage232 bytes at generation8 and248 at generation9. No object payload cache added.
+
+Error and retry evidence retained, not omitted:
+/tmp/git-zero-history-prefix-unit-initial.log: initial sandbox run had12 loopback EPERM failures, plus2 test-contract failures. Unit rerun under authorized socket access removed EPERMs; no timeout cases dropped.
+Strengthened old tests: snapshot_reads_flatten_mixed_packs_and_preserve_repeated_keys_in_order now uses distinct pack IDs while preserving repeated identical chunk-key order/data; duplicate pack identity now correctly fails shared metadata validation.
+failed_snapshot_rebuild_stays_dirty_without_materializing_partial_packs and recovery_rejects_corrupted_authoritative_chunks now assert the native view is absent after invalid bytes, strengthening the old empty-initialized-view expectation. All selected SHA/length/identity checks precede even config/HEAD creation.
+/tmp/git-zero-history-prefix-unit-privileged.log:92/93 pass, witness count regression from marking every pre-view authority read failure dirty. Corrected to invalidate native/partial failures, preserving old authority failure/witness behavior; final witness test passes.
+/tmp/git-zero-history-prefix-history.log and -history-second.log: initial new-test fixture bugs (read-only deliberate corruption injection and bundled-vs-legacy descriptor indexing) corrected; final integrity assertions unchanged/stronger.
+/tmp/git-zero-history-prefix-production.log: first real driver conservatively remainedFull because Git successful empty receive probe dropped provenance. Temporary local trace in -production-trace-fresh/native.stderr proved exact supported requests and probe sequence; no parser/policy weakening.
+/tmp/git-zero-history-prefix-production-probe-fix.log: safe exact no-change preservation enables floors[1,2,6,7,8] and historical selection; driver originally expected1 total large-push hydrate but defaultGit issued2 true POSTs before the related exact-noop shortcut. Native content/state remained correct.
+/tmp/git-zero-history-prefix-worker-probe-fix.log retains actual35854ms staged-publication tail; no timeout omission, speed claim, or attribution to this candidate.
+/tmp/git-zero-history-prefix-production-final.log: pre-noop implementation correctness pass42.50s on fresh state, with honest2-POST hydrate expectation. This is prior-step evidence, not final-candidate performance.
+/tmp/git-zero-history-prefix-production-reviewed-final.log: final exact shortcut correctness pass26.86s; duration is diagnostic only, no speed comparison.
+
+Review/proof scope:
+Private lineage advances only confirmed native staged-upload/CAS/ref/prune/cache-clear success; failures/external/restart drop selectivity. Compaction min-floor includes every selected/duplicate/new input and multi-level plans.
+Whole omitted-metadata validation, strict known wants+haves v0 grammar/fallback, selected corruption/missing failures without Full retry, old alias/delete/readd stamps, overflow/cap failure, partial large/ref-only/native/discovery/stats restore, metrics no restore, cachehit partial, external/dirty/restart and retirement lost-reply integration are tested.
+No-op native equivalence verified directly in tests for unborn/nonempty/partial views; Git2.53 source proof independently reviewed by parent/reviewer: pkt-line.c434-437 FLUSH, receive-pack.c2167/2172-3 no commands,2647 stateless no ad,2657-2709 no unpack/ref/hooks/GC/report,2710 untouched sideband => no bytes,2716 success.
+No selected read promises authentication of unrelated omitted payloads; no-op consumes no object payload and makes no hash-sweep claim.
+Fixed objective projection remains unmeasured: earlier R5 arithmetic138GET+15callbacks=$0.05643; mandatory final whole-scope24GET+8callbacks=$0.01224 restore => $0.04419 separately charged net. No full bill/CPU value asserted. Benchmark postBuffer256M avoids the no-op probe, so this related default-client saving does not alter fixed projection.
+Anchor promotion/measurement remains parent-gated after all four current profile cost/resource/latency reviews. No benchmark, performance acceptance, or production lifecycle claim made here.
+
+Frozen independent source review: /root/review_history_prefix approved bounded source45018bac16ea20e578c2a98d17aa336a7fdcec5d; no source blockers remain. Reviewer ran no builds/tests/probes and made no performance approval. Identity-change fix requires each present ad/history proof match the computed policy identity before no-op; mismatch uses ordinary Full fallback and drops stale proofs. Separate stale-ad and stale-lineage fake-identity regression passes without environment mutation.
+Prior9189176 correctness record retained as /tmp/git-zero-history-prefix-validation-9189176.txt. Final reviewed run26.86s is diagnostic only; previous13.21s and42.50s runs and35854ms staging tail remain retained, with no speed comparison.
+
+Artifact hashes:
+30a759ba82d9b2e927187d7e66866ca1fd59f8bcfe78b24e26a6647b76d386d5  /tmp/git-zero-hosting-history-prefix/docs/hosting-design.md
+de77834fe1173f317c1c94d6244b2a4c4f3fa3cd5a087623a2c2e04c46125634  /tmp/git-zero-history-prefix-production-reviewed-final/contract.json
+5cf914a98b05a3c097ea5d47a407dd2dbf65c5441eeb678fb2844af9e83625b0  /tmp/git-zero-history-prefix-production-reviewed-final.log
+50e70312ff82e515fa60c8fad53058dabfe75fa4b2e0b47d2e936a2b5decb8b9  /tmp/git-zero-history-prefix-worker-reviewed-final.log
+f107da78ad912fe469a5148105b06ad1b6a59897dfd218b74fd7f7aad2d7b4f4  /tmp/git-zero-history-prefix-alltests-reviewed-final.log
+5dc32e61f9e7f02316bb447a338ffac2a08927c3de95cbc0a0bfa788db391b79  /tmp/git-zero-history-prefix-clippy-reviewed-final.log
