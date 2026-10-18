@@ -596,3 +596,78 @@ projection. Default-client probe savings are separate observed operations, not
 scored workload savings. Full four-profile fresh screens and final paired
 validation remain required; cache/latency/transfer/storage guards can reject the
 candidate regardless of arithmetic.
+
+## Deferred catalog retirement preparation
+
+The `catalog_deferred: 1` registration extension requires catalog pages and peak
+witnesses and acknowledges the exact `{version: 1, proof_bytes: 178}` capability.
+Fresh older registrations keep their immediate catalog updates. The new Native
+source retains one opaque 178-byte retirement token, including its complete mutex
+and state allocation in the existing joint 32 MiB budget. Registration,
+unregistration and GC clear it. A token enters that slot only after the existing
+strict typed response validates a successful publication and every retirement
+outcome; no JSON response field was added.
+
+The Worker uses a separate, private per-registration HMAC key. The existing
+generation-witness key remains a different key intentionally known to Native.
+An absence token binds its domain/version, repository, private session,
+generation, and SHA-256 of the JSON encoding of the complete ordered eligible
+debt list. The token contains a version byte, 16-byte session, little-endian u64
+generation, 32-byte debt digest and 32-byte MAC, encoded as lowercase hexadecimal.
+The public service header is `x-git-zero-retirement-proof`; values over 512 bytes
+are rejected before DO I/O. Missing, invalid, stale or lost-session tokens permit
+charged bounded HEAD recovery. All internal headers are stripped before trusted
+reinjection on authenticated service ingress and stripped on public Git ingress.
+The public authoritative generation read remains unchanged.
+
+Proof issuance consumes the actual DO response and its validated, already-counted
+per-RPC usage receipt. It requires a durable successful publication, every exact
+ordered true outcome, the actual successful DELETE count, known SQL counters and
+the correct successful uploaded member for fused calls. Partial outcomes, lost
+replies or unknown SQL counters earn no proof. Accounting is applied once before
+body or cryptographic processing; failure to create the optional token preserves
+the publication response and cannot cause another dispatch. Registry identity is
+checked across asynchronous verification/signing so rotation cannot remint an
+old receipt with a new session.
+
+Page codec v1 remains readable. Codec v2 is `GZCP`, version byte 2, count byte,
+little-endian u64 applied-retirement generation, then at most 32 ordered
+32-byte digests and little-endian u32 sizes. Its maximum is 1,166 bytes, below the
+unchanged 1,286-byte page bound. Sizes include zero and stop at the existing
+16 MiB physical PUT limit. Decoding checks exact length, integer bounds, sorted
+uniqueness, routing prefix and aggregate size. New v2 pages acknowledge the
+current generation, splits retain the acknowledgment, and authoritative GC
+rebuilding acknowledges its reconciled generation. Durable decoding and reopen
+recovery do not depend on the ephemeral registration. Worker rollback to code
+that cannot decode v2 is unsupported.
+
+Only the bounded all-success retirement of a surviving v2 page defers its
+survivor write. Physical DELETE calls still execute immediately, in the original
+order after the winning CAS and sync. Volatile live totals become exact while
+the historical durable page and its peak remain. The next same-page new-key PUT
+folds those removals into its already-required catalog write and sync before CAS.
+An uploaded key in current debt first reconciles, durably acknowledges and syncs
+that debt **before its physical R2 PUT**, preventing an old token from removing
+a same-generation resurrection after a catalog failure. Mixed rows, multiple
+pages, empty pages, overflow, unrelated-page PUTs and publications without PUTs
+use charged eager flushes before the debt marker can be replaced. Partial
+retirement keeps the eager/dirty recovery path.
+
+The DO distinguishes exact inventory, unresolved current debt, and arbitrary
+uncertainty. Reopen examines a bounded current debt set only when durable v2
+pages exist. A matching token or actual bounded HEADs can resolve debt presence;
+neither can clear a PUT/catalog/sync/decoding/numeric uncertainty. Those failures
+retain generation-checked full-GC recovery. The earlier arbitrary uncataloged
+PUT crash gap still relies on Native dirty/startup recovery; this protocol does
+not certify those objects. Observer LISTs never repair, certify, flush or mint
+proofs. They report actual physical inventory and durable peak evidence. GC
+retains the entire pre-delete physical/orphan peak and the union-of-doomed-row
+witness rule.
+
+This is an isolated correctness and accounting candidate, not a measured saving.
+The normal four-profile opportunity is 28 written rows, or $0.028 per 1,000
+repetitions at the retained price snapshot, before actual recovery, routing and
+other overhead. Three HEADs in each of 28 reopened windows cost $0.03024 and can
+erase it. Worker CPU, DO active duration, monthly SQLite retention and Native/full
+bill remain unknown. Acceptance requires independent review and fresh measured
+screens; final SQLite/reopen size must remain at most 24,821.76 bytes.

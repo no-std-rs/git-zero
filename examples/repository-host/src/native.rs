@@ -993,6 +993,12 @@ impl NativeHost {
         let prepare_start = Instant::now();
         self.cloud_read_view()?;
         self.lineage = None;
+        // Scalar cleanup can change provider debt before returning an error.
+        // Preserve recovery even though publication has not started yet.
+        let cleanup_dirty = self.view_dirty;
+        if !self.manifest.garbage.is_empty() {
+            self.view_dirty = true;
+        }
         if !self
             .manifest
             .collect_garbage(&self.repository.blobs)
@@ -1002,6 +1008,7 @@ impl NativeHost {
                 "retired chunk cleanup must complete before another push",
             ));
         }
+        self.view_dirty = cleanup_dirty;
         let mut previous = self.manifest.clone();
         previous.garbage.clear();
         let quarantine = Quarantine(self.root.join("quarantine"));
@@ -1504,6 +1511,10 @@ impl NativeHost {
             + size_of::<Option<advertisement::Certificate>>()
             + size_of::<Option<history::Certificate>>()
             + 2 * size_of::<usize>()
+            + self
+                .cloudflare
+                .as_ref()
+                .map_or(0, |_| HttpServices::retirement_proof_storage_bytes())
     }
 
     fn reserve_metadata(&mut self, incoming: usize) {
@@ -1627,6 +1638,111 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deferred_catalog_proof_slot_is_reserved_inside_the_existing_cache_budget() {
+        let root = std::env::temp_dir().join(format!(
+            "git-zero-proof-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        host.cache = VecDeque::with_capacity(4);
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: vec![b'x'; CACHE_ENTRY_BYTES - 1024].into(),
+        };
+        host.cache_insert("first".into(), &response);
+        host.cache_insert("second".into(), &response);
+        let key = String::from("remaining");
+        let mut padding = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Arc::from([]),
+        };
+        let overhead = NativeHost::cache_weight(key.capacity(), &padding);
+        let remaining = CACHE_BYTES - host.metadata_bytes() - host.cache_bytes - overhead;
+        padding.body = vec![b'y'; remaining].into();
+        host.cache_insert(key, &padding);
+        assert_eq!(host.cache_bytes + host.metadata_bytes(), CACHE_BYTES);
+        let metadata = host.metadata_bytes();
+        host.cloudflare = Some(Arc::new(
+            HttpServices::new("http://127.0.0.1:1", "proof", "token").unwrap(),
+        ));
+        assert_eq!(
+            host.metadata_bytes() - metadata,
+            HttpServices::retirement_proof_storage_bytes()
+        );
+        host.trim_cache(0);
+        assert_eq!(host.metrics.cache_evictions, 1);
+        assert!(host.cache_bytes + host.metadata_bytes() <= CACHE_BYTES);
+        assert_eq!(CACHE_BYTES, 32 * 1024 * 1024);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ambiguous_early_scalar_cleanup_marks_view_dirty_before_returning() {
+        use std::io::{BufRead, BufReader};
+        let root = std::env::temp_dir().join(format!(
+            "git-zero-scalar-cleanup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut host = NativeHost::open(root.clone()).unwrap();
+        host.manifest.garbage = vec![format!("chunks/{}", hash(b"old"))];
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let services = Arc::new(
+            HttpServices::new(
+                &format!("http://{}", listener.local_addr().unwrap()),
+                "cleanup",
+                "token",
+            )
+            .unwrap(),
+        );
+        let key = host.manifest.garbage[0].clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with(&format!("DELETE /_services/blob/{key} ")));
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            // The DELETE may already have committed; its incomplete reply
+            // must force recovery on the following request.
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nx")
+                .unwrap();
+        });
+        host.repository.blobs = HostBlobs::Cloudflare(R2BlobStore::new(services.clone()), services);
+        let request = Request {
+            method: "POST".into(),
+            target: "/repo.git/git-receive-pack".into(),
+            headers: BTreeMap::new(),
+            body: vec![],
+        };
+        assert!(!host.view_dirty);
+        assert!(host.receive_transaction(&request, None).is_err());
+        assert!(host.view_dirty);
+        server.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn fused_partial_failure_retains_debt_and_lost_committed_reply_recovers_before_read() {

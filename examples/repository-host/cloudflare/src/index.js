@@ -1,6 +1,7 @@
 // Local workerd runtime glue. Git and all test/benchmark runners remain Rust.
 // Never deploy this loopback codec gateway as a production Git service.
 import { PAGE_PREFIX, PAGE_END, PAGE_CAPACITY, ancestors, commonPrefix, count, decodePage, encodePage, splitPage } from "./catalog-pages.js";
+import { PROOF_HEADER, DEFERRED_HEADER, CONFIRM_HEADER, DEFERRED_CAPABILITY, debtDigest, registrationProof, issueProof, verifyProof } from "./retirement-proof.js";
 const registry = new Map();
 const workerUsage = new Map();
 let workerEpoch;
@@ -263,7 +264,7 @@ function addCounters(target, delta, fields = Object.keys(emptyUsage())) {
 
 function acceptReceipt(repo, encoded) {
   if (!encoded || encoded.length > 16384) throw new Error("missing or oversized service receipt");
-  const receipt = JSON.parse(encoded);
+  const receipt = strictJson(new TextEncoder().encode(encoded));
   const fields = Object.keys(emptyUsage());
   if (receipt.version !== 1 || !plainObject(receipt.totals) || !plainObject(receipt.by_phase)
       || !plainObject(receipt.operations) || typeof receipt.do_instance_epoch !== "string"
@@ -313,6 +314,7 @@ function acceptReceipt(repo, encoded) {
   }
   next.do_instance_epoch = receipt.do_instance_epoch;
   workerUsage.set(repo, next);
+  return receipt;
 }
 
 function mergeWorkerUsage(result, repo) {
@@ -345,14 +347,15 @@ async function dispatchService(env, repo, request, requireReceipt = false) {
   let response;
   try { response = await stub.fetch(request); }
   catch (error) { incomplete(repo, "Durable Object dispatch failed; side effects may be unaccounted"); throw error; }
-  try { acceptReceipt(repo, response.headers.get(USAGE_HEADER)); }
+  let receipt = null;
+  try { receipt = acceptReceipt(repo, response.headers.get(USAGE_HEADER)); }
   catch {
     incomplete(repo, "missing or invalid Durable Object usage receipt");
     if (requireReceipt) fail(502, "service call has no valid usage receipt");
   }
   const headers = new Headers(response.headers);
   headers.delete(USAGE_HEADER);
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  return { response: new Response(response.body, { status: response.status, statusText: response.statusText, headers }), receipt };
 }
 
 function hex(bytes) {
@@ -369,7 +372,7 @@ async function registrationWitness() {
 async function generationWitness(env, repo, currentPhase, method, target, config) {
   // Construct this request from trusted routing inputs; public headers cannot
   // choose the repository, phase or route of the authoritative read.
-  const response = await dispatchService(env, repo, new Request("https://local/_services/manifest", {
+  const { response } = await dispatchService(env, repo, new Request("https://local/_services/manifest", {
     headers: { "x-hosting-repo": repo, "x-hosting-phase": currentPhase },
   }), true);
   if (!response.ok) fail(502, "authoritative generation read failed");
@@ -406,6 +409,8 @@ export default {
           const body = await parseJson(request, 1024);
           const origin = loopbackOrigin(body.codec_origin);
           const witness = body.generation_witness === 1 ? await registrationWitness() : null;
+          const catalogDeferred = body.catalog_deferred === 1 && body.catalog_pages === 1 && body.catalog_peak === 1;
+          const proof = catalogDeferred ? await registrationProof() : null;
           // Recheck after asynchronous key creation so concurrent registrations
           // cannot replace a different origin or exceed the bounded registry.
           if (registry.has(repo) && registry.get(repo).origin !== origin) {
@@ -413,12 +418,13 @@ export default {
           }
           if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
           const catalogPages = body.catalog_pages === 1 && body.catalog_peak === 1;
-          registry.set(repo, { origin, witness: witness?.private, catalogPeak: body.catalog_peak === 1, catalogPages });
+          registry.set(repo, { origin, witness: witness?.private, catalogPeak: body.catalog_peak === 1, catalogPages, proof });
           return json({ registered: true, repository: repo, codec_origin: origin,
             ...(body.manifest_retire === 1 ? { manifest_retire: { version: 1 } } : {}),
             ...(body.manifest_upload_retire === 1 ? { manifest_upload_retire: UPLOAD_CAPABILITY } : {}),
             ...(body.catalog_peak === 1 ? { catalog_peak: { version: 1 } } : {}),
             ...(catalogPages ? { catalog_pages: { version: 1 } } : {}),
+            ...(proof ? { catalog_deferred: DEFERRED_CAPABILITY } : {}),
             ...(witness ? { generation_witness: witness.response } : {}) });
         }
         if (url.pathname === "/_services/unregister" && request.method === "POST") {
@@ -426,22 +432,50 @@ export default {
           return json({ registered: false, repository: repo });
         }
         const headers = new Headers(request.headers);
+        const registration = registry.get(repo), proof = request.headers.get(PROOF_HEADER);
+        if (proof && proof.length > 512) fail(400, "retirement proof exceeds header limit");
+        headers.delete(PROOF_HEADER);
         for (const name of [...headers.keys()]) {
           if (name.startsWith(WITNESS_PREFIX)) headers.delete(name);
         }
-        if (registry.get(repo)?.catalogPeak) headers.set(CATALOG_PEAK_HEADER, "1");
-        if (registry.get(repo)?.catalogPages) headers.set(CATALOG_PAGES_HEADER, "1");
+        if (registration?.catalogPeak) headers.set(CATALOG_PEAK_HEADER, "1");
+        if (registration?.catalogPages) headers.set(CATALOG_PAGES_HEADER, "1");
+        if (registration?.proof) headers.set(DEFERRED_HEADER, "1");
+        if (!observer && proof) {
+          let confirmation = null;
+          try { confirmation = await verifyProof(registration?.proof, repo, proof); } catch { /* Paid debt recovery remains available. */ }
+          if (confirmation && registry.get(repo) === registration) headers.set(CONFIRM_HEADER, confirmation);
+        }
         headers.set("x-hosting-repo", repo);
         headers.set("x-hosting-phase", currentPhase);
         // Bound and finish this small JSON upload before entering the DO gate.
         // Returning a DO error while its forwarded upload is still active can
         // leave workerd's request pump holding the repository gate indefinitely.
         const upload = url.pathname === "/_services/manifest/upload-retire";
-        const serviceRequest = (upload || ["/_services/blobs/read", "/_services/manifest/retire"].includes(url.pathname)) && request.method === "POST"
-          ? new Request(request.url, { method: request.method, headers,
-            body: await bytes(request, upload ? MAX_BULK_RESPONSE_BYTES : MAX_MANIFEST_BYTES) })
-          : new Request(request, { headers });
-        const clean = await dispatchService(env, repo, serviceRequest, upload);
+        const buffered = (upload || ["/_services/blobs/read", "/_services/manifest/retire"].includes(url.pathname)) && request.method === "POST";
+        const frame = buffered ? await bytes(request, upload ? MAX_BULK_RESPONSE_BYTES : MAX_MANIFEST_BYTES) : null;
+        let context = null;
+        if (registration?.proof && request.method === "POST" && (upload || url.pathname === "/_services/manifest/retire")) {
+          let body;
+          if (upload) {
+            if (frame.length < 12) fail(400, "invalid upload header");
+            const length = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(8, true);
+            if (length > MAX_MANIFEST_BYTES || length > frame.length - 12) fail(400, "invalid upload metadata bound");
+            body = strictJson(frame.subarray(12, 12 + length));
+          } else body = strictJson(frame);
+          context = { generation: body.next?.generation, keys: retirementKeys(body), ...(upload ? { uploaded: body.chunk } : {}) };
+        }
+        const serviceRequest = buffered ? new Request(request.url, { method: request.method, headers, body: frame }) : new Request(request, { headers });
+        const { response: clean, receipt } = await dispatchService(env, repo, serviceRequest, upload);
+        if (context && clean.ok && registry.get(repo) === registration) {
+          // Actual receipts are already charged. Optional crypto/body failure
+          // suppresses the proof, preserving the authoritative publication.
+          try {
+            const reply = strictJson(new Uint8Array(await clean.clone().arrayBuffer()));
+            const token = await issueProof(registration.proof, repo, context, reply, receipt);
+            if (token && registry.get(repo) === registration) clean.headers.set(PROOF_HEADER, token);
+          } catch { /* No proof: bounded actual HEADs can recover after eviction. */ }
+        }
         if (observer && clean.ok) return json(mergeWorkerUsage(await clean.json(), repo));
         return clean;
       }
@@ -456,6 +490,7 @@ export default {
       const headers = new Headers(request.headers);
       headers.delete("host");
       headers.delete("x-hosting-token");
+      headers.delete(PROOF_HEADER);
       for (const name of [...headers.keys()]) {
         if (name.startsWith(WITNESS_PREFIX)) headers.delete(name);
       }
@@ -499,6 +534,11 @@ export class RepositoryServices {
     this.peakBytes = 0;
     this.catalogCertain = true;
     this.peakOwner = null;
+    this.debtLoaded = false;
+    this.debtContext = null;
+    this.debt = null;
+    this.deferredPages = false;
+    this.deferAllowed = false;
     this.reloadCatalog();
   }
 
@@ -580,14 +620,22 @@ export class RepositoryServices {
   }
 
   reloadCatalog() {
+    // Reload discards volatile deltas together with their exact live totals.
+    // Reclassify from durable current debt; a surviving in-memory confirmation
+    // must never be subtracted twice or applied to newly loaded stale totals.
+    this.debtLoaded = false;
+    this.debtContext = null;
+    this.debt = null;
     const columns = this.exec("PRAGMA table_info(blob_catalog)");
     this.catalogPeak = columns.some((column) => column.name === "peak_bytes");
     this.catalogPages = columns.some((column) => column.name === "entries");
     if (this.catalogPages && !this.catalogPeak) throw new Error("catalog pages require durable peak schema");
     const validSize = "typeof(size) = 'integer' AND size BETWEEN 0 AND 9007199254740991";
     const validPeak = "typeof(peak_bytes) = 'integer' AND peak_bytes BETWEEN 0 AND 9007199254740991";
+    const v1 = "hex(substr(entries, 1, 5)) = '475A435001' AND LENGTH(entries) BETWEEN 46 AND 1286 AND (LENGTH(entries) - 6) % 40 = 0 AND hex(substr(entries, 6, 1)) = printf('%02X', (LENGTH(entries) - 6) / 40)";
+    const v2 = "hex(substr(entries, 1, 5)) = '475A435002' AND LENGTH(entries) BETWEEN 50 AND 1166 AND (LENGTH(entries) - 14) % 36 = 0 AND hex(substr(entries, 6, 1)) = printf('%02X', (LENGTH(entries) - 14) / 36)";
     const inventory = this.exec(this.catalogPages
-      ? `SELECT COALESCE(SUM(CASE WHEN entries IS NULL THEN 1 ELSE (LENGTH(entries) - 6) / 40 END), 0) AS objects, COALESCE(SUM(CASE WHEN ${validSize} THEN 1.0 * size ELSE 0 END), 0) AS bytes, COALESCE(MAX(CASE WHEN ${validPeak} THEN peak_bytes ELSE 0 END), 0) AS peak, COALESCE(MAX(CASE WHEN NOT (${validSize}) OR NOT (${validPeak}) OR (entries IS NOT NULL AND (LENGTH(entries) < 46 OR LENGTH(entries) > 1286 OR (LENGTH(entries) - 6) % 40 <> 0)) THEN 1 ELSE 0 END), 0) AS invalid FROM blob_catalog`
+      ? `SELECT COALESCE(SUM(CASE WHEN entries IS NULL THEN 1 WHEN ${v1} THEN (LENGTH(entries) - 6) / 40 WHEN ${v2} THEN (LENGTH(entries) - 14) / 36 ELSE 0 END), 0) AS objects, COALESCE(SUM(CASE WHEN ${validSize} THEN 1.0 * size ELSE 0 END), 0) AS bytes, COALESCE(MAX(CASE WHEN ${validPeak} THEN peak_bytes ELSE 0 END), 0) AS peak, COALESCE(MAX(CASE WHEN NOT (${validSize}) OR NOT (${validPeak}) OR (entries IS NOT NULL AND NOT ((${v1}) OR (${v2}))) THEN 1 ELSE 0 END), 0) AS invalid, COALESCE(MAX(CASE WHEN ${v2} THEN 1 ELSE 0 END), 0) AS deferred FROM blob_catalog`
       : this.catalogPeak
       ? "SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes, COALESCE(MAX(peak_bytes), 0) AS peak FROM blob_catalog"
       : "SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes FROM blob_catalog")[0];
@@ -604,6 +652,11 @@ export class RepositoryServices {
     this.fallbackPeak = this.catalogPages && !this.fallbackValid ? 0 : count(fallback);
     this.peakBytes = Math.max(this.peakBytes, this.liveBytes, count(inventory.peak ?? 0), this.fallbackPeak);
     this.peakOwner = null;
+    this.deferredPages = !!inventory.deferred;
+    // Durable format, never the ephemeral registration, selects reopen logic.
+    if (this.deferredPages && !this.debtLoaded && this.catalogCertain) {
+      try { this.loadDebtContext(); } catch { this.catalogUncertain(); }
+    }
     // SQL recovers peak witnesses, never certainty about an interrupted R2
     // operation. Only a generation-checked physical inventory clears dirty.
   }
@@ -615,6 +668,97 @@ export class RepositoryServices {
   catalogUncertain() {
     this.catalogCertain = false;
     this.peakOwner = null;
+  }
+
+  setDebtContext(manifest) {
+    count(manifest.generation);
+    const keys = manifest.generation === 0 ? [] : retirementKeys({ version: 1, expected: manifest.generation - 1, next: manifest });
+    this.debtContext = { generation: manifest.generation, keys };
+    this.debtLoaded = true;
+  }
+
+  loadDebtContext() {
+    const row = this.exec("SELECT manifest FROM repository_state WHERE id = 1")[0];
+    this.setDebtContext(row ? JSON.parse(row.manifest) : { generation: 0, refs: {}, packs: [] });
+    const { generation, keys } = this.debtContext, items = [];
+    for (const key of keys) {
+      const found = this.catalogLookup(key);
+      const appliedGeneration = found.entries?.appliedGeneration ?? null;
+      if (appliedGeneration !== null && appliedGeneration > generation) throw new Error("catalog acknowledgment exceeds manifest generation");
+      if (found.size !== undefined && (appliedGeneration === null || appliedGeneration < generation)) {
+        items.push({ key, rowKey: found.legacy?.key ?? found.page.key, size: found.size, appliedGeneration, absent: false });
+      }
+    }
+    this.debt = items.length ? { generation, keys, items, resolved: false } : null;
+  }
+
+  async resolveDebt(prefix) {
+    this.requireCatalogCertain();
+    if (!this.catalogPages || (!this.deferredPages && !this.deferAllowed)) return;
+    if (!this.debtLoaded) {
+      try { this.loadDebtContext(); } catch (error) { this.catalogUncertain(); throw error; }
+    }
+    if (!this.debt || this.debt.resolved) return;
+    let confirmed = false;
+    try {
+      const proof = JSON.parse(this.confirmation ?? "null");
+      confirmed = Array.isArray(proof) && proof.length === 3 && proof[0] === 1
+        && proof[1] === this.debt.generation && proof[2] === await debtDigest(this.debt.keys);
+    } catch { /* Missing/stale proof uses actual bounded binding calls. */ }
+    // Accumulate first. A failed HEAD leaves the original bounded uncertainty
+    // unresolved; it cannot partially change the exact live counters.
+    for (const item of this.debt.items) {
+      if (confirmed && item.appliedGeneration !== null) item.absent = true;
+      else {
+        const object = await this.operation("r2_head", () => this.env.BLOBS.head(prefix + item.key), () => 0, 0, item.key);
+        if (object && object.size !== item.size) { this.catalogUncertain(); throw new Error("debt member size differs from physical object"); }
+        item.absent = !object;
+      }
+    }
+    for (const item of this.debt.items) if (item.absent) {
+      this.liveObjects = count(this.liveObjects - 1);
+      this.liveBytes = count(this.liveBytes - item.size);
+    }
+    this.debt.resolved = true;
+  }
+
+  async flushDebt() {
+    if (!this.debt) return;
+    this.requireCatalogCertain();
+    if (!this.debt.resolved) throw new Error("retirement debt must be reconciled before persistence");
+    try {
+      const groups = new Map();
+      for (const item of this.debt.items) {
+        if (!groups.has(item.rowKey)) groups.set(item.rowKey, []);
+        groups.get(item.rowKey).push(item);
+      }
+      const doomed = new Set();
+      for (const [key, items] of groups) {
+        const row = this.exec("SELECT key, size, peak_bytes, entries FROM blob_catalog WHERE key = ?", key)[0];
+        if (!row) throw new Error("pending catalog row disappeared");
+        const members = row.entries === null ? 1 : decodePage(row).length;
+        if (items.filter((item) => item.absent).length === members) doomed.add(key);
+      }
+      await this.preserveBatchPeak(doomed);
+      this.ctx.storage.transactionSync(() => {
+        for (const [key, items] of groups) {
+          if (!key.startsWith(PAGE_PREFIX)) {
+            if (items[0].absent) this.exec("DELETE FROM blob_catalog WHERE key = ?", key);
+            continue;
+          }
+          const row = this.exec("SELECT key, size, peak_bytes, entries FROM blob_catalog WHERE key = ?", key)[0];
+          const entries = decodePage(row);
+          if (entries.appliedGeneration !== null && entries.appliedGeneration >= this.debt.generation) continue;
+          const absent = new Set(items.filter((item) => item.absent).map((item) => item.key.slice(7)));
+          const survivors = entries.filter((entry) => !absent.has(entry.digest));
+          if (survivors.length) this.writePage(key, survivors, row.peak_bytes, this.debt.generation);
+          else this.exec("DELETE FROM blob_catalog WHERE key = ?", key);
+        }
+      });
+      await this.ctx.storage.sync();
+      this.debt = null;
+      this.peakOwner = null;
+    } catch (error) { this.catalogUncertain(); throw error; }
   }
 
   enableCatalogPeak(request, reconciling = false) {
@@ -680,12 +824,13 @@ export class RepositoryServices {
     return PAGE_PREFIX + digest.slice(0, length);
   }
 
-  writePage(key, entries, peak) {
-    const row = encodePage(key, entries, peak);
+  writePage(key, entries, peak, appliedGeneration = null) {
+    const row = encodePage(key, entries, peak, appliedGeneration);
     this.exec("INSERT INTO blob_catalog (key, size, peak_bytes, entries) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size, peak_bytes = MAX(blob_catalog.peak_bytes, excluded.peak_bytes), entries = excluded.entries", row.key, row.size, row.peak_bytes, row.entries);
+    if (appliedGeneration !== null) this.deferredPages = true;
   }
 
-  putCatalogPage(key, size, found, peak) {
+  putCatalogPage(key, size, found, peak, appliedGeneration = found.entries?.appliedGeneration ?? null) {
     if (found.legacy) {
       this.exec("INSERT INTO blob_catalog (key, size, peak_bytes) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size, peak_bytes = MAX(blob_catalog.peak_bytes, excluded.peak_bytes)", key, size, peak);
       return key;
@@ -698,11 +843,11 @@ export class RepositoryServices {
     else entries.push({ digest, size });
     entries.sort((left, right) => left.digest < right.digest ? -1 : left.digest > right.digest ? 1 : 0);
     peak = Math.max(peak, found.page?.peak_bytes ?? 0);
-    if (entries.length <= PAGE_CAPACITY) { this.writePage(pageKey, entries, peak); return pageKey; }
+    if (entries.length <= PAGE_CAPACITY) { this.writePage(pageKey, entries, peak, appliedGeneration); return pageKey; }
     const groups = splitPage(entries);
     this.ctx.storage.transactionSync(() => {
       this.exec("DELETE FROM blob_catalog WHERE key = ?", pageKey);
-      for (const group of groups) this.writePage(group.key, group.entries, peak);
+      for (const group of groups) this.writePage(group.key, group.entries, peak, appliedGeneration);
     });
     return groups[0].key;
   }
@@ -727,6 +872,8 @@ export class RepositoryServices {
 
   async remove(key, prefix, knownSize, reconciling = false) {
     if (this.catalogPages && !reconciling) {
+      await this.resolveDebt(prefix);
+      await this.flushDebt();
       const receipt = await this.retirePages([key], prefix, 0);
       if (!receipt.outcomes[0].deleted) throw new Error("R2 deletion failed; inventory reconciliation required");
       return;
@@ -759,7 +906,35 @@ export class RepositoryServices {
 
   async put(key, data, prefix) {
     if (this.catalogPeak) this.requireCatalogCertain();
-    const found = this.catalogPages ? this.catalogLookup(key) : null;
+    await this.resolveDebt(prefix);
+    let found = this.catalogPages ? this.catalogLookup(key) : null;
+    if (this.deferAllowed && found?.page && found.entries.appliedGeneration === null && !this.debt
+        && this.debtContext.keys.length) {
+      // A v1 page has no durable replay acknowledgment. Even after an older
+      // client mutated this instance, its first conversion cannot trust a
+      // surviving registration or an old all-success proof as absence evidence.
+      try { this.loadDebtContext(); } catch (error) { this.catalogUncertain(); throw error; }
+      await this.resolveDebt(prefix);
+    }
+    let folded = false;
+    if (this.debt) {
+      // A resurrected debt key must obtain its durable acknowledgment BEFORE
+      // R2 PUT. Otherwise a post-PUT catalog failure leaves an old proof usable.
+      const samePage = found.page && this.debt.items.every((item) => item.rowKey === found.page.key);
+      const absent = new Set(this.debt.items.filter((item) => item.absent).map((item) => item.key.slice(7)));
+      const survivors = samePage ? found.entries.filter((entry) => !absent.has(entry.digest)) : [];
+      const projected = survivors.length + Number(!survivors.some((entry) => entry.digest === key.slice(7)));
+      if (!this.debt.keys.includes(key) && samePage && survivors.length && projected <= PAGE_CAPACITY
+          && found.entries.appliedGeneration !== null) {
+        found.entries = survivors;
+        found.member = survivors.find((entry) => entry.digest === key.slice(7));
+        found.size = found.member?.size;
+        folded = true;
+      } else {
+        await this.flushDebt();
+        found = this.catalogLookup(key);
+      }
+    }
     const previous = found ? (found.size === undefined ? null : { size: found.size }) : this.exec("SELECT size FROM blob_catalog WHERE key = ?", key)[0];
     if (this.catalogPeak) {
       try {
@@ -767,12 +942,15 @@ export class RepositoryServices {
         const nextLive = this.liveBytes + data.byteLength - (previous?.size ?? 0);
         if (!Number.isSafeInteger(nextLive) || nextLive < 0) throw new Error("catalog byte total exceeds safe integer bound");
         this.peakBytes = Math.max(this.peakBytes, nextLive);
-        const owner = this.catalogPages ? this.putCatalogPage(key, data.byteLength, found, this.peakBytes) : key;
+        const acknowledgment = this.catalogPages && (this.deferAllowed || found.entries?.appliedGeneration !== null && found.entries?.appliedGeneration !== undefined)
+          ? this.debtContext.generation : null;
+        const owner = this.catalogPages ? this.putCatalogPage(key, data.byteLength, found, this.peakBytes, acknowledgment) : key;
         if (!this.catalogPages) this.exec("INSERT INTO blob_catalog (key, size, peak_bytes) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size, peak_bytes = MAX(blob_catalog.peak_bytes, excluded.peak_bytes)", key, data.byteLength, this.peakBytes);
         await this.ctx.storage.sync();
         this.liveObjects += previous ? 0 : 1;
         this.liveBytes = nextLive;
         this.peakOwner = { key: owner, peak: this.peakBytes };
+        if (folded) this.debt = null;
         return;
       } catch (error) {
         this.catalogUncertain();
@@ -833,7 +1011,7 @@ export class RepositoryServices {
         const item = { key, rowKey: row?.key, size: found.size, deleted: false };
         requested.push(item);
         if (row) {
-          const group = groups.get(row.key) ?? { page: !found.legacy, members: found.legacy ? 1 : found.entries.length, requested: 0 };
+          const group = groups.get(row.key) ?? { page: !found.legacy, members: found.legacy ? 1 : found.entries.length, appliedGeneration: found.entries?.appliedGeneration ?? null, requested: 0 };
           group.requested++;
           groups.set(row.key, group);
         }
@@ -848,7 +1026,10 @@ export class RepositoryServices {
         } catch { failed = true; }
         outcomes.push({ key: item.key, deleted: item.deleted });
       }
-      this.ctx.storage.transactionSync(() => {
+      const only = groups.size === 1 ? groups.values().next().value : null;
+      const deferred = !failed && generation > 0 && this.deferAllowed && only?.page
+        && only.appliedGeneration !== null && doomed.size === 0;
+      if (!deferred) this.ctx.storage.transactionSync(() => {
         for (const [rowKey, group] of groups) {
           const removed = requested.filter((item) => item.rowKey === rowKey && item.deleted);
           if (!removed.length) continue;
@@ -856,8 +1037,11 @@ export class RepositoryServices {
           const row = this.exec("SELECT key, size, peak_bytes, entries FROM blob_catalog WHERE key = ?", rowKey)[0];
           if (!row) throw new Error("catalog page disappeared during retirement");
           const digests = new Set(removed.map((item) => item.key.slice(7)));
-          const survivors = decodePage(row).filter((entry) => !digests.has(entry.digest));
-          if (survivors.length) this.writePage(rowKey, survivors, row.peak_bytes);
+          const entries = decodePage(row);
+          const survivors = entries.filter((entry) => !digests.has(entry.digest));
+          const acknowledgment = entries.appliedGeneration !== null || this.deferAllowed
+            ? generation || entries.appliedGeneration || this.debtContext?.generation || 0 : null;
+          if (survivors.length) this.writePage(rowKey, survivors, row.peak_bytes, acknowledgment);
           else this.exec("DELETE FROM blob_catalog WHERE key = ?", rowKey);
         }
       });
@@ -865,6 +1049,10 @@ export class RepositoryServices {
       for (const item of requested) if (item.deleted && item.size !== undefined) {
         this.liveObjects--;
         this.liveBytes -= item.size;
+      }
+      if (deferred) {
+        this.debt = { generation, keys: this.debtContext.keys,
+          items: requested.filter((item) => item.rowKey !== undefined).map((item) => ({ ...item, absent: true, appliedGeneration: only.appliedGeneration })), resolved: true };
       }
       if (this.peakOwner && doomed.has(this.peakOwner.key)) this.peakOwner = null;
       if (failed) this.catalogUncertain();
@@ -877,7 +1065,7 @@ export class RepositoryServices {
     }
   }
 
-  rebuildPages(objects, prefix) {
+  rebuildPages(objects, prefix, appliedGeneration = null) {
     // GC already owns this authoritative inventory array. Sort that existing
     // array; each builder holds <=32 entries, recursion is <=64 hex digits.
     for (const object of objects) {
@@ -886,7 +1074,7 @@ export class RepositoryServices {
     objects.sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
     const build = (start, end, pageKey) => {
       if (end - start <= PAGE_CAPACITY) {
-        if (end > start) this.writePage(pageKey, objects.slice(start, end).map((object) => ({ digest: object.key.slice(prefix.length + 7), size: count(object.size) })), this.peakBytes);
+        if (end > start) this.writePage(pageKey, objects.slice(start, end).map((object) => ({ digest: object.key.slice(prefix.length + 7), size: count(object.size) })), this.peakBytes, appliedGeneration);
         return;
       }
       const first = objects[start].key.slice(prefix.length + 7), last = objects[end - 1].key.slice(prefix.length + 7);
@@ -906,6 +1094,20 @@ export class RepositoryServices {
 
   async publishManifest(expected, next) {
     if (this.catalogPeak) this.requireCatalogCertain();
+    if (this.catalogPages && (this.debt || !this.debtLoaded && (this.deferredPages || this.deferAllowed))) {
+      // A CAS-only stale caller must not trigger retirement HEADs or catalog
+      // persistence. This exceptional read is charged; ordinary post-PUT CAS
+      // already has no pending debt and retains its original one-row check.
+      const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
+      if (generation !== expected) return this.operation("manifest_cas", async () => {
+        await this.ctx.storage.sync();
+        return false;
+      });
+    }
+    await this.resolveDebt(this.repoPrefix);
+    // Includes no-PUT CAS and an independent subsequent retirement set. The
+    // old durable marker cannot disappear before its survivor rows sync.
+    await this.flushDebt();
     try { return await this.operation("manifest_cas", async () => {
       const published = this.ctx.storage.transactionSync(() => {
         const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
@@ -915,6 +1117,7 @@ export class RepositoryServices {
         return true;
       });
       await this.ctx.storage.sync();
+      if (published && this.debtLoaded) this.setDebtContext(next);
       return published;
     }); } catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
   }
@@ -924,6 +1127,9 @@ export class RepositoryServices {
     this.bump("do_requests");
     const repo = repoName(request.headers.get("x-hosting-repo"));
     const prefix = `${repo}/`;
+    this.repoPrefix = prefix;
+    this.deferAllowed = request.headers.get(DEFERRED_HEADER) === "1";
+    this.confirmation = request.headers.get(CONFIRM_HEADER);
     const path = new URL(request.url).pathname;
     if (path === "/_services/blobs/read" && request.method === "POST") {
       const body = await parseJson(request, MAX_MANIFEST_BYTES);
@@ -1042,7 +1248,8 @@ export class RepositoryServices {
     if (path === "/_services/gc" && request.method === "POST") {
       const body = await parseJson(request, MAX_MANIFEST_BYTES);
       if (!Array.isArray(body.live_keys) || body.live_keys.some((key) => typeof key !== "string" || !BLOB.test(key))) fail(400, "invalid GC live keys");
-      const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
+      const current = this.exec("SELECT generation, manifest FROM repository_state WHERE id = 1")[0];
+      const generation = current?.generation ?? 0;
       if (!Number.isSafeInteger(body.expected_generation) || body.expected_generation < 0) fail(400, "GC requires expected_generation");
       if (body.expected_generation !== generation) fail(409, "stale GC generation");
       // A stale/invalid recovery request never migrates. Recovery itself is
@@ -1080,7 +1287,7 @@ export class RepositoryServices {
         // Reconcile catalog state after interrupted put/catalog updates as well.
         this.ctx.storage.transactionSync(() => {
           this.exec("DELETE FROM blob_catalog");
-          if (this.catalogPages) this.rebuildPages(retained, prefix);
+          if (this.catalogPages) this.rebuildPages(retained, prefix, this.deferredPages || this.deferAllowed ? generation : null);
           else for (const object of objects) {
             const key = object.key.slice(prefix.length);
             if (live.has(key)) {
@@ -1096,6 +1303,8 @@ export class RepositoryServices {
         this.liveBytes = retainedBytes;
         this.peakOwner = this.catalogPeak && retained.length && !this.catalogPages ? { key: retained[0].key.slice(prefix.length), peak: this.peakBytes } : null;
         this.catalogCertain = true;
+        this.debt = null;
+        this.setDebtContext(current ? JSON.parse(current.manifest) : { generation: 0, refs: {}, packs: [] });
       } catch (error) { if (this.catalogPeak) this.catalogUncertain(); throw error; }
       return json({ deleted: removed });
     }
@@ -1103,7 +1312,10 @@ export class RepositoryServices {
       const objects = await this.inventory(prefix);
       const liveBytes = objects.reduce((sum, object) => sum + object.size, 0);
       this.peakBytes = Math.max(this.peakBytes, liveBytes);
-      if (this.catalogPeak && (objects.length !== this.liveObjects || liveBytes !== this.liveBytes)) this.catalogUncertain();
+      // Observer LIST never reconciles/certifies pending debt. A reopened
+      // historical page may legitimately differ until a paid mutation resolves
+      // that bounded state. Arbitrary uncertainty remains sticky regardless.
+      if (this.catalogPeak && !this.debt && (objects.length !== this.liveObjects || liveBytes !== this.liveBytes)) this.catalogUncertain();
       const row = this.exec("SELECT generation, LENGTH(CAST(manifest AS BLOB)) AS bytes FROM repository_state WHERE id = 1")[0];
       const counters = { ...this.totals };
       if (!this.sqlRowsKnown) { counters.do_rows_read = null; counters.do_rows_written = null; }

@@ -36,6 +36,44 @@ const MAX_BULK_RESPONSE: usize =
 const UPLOAD_MAGIC: &[u8; 4] = b"GZUP";
 const BULK_MAGIC: &[u8; 4] = b"GZBR";
 
+pub const RETIREMENT_PROOF_HEADER: &str = "x-git-zero-retirement-proof";
+pub const RETIREMENT_PROOF_BYTES: usize = 178;
+
+fn deferred_catalog_supported(value: &Value) -> bool {
+    value.get("catalog_deferred")
+        == Some(&json!({"version": 1, "proof_bytes": RETIREMENT_PROOF_BYTES}))
+}
+
+#[derive(Clone, Copy)]
+struct RetirementProof([u8; RETIREMENT_PROOF_BYTES]);
+
+impl RetirementProof {
+    fn parse(value: &str) -> Option<Self> {
+        let bytes = value.as_bytes();
+        if bytes.len() != RETIREMENT_PROOF_BYTES
+            || !bytes.starts_with(b"01")
+            || !bytes
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        {
+            return None;
+        }
+        Some(Self(bytes.try_into().ok()?))
+    }
+
+    fn as_str(&self) -> &str {
+        // Construction requires exactly lowercase ASCII hexadecimal.
+        std::str::from_utf8(&self.0).expect("validated retirement proof")
+    }
+}
+
+#[derive(Default)]
+struct RetirementProofState {
+    token: Option<RetirementProof>,
+    enabled: bool,
+    epoch: u64,
+}
+
 fn upload_supported(value: &Value) -> bool {
     value.get("manifest_upload_retire")
         == Some(&json!({
@@ -415,6 +453,7 @@ pub struct HttpServices {
     token: String,
     phase: Mutex<String>,
     generation_witness: Mutex<Option<GenerationWitness>>,
+    retirement_proof: Mutex<RetirementProofState>,
     manifest_retire: AtomicBool,
     manifest_upload_retire: AtomicBool,
 }
@@ -446,6 +485,7 @@ impl HttpServices {
             token: token.into(),
             phase: Mutex::new("startup".into()),
             generation_witness: Mutex::new(None),
+            retirement_proof: Mutex::new(RetirementProofState::default()),
             manifest_retire: AtomicBool::new(false),
             manifest_upload_retire: AtomicBool::new(false),
         })
@@ -456,6 +496,48 @@ impl HttpServices {
             .phase
             .lock()
             .map_err(|_| io::Error::other("phase lock poisoned"))? = phase.into();
+        Ok(())
+    }
+
+    pub(crate) const fn retirement_proof_storage_bytes() -> usize {
+        std::mem::size_of::<Mutex<RetirementProofState>>()
+    }
+
+    fn reset_retirement_proof(&self, disable: bool) -> io::Result<u64> {
+        let mut state = self
+            .retirement_proof
+            .lock()
+            .map_err(|_| io::Error::other("retirement proof lock poisoned"))?;
+        state.token = None;
+        if disable {
+            state.enabled = false;
+        }
+        state.epoch = state
+            .epoch
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("retirement proof epoch exhausted"))?;
+        Ok(state.epoch)
+    }
+
+    fn retirement_proof_epoch(&self) -> io::Result<u64> {
+        Ok(self
+            .retirement_proof
+            .lock()
+            .map_err(|_| io::Error::other("retirement proof lock poisoned"))?
+            .epoch)
+    }
+
+    fn replace_retirement_proof(&self, epoch: u64, response: Option<&Response>) -> io::Result<()> {
+        let token = response
+            .and_then(|response| response.headers.get(RETIREMENT_PROOF_HEADER))
+            .and_then(|value| RetirementProof::parse(value));
+        let mut state = self
+            .retirement_proof
+            .lock()
+            .map_err(|_| io::Error::other("retirement proof lock poisoned"))?;
+        if state.epoch == epoch {
+            state.token = token.filter(|_| state.enabled);
+        }
         Ok(())
     }
 
@@ -479,18 +561,30 @@ impl HttpServices {
             .map_err(|_| io::Error::other("phase lock poisoned"))?
             .clone();
         let phase = phase.unwrap_or(&current_phase);
+        let proof = if matches!(route, "register" | "unregister" | "metrics") {
+            None
+        } else {
+            self.retirement_proof
+                .lock()
+                .map_err(|_| io::Error::other("retirement proof lock poisoned"))?
+                .token
+        };
         let mut stream = TcpStream::connect(&self.authority)?;
         stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(Duration::from_secs(60)))?;
         stream.set_write_timeout(Some(Duration::from_secs(60)))?;
         write!(
             stream,
-            "{method} /_services/{route} HTTP/1.1\r\nHost: {}\r\nx-hosting-token: {}\r\nx-hosting-repo: {}\r\nx-hosting-phase: {phase}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "{method} /_services/{route} HTTP/1.1\r\nHost: {}\r\nx-hosting-token: {}\r\nx-hosting-repo: {}\r\nx-hosting-phase: {phase}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n",
             self.authority,
             self.token,
             self.repo,
             body.len()
         )?;
+        if let Some(proof) = proof {
+            write!(stream, "{RETIREMENT_PROOF_HEADER}: {}\r\n", proof.as_str())?;
+        }
+        stream.write_all(b"\r\n")?;
         stream.write_all(body)?;
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
@@ -505,6 +599,7 @@ impl HttpServices {
             .parse()
             .map_err(io::Error::other)?;
         let mut headers = BTreeMap::new();
+        let mut proof_header_seen = false;
         let mut total_headers = line.len();
         loop {
             line.clear();
@@ -519,7 +614,19 @@ impl HttpServices {
             let (name, value) = line
                 .split_once(':')
                 .ok_or_else(|| io::Error::other("invalid emulator header"))?;
-            headers.insert(name.to_ascii_lowercase(), value.trim().to_string());
+            let name = name.to_ascii_lowercase();
+            let value = value.trim();
+            if name == RETIREMENT_PROOF_HEADER {
+                if proof_header_seen || RetirementProof::parse(value).is_none() {
+                    // An ambiguous proof is optional metadata; publication
+                    // still uses the existing strict typed response decoder.
+                    headers.remove(RETIREMENT_PROOF_HEADER);
+                    proof_header_seen = true;
+                    continue;
+                }
+                proof_header_seen = true;
+            }
+            headers.insert(name, value.to_string());
         }
         let mut bytes = Vec::new();
         if status == 204 || status == 304 || method == "HEAD" {
@@ -611,6 +718,7 @@ impl HttpServices {
         // capabilities or witnesses from an earlier session.
         self.manifest_retire.store(false, Ordering::Release);
         self.manifest_upload_retire.store(false, Ordering::Release);
+        let proof_epoch = self.reset_retirement_proof(true)?;
         *self
             .generation_witness
             .lock()
@@ -620,7 +728,7 @@ impl HttpServices {
         let response = self.json(
             "POST",
             "register",
-            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1})),
+            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1, "catalog_deferred": 1})),
             Some("stats"),
         )?;
         *self
@@ -632,6 +740,13 @@ impl HttpServices {
             .store(retirement_supported(&response), Ordering::Release);
         self.manifest_upload_retire
             .store(upload_supported(&response), Ordering::Release);
+        let mut proof = self
+            .retirement_proof
+            .lock()
+            .map_err(|_| io::Error::other("retirement proof lock poisoned"))?;
+        if proof.epoch == proof_epoch {
+            proof.enabled = deferred_catalog_supported(&response);
+        }
         Ok(())
     }
 
@@ -652,6 +767,7 @@ impl HttpServices {
     pub fn unregister(&self) -> io::Result<()> {
         self.manifest_retire.store(false, Ordering::Release);
         self.manifest_upload_retire.store(false, Ordering::Release);
+        self.reset_retirement_proof(true)?;
         *self
             .generation_witness
             .lock()
@@ -665,6 +781,8 @@ impl HttpServices {
     }
 
     fn reclaim(&self, manifest: &Manifest) -> io::Result<usize> {
+        // A GC attempt can reconcile debt even if its response is lost.
+        self.reset_retirement_proof(false)?;
         let live_keys: Vec<_> = manifest
             .packs
             .iter()
@@ -772,10 +890,19 @@ impl CloudflareBindings for HttpServices {
                 "retiring request too large",
             ));
         }
-        let response = self.call("POST", "manifest/retire", &body, None)?;
+        let proof_epoch = self.retirement_proof_epoch()?;
+        let response = self.call("POST", "manifest/retire", &body, None);
+        self.replace_retirement_proof(proof_epoch, None)?;
+        let response = response?;
         // Errors here remain errors: 404, malformed and lost replies may all
         // follow a committed CAS, and must never trigger scalar fallback.
-        decode_retirement_response(next, &response.body)
+        let result = decode_retirement_response(next, &response.body)?;
+        if let RetiringCas::Published(receipt) = &result
+            && receipt.outcomes.iter().all(|outcome| outcome.deleted)
+        {
+            self.replace_retirement_proof(proof_epoch, Some(&response))?;
+        }
+        Ok(result)
     }
 
     fn try_compare_and_swap_upload_retiring(
@@ -790,8 +917,17 @@ impl CloudflareBindings for HttpServices {
         let Some(body) = upload_frame(expected, next, pending)? else {
             return Ok(UploadRetiringCas::Unsupported);
         };
-        let response = self.call("POST", "manifest/upload-retire", &body, None)?;
-        decode_upload_response(next, pending, &response.body)
+        let proof_epoch = self.retirement_proof_epoch()?;
+        let response = self.call("POST", "manifest/upload-retire", &body, None);
+        self.replace_retirement_proof(proof_epoch, None)?;
+        let response = response?;
+        let result = decode_upload_response(next, pending, &response.body)?;
+        if let UploadRetiringCas::Published { retirement, .. } = &result
+            && retirement.outcomes.iter().all(|outcome| outcome.deleted)
+        {
+            self.replace_retirement_proof(proof_epoch, Some(&response))?;
+        }
+        Ok(result)
     }
 }
 
@@ -1040,6 +1176,300 @@ mod tests {
             },
             pending,
         )
+    }
+
+    struct ProofReply {
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        truncate: bool,
+    }
+
+    fn proof_reply(body: Value, proof: Option<&str>) -> ProofReply {
+        ProofReply {
+            headers: proof
+                .map(|proof| vec![(RETIREMENT_PROOF_HEADER.into(), proof.into())])
+                .unwrap_or_default(),
+            body: serde_json::to_vec(&body).unwrap(),
+            truncate: false,
+        }
+    }
+
+    struct ProofRequest {
+        target: String,
+        headers: BTreeMap<String, String>,
+        body: Vec<u8>,
+    }
+
+    fn proof_services(
+        replies: Vec<ProofReply>,
+    ) -> (HttpServices, std::thread::JoinHandle<Vec<ProofRequest>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for reply in replies {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let target = line.trim().to_owned();
+                let mut headers = BTreeMap::new();
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    let (name, value) = line.split_once(':').unwrap();
+                    assert!(
+                        headers
+                            .insert(name.to_ascii_lowercase(), value.trim().to_owned())
+                            .is_none()
+                    );
+                }
+                let length: usize = headers["content-length"].parse().unwrap();
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                requests.push(ProofRequest {
+                    target,
+                    headers,
+                    body,
+                });
+                write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    reply.body.len() + usize::from(reply.truncate)
+                )
+                .unwrap();
+                for (name, value) in reply.headers {
+                    write!(reader.get_mut(), "{name}: {value}\r\n").unwrap();
+                }
+                reader.get_mut().write_all(b"\r\n").unwrap();
+                reader.get_mut().write_all(&reply.body).unwrap();
+            }
+            requests
+        });
+        (HttpServices::new(&origin, "test", "token").unwrap(), server)
+    }
+
+    #[test]
+    fn deferred_catalog_capability_requires_exact_ack_and_resets_before_registration_io() {
+        let exact = json!({"catalog_deferred":{"version":1,"proof_bytes":178}});
+        assert!(deferred_catalog_supported(&exact));
+        for value in [
+            json!({}),
+            json!({"catalog_deferred":1}),
+            json!({"catalog_deferred":null}),
+            json!({"catalog_deferred":{"version":1}}),
+            json!({"catalog_deferred":{"version":2,"proof_bytes":178}}),
+            json!({"catalog_deferred":{"version":1,"proof_bytes":179}}),
+            json!({"catalog_deferred":{"version":1,"proof_bytes":178,"extra":true}}),
+        ] {
+            assert!(!deferred_catalog_supported(&value));
+        }
+        let (services, server) = proof_services(vec![proof_reply(exact, None)]);
+        services.register("http://127.0.0.1:1234").unwrap();
+        let requests = server.join().unwrap();
+        let request: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request["catalog_deferred"], 1);
+        let token = format!("01{}", "ab".repeat(88));
+        services.retirement_proof.lock().unwrap().token = RetirementProof::parse(&token);
+        assert!(services.register("https://example.invalid").is_err());
+        let state = services.retirement_proof.lock().unwrap();
+        assert!(!state.enabled);
+        assert!(state.token.is_none());
+        assert_eq!(
+            HttpServices::retirement_proof_storage_bytes(),
+            std::mem::size_of_val(&services.retirement_proof)
+        );
+        assert!(HttpServices::retirement_proof_storage_bytes() >= RETIREMENT_PROOF_BYTES);
+    }
+
+    #[test]
+    fn accepted_retirement_proof_piggybacks_mutations_and_resets_at_gc_and_unregister() {
+        let proof = format!("01{}", "ab".repeat(88));
+        let next = Manifest {
+            generation: 1,
+            garbage: vec![chunk(b"old").key],
+            ..Manifest::default()
+        };
+        let accepted = json!({"version":1,"published":true,"retirement":{
+            "generation":1,"outcomes":[{"key":next.garbage[0],"deleted":true}]}});
+        let (services, server) = proof_services(vec![
+            proof_reply(
+                json!({"manifest_retire":{"version":1},"catalog_deferred":{"version":1,"proof_bytes":178}}),
+                None,
+            ),
+            proof_reply(accepted.clone(), Some(&proof)),
+            proof_reply(json!({}), None),
+            proof_reply(json!({"published":true}), None),
+            proof_reply(json!({}), None),
+            proof_reply(json!({}), None),
+            proof_reply(json!({"deleted":1}), None),
+            proof_reply(json!({}), None),
+            proof_reply(accepted, Some(&proof)),
+            proof_reply(json!({}), None),
+            proof_reply(json!({}), None),
+        ]);
+        services.register("http://127.0.0.1:1234").unwrap();
+        assert!(matches!(
+            services.try_compare_and_swap_retiring(0, &next).unwrap(),
+            RetiringCas::Published(_)
+        ));
+        services.r2_put(&chunk(b"new").key, b"new").unwrap();
+        assert!(services.manifest_cas(1, &next).unwrap());
+        services.r2_delete(&next.garbage[0]).unwrap();
+        services.usage().unwrap();
+        services.reclaim(&next).unwrap();
+        services
+            .r2_put(&chunk(b"after-gc").key, b"after-gc")
+            .unwrap();
+        services.try_compare_and_swap_retiring(0, &next).unwrap();
+        services.unregister().unwrap();
+        services
+            .r2_put(&chunk(b"after-unregister").key, b"after-unregister")
+            .unwrap();
+        let requests = server.join().unwrap();
+        assert!(
+            requests[1]
+                .target
+                .starts_with("POST /_services/manifest/retire ")
+        );
+        for (index, request) in requests.iter().enumerate() {
+            assert_eq!(
+                request
+                    .headers
+                    .get(RETIREMENT_PROOF_HEADER)
+                    .map(String::as_str),
+                matches!(index, 2..=4).then_some(proof.as_str()),
+                "request {index}: {}",
+                request.target
+            );
+        }
+    }
+
+    #[test]
+    fn retirement_and_upload_proofs_require_complete_strict_successful_responses() {
+        let old_proof = format!("01{}", "cd".repeat(88));
+        let proof = format!("01{}", "ab".repeat(88));
+        let (mut next, pending) = staged_upload(b"tail".to_vec());
+        next.garbage = vec![chunk(b"old-a").key, chunk(b"old-b").key];
+        for upload in [false, true] {
+            let mut valid = json!({"version":1,"published":true,"retirement":{
+                "generation":1,"outcomes":[{"key":next.garbage[0],"deleted":true},{"key":next.garbage[1],"deleted":true}]}});
+            if upload {
+                valid["uploaded"] = json!(pending.chunk());
+            }
+            let mut cases = vec![(proof_reply(valid.clone(), Some(&proof)), false, true)];
+            for (pointer, value, error) in [
+                ("/retirement/outcomes/0/deleted", json!(false), false),
+                ("/retirement/outcomes/0/key", json!(next.garbage[1]), true),
+                ("/retirement/outcomes", json!([]), true),
+                ("/retirement/generation", json!(2), true),
+            ] {
+                let mut changed = valid.clone();
+                *changed.pointer_mut(pointer).unwrap() = value;
+                cases.push((proof_reply(changed, Some(&proof)), error, false));
+            }
+            if upload {
+                let mut changed = valid.clone();
+                changed["uploaded"]["key"] = json!(chunk(b"wrong").key);
+                cases.push((proof_reply(changed, Some(&proof)), true, false));
+            }
+            let mut stale = valid.clone();
+            stale["published"] = json!(false);
+            stale["retirement"] = Value::Null;
+            cases.push((proof_reply(stale, Some(&proof)), false, false));
+            let mut extra = valid.clone();
+            extra["extra"] = json!(true);
+            cases.push((proof_reply(extra, Some(&proof)), true, false));
+            for header in [
+                None,
+                Some("00".repeat(89)),
+                Some(format!("01{}", "AB".repeat(88))),
+                Some(format!("{proof}0")),
+                Some(proof[..177].into()),
+                Some("a".repeat(513)),
+            ] {
+                cases.push((proof_reply(valid.clone(), header.as_deref()), false, false));
+            }
+            let mut duplicate = proof_reply(valid.clone(), Some(&proof));
+            duplicate
+                .headers
+                .push((RETIREMENT_PROOF_HEADER.to_ascii_uppercase(), proof.clone()));
+            cases.push((duplicate, false, false));
+            let mut truncated = proof_reply(valid.clone(), Some(&proof));
+            truncated.truncate = true;
+            cases.push((truncated, true, false));
+            let mut malformed = proof_reply(valid, Some(&proof));
+            malformed.body.pop();
+            cases.push((malformed, true, false));
+            for (reply, error, retained) in cases {
+                let (services, server) = proof_services(vec![reply, proof_reply(json!({}), None)]);
+                services.manifest_retire.store(true, Ordering::Release);
+                services
+                    .manifest_upload_retire
+                    .store(true, Ordering::Release);
+                {
+                    let mut state = services.retirement_proof.lock().unwrap();
+                    state.enabled = true;
+                    state.token = RetirementProof::parse(&old_proof);
+                }
+                let failed = if upload {
+                    services
+                        .try_compare_and_swap_upload_retiring(0, &next, &pending)
+                        .is_err()
+                } else {
+                    services.try_compare_and_swap_retiring(0, &next).is_err()
+                };
+                assert_eq!(failed, error);
+                services.r2_put(&chunk(b"new").key, b"new").unwrap();
+                let requests = server.join().unwrap();
+                assert_eq!(
+                    requests[0].headers.get(RETIREMENT_PROOF_HEADER),
+                    Some(&old_proof)
+                );
+                assert_eq!(
+                    requests[1].headers.get(RETIREMENT_PROOF_HEADER),
+                    retained.then_some(&proof)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retirement_proof_does_not_survive_a_registration_or_gc_epoch_change() {
+        let services = HttpServices::new("http://127.0.0.1:1", "test", "token").unwrap();
+        let proof = format!("01{}", "ab".repeat(88));
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::from([(RETIREMENT_PROOF_HEADER.into(), proof)]),
+            body: Arc::from([]),
+        };
+        let epoch = services.retirement_proof_epoch().unwrap();
+        services
+            .replace_retirement_proof(epoch, Some(&response))
+            .unwrap();
+        assert!(services.retirement_proof.lock().unwrap().token.is_none());
+        services.retirement_proof.lock().unwrap().enabled = true;
+        services.reset_retirement_proof(false).unwrap();
+        services
+            .replace_retirement_proof(epoch, Some(&response))
+            .unwrap();
+        assert!(services.retirement_proof.lock().unwrap().token.is_none());
+        let epoch = services.retirement_proof_epoch().unwrap();
+        services
+            .replace_retirement_proof(epoch, Some(&response))
+            .unwrap();
+        assert!(services.retirement_proof.lock().unwrap().token.is_some());
+        services.reset_retirement_proof(true).unwrap();
+        services
+            .replace_retirement_proof(epoch, Some(&response))
+            .unwrap();
+        assert!(services.retirement_proof.lock().unwrap().token.is_none());
     }
 
     #[test]
@@ -1569,6 +1999,7 @@ mod tests {
                     let value: Value = serde_json::from_slice(&body).unwrap();
                     assert_eq!(value["catalog_peak"], 1);
                     assert_eq!(value["catalog_pages"], 1);
+                    assert_eq!(value["catalog_deferred"], 1);
                 } else if !method.starts_with("POST") {
                     assert!(body.is_empty());
                 }
