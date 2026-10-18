@@ -1,0 +1,158 @@
+{
+  "kind": "R21 docs-only candidate implementation/evidence ledger",
+  "utc": "2026-10-18T16:09:48Z",
+  "status": "SOURCEAPPROVED95f; NEW independent ledger review PENDING",
+  "exact_docs_parent": "95fdf58f6bd7298736cfe124725e4f7e6c9aceb9",
+  "approved_R20_SOURCE_base": "b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0",
+  "implementation_SOURCE": "5b523c9c9b8d8b8876281371c888d5af77757df2",
+  "runtime_tested_SOURCE": "8287ef863e8ec78950ed3a9a59d509a7ed6e1dc2",
+  "final_SOURCE": "95fdf58f6bd7298736cfe124725e4f7e6c9aceb9",
+  "source_review": {
+    "markdown": "reviews/final/REVIEW.md",
+    "original_SHA256": "8993997429a866f529e46aac775b39f9967e6b4b396c58e256483b29bd46e7c1",
+    "json": "reviews/final/REVIEW.json.gz",
+    "original_JSON_SHA256": "fe56cbfb0014bd3044626a6be0b556b0c0e3a7006a0d654137ecc6c4ffb782cc",
+    "input_inventory": "reviews/final/INPUT_SHA256_INVENTORY.json.gz",
+    "original_input_SHA256": "8102c427d8637aa5a4987c9df01712dc5d5ea47189a583c5d3fb43892f51daba",
+    "scope": "SOURCE/bounded correctness only; no ledger/integration/screen acceptance"
+  },
+  "source_files_changed_from_R20": [
+    "examples/repository-host/src/native.rs",
+    "examples/repository-host/src/bin/repository-host.rs",
+    "examples/repository-host/tests/multi_chunk_cloudflare.rs"
+  ],
+  "native_source_tree": "4717edd249bcb85edec47674787aa1ecf9f7d8f1",
+  "worker_source_tree": "7f41db4407963ed04e6cbe19556b1416633caf18",
+  "production_Worker_changed": false,
+  "implementation": {
+    "policy": "new optional upload POST retention skips when complete source-based fit would evict any current owner",
+    "scope": "cold Cloudflare Joint with verified chunk owners only",
+    "generic_control": "evict|fit",
+    "isolated_default": "Fit",
+    "retained_cache_bytes": 33554432,
+    "combined_entries": 256,
+    "protected_pool": 32,
+    "socket_bytes": 262144,
+    "response_eligibility_bytes": 16777216,
+    "mandatory_metadata_pressure_and_all_authority_unchanged": true,
+    "ring_growth_old_plus_new_overlap": true,
+    "calibrated_or_fake_headroom": false
+  },
+  "continuity": {
+    "utc": "2026-10-18T15:34:39Z",
+    "source_commit": "95fdf58f6bd7298736cfe124725e4f7e6c9aceb9",
+    "parent_and_runtime_tested_source": "8287ef863e8ec78950ed3a9a59d509a7ed6e1dc2",
+    "stage": "final source all-target Clippy/fmt/diff checked; not relinked or runtime rerun",
+    "files": {
+      "native.rs": {
+        "path": "/tmp/git-zero-fit-response-final-source/native.rs",
+        "bytes": 150953,
+        "sha256": "ad04a572eadaec569fae885f781a4f3dd44e1fe9eaed363cbd16e54090894862"
+      },
+      "cli.rs": {
+        "path": "/tmp/git-zero-fit-response-final-source/cli.rs",
+        "bytes": 8088,
+        "sha256": "a7c3fc9c8f685ece6844f60c218e2edb9316b182674ba2888ec72f3f1162ef78"
+      },
+      "runner.rs": {
+        "path": "/tmp/git-zero-fit-response-final-source/runner.rs",
+        "bytes": 95790,
+        "sha256": "e8f3a482adb96ec8f52fccd4f9fe4a66f69d3706c65adba355f478183c0dc73f"
+      }
+    },
+    "actual_runtime_tested_runner": {
+      "path": "/tmp/git-zero-fit-response-build-v2/runner-elf",
+      "sha256": "80df43e2f9c804f878b5f25d6e7cad8e68a191b897d95fc8cc50f3c7cc3e6660"
+    },
+    "actual_Native_ELF_sha256": "2941f19a4f25353b86f1ae3e8e75315480f17151ff9310561b828d0c8ad81369",
+    "Native_tree": "4717edd249bcb85edec47674787aa1ecf9f7d8f1",
+    "Worker_tree": "7f41db4407963ed04e6cbe19556b1416633caf18",
+    "Native_CLI_source_and_actual_Native_ELF_equal_all_preserved_versions": true,
+    "tested_to_final_difference": "only .err().expect(...) -> .expect_err(...); same expected-Err return/control flow, unexpected-Ok panic format differs",
+    "exact_patch": {
+      "path": "/tmp/git-zero-fit-response-runner-final-lint-only.patch",
+      "sha256": "79919a8a6e4fb9c90132b3fda9de24b21ac2936e9e2fca98a39be22667455981"
+    }
+  },
+  "correctness": {
+    "matched_pairs": "19 rows/arm at16MiB and64MiB;16 measured response hashes/each pair; first16evict overall resourceFAIL preserved",
+    "ordinary_GET_controls": {
+      "first16": [
+        37,
+        27
+      ],
+      "first64": [
+        93,
+        87
+      ],
+      "startup_paid_GET_per_arm": [
+        8,
+        12
+      ],
+      "priced_or_speed_measurement": false
+    },
+    "current_bounded_controls": [
+      "allocation-fit-v1-02 PASS",
+      "faults-fit-v2-02 PASS",
+      "restart-fit-v2-01 PASS",
+      "warm-fit-v2-01 PASS",
+      "http-fit-v2-01 PASS"
+    ],
+    "productive_fitting_response_bytes": 16395422,
+    "exact_request_response_hit": true,
+    "oversized_delivered_uncached_bytes": 17453483,
+    "exact16MiB_boundary": "private source/actual allocation control",
+    "held_signed_mask_paid_discard_delta": 1
+  },
+  "checks": {
+    "canonical_library": "134PASS preserved actual ELF/log; source-equivalent unchanged production",
+    "final_all_target_Clippy_Dwarnings": "PASS",
+    "final_fmt_diff": "PASS",
+    "final_runtime_relink_or_rerun": false,
+    "original_failures_preserved": true
+  },
+  "evidence": {
+    "completion_handoff": "handoffs/completion-handoff.md",
+    "originals_map": "COPY-MAP.json",
+    "named_index": "evidence/final-evidence-index.json.gz",
+    "raw_local_inventory": "evidence/raw-evidence-inventory-final.json.gz",
+    "historical_raw_seals_retained": true,
+    "selected_original_count": 1051,
+    "selected_original_bytes": 29775842,
+    "selected_stored_bytes": 6185003,
+    "all_copied_original_SHA_and_decompressed_bytes_checked": true,
+    "selected_publication_not_complete_raw_dataset": true,
+    "raw_volatile_local_requires_actual_host_escalation": true,
+    "canonical_selected_archive": {
+      "path": "selected-evidence.tar.gz",
+      "bytes": 753056,
+      "sha256": "9983f879ac58a988b0a2a3bc6459987f995ed0264d766f49a3b36af4381f16cd",
+      "exact_original_control_members": 946,
+      "internal_SHA256SUMS": true,
+      "safe_relative_regular_file_members_only": true,
+      "no_individually_duplicated_control_payloads": true
+    }
+  },
+  "publication_limits": {
+    "wire_original_bytes": 65536,
+    "source_text_metadata_original_bytes": 8388608,
+    "PACK_v2_sample_files": 82,
+    "PACK_v2_full_original_bytes": 41706,
+    "PACK_body_files": 15,
+    "PACK_request_files": 67,
+    "PACK_full_file_min": 323,
+    "PACK_full_file_max": 2766,
+    "all_non_UTF8_are_declared_small_PROTOCOL_PACK_samples": true,
+    "ELF_generated_repository_R2_SQLite_fixture_state_large_wire_archives_seed_packs": false,
+    "redundant_ZIP_or_capsule": false,
+    "local_originals_include_some_published_compact_copies": true
+  },
+  "limits_and_NULLs": "known-scope-nulls.json",
+  "ledger_phase_runtime_build_push_CI_deploy_or_primary_edits": false,
+  "only_new_R21_folder_changes": true,
+  "shared_reports_main_workflow_changes": false,
+  "mandatory_final_five_original_final_all4": "NOTDONE",
+  "fresh_independent_screen_required": true,
+  "full_bill_USD": null,
+  "cost_speed_promotion_plateau_stopping_acceptance": false
+}

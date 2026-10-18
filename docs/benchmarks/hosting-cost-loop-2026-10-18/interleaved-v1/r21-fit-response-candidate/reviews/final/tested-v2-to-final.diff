@@ -1,0 +1,14 @@
+diff --git a/examples/repository-host/tests/multi_chunk_cloudflare.rs b/examples/repository-host/tests/multi_chunk_cloudflare.rs
+index 0cfd30a..25f8eb5 100644
+--- a/examples/repository-host/tests/multi_chunk_cloudflare.rs
++++ b/examples/repository-host/tests/multi_chunk_cloudflare.rs
+@@ -1841,8 +1841,7 @@ fn multi_chunk_copied_controls_gate() {
+             assert!(usage["do_rows_written"].is_null());
+             let counters = serde_json::from_value(usage.clone()).unwrap();
+             let error = git_zero_host::cost::estimate_service_usage(&counters, 1000)
+-                .err()
+-                .expect("incomplete fault accounting must refuse a priced estimate");
++                .expect_err("incomplete fault accounting must refuse a priced estimate");
+             assert_eq!(error.to_string(), "service accounting is incomplete");
+             (Value::Null, Some(error.to_string()), Value::Null)
+         } else {
