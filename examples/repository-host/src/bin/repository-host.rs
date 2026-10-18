@@ -18,7 +18,7 @@ fn main() -> io::Result<()> {
         let mut gateway_first_read = true;
         let mut gateway_first_receive = true;
         let mut socket_rpc = true;
-        let mut protected_chunk = git_zero_host::native::ProtectedChunkMode::Multi;
+        let mut protected_chunk = git_zero_host::native::ProtectedChunkMode::Joint;
         loop {
             match arguments.peek().map(String::as_str) {
                 Some("--repo") => {
@@ -78,10 +78,11 @@ fn main() -> io::Result<()> {
                     protected_chunk = match arguments.next().as_deref() {
                         Some("on" | "one") => git_zero_host::native::ProtectedChunkMode::One,
                         Some("multi") => git_zero_host::native::ProtectedChunkMode::Multi,
+                        Some("joint") => git_zero_host::native::ProtectedChunkMode::Joint,
                         Some("off") => git_zero_host::native::ProtectedChunkMode::Off,
                         _ => {
                             return Err(io::Error::other(
-                                "protected chunk must be off, on, one or multi",
+                                "protected chunk must be off, on, one, multi or joint",
                             ));
                         }
                     };
