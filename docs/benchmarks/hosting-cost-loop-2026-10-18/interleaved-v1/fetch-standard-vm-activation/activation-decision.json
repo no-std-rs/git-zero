@@ -1,0 +1,154 @@
+{
+  "utc": "2026-10-18T16:46:46.170559+00:00",
+  "root_authorization": "One standardGitHubVM real-disk batch using exact reviewedsource5d7, two original fixed plans serially replicas_each1, no retries, no paid Cloudflare",
+  "approved_source": "5d7f6a4c922ecca46129a391682e78d7b7aa5488",
+  "source_review_md_sha256": "0eff4ff709912615f581d066d3c7655bd443a76cfe138234fcccc70e50538138",
+  "reviewed_activation_draft_sha256": "280a81bbf32d7a5e8611e7173f2785b9df79af0f8f6d3e774c89cd144116a0f5",
+  "installed_workflow_sha256": "71d980622f72f1792c4b4d385d2bbd69f087d0e463e78fe1b4d2a9e8ca4e5581",
+  "shell_syntax_blocks": 4,
+  "source_policy_changed": false,
+  "launch_memory_floor_bytes": 12884901888,
+  "process_planning_headroom_above_source_floor_bytes": 4294967296,
+  "launch_disk_floor_bytes": 10737418240,
+  "source_per_boundary_memory_floor_bytes": 8589934592,
+  "source_raw_reserve_bytes": 2147483648,
+  "source_sampled_raw_cap_bytes": 8589934592,
+  "case_work_seconds": 1200,
+  "case_cleanup_grace_seconds": 5,
+  "actual_fresh_VM_capacity": "PENDING; machine step must measure and block before fixtures/services if guard fails",
+  "profile": "fresh release/Node22/standardVM disk, not localdebug/Node24/tmpfs",
+  "compatibility": "historicalNativeR19+hooks, not currentR21Fit or bootstrap",
+  "source_tiny_strict_clippy": "Not claimed; two unchanged preexisting lints allowed in retained pass",
+  "speed_cause_fix_benchmark_acceptance": false,
+  "mandatory_final5_all4": "NOTDONE",
+  "review_publication": [
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/REVIEW.json",
+      "published": "independent-REVIEW.json.gz",
+      "source_bytes": 20392,
+      "source_sha256": "cc4f6805b3b8ea01fd77bd0dc799a7c72fcd70fc6302ca0527f3bd6cae403a69",
+      "published_bytes": 6592,
+      "published_sha256": "50b56bbb7d9d431e40b210e41056c53a5470b0ecef759874c20bbc832c62d15d"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/REVIEW.md",
+      "published": "independent-REVIEW.md",
+      "source_bytes": 12215,
+      "source_sha256": "0eff4ff709912615f581d066d3c7655bd443a76cfe138234fcccc70e50538138",
+      "published_bytes": 12215,
+      "published_sha256": "0eff4ff709912615f581d066d3c7655bd443a76cfe138234fcccc70e50538138"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/activation-review.json",
+      "published": "independent-activation-review.json.gz",
+      "source_bytes": 1287,
+      "source_sha256": "c920aea68dc379cefaa46b612337522774c9bcfafad13535418d7797ce1c2b95",
+      "published_bytes": 756,
+      "published_sha256": "f26999742f4b8a64794d8cb054586435fd03559a1af7949699cc8a7db8907b7b"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/audit_draft.py",
+      "published": "independent-audit_draft.py",
+      "source_bytes": 6279,
+      "source_sha256": "5a57d16d017b00d9455a81087ad6a456c2ddb94d2252f9d6f996eb23cad3cca4",
+      "published_bytes": 6279,
+      "published_sha256": "5a57d16d017b00d9455a81087ad6a456c2ddb94d2252f9d6f996eb23cad3cca4"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/audit_evidence.py",
+      "published": "independent-audit_evidence.py",
+      "source_bytes": 16395,
+      "source_sha256": "0047a39cc89666a62fc069c66e66de6c7f6123f026779881b1f03cfd95ec6464",
+      "published_bytes": 16395,
+      "published_sha256": "0047a39cc89666a62fc069c66e66de6c7f6123f026779881b1f03cfd95ec6464"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/audit_integrity.py",
+      "published": "independent-audit_integrity.py",
+      "source_bytes": 9084,
+      "source_sha256": "ee3b2ec3ba68f4f35566a477b2c9056f9554998eba2849dfefaaf74e65d71805",
+      "published_bytes": 9084,
+      "published_sha256": "ee3b2ec3ba68f4f35566a477b2c9056f9554998eba2849dfefaaf74e65d71805"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/cleanup-readonly.json",
+      "published": "independent-cleanup-readonly.json.gz",
+      "source_bytes": 341,
+      "source_sha256": "6b708af509cbae7b80cabcdcee915f03e4f4be5d7cf74553531ce67072fe9a9c",
+      "published_bytes": 238,
+      "published_sha256": "b44a234b91b69921a494ac4e271816a23ca916f5ae82e320d1e0f26ae81536df"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/draft-inputs.json",
+      "published": "independent-draft-inputs.json.gz",
+      "source_bytes": 96150,
+      "source_sha256": "6036932e810320dc326d297e20410b45ef0041f6f1d56394e921077cb23f4ed3",
+      "published_bytes": 17455,
+      "published_sha256": "38cb15f7234f5e1a9da0029d011eda4a92f4d6cad75c75e05466f86ac2c018eb"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/draft-review.json",
+      "published": "independent-draft-review.json.gz",
+      "source_bytes": 3604,
+      "source_sha256": "4e7b03dd08542a06777c24fff5126b6bad1ae16ff966a3c591b8e867cb3355aa",
+      "published_bytes": 1681,
+      "published_sha256": "9ef174df1fb985fdc5776cfeb4b899b8e8be860380295cb8d019d23839310528"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/evidence-inputs.json",
+      "published": "independent-evidence-inputs.json.gz",
+      "source_bytes": 120691,
+      "source_sha256": "9b98114cf6bc2ab4466b81754534e7b6cc4ce96480668175cdd314e50fd4ad1a",
+      "published_bytes": 26190,
+      "published_sha256": "ca80ad374a4242b28034377345d9e59caf9036f168cae34cf60d8538b66265f3"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/inputs.sha256",
+      "published": "independent-inputs.sha256.gz",
+      "source_bytes": 612351,
+      "source_sha256": "8b0043d0c6a43b0a9e0cb3fed1b3674df80bf31ca224d7f26635cd61508c6122",
+      "published_bytes": 146607,
+      "published_sha256": "5e3d15425a65b3e958e30d2d9904669b9955817a06d8f760af95a110e134d610"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/integrity-inputs.json",
+      "published": "independent-integrity-inputs.json.gz",
+      "source_bytes": 430344,
+      "source_sha256": "ea0b07d2964379f7184105edcc52681257cc4c8aeb6b9807e1958754a4850ac5",
+      "published_bytes": 108181,
+      "published_sha256": "ad8779cba8b69b5072ef7556c7b50741f32f5381817f1253ea29c255eaee7231"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/integrity.json",
+      "published": "independent-integrity.json.gz",
+      "source_bytes": 4526,
+      "source_sha256": "e3e357fa824f2e2d7c04cc65f4592ec6e6c5f99a1e5758082a87e29bd7c49400",
+      "published_bytes": 1718,
+      "published_sha256": "cb74c7aa9f67fcf416264e1c03c82e390c5ec31fe723cab9f1cca5d2b11bed0d"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/review-artifacts.sha256",
+      "published": "independent-review-artifacts.sha256.gz",
+      "source_bytes": 2019,
+      "source_sha256": "cab1a3c90318373476fc678f1bdac2795f31222f32f75a8403985b5dd78a1910",
+      "published_bytes": 807,
+      "published_sha256": "267b785ccb523d7934a28cbe2fad215cd372e12d71c099ea602fafbfd989b2d6"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/source-final.json",
+      "published": "independent-source-final.json.gz",
+      "source_bytes": 1655,
+      "source_sha256": "2581dcdcf1ac0954aad41f9e6fca491fddfb397605f361ba5b46ab2f79564bc1",
+      "published_bytes": 866,
+      "published_sha256": "19920ea2d7ae550714a296cc6822c7e0714cd28c3d3eb60e2d727368590faf24"
+    },
+    {
+      "source": "/tmp/git-zero-fetch-portability-independent-review/tiny-evidence.json",
+      "published": "independent-tiny-evidence.json.gz",
+      "source_bytes": 4218,
+      "source_sha256": "82a132132223cbca22479d3d6575bf0cf8d8272c208c98641020c0ddba9ddc90",
+      "published_bytes": 1603,
+      "published_sha256": "920ed08b0b80326b43872f1868b364624a5ea803052e589e6c148601aa7bf7c0"
+    }
+  ]
+}

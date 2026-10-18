@@ -1,0 +1,184 @@
+# Root-authorized one diagnostic batch; reviewed SOURCE5d7 and activation corrections.
+# Fresh real-disk launch must pass12GiB available RAM/10GiB disk; no retries.
+name: Bounded fetch phases on standard VM disk
+on:
+  push:
+    branches: [perf/fetch-phases-vm-20261018]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fetch-phase-standard-vm-diagnostic
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    if: github.ref == 'refs/heads/perf/fetch-phases-vm-20261018'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      DIAGNOSTIC_SOURCE: 5d7f6a4c922ecca46129a391682e78d7b7aa5488
+      APPROVED_NATIVE_SOURCE: a827df032e87374737b1ac7e36fb518b507e8411
+      REFERENCE_GIT_VERSION: 2.53.0
+      NODE_VERSION: 22.20.0
+      RUST_TOOLCHAIN: 1.97.1
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 5d7f6a4c922ecca46129a391682e78d7b7aa5488
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.20.0
+      - name: Prepare exact source, Git, Rust and local Worker before case timing
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export PREP="$RUNNER_TEMP/fetch-phase-preparation"
+          mkdir "$PREP"
+          echo "PREP=$PREP" >> "$GITHUB_ENV"
+          {
+            printf 'workflow_commit=%s\nworkflow_ref=%s\nrun_id=%s\nrun_attempt=%s\n' "$GITHUB_SHA" "$GITHUB_REF" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'workflow_source=%s\nvm_boot_id=%s\nrunner_name=%s\nrunner_os=%s\nrunner_arch=%s\nimage_os=%s\nimage_version=%s\n' "${GITHUB_WORKFLOW_REF:-unknown}" "$(cat /proc/sys/kernel/random/boot_id)" "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          } > "$PREP/workflow-vm-identity.txt"
+          git show "$GITHUB_SHA:.github/workflows/fetch-phase-standard-vm.yml" > "$PREP/workflow.yml.txt"
+          sha256sum "$PREP/workflow.yml.txt" > "$PREP/workflow.sha256"
+          test "$(git rev-parse HEAD)" = "$DIAGNOSTIC_SOURCE"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD:examples/repository-host/cloudflare/src)" = 7f41db4407963ed04e6cbe19556b1416633caf18
+          sha256sum -c examples/repository-host/src/bin/fetch-phase-supervisor/approved-source.sha256 > "$PREP/source-closure-check.log"
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcurl4-openssl-dev zlib1g-dev
+          curl --fail --location --max-time 120 --output "$PREP/git.tar.xz" https://www.kernel.org/pub/software/scm/git/git-2.53.0.tar.xz
+          printf '%s  %s\n' 5818bd7d80b061bbbdfec8a433d609dc8818a05991f731ffc4a561e2ca18c653 "$PREP/git.tar.xz" | sha256sum --check
+          tar -xJf "$PREP/git.tar.xz" -C "$PREP"
+          make -C "$PREP/git-2.53.0" -j2 prefix="$PREP/git-install" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_OPENSSL=YesPlease NO_EXPAT=YesPlease > "$PREP/git-build.log" 2>&1
+          make -C "$PREP/git-2.53.0" install prefix="$PREP/git-install" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_OPENSSL=YesPlease NO_EXPAT=YesPlease >> "$PREP/git-build.log" 2>&1
+          echo "$PREP/git-install/bin" >> "$GITHUB_PATH"
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt
+          npm ci --prefix examples/repository-host/cloudflare > "$PREP/npm-ci.log" 2>&1
+          test "$(node --version)" = "v$NODE_VERSION"
+      - name: Build fresh release Native and supervisor outside timer; seal actual identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git --version)" = "git version $REFERENCE_GIT_VERSION"
+          test "$(git rev-parse HEAD)" = "$DIAGNOSTIC_SOURCE"
+          export CARGO_TARGET_DIR="$PREP/target"
+          printf '%s\n' 'cargo +1.97.1 build --release --locked -p git-zero-host --bin repository-host --bin fetch-phase-supervisor -j2' > "$PREP/build-command.txt"
+          cargo +"$RUST_TOOLCHAIN" build --release --locked -p git-zero-host --bin repository-host --bin fetch-phase-supervisor -j2 > "$PREP/rust-build.log" 2>&1
+          export SUPERVISOR="$PREP/target/release/fetch-phase-supervisor"
+          export FETCH_PHASE_BUILD_SOURCE_COMMIT="$DIAGNOSTIC_SOURCE"
+          export FETCH_PHASE_BUILD_PROFILE=release
+          "$SUPERVISOR" --seal-runtime-manifest "$PREP/runtime-manifest.json"
+          echo "SUPERVISOR=$SUPERVISOR" >> "$GITHUB_ENV"
+          echo "FETCH_PHASE_RUNTIME_MANIFEST=$PREP/runtime-manifest.json" >> "$GITHUB_ENV"
+          rustc +"$RUST_TOOLCHAIN" -vV > "$PREP/rustc.txt"
+          cargo +"$RUST_TOOLCHAIN" --version > "$PREP/cargo.txt"
+          git --version > "$PREP/git.txt"
+          git version --build-options >> "$PREP/git.txt"
+          node --version > "$PREP/node.txt"
+          node examples/repository-host/cloudflare/node_modules/wrangler/bin/wrangler.js --version > "$PREP/wrangler.txt"
+          sha256sum "$SUPERVISOR" "$PREP/target/release/repository-host" "$(command -v git)" "$(command -v node)" > "$PREP/actual-elfs.sha256"
+          sha256sum -c examples/repository-host/src/bin/fetch-phase-supervisor/approved-source.sha256 > "$PREP/source-closure-after-build.log"
+          git status --porcelain > "$PREP/git-status.txt"
+          test ! -s "$PREP/git-status.txt"
+      - name: Fresh conservative launch decision and two exact serial cases once each
+        shell: bash
+        run: |
+          set -euo pipefail
+          export RAW="$RUNNER_TEMP/fetch-phase-reviewed-raw"
+          echo "RAW=$RAW" >> "$GITHUB_ENV"
+          test ! -e "$RAW"
+          uname -a > "$PREP/uname.txt"
+          cp /etc/os-release "$PREP/os-release.txt"
+          lscpu > "$PREP/lscpu.txt"
+          cat /proc/meminfo > "$PREP/meminfo-launch.txt"
+          findmnt -T "$RUNNER_TEMP" --json > "$PREP/raw-mount.json"
+          df -B1 -T "$RUNNER_TEMP" > "$PREP/raw-df.txt"
+          stat -f "$RUNNER_TEMP" > "$PREP/raw-statfs.txt"
+          test "$(findmnt -n -T "$RUNNER_TEMP" -o FSTYPE)" != tmpfs
+          mem=$(awk '/MemAvailable:/ {printf "%.0f\n", $2*1024}' /proc/meminfo)
+          disk=$(df -B1 --output=avail "$RUNNER_TEMP" | tail -1 | tr -d ' ')
+          # Root-authorized launch:12GiB available = existing8GiB floor +4GiB process planning.
+          # Fresh VM must pass;8GiB per-boundary source floor and2GiB raw reserve stay unchanged.
+          jq -n --argjson mem "$mem" --argjson disk "$disk" \
+            '{available_memory_bytes:$mem,available_disk_bytes:$disk,launch_memory_floor_bytes:12884901888,launch_disk_floor_bytes:10737418240,source_memory_floor_bytes:8589934592,source_raw_reserve_bytes:2147483648,raw_cap_bytes:8589934592,pass:($mem>=12884901888 and $disk>=10737418240)}' > "$PREP/launch-resource-decision.json"
+          jq -e '.pass' "$PREP/launch-resource-decision.json" >/dev/null
+          ss -H -lnt '( sport = :8853 or sport = :8854 )' > "$PREP/owned-port-listeners.txt"
+          test ! -s "$PREP/owned-port-listeners.txt"
+          plans="$GITHUB_WORKSPACE/examples/repository-host/src/bin/fetch-phase-supervisor/plans"
+          printf '%s  %s\n' 852558c0bcd8491061b762ac2a50352a89565d927fe2ae367e9e9dc22ad713a4 "$plans/64mib-cold-history_no_haves_16.json" \
+            5f720f8368e75f4d9447871ce6809330e4f8db188d561c3457de51e21bf3072d "$plans/16mib-warm-history_no_haves_32.json" | sha256sum --check > "$PREP/fixed-plan-check.txt"
+          jq -n --arg raw "$RAW" --arg supervisor_source "$(sha256sum examples/repository-host/src/bin/fetch-phase-supervisor.rs | cut -d' ' -f1)" \
+            --arg executor_source "$(sha256sum examples/repository-host/src/bin/fetch-phase-supervisor/replay.rs | cut -d' ' -f1)" \
+            --arg elf "$(sha256sum "$SUPERVISOR" | cut -d' ' -f1)" --arg runtime "$(sha256sum "$FETCH_PHASE_RUNTIME_MANIFEST" | cut -d' ' -f1)" \
+            --arg cold "$plans/64mib-cold-history_no_haves_16.json" --arg warm "$plans/16mib-warm-history_no_haves_32.json" \
+            '{root_runtime_go:true,approved_raw_cap_bytes:8589934592,approved_new_raw_prefix:$raw,replicas_each:1,supervisor_source_sha256:$supervisor_source,executor_source_sha256:$executor_source,supervisor_elf_sha256:$elf,runtime_manifest_sha256:$runtime,sealed_plans:[$cold,$warm]}' > "$PREP/authorized-batch.json"
+          # Root authorizes exactly this two-plan serial batch once, subject to the launch guard.
+          # Worker/executor opens own8853/54; cases inherit fresh PGID; no setsid here.
+          "$SUPERVISOR" --execute-reviewed-batch "$PREP/authorized-batch.json" > "$PREP/batch.stdout" 2> "$PREP/batch.stderr"
+      - name: Seal compact metadata exports (always; no raw repository/service-state export)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/fetch-phase-export"
+          out="$RUNNER_TEMP/fetch-phase-export"
+          for name in rust-build npm-ci git-build; do
+            test ! -f "$RUNNER_TEMP/fetch-phase-preparation/$name.log" || tail -c 131072 "$RUNNER_TEMP/fetch-phase-preparation/$name.log" > "$RUNNER_TEMP/fetch-phase-preparation/$name-tail.txt"
+          done
+          for name in batch.json batch-incomplete.json approved-batch-config.json; do
+            test ! -f "$RUNNER_TEMP/fetch-phase-reviewed-raw/$name" || cp "$RUNNER_TEMP/fetch-phase-reviewed-raw/$name" "$RUNNER_TEMP/fetch-phase-preparation/$name"
+          done
+          # Explicit flat allowlist. Never recurse into source/Git/persist/native-state.
+          # Exclude command stdout/archive/pack prefixes; include command status/hash
+          # receipts, stderr and service logs; HTTP bodies contain error/status evidence.
+          for spec in preparation cold warm; do
+            case "$spec" in
+              preparation) base="$RUNNER_TEMP/fetch-phase-preparation" ;;
+              cold) base="$RUNNER_TEMP/fetch-phase-reviewed-raw/64mib-cold-0" ;;
+              warm) base="$RUNNER_TEMP/fetch-phase-reviewed-raw/16mib-warm-0" ;;
+            esac
+            test -d "$base" || continue
+            list="$out/$spec.files"
+            find "$base" -maxdepth 1 -type f \( -name '*.json' -o -name '*.jsonl' -o -name '*.headers' -o -name '*.body' -o -name '*.stderr' -o -name 'native.stdout' -o -name 'wrangler.stdout' -o -name 'batch.stdout' -o -name '*.txt' -o -name '*.sha256' \) -printf '%f\0' | sort -z > "$list"
+            test -s "$list" || continue
+            (cd "$base" && xargs -0 -r sha256sum -- < "$list") > "$out/$spec-SHA256SUMS"
+            tar -czf "$out/$spec.tgz" --null -C "$base" -T "$list" -C "$out" "$spec-SHA256SUMS"
+            if test "$(stat -c %s "$out/$spec.tgz")" -gt 4128768; then
+              # Keep64KiB framing margin below4MiB. Keep local original; export status only.
+              mv "$out/$spec.tgz" "$RUNNER_TEMP/$spec-compact-oversized.tgz"
+              printf '%s\n' '{"export_complete":false,"reason":"compact bundle exceeds4MiB; remains VM local only"}' > "$out/$spec-export-incomplete.json"
+              tar -C "$out" -czf "$out/$spec.tgz" "$spec-export-incomplete.json"
+            fi
+          done
+          # Raw service/Git/ELF state stays on VM and is not a durable backup.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fetch-phase-preparation
+          path: ${{ runner.temp }}/fetch-phase-export/preparation.tgz
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fetch-phase-cold
+          path: ${{ runner.temp }}/fetch-phase-export/cold.tgz
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fetch-phase-warm
+          path: ${{ runner.temp }}/fetch-phase-export/warm.tgz
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 7
