@@ -69,3 +69,30 @@ regresses three GETs, so the measured result remains open. The independent
 review corrects the audit's ownership labels; production must use actual source
 capacities. This candidate follows exact Joint source approval and root GO.
 Bootstrap remains deferred. No implementation or benchmark is included here.
+
+The [actual R20 residual-cost audit](after-joint-actual-cost-audit.md) uses the
+completed fresh screen rather than modeled cache counts. Every measured row
+already reaches the optimistic 16 MiB callback minimum; further grouping has
+no request-cost credit under unchanged bytes, authority and bounds. Ordinary
+hot-object coalescing exceeds the write-byte guard. A larger initial physical
+container with logical range reads remains a separate conditional format
+proposal, with unproved net benefit. It is not an implementation candidate or
+a global floor. The [root recheck](after-joint-actual-cost-root-recheck.json)
+reproduces all semantic arithmetic in a separate directory; original bytes
+and scope remain preserved. Bootstrap and response retention remain separate.
+
+The [initial physical-container design](initial-container-design.md),
+[independent review](initial-container-independent-review.md) and
+[revision](initial-container-revision-1.md) preserve the format investigation.
+The specified transparent legacy-writer variant needs at least $0.050 extra
+SQL writes against $0.005275 of remaining margin and is rejected. The separate
+new-Native-only writer contract remains unresolved; this is no global floor.
+[Exact format and SQL](initial-container-format-sql.md) are paper specifications;
+SQLite geometry, pinned-runtime streaming and intermediate physical inventories
+remain unmeasured. No container implementation was authorized.
+
+Current status: Fit response-retention source `95fdf58` passed final independent
+correctness review; its fresh priced screen remains pending. Bootstrap now has
+isolated implementation GO from that source for focused tests and the cheap
+16/64 MiB startup/first-push proof. Broader gates and any benefit remain open.
+Earlier records retain their original historical statuses.

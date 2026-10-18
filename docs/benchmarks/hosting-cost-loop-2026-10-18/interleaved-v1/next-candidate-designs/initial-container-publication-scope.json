@@ -1,0 +1,97 @@
+{
+  "recorded_at": "2026-10-18T15:56:26.160387+00:00",
+  "status": "Documentation only; original design and independent findings preserved; revised fully journaled transparent-legacy-writer variant rejected on conditional SQL cost, not all possible container formats",
+  "known_r20_objective": 1.21247143618,
+  "gross_class_a_saving": 0.018,
+  "two_worker_debit": 0.0006,
+  "extra_sql_write_lower_bound": 0.05,
+  "strict_margin_before_extra_sql": 0.0052752856382,
+  "outside_rejection": "new-Native-only mutations in separate versioned container namespace; unresolved protocol, recovery, storage and cost proofs",
+  "runtime_or_code_go": false,
+  "sqlite_geometry": null,
+  "exact_wrangler_4_149_runtime": null,
+  "intermediate_manifest_timeline": null,
+  "full_bill": null,
+  "files": [
+    {
+      "source": "/tmp/git-zero-initial-container-design/DESIGN.md",
+      "destination": "initial-container-design.md",
+      "source_bytes": 16411,
+      "source_sha256": "6f320a53287f747666cfe997f35986d1afb19cc032039719691e6baea1b052b5",
+      "published_bytes": 16411,
+      "published_sha256": "6f320a53287f747666cfe997f35986d1afb19cc032039719691e6baea1b052b5"
+    },
+    {
+      "source": "/tmp/git-zero-initial-container-design/INVENTORY.json",
+      "destination": "initial-container-design.json.gz",
+      "source_bytes": 16458,
+      "source_sha256": "f542024e9e0303f3a534063e16d0574a715398a11a7613c7f883ad61330a0bbb",
+      "published_bytes": 5589,
+      "published_sha256": "0c1ebb36034150ff8e0f067a6c68b761d1a8a6041ec442a1d5f4c8e9ca1784e4"
+    },
+    {
+      "source": "/tmp/git-zero-initial-container-design/SHA256SUMS",
+      "destination": "initial-container-design-original.sha256",
+      "source_bytes": 157,
+      "source_sha256": "444520eab2945d368752ec1969a6d8ad5f7196438b14a7f2a773af610fe5589c",
+      "published_bytes": 157,
+      "published_sha256": "444520eab2945d368752ec1969a6d8ad5f7196438b14a7f2a773af610fe5589c"
+    },
+    {
+      "source": "/tmp/git-zero-initial-container-independent-review/REVIEW.md",
+      "destination": "initial-container-independent-review.md",
+      "source_bytes": 19431,
+      "source_sha256": "caf65a5e4e1e1614721e04ae150e4412fc8de186007c9194f56eaf5efe2d7b47",
+      "published_bytes": 19431,
+      "published_sha256": "caf65a5e4e1e1614721e04ae150e4412fc8de186007c9194f56eaf5efe2d7b47"
+    },
+    {
+      "source": "/tmp/git-zero-initial-container-independent-review/REVIEW.json",
+      "destination": "initial-container-independent-review.json.gz",
+      "source_bytes": 39472,
+      "source_sha256": "da910d0f5f1b092d3ddf3b596df60387477af199784d996129ef2fabb7004f2c",
+      "published_bytes": 7029,
+      "published_sha256": "814942e86ae94e3300eb0f2876a18d0ef26feb1741b8a7a679212e8bdc2242b8"
+    },
+    {
+      "source": "/tmp/git-zero-initial-container-independent-review/SHA256SUMS",
+      "destination": "initial-container-review-original.sha256",
+      "source_bytes": 556,
+      "source_sha256": "b018b839b18daeb09b3e1889c9614f616b11b952fe140bc2a128ee6c592bfac7",
+      "published_bytes": 556,
+      "published_sha256": "b018b839b18daeb09b3e1889c9614f616b11b952fe140bc2a128ee6c592bfac7"
+    },
+    {
+      "source": "/tmp/git-zero-initial-container-design-revision-1/REVISION.md",
+      "destination": "initial-container-revision-1.md",
+      "source_bytes": 16197,
+      "source_sha256": "41ea04f466754af7d8e3f511c51ba13723918ab7d64d55e79eda93f7fc5ce205",
+      "published_bytes": 16197,
+      "published_sha256": "41ea04f466754af7d8e3f511c51ba13723918ab7d64d55e79eda93f7fc5ce205"
+    },
+    {
+      "source": "/tmp/git-zero-initial-container-design-revision-1/FORMAT-SQL.md",
+      "destination": "initial-container-format-sql.md",
+      "source_bytes": 13923,
+      "source_sha256": "6f5905530996de6a0ad3125b67759c0fa5c1eb8fbbb212e9b720a3e9ff882203",
+      "published_bytes": 13923,
+      "published_sha256": "6f5905530996de6a0ad3125b67759c0fa5c1eb8fbbb212e9b720a3e9ff882203"
+    },
+    {
+      "source": "/tmp/git-zero-initial-container-design-revision-1/INVENTORY.json",
+      "destination": "initial-container-revision-1.json.gz",
+      "source_bytes": 26419,
+      "source_sha256": "8b325ff537479715d0036bf3a2ad41950a94d78ad25adbc03a9275af9c5ed1f8",
+      "published_bytes": 7685,
+      "published_sha256": "9db3b1bfa762863f020141df707673c7239dcdd7f14f4dabc7a3f7e0fe8e9541"
+    },
+    {
+      "source": "/tmp/git-zero-initial-container-design-revision-1/SHA256SUMS",
+      "destination": "initial-container-revision-original.sha256",
+      "source_bytes": 239,
+      "source_sha256": "70645037738a87aa78eb191cf2270aa0bbe314afbb028ab787a31065795da6f5",
+      "published_bytes": 239,
+      "published_sha256": "70645037738a87aa78eb191cf2270aa0bbe314afbb028ab787a31065795da6f5"
+    }
+  ]
+}

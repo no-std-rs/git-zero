@@ -901,11 +901,12 @@ The next [response-retention design](benchmarks/hosting-cost-loop-2026-10-18/int
 would skip optional upload response retention when it would evict existing
 owners. Its conditional replay saves 70 GETs ($0.0252); a larger-pressure
 counterexample regresses three GETs. Actual ownership and a fresh screen must
-settle the result. Its isolated implementation and completed short controls have
-received preliminary source review. Allocator verification now passes, while
-fault, restart, warm and HTTP controls remain pending. Final source approval,
-integration and priced measurements have not occurred.
-The fresh-schema proposal is deferred. None enters this completed screen.
+settle the result. Exact source `95fdf58` has now passed final independent
+correctness review, including allocator, fault, restart, warm and HTTP controls.
+Its ledger publication and fresh R20/R21 priced screen remain pending. The
+fresh-schema proposal has isolated implementation authorization for focused
+tests and a cheap actual 16/64 MiB startup/first-push proof. Neither change
+enters this completed screen.
 
 A [read-only fetch phase audit](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/fetch-latency-audit/AUDIT.md)
 shows that the codec elapsed counter excludes view preparation and response
@@ -917,8 +918,13 @@ deadline; a [separate hard supervisor](benchmarks/hosting-cost-loop-2026-10-18/i
 has passed independent review and tiny stall/cleanup controls. The bounded
 executor and corrected tiny same-path proof have also passed independent review.
 Every newly fetched pack receives explicit strict indexing, and resource helpers
-run inside its supervised budget. Neither large case has run.
-Diagnostic timings cannot replace the unchanged benchmark.
+run inside its supervised budget. Both large cases have now completed once:
+cold64's selected fetch took 4,698.999 ms and warm16's 103.216 ms; no operation
+reached ten seconds. The historical tails did not reproduce. These runs used
+different source and temporary storage from the historical GitHub VM evidence;
+they establish no cause, fix or speed result. Cold actual environment capture
+is incomplete. Independent result review remains pending. Diagnostic timings
+cannot replace the unchanged benchmark.
 
 ## Declared R19/R20 screen
 
@@ -988,3 +994,11 @@ selects R20 only as the provisional known-cost comparison anchor. Response
 retention, fresh-schema bootstrap and phase diagnostics do not enter these
 measurements. Five fresh original-R1/final pairs on every profile remain
 mandatory and have not run.
+
+The [actual R20 residual-cost audit](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/next-candidate-designs/after-joint-actual-cost-audit.md)
+finds no further callback-grouping credit under unchanged bytes and bounds.
+The [initial-container revision](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/next-candidate-designs/initial-container-revision-1.md)
+rejects its fully journaled transparent legacy-writer variant: at least $0.050
+extra SQL writes exceed the $0.005275 remaining margin. A separate versioned
+new-Native-only writer contract remains unresolved; no global minimum follows.
+No container implementation or runtime was authorized.
