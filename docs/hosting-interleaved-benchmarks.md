@@ -140,8 +140,10 @@ requirements remain enforced by the existing runner and scorer.
 Before pushing each batch, validate the common final Worker's backward compatibility and pin its
 validated hash alongside every actual pushed source ref. For the earlier R2–R5 batch, generation
 witnesses were gated by registration capability so R2/R3 incurred no extra DO checks, and 16 MiB chunk
-support still accepted old 8 MiB entries within the unchanged aggregate response limit. The next batch
-also requires R5 to retain scalar retirement behavior unless its client negotiates the new capability.
+support still accepted old 8 MiB entries within the unchanged aggregate response limit. The completed R5–R8 batch
+kept R5 scalar retirement unless negotiated. The next R8–R11 batch keeps older
+clients on their negotiated upload path and fresh v1 catalog; only R11 requests
+the peak-catalog schema, with migration charged to its first eligible mutation.
 
 `REFERENCE_COMMIT` stays fixed at scalar `556b9ecd2aa79197f86b3db2d546eee81696e899` for every round.
 Its source remains at `scalar-baseline` and its build at `baseline-target` under the experiment root,
@@ -307,7 +309,35 @@ metadata-only empty receive probe. The fixed workload does not send that probe,
 so its actual default-client benefit is kept separate. The
 [peak-in-catalog design](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/peak-catalog-design/README.md)
 proposes reducing SQL writes with explicit capability and recovery gates. Its
-implementation is underway after the complete screen review. Actual early
-11/13-row catalog shapes with 33 refs and 11 pack descriptors retain 24,576-byte
-SQLite storage; first-mutation migration writes are counted. Full source, fault
-and restart validation remain required before any benchmark.
+[implementation record](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r11-peak-candidate/README.md)
+now retains independent source approval, actual fault and three-process restart
+checks, and combined production-Worker historical-read/large-push verification.
+Realistic 11/13-row catalog shapes with 33 refs and 11 pack descriptors retain
+24,576-byte SQLite storage; first-mutation migration writes are counted.
+
+The independent [catalog-page audit](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/catalog-pages-design/README.md)
+finds a remaining potential SQL representation saving after R11. It reproduces
+all 704 fresh R8 operation rows and specifies bounded pages and routing, with no
+empty-page growth under churn. Its $0.056 gross projection needs actual migration,
+page, failure-recovery and cursor checks. This viable next design prevents a
+plateau claim; it has no implementation or benchmark result yet.
+
+## Next declared screen: upload, historical selection and catalog peak
+
+After complete R5–R8 guard review, this fresh batch compares provisional R8
+(`0f9f62e`), R9 staged upload/publication (`8af8c48`), R10 certified historical
+selection (`e30e9c3`) and R11 peak-in-catalog/recovery (`26e3d61`). Two measured
+pairs per provider/profile plus warmup, four shared profile VMs, six correlated
+earlier-to-later comparisons, new service state and unchanged guards are fixed
+before running. Every native source tree is distinct and pinned in the workflow.
+No earlier report is reused. The common reviewed Worker hash is
+`f5f72b40ec605814be6a6a0311df44e255ffdc3b402afec2e66454aa5711a811`.
+
+R8 does not negotiate staged upload; R9/R10/R11 do. Only R11 registers
+`catalog_peak:1`; fresh older providers retain exact v1 catalog writes. Common
+read-only schema discovery is honestly counted for every provider. Native startup
+recovery precedes registration on fresh namespaces, so R11's first eligible
+schema mutation belongs inside the timed first push. Actual legacy controls and
+current R8/R9 contracts pass under this Worker; the independent source review
+and root combined R10/R11 production-Worker contract pass. Full final validation
+still uses five fresh pairs of original R1 and the selected final candidate.

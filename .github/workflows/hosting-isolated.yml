@@ -25,16 +25,13 @@ env:
   # Full validation always compares the original scalar baseline with current HEAD.
   BASELINE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
   # Ordered providers, measured once each per VM; adjacent comparisons share suites.
-  SCREEN_PROVIDERS: r5 r6 r7 r8
-  SCREEN_R2_COMMIT: e6f4ad0c35581630d1d44c40aa1d5eb3496d5f92
-  SCREEN_R3_COMMIT: afe29484c6513908463f5e027d5f3a4b5be3b9f0
+  SCREEN_PROVIDERS: r8 r9 r10 r11
   # Duplicate refs or native source trees fail closed before any build or timing.
-  SCREEN_R4_COMMIT: 29fa4808395929ba26475a90a647947a66f46442
-  SCREEN_R5_COMMIT: 086229b983953a27c93ad02b30300907f2925d42
-  SCREEN_R6_COMMIT: e4cdb32e92982d5f56a0ab88fe8648d5bac33b05
-  SCREEN_R7_COMMIT: 50e2fd8d46473c9dfdec2eb693c2c92fdfeeaeb4
   SCREEN_R8_COMMIT: 0f9f62e2079ef984d56ca5d50c8a61c18c97f1ff
-  EXPECTED_WORKER_SHA256: b5ed0af945a3497d31dfbfb449f52e387ddb1f2821a6cdb750656458cc7528d6
+  SCREEN_R9_COMMIT: 8af8c48fb272624bb67a0cb3923fad154c3a6dcf
+  SCREEN_R10_COMMIT: e30e9c324fe12e9bbbd86959b1710cc9ea5b270e
+  SCREEN_R11_COMMIT: 26e3d61c6fecbf92a709a089ed2f1270182ae625
+  EXPECTED_WORKER_SHA256: f5f72b40ec605814be6a6a0311df44e255ffdc3b402afec2e66454aa5711a811
   REFERENCE_GIT_VERSION: 2.53.0
   # Four profile archives plus one score archive: at most 20 MiB per run.
   ARTIFACT_MAX_BYTES: '4194304'

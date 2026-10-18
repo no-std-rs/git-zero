@@ -1,0 +1,22 @@
+{
+  "clean_candidate": "7b6f6264f66c3e636a4e78d9987892de5f983d09",
+  "integrated_candidate": "26e3d61c6fecbf92a709a089ed2f1270182ae625",
+  "native_source_tree": "5c0a9c25198b930597e4968019bb901a19301e2f",
+  "worker_sha256": "f5f72b40ec605814be6a6a0311df44e255ffdc3b402afec2e66454aa5711a811",
+  "examples_source_diff_clean_vs_integrated": "empty",
+  "reviewer": "independent read-only source subagent",
+  "remaining_source_blockers": [],
+  "review_scope": "source correctness only, not performance acceptance",
+  "resolved_findings": [
+    "Non-string GC keys reject before migration/deletion",
+    "Incomplete Cloudflare retirement preserves published response and forces recovery before next request"
+  ],
+  "combined_r10_r11_production_worker_contract": "passed; Rust history_cloudflare driver, exact candidate native code, production Worker; local owned8831 stopped",
+  "full_hosting_cost_usd": null,
+  "combined_phase_check": {
+    "startup_sql_writes": 6,
+    "eight_push_sql_writes": 20,
+    "push_components": "8 PUT catalog + 8 manifest CAS + 3 confirmed retirements + 1 schema ALTER",
+    "read_only_fetch_and_stats_sql_writes": 0
+  }
+}
