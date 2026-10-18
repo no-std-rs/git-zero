@@ -318,7 +318,7 @@ fn validate_bulk_chunks(chunks: &[Chunk]) -> io::Result<()> {
 
 /// Larger legacy chunks retain the scalar route. Payload and framing have
 /// separate bounds so one complete 16 MiB chunk or two 8 MiB chunks fit.
-fn bulk_batch_len(chunks: &[Chunk]) -> usize {
+pub(crate) fn bulk_batch_len(chunks: &[Chunk]) -> usize {
     let mut payload = 0usize;
     let mut wire = BULK_HEADER_BYTES;
     let mut count = 0;
@@ -349,7 +349,7 @@ fn bulk_batch_len(chunks: &[Chunk]) -> usize {
     count
 }
 
-fn decode_bulk_response(chunks: &[Chunk], bytes: &[u8]) -> io::Result<VerifiedChunks> {
+pub(crate) fn decode_bulk_response(chunks: &[Chunk], bytes: &[u8]) -> io::Result<VerifiedChunks> {
     let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid bulk blob response");
     if chunks.is_empty()
         || chunks.len() > MAX_BULK_KEYS
@@ -472,6 +472,8 @@ pub struct HttpServices {
     token: String,
     phase: Mutex<String>,
     generation_witness: Mutex<Option<GenerationWitness>>,
+    pub(crate) first_read: Mutex<Option<crate::first_read::Key>>,
+    first_read_enabled: AtomicBool,
     retirement_proof: Mutex<RetirementProofState>,
     manifest_retire: AtomicBool,
     manifest_upload_retire: AtomicBool,
@@ -504,6 +506,8 @@ impl HttpServices {
             token: token.into(),
             phase: Mutex::new("startup".into()),
             generation_witness: Mutex::new(None),
+            first_read: Mutex::new(None),
+            first_read_enabled: AtomicBool::new(false),
             retirement_proof: Mutex::new(RetirementProofState::default()),
             manifest_retire: AtomicBool::new(false),
             manifest_upload_retire: AtomicBool::new(false),
@@ -732,9 +736,58 @@ impl HttpServices {
         serde_json::from_slice(&response.body).map_err(io::Error::other)
     }
 
+    /// Select the next registration capability; warm hosts leave this disabled.
+    pub fn enable_first_read(&self, enabled: bool) {
+        self.first_read_enabled.store(enabled, Ordering::Release);
+    }
+
+    pub(crate) fn first_read_key(&self) -> io::Result<Option<crate::first_read::Key>> {
+        Ok(*self
+            .first_read
+            .lock()
+            .map_err(|_| io::Error::other("first read lock poisoned"))?)
+    }
+
+    pub(crate) fn repo(&self) -> &str {
+        &self.repo
+    }
+
+    pub(crate) fn witness_for(
+        &self,
+        request: &Request,
+        generation: u64,
+    ) -> io::Result<Option<String>> {
+        let guard = self
+            .generation_witness
+            .lock()
+            .map_err(|_| io::Error::other("witness lock poisoned"))?;
+        let Some(config) = guard.as_ref() else {
+            return Ok(None);
+        };
+        let message = config
+            .message(&self.repo, request, generation)
+            .ok_or_else(|| io::Error::other("invalid witness request"))?;
+        let mut mac = Hmac::<Sha256>::new_from_slice(&config.key).map_err(io::Error::other)?;
+        mac.update(&message);
+        let signature = mac.finalize().into_bytes();
+        Ok(Some(format!(
+            "1:{}:{}:{}",
+            config.session,
+            generation,
+            signature
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        )))
+    }
+
     pub fn register(&self, codec_origin: &str) -> io::Result<()> {
         // Reset before all validation/I/O: failed registration cannot retain
         // capabilities or witnesses from an earlier session.
+        *self
+            .first_read
+            .lock()
+            .map_err(|_| io::Error::other("first read lock poisoned"))? = None;
         self.manifest_retire.store(false, Ordering::Release);
         self.manifest_upload_retire.store(false, Ordering::Release);
         let proof_epoch = self.reset_retirement_proof(true)?;
@@ -744,15 +797,20 @@ impl HttpServices {
             .map_err(|_| io::Error::other("witness config lock poisoned"))? = None;
         // Reuse strict loopback validation so registration cannot enable SSRF.
         Self::new(codec_origin, &self.repo, &self.token)?;
-        let response = self.json(
-            "POST",
-            "register",
-            Some(&json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1, "catalog_deferred": 1, "catalog_inline": 1})),
-            Some("stats"),
+        let requested_first = self.first_read_enabled.load(Ordering::Acquire);
+        let registration_body = serde_json::to_vec(
+            &json!({"codec_origin": codec_origin, "generation_witness": 1, "manifest_retire": 1, "manifest_upload_retire": 1, "catalog_peak": 1, "catalog_pages": 1, "catalog_deferred": 1, "catalog_inline": 1, "gateway_first_read": u8::from(requested_first)}),
         )?;
+        let raw_response = self.call("POST", "register", &registration_body, Some("stats"))?;
+        let response = crate::first_read::strict_json(&raw_response.body)?;
         // Inline ownership is selected by the private Worker registration, so
         // acknowledge it before installing any capabilities for this session.
         validate_inline_catalog_registration(&response)?;
+        *self
+            .first_read
+            .lock()
+            .map_err(|_| io::Error::other("first read lock poisoned"))? =
+            crate::first_read::Key::from_registration(&response, requested_first)?;
         *self
             .generation_witness
             .lock()
@@ -787,6 +845,10 @@ impl HttpServices {
     }
 
     pub fn unregister(&self) -> io::Result<()> {
+        *self
+            .first_read
+            .lock()
+            .map_err(|_| io::Error::other("first read lock poisoned"))? = None;
         self.manifest_retire.store(false, Ordering::Release);
         self.manifest_upload_retire.store(false, Ordering::Release);
         self.reset_retirement_proof(true)?;
@@ -1324,6 +1386,73 @@ mod tests {
             "catalog_deferred": {"version": 1, "proof_bytes": RETIREMENT_PROOF_BYTES},
             "catalog_inline": {"version": 1, "members": 32, "manifest_bytes": 8192},
         })
+    }
+
+    #[test]
+    fn invalid_first_read_registration_resets_every_prior_capability_before_more_io() {
+        let mut valid = inline_catalog_registration();
+        valid["gateway_first_read"] = json!({"version":1,"body_bytes":crate::first_read::MAX_ORIGINAL,"frame_bytes":crate::first_read::MAX_FRAME,"key":"11".repeat(32),"session":"00".repeat(16)});
+        valid["generation_witness"] =
+            json!({"version":1,"key":"22".repeat(32),"session":"00".repeat(16)});
+        let mut invalid = Vec::new();
+        for field in ["version", "body_bytes", "frame_bytes", "key", "session"] {
+            let mut response = valid.clone();
+            response["gateway_first_read"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            invalid.push(proof_reply(response, None));
+        }
+        let mut response = valid.clone();
+        response["gateway_first_read"]["extra"] = json!(true);
+        invalid.push(proof_reply(response, None));
+        let mut response = valid.clone();
+        response["generation_witness"]["session"] = json!("ff".repeat(16));
+        invalid.push(proof_reply(response, None));
+        let mut response = valid.clone();
+        response
+            .as_object_mut()
+            .unwrap()
+            .remove("generation_witness");
+        invalid.push(proof_reply(response, None));
+        let mut response = valid.clone();
+        response["gateway_first_read"] = Value::Null;
+        invalid.push(proof_reply(response, None));
+        let mut duplicate = proof_reply(valid.clone(), None);
+        let text = String::from_utf8(duplicate.body).unwrap();
+        duplicate.body = text
+            .replace(
+                &format!("\"frame_bytes\":{}", crate::first_read::MAX_FRAME),
+                &format!(
+                    "\"frame_bytes\":{},\"frame_bytes\":{}",
+                    crate::first_read::MAX_FRAME,
+                    crate::first_read::MAX_FRAME
+                ),
+            )
+            .into_bytes();
+        invalid.push(duplicate);
+        for response in invalid {
+            let (services, server) =
+                proof_services(vec![proof_reply(valid.clone(), None), response]);
+            services.enable_first_read(true);
+            services.register("http://127.0.0.1:1234").unwrap();
+            assert!(services.first_read_key().unwrap().is_some());
+            assert!(services.manifest_upload_retire.load(Ordering::Acquire));
+            assert!(services.register("http://127.0.0.1:1234").is_err());
+            assert!(services.first_read_key().unwrap().is_none());
+            assert!(services.generation_witness.lock().unwrap().is_none());
+            assert!(!services.manifest_retire.load(Ordering::Acquire));
+            assert!(!services.manifest_upload_retire.load(Ordering::Acquire));
+            let proof = services.retirement_proof.lock().unwrap();
+            assert!(!proof.enabled && proof.token.is_none());
+            drop(proof);
+            assert_eq!(server.join().unwrap().len(), 2);
+        }
+        let (services, server) = proof_services(vec![proof_reply(valid, None)]);
+        assert!(services.register("http://127.0.0.1:1234").is_err()); // Unsolicited off/warm capability.
+        assert!(services.first_read_key().unwrap().is_none());
+        assert!(!services.manifest_upload_retire.load(Ordering::Acquire));
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     #[test]

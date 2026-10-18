@@ -15,6 +15,7 @@ fn main() -> io::Result<()> {
         let mut token = "git-zero-local-services".to_owned();
         let mut cold = true;
         let mut unregister = false;
+        let mut gateway_first_read = true;
         loop {
             match arguments.peek().map(String::as_str) {
                 Some("--repo") => {
@@ -35,6 +36,14 @@ fn main() -> io::Result<()> {
                         Some("cold") => true,
                         Some("warm") => false,
                         _ => return Err(io::Error::other("view cache must be cold or warm")),
+                    };
+                }
+                Some("--gateway-first-read") => {
+                    arguments.next();
+                    gateway_first_read = match arguments.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err(io::Error::other("gateway first read must be on or off")),
                     };
                 }
                 Some("--unregister") => {
@@ -65,6 +74,7 @@ fn main() -> io::Result<()> {
         let services = host
             .cloudflare_services()
             .ok_or_else(|| io::Error::other("missing Cloudflare registration services"))?;
+        services.enable_first_read(cold && gateway_first_read);
         return http::serve_with_ready(
             port,
             |request| host.handle(request),

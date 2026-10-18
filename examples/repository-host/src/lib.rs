@@ -4,6 +4,7 @@ pub mod accounting;
 pub mod benchmark_cost;
 pub mod cloudflare;
 pub mod cost;
+mod first_read;
 pub mod http;
 pub mod native;
 pub mod objects;
@@ -244,6 +245,15 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
         manifest: &Manifest,
         selected: &[usize],
     ) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.read_snapshot_selection_prefetched(manifest, selected, None)
+    }
+
+    pub(crate) fn read_snapshot_selection_prefetched(
+        &self,
+        manifest: &Manifest,
+        selected: &[usize],
+        prefetched: Option<(usize, storage::VerifiedChunks)>,
+    ) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
         snapshot_chunks(manifest)?;
         if selected.iter().any(|i| *i >= manifest.packs.len())
             || selected.windows(2).any(|pair| pair[0] >= pair[1])
@@ -254,7 +264,22 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
             .iter()
             .flat_map(|i| manifest.packs[*i].chunks().cloned())
             .collect();
-        let data = self.blobs.get_many_verified(&chunks)?.into_data(&chunks)?;
+        let data = if let Some((count, first)) = prefetched {
+            if count == 0 || count > chunks.len() {
+                return Err(io::Error::other("invalid prefetched prefix"));
+            }
+            let mut data = first.into_data(&chunks[..count])?;
+            if count < chunks.len() {
+                data.extend(
+                    self.blobs
+                        .get_many_verified(&chunks[count..])?
+                        .into_data(&chunks[count..])?,
+                );
+            }
+            data
+        } else {
+            self.blobs.get_many_verified(&chunks)?.into_data(&chunks)?
+        };
         let mut data = data.into_iter();
         let mut files = Vec::with_capacity(selected.len());
         for pack in selected.iter().map(|i| &manifest.packs[*i]) {
@@ -1039,6 +1064,50 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 5);
+    }
+
+    #[test]
+    fn prefetched_snapshot_consumes_exact_first_prefix_once_then_reads_only_suffix() {
+        let repository = Repository::new(MemoryBlobs::default(), UnusedState);
+        let first = repository
+            .store_pack("legacy".into(), b"pack", b"index", 0)
+            .unwrap();
+        let last = repository
+            .store_bundled_pack("bundle".into(), b"tail", b"idx", 0)
+            .unwrap();
+        let manifest = Manifest {
+            packs: vec![first, last],
+            ..Manifest::default()
+        };
+        let chunks = snapshot_chunks(&manifest).unwrap();
+        let prefix = storage::VerifiedChunks::verify(
+            &chunks[..2],
+            vec![b"pack".to_vec(), b"index".to_vec()],
+        )
+        .unwrap();
+        let files = repository
+            .read_snapshot_selection_prefetched(&manifest, &[0, 1], Some((2, prefix)))
+            .unwrap();
+        assert_eq!(
+            files,
+            vec![
+                (b"pack".to_vec(), b"index".to_vec()),
+                (b"tail".to_vec(), b"idx".to_vec())
+            ]
+        );
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            *repository.blobs.batches.lock().unwrap(),
+            vec![chunks[2..].to_vec()]
+        );
+        let wrong =
+            storage::VerifiedChunks::verify(&chunks[1..2], vec![b"index".to_vec()]).unwrap();
+        assert!(
+            repository
+                .read_snapshot_selection_prefetched(&manifest, &[0, 1], Some((1, wrong)))
+                .is_err()
+        );
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 1);
     }
 
     #[test]
