@@ -672,6 +672,14 @@ export class RepositoryServices {
 
   setDebtContext(manifest) {
     count(manifest.generation);
+    if (Array.isArray(manifest.garbage) && manifest.garbage.length > MAX_RETIREMENT_KEYS) {
+      // Native deliberately uses scalar publication/deletion above the fused
+      // bound. That path is eager, not invalid: retain only its generation and
+      // never build an oversized proof/debt cache or infer physical absence.
+      this.debtContext = { generation: manifest.generation, keys: [], eager: true };
+      this.debtLoaded = true;
+      return;
+    }
     const keys = manifest.generation === 0 ? [] : retirementKeys({ version: 1, expected: manifest.generation - 1, next: manifest });
     this.debtContext = { generation: manifest.generation, keys };
     this.debtLoaded = true;
@@ -1027,7 +1035,7 @@ export class RepositoryServices {
         outcomes.push({ key: item.key, deleted: item.deleted });
       }
       const only = groups.size === 1 ? groups.values().next().value : null;
-      const deferred = !failed && generation > 0 && this.deferAllowed && only?.page
+      const deferred = !failed && generation > 0 && this.deferAllowed && !this.debtContext?.eager && only?.page
         && only.appliedGeneration !== null && doomed.size === 0;
       if (!deferred) this.ctx.storage.transactionSync(() => {
         for (const [rowKey, group] of groups) {

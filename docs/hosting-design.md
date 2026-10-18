@@ -653,6 +653,14 @@ pages, empty pages, overflow, unrelated-page PUTs and publications without PUTs
 use charged eager flushes before the debt marker can be replaced. Partial
 retirement keeps the eager/dirty recovery path.
 
+The fused 256-key limit does not restrict the existing scalar fallback. A
+generation with more garbage keys retains only its generation and an eager-mode
+marker in the new bookkeeping; it stores no oversized debt/proof set. Scalar
+deletions persist immediately, and constructor/GC recovery keeps the earlier R12
+ambiguity guarantees. Garbage itself never establishes physical absence. Any
+prior bounded pending page is synced before such a publication replaces its
+debt marker.
+
 The DO distinguishes exact inventory, unresolved current debt, and arbitrary
 uncertainty. Reopen examines a bounded current debt set only when durable v2
 pages exist. A matching token or actual bounded HEADs can resolve debt presence;

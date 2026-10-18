@@ -1,6 +1,12 @@
 //! Rust owns actual Wrangler/R2/SQLite contracts on 8834. These are ignored so
 //! ordinary tests cannot start services or collide with another runtime owner.
-use git_zero_host::{accounting::ServiceUsage, hash};
+use git_zero_host::{
+    Repository,
+    accounting::ServiceUsage,
+    cloudflare::HttpServices,
+    hash,
+    storage::{BlobStore, DurableStateStore, Manifest, R2BlobStore, RetiringCas, StateStore},
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -9,7 +15,10 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -1776,4 +1785,322 @@ fn actual_deferred_catalog_durable_codec_and_storage() {
     );
     runtime.stop();
     report(&root, "storage", &reports);
+}
+
+#[test]
+#[ignore = "owns 8834; >256-key scalar retirement stays eager through pending flush, deletes, GC and process restarts"]
+fn actual_deferred_catalog_oversized_scalar_fallback() {
+    let root = artifacts("eager-257");
+    let mut runtime = Runtime::start(&root, 1);
+    let mut reports = Vec::new();
+    let worker = Worker::new("eager-257");
+    worker.register(true);
+    let a = matching_data('a', 4, "small pending page");
+    let b = matching_data('b', 257, "oversized scalar garbage");
+    let a_keys: Vec<_> = a
+        .iter()
+        .map(|data| (worker.put(data, None), data.len()))
+        .collect();
+    let b_keys: Vec<_> = b
+        .iter()
+        .map(|data| (worker.put(data, None), data.len()))
+        .collect();
+    let peak: u64 = a.iter().chain(&b).map(|data| data.len() as u64).sum();
+    let survivor = a_keys[3].clone();
+    let small_garbage: Vec<_> = a_keys[..3].iter().map(|(key, _)| key.clone()).collect();
+    let large_garbage: Vec<_> = b_keys.iter().map(|(key, _)| key.clone()).collect();
+    let mut initial_live = vec![survivor.clone()];
+    initial_live.extend(b_keys.iter().cloned());
+    let retirement = worker.retire(0, &small_garbage, &initial_live);
+    retired_ok(&retirement, &small_garbage);
+    checked_proof(&retirement);
+    let pending = worker.state();
+    assert_eq!(
+        members(&pending).len(),
+        261,
+        "small retirement remains deferred in its durable page"
+    );
+
+    worker.fault("");
+    let before = worker.usage();
+    let scalar = worker.json(
+        "POST",
+        "/_services/manifest",
+        &json!({
+            "expected":1,"next":manifest(2, std::slice::from_ref(&survivor), &large_garbage)
+        }),
+        None,
+    );
+    assert_eq!(scalar.json(), json!({"published":true}));
+    assert!(scalar.proof().is_none());
+    let delta = worker.usage().checked_workload_delta(&before).unwrap();
+    assert_eq!(delta.worker_service_requests, 1);
+    assert_eq!(delta.do_requests, 1);
+    assert_eq!(delta.r2_class_a + delta.r2_class_b + delta.r2_deletes, 0);
+    assert_eq!(
+        delta.do_rows_written,
+        Some(2),
+        "one prior-debt acknowledgement and one scalar CAS"
+    );
+    let scalar_state = worker.state();
+    assert_eq!(catalog_writes(&scalar_state), 1);
+    assert_eq!(members(&scalar_state).len(), 258);
+    assert_eq!(scalar_state["manifest"]["generation"], 2);
+    assert_eq!(
+        scalar_state["manifest"]["garbage"]
+            .as_array()
+            .unwrap()
+            .len(),
+        257
+    );
+    let trace = scalar_state["trace"].as_array().unwrap();
+    let acknowledgement = trace
+        .iter()
+        .position(|event| {
+            event
+                .as_str()
+                .unwrap()
+                .starts_with("INSERT INTO blob_catalog")
+        })
+        .unwrap();
+    let cas = trace
+        .iter()
+        .position(|event| {
+            event
+                .as_str()
+                .unwrap()
+                .starts_with("INSERT INTO repository_state")
+        })
+        .unwrap();
+    assert!(acknowledgement < cas);
+    assert!(
+        trace[acknowledgement + 1..cas]
+            .iter()
+            .any(|event| event == "sync:durable")
+    );
+    reports.push(json!({"case":"257-key-scalar-CAS-flushes-prior-small-debt","delta":delta,"pending":pending,"state":scalar_state}));
+
+    for (key, _) in &b_keys[..3] {
+        worker.fault("");
+        let before = worker.usage();
+        assert_eq!(
+            worker
+                .request("DELETE", &format!("/_services/blob/{key}"), &[], None)
+                .status,
+            204
+        );
+        let after = worker.usage();
+        let delta = after.checked_workload_delta(&before).unwrap();
+        assert_eq!(delta.worker_service_requests, 1);
+        assert_eq!(delta.do_requests, 1);
+        assert_eq!(delta.r2_deletes, 1);
+        assert_eq!(delta.r2_class_a + delta.r2_class_b, 0);
+        assert!(delta.do_rows_written.unwrap() >= 1);
+        let state = worker.state();
+        assert!(
+            catalog_writes(&state) >= 1,
+            "oversized scalar debt cannot defer a DELETE"
+        );
+        assert!(!members(&state).contains(key));
+        assert_eq!(worker.get(key).status, 404);
+        assert_eq!(state["certain"], true);
+        reports.push(json!({"case":"eager-scalar-DELETE","key":key,"delta":delta,"state":state}));
+    }
+
+    runtime.stop();
+    runtime = Runtime::start(&root, 2);
+    let reopened = worker.usage_json();
+    assert_eq!(reopened["r2_live_objects"], 255);
+    assert_eq!(reopened["r2_peak_bytes"], peak);
+    assert_eq!(reopened["accounting_complete"], true);
+    assert_eq!(worker.get(&survivor.0).body, a[3]);
+    assert_eq!(worker.get(&b_keys[256].0).body, b[256]);
+    assert_eq!(worker.state()["certain"], true);
+    let before = worker.usage();
+    let extra_data = b"actual PUT while oversized scalar debt is pending after registry loss";
+    let extra = (worker.put(extra_data, None), extra_data.len());
+    let delta = worker.usage().checked_workload_delta(&before).unwrap();
+    assert_eq!(delta.r2_class_a, 1);
+    assert_eq!(delta.r2_class_b + delta.r2_deletes, 0);
+    assert_eq!(delta.do_rows_written, Some(1));
+    let live = vec![survivor.clone(), extra];
+    let keep: Vec<_> = live.iter().map(|(key, _)| key.clone()).collect();
+    worker.fault("");
+    let before_stale = worker.usage();
+    assert_eq!(worker.gc(1, &keep).status, 409);
+    let after_stale = worker.usage();
+    let stale_delta = after_stale.checked_workload_delta(&before_stale).unwrap();
+    assert_eq!(
+        stale_delta.r2_class_a + stale_delta.r2_class_b + stale_delta.r2_deletes,
+        0
+    );
+    assert_eq!(stale_delta.do_rows_written, Some(0));
+    worker.fault("");
+    let before_gc = worker.usage();
+    assert_eq!(worker.gc(2, &keep).json(), json!({"deleted":254}));
+    let gc_delta = worker.usage().checked_workload_delta(&before_gc).unwrap();
+    assert_eq!(
+        gc_delta.r2_deletes, 254,
+        "GC performs every remaining actual R2 DELETE"
+    );
+    assert_eq!(gc_delta.r2_class_b, 0);
+    assert_eq!(gc_delta.r2_class_a, 1, "one authoritative physical LIST");
+    assert!(gc_delta.do_rows_written.unwrap() > 0);
+    let metrics = assert_live(&worker, &live, peak);
+    let gc_state = worker.state();
+    assert_eq!(members(&gc_state).len(), 2);
+    assert_eq!(gc_state["certain"], true);
+    reports.push(
+        json!({"case":"restart-mid-eager-debt-and-generation-checked-GC",
+        "reopened":reopened,"put_delta":delta,"stale_gc_delta":stale_delta,
+        "gc_delta":gc_delta,"metrics":metrics,"state":gc_state}),
+    );
+
+    runtime.stop();
+    runtime = Runtime::start(&root, 3);
+    worker.register(true);
+    assert_live(&worker, &live, peak);
+    worker.fault("");
+    let before = worker.usage();
+    let final_data = b"next normal mutation after completed oversized scalar cleanup";
+    let mut final_live = live;
+    final_live.push((worker.put(final_data, None), final_data.len()));
+    assert_eq!(
+        worker.publish(2, &final_live, None).json(),
+        json!({"published":true})
+    );
+    let final_delta = worker.usage().checked_workload_delta(&before).unwrap();
+    assert_eq!(final_delta.worker_service_requests, 2);
+    assert_eq!(final_delta.do_requests, 2);
+    assert_eq!(final_delta.r2_class_a, 1);
+    assert_eq!(final_delta.r2_class_b + final_delta.r2_deletes, 0);
+    assert_eq!(final_delta.do_rows_written, Some(2));
+    let final_metrics = assert_live(&worker, &final_live, peak);
+    let final_state = worker.state();
+    assert_eq!(final_state["manifest"]["generation"], 3);
+    assert_eq!(final_state["manifest"]["garbage"], json!([]));
+    assert_eq!(members(&final_state).len(), 3);
+    assert_eq!(final_state["certain"], true);
+    reports.push(json!({"case":"restart-after-GC-next-normal-mutation","delta":final_delta,
+        "metrics":final_metrics,"state":final_state,
+        "sqlite_shape_note":"257-key stress fixture is outside the normal thirteen-key SQLite shape guard"}));
+
+    let sdk_worker = Worker::new("SDK-eager-257");
+    let sdk_services =
+        Arc::new(HttpServices::new(ORIGIN, &sdk_worker.repo, "git-zero-local-services").unwrap());
+    sdk_services.register("http://127.0.0.1:1").unwrap();
+    let sdk_blobs = R2BlobStore::new(sdk_services.clone());
+    for ((key, _), bytes) in b_keys.iter().zip(&b) {
+        sdk_blobs.put(key, bytes).unwrap();
+    }
+    let sdk_peak: u64 = b.iter().map(|bytes| bytes.len() as u64).sum();
+    let sdk_state = DurableStateStore::new(sdk_services.clone());
+    let sdk_next: Manifest = serde_json::from_value(manifest(1, &[], &large_garbage)).unwrap();
+    let before_unsupported = sdk_worker.usage();
+    assert!(matches!(
+        sdk_state
+            .try_compare_and_swap_retiring(0, &sdk_next)
+            .unwrap(),
+        RetiringCas::Unsupported
+    ));
+    let unsupported_delta = sdk_worker
+        .usage()
+        .checked_workload_delta(&before_unsupported)
+        .unwrap();
+    assert_eq!(unsupported_delta.worker_requests, 0);
+    assert_eq!(unsupported_delta.do_requests, 0);
+    assert_eq!(
+        unsupported_delta.r2_class_a + unsupported_delta.r2_class_b + unsupported_delta.r2_deletes,
+        0
+    );
+    assert_eq!(unsupported_delta.do_rows_read, Some(0));
+    assert_eq!(unsupported_delta.do_rows_written, Some(0));
+    let repository = Repository::new(sdk_blobs, sdk_state);
+    sdk_worker.fault("");
+    let before_sdk = sdk_worker.usage();
+    let RetiringCas::Published(receipt) = repository
+        .publish_retiring(&Manifest::default(), sdk_next)
+        .unwrap()
+    else {
+        panic!("257-key SDK fallback must publish through scalar CAS and DELETEs");
+    };
+    assert_eq!(receipt.generation, 1);
+    assert_eq!(receipt.outcomes.len(), 257);
+    for (outcome, expected) in receipt.outcomes.iter().zip(&large_garbage) {
+        assert_eq!(outcome.key, *expected);
+        assert!(outcome.deleted);
+    }
+    let sdk_after = sdk_worker.usage();
+    let sdk_delta = sdk_after.checked_workload_delta(&before_sdk).unwrap();
+    assert_eq!(sdk_delta.worker_service_requests, 258);
+    assert_eq!(sdk_delta.do_requests, 258);
+    assert_eq!(sdk_delta.r2_deletes, 257);
+    assert_eq!(sdk_delta.r2_class_a + sdk_delta.r2_class_b, 0);
+    assert!(sdk_delta.do_rows_read.is_some());
+    assert!(sdk_delta.do_rows_written.unwrap() >= 258);
+    assert_eq!(
+        sdk_after.operations["r2_delete"].successes
+            - before_sdk
+                .operations
+                .get("r2_delete")
+                .map_or(0, |operation| operation.successes),
+        257
+    );
+    assert_eq!(
+        sdk_after.operations["r2_delete"].failures
+            - before_sdk
+                .operations
+                .get("r2_delete")
+                .map_or(0, |operation| operation.failures),
+        0
+    );
+    assert_eq!(
+        sdk_after.operations["manifest_cas"].successes
+            - before_sdk
+                .operations
+                .get("manifest_cas")
+                .map_or(0, |operation| operation.successes),
+        1
+    );
+    let sdk_metrics = assert_live(&sdk_worker, &[], sdk_peak);
+    let sdk_complete = sdk_worker.state();
+    assert!(members(&sdk_complete).is_empty());
+    assert_eq!(sdk_complete["certain"], true);
+    reports.push(
+        json!({"case":"SDK-Unsupported-before-IO-then-Repository-scalar-fallback",
+        "unsupported_delta":unsupported_delta,"delta":sdk_delta,"receipt":receipt,
+        "metrics":sdk_metrics,"state":sdk_complete}),
+    );
+
+    runtime.stop();
+    runtime = Runtime::start(&root, 4);
+    let sdk_reopened = assert_live(&sdk_worker, &[], sdk_peak);
+    let normal_blobs = R2BlobStore::new(sdk_services.clone());
+    let normal_state = DurableStateStore::new(sdk_services);
+    let bytes = b"SDK normal mutation after oversized scalar fallback reopened empty";
+    let key = format!("chunks/{}", hash(bytes));
+    let before = sdk_worker.usage();
+    normal_blobs.put(&key, bytes).unwrap();
+    let next: Manifest =
+        serde_json::from_value(manifest(2, &[(key.clone(), bytes.len())], &[])).unwrap();
+    assert!(normal_state.compare_and_swap(1, &next).unwrap());
+    let sdk_normal_delta = sdk_worker.usage().checked_workload_delta(&before).unwrap();
+    assert_eq!(sdk_normal_delta.worker_service_requests, 2);
+    assert_eq!(sdk_normal_delta.do_requests, 2);
+    assert_eq!(sdk_normal_delta.r2_class_a, 1);
+    assert_eq!(sdk_normal_delta.r2_class_b + sdk_normal_delta.r2_deletes, 0);
+    let metrics = assert_live(&sdk_worker, &[(key, bytes.len())], sdk_peak);
+    let state = sdk_worker.state();
+    assert_eq!(state["manifest"]["generation"], 2);
+    assert!(
+        state["manifest"]
+            .get("garbage")
+            .is_none_or(|garbage| garbage == &json!([]))
+    );
+    reports.push(
+        json!({"case":"SDK-full-scalar-cleanup-reopened-next-normal-mutation",
+        "reopened":sdk_reopened,"delta":sdk_normal_delta,"metrics":metrics,"state":state}),
+    );
+    runtime.stop();
+    report(&root, "eager-257", &reports);
 }
