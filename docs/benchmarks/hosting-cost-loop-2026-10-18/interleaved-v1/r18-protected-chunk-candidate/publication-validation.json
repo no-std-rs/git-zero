@@ -1,0 +1,21 @@
+{
+  "kind": "author compact-publication validation; independent ledger review pending",
+  "source_commit": "f1ba8f548507dca1e5ab78e5c5d20d8360ecee21",
+  "source_parent_exact": true,
+  "source_review_hash_exact": true,
+  "original_source_review_inventory_hash_exact": true,
+  "twelve_completed_maps_before_after_exact": true,
+  "three_failed_runtime_scopes_preserved": true,
+  "capsule_members_reread": 2007,
+  "capsule_member_manifest_records": 2006,
+  "manifest_self_exclusion_explicit": true,
+  "full_local_inventory_files": 4006,
+  "full_local_inventory_logical_bytes": 3953598095,
+  "full_local_inventory_new_streamed_bytes": 2348712157,
+  "full_local_inventory_reused_independent_hashes": 2129,
+  "giant_payloads_not_rehashed_during_capsule_verification": true,
+  "capsule_bytes": 1361154,
+  "all_source_paths_outside_docs_unchanged": true,
+  "no_runtimes_builds_tests_push_ci_deploy": true,
+  "full_bill_usd": null
+}
