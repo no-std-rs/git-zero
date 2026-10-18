@@ -150,3 +150,8 @@ and executable hashes, runtime/hardware provenance and local service logs. A sep
 holds scores and evaluator provenance. Artifacts have one-day retention and a hard 4 MiB compressed
 cap per archive (at most five archives, 20 MiB total); no binaries, fixtures, emulator state or caches are uploaded.
 Download evidence before expiration. No Cloudflare account, deployment, secrets or paid runner is used.
+
+Initial workflow run [39081449226](https://github.com/no-std-rs/git-zero/actions/runs/39081449226),
+at `e2a54d69ebcd79a157c77c1979d265fbfd44ee81`, failed workflow validation because job-level `env` does
+not expose the `runner` context. No jobs started and no measurements were collected. Experiment paths
+now use the available `github.workspace` context at job scope, retaining stable paths outside checkout.
