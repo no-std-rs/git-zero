@@ -104,7 +104,8 @@ compute remains unknown. Local timings are latency guards, not billed compute.
 ## Iteration budget
 
 The user selected two-pair screens for each optimization, followed by five-pair validation of the final
-candidate. Keep a matching two-pair scalar baseline for screening. Use complete screen counters and
+candidate. Measure a fresh matching two-pair baseline for each screen: the scalar provider initially,
+then the preceding provisional candidate. Use complete screen counters and
 resource/latency guards to choose the next provisional candidate; do not treat the CLI's screen decision
 as formal acceptance. Each change still has a clean designer, clean implementation, committed and pushed
 source, and independent measurement.

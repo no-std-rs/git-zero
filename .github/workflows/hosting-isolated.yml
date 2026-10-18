@@ -23,8 +23,8 @@ env:
   # Keep this source and its existing build paths fixed across optimization rounds.
   REFERENCE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
   # Screens compare the preceding candidate; final validation uses REFERENCE_COMMIT.
-  BASELINE_COMMIT: 556b9ecd2aa79197f86b3db2d546eee81696e899
-  EXPECTED_WORKER_SHA256: 29830c201a5e97f163c8d40d7087e83c8f63a0608e0e7f246b5924661e3a2f19
+  BASELINE_COMMIT: e6f4ad0c35581630d1d44c40aa1d5eb3496d5f92
+  EXPECTED_WORKER_SHA256: a91ac0a693160172ea8b90ff1bc36912feb8043fc29beeef2c92191850aa9f4a
   REFERENCE_GIT_VERSION: 2.53.0
   # Four profile archives plus one score archive: at most 20 MiB per run.
   ARTIFACT_MAX_BYTES: '4194304'
