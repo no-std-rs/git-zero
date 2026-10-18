@@ -1,6 +1,6 @@
 {
   "kind": "R20 Joint SOURCE-approved correctness implementation/evidence ledger",
-  "status": "pending-independent-ledger-review; no screen acceptance",
+  "status": "pending-independent-corrected-ledger-review; SOURCE approved, no screen acceptance",
   "source_commit": "b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0",
   "parent": "f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5",
   "native_source_tree": "ff99eaf58a5e4f68e744d0b50ddee2af67aff1cf",
@@ -834,9 +834,9 @@
   "full_local_inventory": {
     "archive_path": "LOCAL-ONLY-INVENTORY.json",
     "file": {
-      "path": "/tmp/git-zero-joint-docs-stage-v1/capsule/LOCAL-ONLY-INVENTORY.json",
-      "bytes": 1804911,
-      "sha256": "b0e9a29eb03b027aa43132d380cf44ecaf53f3d91d80c278ff2a854bf72dd5d5"
+      "path": "/tmp/git-zero-joint-ledger-correction-v1/metadata/LOCAL-ONLY-INVENTORY.json",
+      "bytes": 1806850,
+      "sha256": "e60b084230a0025ff95cc45598ef9f83f7a121d09a7afe370e7f7d6fcf0bd292"
     },
     "raw_roots": 18,
     "raw_regular_files": 7684,
@@ -885,17 +885,17 @@
   "capsule": {
     "file": {
       "path": "/tmp/git-zero-hosting-joint-chunk/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r20-joint-chunk-candidate/raw-evidence.tar.gz",
-      "bytes": 3412997,
-      "sha256": "c73685d787d9b4d31e47b93975a285e76eef36faf0ab9cd00fb4a4a34f6ac64e"
+      "bytes": 3432016,
+      "sha256": "051c008d04dd0a0553a5aee8bf6405b37b9f3574668a4915c41bcea2e8aeb07c"
     },
     "manifest_archive_path": "CAPSULE-MANIFEST.json",
     "manifest": {
-      "path": "/tmp/git-zero-joint-docs-stage-v1/capsule/CAPSULE-MANIFEST.json",
-      "bytes": 1779023,
-      "sha256": "3ae4f61cd683e595968cecdb64e1bbd62374c014080c7e46e829df3124cf8ee4"
+      "path": "/tmp/git-zero-joint-ledger-correction-v1/metadata/CAPSULE-MANIFEST.json",
+      "bytes": 1787433,
+      "sha256": "85039daba28eaf28d93077b5ea64b3294e10eed011e5b75a614f1b6392fca008"
     },
-    "verified_members": 4090,
-    "uncompressed_member_bytes": 34630037,
+    "verified_members": 4096,
+    "uncompressed_member_bytes": 34709363,
     "all_member_bytes_SHA_verified": true
   },
   "resource_cleanup": {
@@ -932,7 +932,7 @@
     "compiler_cache_removed": false,
     "source_or_evidence_deleted": false
   },
-  "publication_limits": "Large raw Git/R2/SQL/state, pack bodies, wanted archives, seed packs and all ELF payloads stay local-only. Compact counterparts below do not imply all raw files published. Raw /dev/shm is volatile local-only and sandbox-hidden unless escalated; no speed/power-loss claim.",
+  "publication_limits": "Permitted compact synthetic request/response/control wire files up to4MiB (4,194,304B) are included:62 PACK-v2-bearing samples,21 bodies and41 requests,39,445B full member bytes (323\u20132,767B), including33,045B embedded PACK spans. The separate8MiB author text-helper limit is not a wire limit. Executable ELF payloads, generated repository/R2/SQLite state, wire/body files larger than4MiB, whole wanted archives and standalone seed-pack files remain local-only. This inventory describes retained raw originals; some originals also have published compact copies. Raw /dev/shm originals remain volatile local evidence, sandbox-hidden unless escalated; no speed or power-loss claim.",
   "conditional_model_only": {
     "approval_md": {
       "path": "/tmp/git-zero-hosting-joint-chunk/docs/benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r20-joint-chunk-candidate/independent-design-review.md",
@@ -971,5 +971,113 @@
       "sha256": "237796d1c3f1aa0dbb8b99b945a7bb50044f6043c6b99ba65df89781c78e70c2",
       "scope": "Historical replaced output path, not a fresh actual-file claim; current exact bytes preserved at preserved_intermediate_capsule.path."
     }
+  },
+  "small_synthetic_wire_evidence": {
+    "wire_file_inclusion_limit_bytes": 4194304,
+    "wire_file_rule": "Eligible top-level compact request/response/control files are at most4MiB, with existing suffix filters. Generated repository/R2/SQLite state and executable payloads are excluded regardless of size.",
+    "separate_author_text_helper_limit_bytes": 8388608,
+    "author_text_limit_is_not_wire_limit": true,
+    "PACK_v2_bearing_members": 62,
+    "PACK_v2_bearing_full_member_bytes": 39445,
+    "body_members": 21,
+    "request_members": 41,
+    "full_member_min_bytes": 323,
+    "full_member_max_bytes": 2767,
+    "embedded_PACK_span_bytes": 33045,
+    "embedded_PACK_span_max_bytes": 2636,
+    "all_non_UTF8_members_are_these62_protocol_samples": true,
+    "ELF_payload_members": 0,
+    "SQLite_payload_members": 0,
+    "generated_repository_R2_SQLite_state_paths": 0,
+    "original_classifier": {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-payload-classification.json",
+      "bytes": 28833,
+      "sha256": "bf67c932ff9a0b958c1d30f5e00a55d9288b3164d3fac64b5d8721490495db99"
+    },
+    "classifier_member": "PROTOCOL-EVIDENCE-INVENTORY.json",
+    "content_scope": "Permitted synthetic Git correctness-fixture protocol evidence. Full member totals include framing; PACK spans are separately stated. No new sample or body byte is introduced by this correction."
+  },
+  "documentation_scope_correction": {
+    "kind": "narrow publication-scope correction after original066 independent ledger review",
+    "at_utc": "2026-10-18T12:36:10.810936+00:00",
+    "docs_parent": "06602228e45a2cacbf1bc9d7553f1925cd87b7ee",
+    "SOURCE_approved_ancestor": "b74c91738a3fbfe3ebf30a936fbf9d7ff79f1ae0",
+    "original_ledger_not_rewritten_or_relabelled_clean": true,
+    "original_publication_snapshot": {
+      "path": "/tmp/git-zero-joint-ledger-correction-v1/ORIGINAL-SNAPSHOT.json",
+      "bytes": 3469,
+      "sha256": "5b6a9b5ed7d6a0a164936002cd5de17b7eb0fce73069293479b2150e6b30ca96"
+    },
+    "original_capsule_snapshot": {
+      "path": "/tmp/git-zero-joint-ledger-correction-v1/original-066-publication/raw-evidence.tar.gz",
+      "bytes": 3412997,
+      "sha256": "c73685d787d9b4d31e47b93975a285e76eef36faf0ab9cd00fb4a4a34f6ac64e"
+    },
+    "original_validation_snapshot": {
+      "path": "/tmp/git-zero-joint-ledger-correction-v1/original-066-publication/publication-validation.json",
+      "bytes": 5339,
+      "sha256": "a0cb28208c97b53e3b5d40351018344e06a121494e13826fd0f24357eb171c9a"
+    },
+    "original_review_md": {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a.md",
+      "bytes": 5129,
+      "sha256": "a99f5ceb277bec268d95cb5caa9f3f37ac938c88519f3ad1ee13a8d445509e07"
+    },
+    "original_review_json": {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a.json",
+      "bytes": 13365,
+      "sha256": "1529d5f9f577b82c11969fb394c9c121788127fbf23345564ea0a0a91031b626"
+    },
+    "original_review_verdict": "Ledger approval withheld solely for imprecise active pack-payload scope wording; all source/evidence integrity checks passed.",
+    "original_payload_classifier": {
+      "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-payload-classification.json",
+      "bytes": 28833,
+      "sha256": "bf67c932ff9a0b958c1d30f5e00a55d9288b3164d3fac64b5d8721490495db99"
+    },
+    "current_small_wire_scope": {
+      "wire_file_inclusion_limit_bytes": 4194304,
+      "wire_file_rule": "Eligible top-level compact request/response/control files are at most4MiB, with existing suffix filters. Generated repository/R2/SQLite state and executable payloads are excluded regardless of size.",
+      "separate_author_text_helper_limit_bytes": 8388608,
+      "author_text_limit_is_not_wire_limit": true,
+      "PACK_v2_bearing_members": 62,
+      "PACK_v2_bearing_full_member_bytes": 39445,
+      "body_members": 21,
+      "request_members": 41,
+      "full_member_min_bytes": 323,
+      "full_member_max_bytes": 2767,
+      "embedded_PACK_span_bytes": 33045,
+      "embedded_PACK_span_max_bytes": 2636,
+      "all_non_UTF8_members_are_these62_protocol_samples": true,
+      "ELF_payload_members": 0,
+      "SQLite_payload_members": 0,
+      "generated_repository_R2_SQLite_state_paths": 0,
+      "original_classifier": {
+        "path": "/tmp/git-zero-joint-ledger-review-06602228e45a-payload-classification.json",
+        "bytes": 28833,
+        "sha256": "bf67c932ff9a0b958c1d30f5e00a55d9288b3164d3fac64b5d8721490495db99"
+      },
+      "classifier_member": "PROTOCOL-EVIDENCE-INVENTORY.json",
+      "content_scope": "Permitted synthetic Git correctness-fixture protocol evidence. Full member totals include framing; PACK spans are separately stated. No new sample or body byte is introduced by this correction."
+    },
+    "corrected_active_assertions": [
+      "README.md",
+      "implementation-ledger.json publication_limits",
+      "CAPSULE-MANIFEST.json positive wire classification",
+      "LOCAL-ONLY-INVENTORY.json publication_limits and retained-original clarification",
+      "publication-validation.json positive wire classification"
+    ],
+    "historical_producers_unchanged": [
+      {
+        "archive_path": "author/git-zero-joint-build-ledger.py",
+        "imprecise_original_lines": [
+          73,
+          98
+        ],
+        "scope": "Byte-exact historical producer, not the corrected active publication rule. Its historical wording is superseded only by this explicit correction."
+      }
+    ],
+    "preservation": "Original066 publication, original reports and all original source/runtime/raw evidence/sample bytes remain unchanged. Only active documentation metadata and dependent hashes/checksums are resealed.",
+    "no_source_runtime_build_or_new_test": true,
+    "cost_speed_acceptance_plateau_stopping_claim": false
   }
 }
