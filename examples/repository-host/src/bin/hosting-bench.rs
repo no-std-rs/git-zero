@@ -1,4 +1,7 @@
 //! Rust-only paired smart HTTP benchmark, including optional local workerd services.
+#[path = "hosting-bench/failure_logs.rs"]
+mod failure_logs;
+
 use git_zero_host::benchmark_cost::{
     INTERLEAVED_FLOW, INTERLEAVED_OBJECTIVE, INTERLEAVED_PUSH_LATENCY_GUARD,
     INTERLEAVED_REFERENCE_COMMANDS, INTERLEAVED_REFERENCE_EXTRA_CONFIG,
@@ -1745,6 +1748,30 @@ fn main() -> Result<()> {
         let report = preserve_incomplete_report(error.as_ref());
         if let Err(report_error) = report {
             eprintln!("Could not write incomplete report: {report_error}");
+        }
+        // run() has unwound: failure snapshots are complete and Host::drop has
+        // stopped the child. Export stderr outside every workload timer.
+        if let Some(progress) = PROGRESS.get() {
+            let export = (|| -> Result<()> {
+                let fixtures = progress.metadata["fixtures"]
+                    .as_str()
+                    .ok_or("missing fixture path")?;
+                let samples = progress.metadata["samples"]
+                    .as_u64()
+                    .ok_or("missing sample count")?;
+                let backend = if progress.metadata["cloudflare"].is_null() {
+                    "prototype"
+                } else {
+                    "cloudflare-local"
+                };
+                let destination = progress.incomplete.with_extension("failure-logs");
+                failure_logs::export(Path::new(fixtures), &destination, samples, backend)?;
+                eprintln!("Failure host logs: {}", destination.display());
+                Ok(())
+            })();
+            if let Err(export_error) = export {
+                eprintln!("Could not export failure host logs: {export_error}");
+            }
         }
     }
     result
