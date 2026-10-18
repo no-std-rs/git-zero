@@ -14,6 +14,12 @@ The separately reconciled deterministic candidate/control topology proof, 19-row
 
 Source review complete. STOP READY for ledger continuity; clean R16 work may be based on this exact approved R15 code SHA if root authorizes it.
 
+## Retained predecessor diagnostic limitation
+
+A later independent R16 review identified an R15 Native diagnostic omission, confirmed here from source: after a matched continuation increments logical `requests`, `input_bytes` and cache-miss counters, an error in materialization or native Git dispatch returns the 503 body through the private error wrapper without adding that body to `Native.output_bytes`. Protocol/auth failures before logical consumption are counted by private error counters rather than ordinary logical-request counters. Therefore R15 must not be described as having complete failed-logical-response output totals. R16 is correcting the shared diagnostic/error wrapper; exact approved R15 source stays unchanged.
+
+This does not erase actual Worker/DO/R2 service work: the gateway has already accepted real DO receipts once and later ordinary bridge reads keep their real receipts. The failed materialization/native dispatch paths mark the view dirty/Invalid before returning; subsequent planning refuses that view and ordinary dispatch recovers and invalidates certificates before serving. No authority, mutation, stale-read or real-service-charge defect was demonstrated by this omission. Successful benchmark rows have unchanged output accounting; a failed trial remains invalid under the fixed policy, never a cost or speed win. This known narrow limitation does not revoke source-only approval or waive later ledger/screen checks.
+
 ## Retained intermediate review and resolved findings
 
 # R15 focused source re-review: correction required

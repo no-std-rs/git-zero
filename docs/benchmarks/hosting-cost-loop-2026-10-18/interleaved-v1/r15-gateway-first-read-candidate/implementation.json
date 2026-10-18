@@ -16,7 +16,7 @@
     "result": "SOURCE-ONLY APPROVED exact5a; ledger continuity is a separate review",
     "report": "independent-source-review.md",
     "original_path": "/tmp/git-zero-gateway-first-read-source-rereview.md",
-    "sha256": "a69ea55a9e1cdca4540762a1f6a7709971eae73e4f96c861c496a661093aa55c"
+    "sha256": "aab0765805687175ddb4dc117e3495eb23521e8b2dc7dd57e02ac344a360b8ff"
   },
   "behavior": "For an opted-in standard cold Git upload-pack POST with a valid local view, the existing gateway invocation authenticates a stateless Native plan, performs one authoritative DO manifest read and the first exact GET batch, then authenticates an owned bounded continuation. Native validates and consumes that prefix once, with any suffix fetched by ordinary code. Original discovery, warm, receive, unsupported and old-capability paths remain ordinary.",
   "limits": {
@@ -715,7 +715,7 @@
     },
     {
       "artifacts": "headers-before-fix",
-      "result": "Independent reviewer proved actual forwarded logical header count could exceed256 after additions, valid token underscore/dot names and HTAB values rejected. Actual before-fix regression rows and exact source archive/manifest/binarySHA retained. Sanitized eligibility and legal token grammar fixed, headers-after-fix then final5a12case control passed."
+      "result": "Independent reviewer proved actual forwarded logical header count could exceed256 after additions, valid token underscore/dot names and HTAB values rejected. Actual before-fix regression rows and exact source archive/manifest/binarySHA retained. Sanitized eligibility and legal token grammar fixed, headers-after-fix then final5a13case control passed."
     },
     {
       "artifacts": "warm-01 / warm-02",
