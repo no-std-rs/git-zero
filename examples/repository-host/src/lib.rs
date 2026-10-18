@@ -36,6 +36,7 @@ pub struct Repository<B, S> {
 
 pub(crate) struct ResolvedSnapshot {
     pub files: Vec<(Vec<u8>, Vec<u8>)>,
+    #[cfg(test)]
     pub admission: Option<storage::VerifiedChunk>,
     pub cache_hits: usize,
     pub cache_hit_bytes: u64,
@@ -316,8 +317,8 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
         Ok(files)
     }
 
-    /// Resolve an authenticated selection with one immutable cached chunk and
-    /// an exact first *missing* batch. All proofs precede native file writes.
+    /// Original one-slot interface retained for its proof/order tests.
+    #[cfg(test)]
     pub(crate) fn read_snapshot_selection_resolved(
         &self,
         manifest: &Manifest,
@@ -325,6 +326,32 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
         cached: Option<storage::VerifiedChunk>,
         prefetched: Option<(Vec<Chunk>, storage::VerifiedChunks)>,
         admit: bool,
+    ) -> io::Result<ResolvedSnapshot> {
+        let mut admission = None;
+        let mut result = self.read_snapshot_selection_cached(
+            manifest,
+            selected,
+            &cached.into_iter().collect::<Vec<_>>(),
+            prefetched,
+            &mut |value| {
+                if admit && admission.is_none() && value.bytes().len() <= 16 * 1024 * 1024 {
+                    admission = Some(value.clone());
+                }
+            },
+        )?;
+        result.admission = admission;
+        Ok(result)
+    }
+
+    /// Snapshot the exact cached partition before resolving all missing bytes.
+    /// The visitor sees every verified miss, not a truncated candidate prefix.
+    pub(crate) fn read_snapshot_selection_cached(
+        &self,
+        manifest: &Manifest,
+        selected: &[usize],
+        cached: &[storage::VerifiedChunk],
+        prefetched: Option<(Vec<Chunk>, storage::VerifiedChunks)>,
+        admit: &mut impl FnMut(&storage::VerifiedChunk),
     ) -> io::Result<ResolvedSnapshot> {
         snapshot_chunks(manifest)?;
         if selected.iter().any(|i| *i >= manifest.packs.len())
@@ -336,7 +363,17 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
             .iter()
             .flat_map(|i| manifest.packs[*i].chunks().cloned())
             .collect();
-        let hit = |chunk: &Chunk| cached.as_ref().is_some_and(|v| v.descriptor() == chunk);
+        if cached.len() > 32
+            || cached.iter().enumerate().any(|(i, value)| {
+                cached[..i]
+                    .iter()
+                    .any(|old| old.descriptor() == value.descriptor())
+            })
+        {
+            return Err(io::Error::other("invalid cached descriptor set"));
+        }
+        let find = |chunk: &Chunk| cached.iter().find(|v| v.descriptor() == chunk);
+        let hit = |chunk: &Chunk| find(chunk).is_some();
         let missing: Vec<_> = chunks.iter().filter(|c| !hit(c)).cloned().collect();
         let mut fresh = if let Some((first, verified)) = prefetched {
             if first.is_empty() || first.len() > missing.len() || first != missing[..first.len()] {
@@ -354,7 +391,6 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
                 .into_handles(&missing)?
         }
         .into_iter();
-        let mut admission = None;
         let mut cache_hits = 0;
         let mut cache_hit_bytes = 0;
         let mut handles = Vec::with_capacity(chunks.len());
@@ -362,14 +398,12 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
             let value = if hit(chunk) {
                 cache_hits += 1;
                 cache_hit_bytes += chunk.len;
-                cached.as_ref().unwrap().clone()
+                find(chunk).unwrap().clone()
             } else {
                 let value = fresh
                     .next()
                     .ok_or_else(|| io::Error::other("missing verified chunk"))?;
-                if admit && admission.is_none() && chunk.len <= 16 * 1024 * 1024 {
-                    admission = Some(value.clone());
-                }
+                admit(&value);
                 value
             };
             if value.descriptor() != chunk {
@@ -417,7 +451,8 @@ impl<B: BlobStore, S: StateStore> Repository<B, S> {
         }
         Ok(ResolvedSnapshot {
             files,
-            admission,
+            #[cfg(test)]
+            admission: None,
             cache_hits,
             cache_hit_bytes,
         })
@@ -1282,6 +1317,71 @@ mod tests {
                 .is_err()
         );
         assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn multi_cached_snapshot_visits_all_misses_and_keeps_exact_order() {
+        use std::sync::atomic::Ordering;
+        let repository = Repository::new(MemoryBlobs::default(), UnusedState);
+        let mut manifest = Manifest::default();
+        for index in 0..40u8 {
+            manifest.packs.push(
+                repository
+                    .store_bundled_pack(index.to_string(), &[index], &[index, 1], 0)
+                    .unwrap(),
+            );
+        }
+        let chunks = snapshot_chunks(&manifest).unwrap();
+        let cached_descriptors = vec![chunks[1].clone(), chunks[35].clone()];
+        let cached = storage::VerifiedChunks::verify(
+            &cached_descriptors,
+            vec![vec![1, 1, 1], vec![35, 35, 1]],
+        )
+        .unwrap()
+        .into_handles(&cached_descriptors)
+        .unwrap();
+        let missing: Vec<_> = chunks
+            .iter()
+            .filter(|c| !cached_descriptors.contains(c))
+            .cloned()
+            .collect();
+        let first = vec![missing[0].clone(), missing[1].clone()];
+        let paid =
+            storage::VerifiedChunks::verify(&first, vec![vec![0, 0, 1], vec![2, 2, 1]]).unwrap();
+        let mut seen = Vec::new();
+        let selected: Vec<_> = (0..40).collect();
+        let resolved = repository
+            .read_snapshot_selection_cached(
+                &manifest,
+                &selected,
+                &cached,
+                Some((first, paid)),
+                &mut |value| seen.push(value.descriptor().clone()),
+            )
+            .unwrap();
+        assert_eq!(
+            seen, missing,
+            "later fitting candidates cannot be lost to a prefix limit"
+        );
+        assert_eq!(resolved.cache_hits, 2);
+        for (index, (pack, idx)) in resolved.files.iter().enumerate() {
+            assert_eq!(pack, &vec![index as u8]);
+            assert_eq!(idx, &vec![index as u8, 1]);
+        }
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), 36);
+        let before = repository.blobs.gets.load(Ordering::Relaxed);
+        assert!(
+            repository
+                .read_snapshot_selection_cached(
+                    &manifest,
+                    &selected,
+                    &[cached[0].clone(), cached[0].clone()],
+                    None,
+                    &mut |_| panic!("invalid set before admission")
+                )
+                .is_err()
+        );
+        assert_eq!(repository.blobs.gets.load(Ordering::Relaxed), before);
     }
 
     #[test]
