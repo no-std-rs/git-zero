@@ -8,3 +8,6 @@ examples/cloudflare-worker/build/
 __pycache__/
 /interop-artifacts/
 /dist/
+
+# Generated hosting benchmark evidence belongs in local storage or CI artifacts.
+/docs/benchmarks/

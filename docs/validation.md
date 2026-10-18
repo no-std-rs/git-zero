@@ -6,8 +6,8 @@ The [Rust hosting experiment](../examples/repository-host/README.md) is covered
 by `cargo test -p git-zero-host --locked`. It tests publication, rejected pushes,
 compressed compaction, recovery, storage/ref limits, bounded caches and the
 local/Cloudflare service contract. Lifecycle tests exercise repeated pushes,
-restart, varied fetches and abandoned-write cleanup. Its [local benchmark report](hosting-performance.md) records
-the separate Rust runner and measured results.
+restart, varied fetches and abandoned-write cleanup. See the
+[benchmark commands](hosting-performance.md) for separate performance measurements.
 
 ## Validation
 
@@ -50,11 +50,7 @@ cargo test -p git-zero-host --locked --test cloudflare seed_before_workerd_resta
 cargo test -p git-zero-host --locked --test cloudflare verify_after_workerd_restart -- --ignored
 ```
 
-Missing configuration fails these explicit runs. All three ordinary contracts and
-both process-restart phases passed again against the final receipt-based local
-workerd runtime on 2026-10-17, including R2 immutability, namespace isolation,
-concurrent CAS, orphan cleanup, changed runtime identity, persisted R2/SQLite
-state and reconstruction by a fresh codec.
+Missing configuration fails these explicit runs.
 The idle-eviction contract makes no calls for 13 seconds, then proves that the DO
 instance changed while complete cumulative counters and their aggregate epoch
 survived. Explicitly incomplete accounting is rejected by trace and cost helpers.

@@ -43,8 +43,5 @@ Single-chunk native files share
 immutable blob storage. Native Git's expanded processing is outside a Worker memory
 budget. This example supplies no authentication or remote listener.
 
-See the [hosting design](../../docs/hosting-design.md) for the Cloudflare service
-layout and Linux-size cost assumptions, and the
-[performance report](../../docs/hosting-performance.md) for results and limits.
-The [Cloudflare emulator measurements](../../docs/hosting-cloudflare-benchmarks.md)
-record actual binding operations, object statistics and cost scenarios.
+See the [hosting design and limits](../../docs/hosting-design.md) and
+[benchmark commands and cost model](../../docs/hosting-performance.md).

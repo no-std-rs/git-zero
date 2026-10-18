@@ -15,10 +15,9 @@ Follow the [local setup](../../../docs/hosting-cloudflare-services.md#run) to
 start the emulator and codec, then push or clone through
 `http://127.0.0.1:8798/demo/repo.git`.
 
-- [Service interfaces, recovery and accounting](../../../docs/hosting-cloudflare-services.md)
-- [Interleaved push/fetch benchmarks](../../../docs/hosting-interleaved-benchmarks.md)
+- [Setup and restarts](../../../docs/hosting-cloudflare-services.md)
+- [Benchmark commands and cost model](../../../docs/hosting-performance.md)
 - [Hosting design](../../../docs/hosting-design.md)
-- [Performance and limits](../../../docs/hosting-performance.md)
 
 The codec still runs outside workerd. Local measurements count binding operations;
 production latency and the full compute bill remain unmeasured.

@@ -41,12 +41,11 @@ commands, file-backed storage, crate features, and the Worker demo.
 ## Documentation
 
 - [Documentation index](docs/README.md)
-- [Current capabilities and detailed examples](docs/current-features.md)
 - [Current architecture](docs/design.md)
 - [Embedding and repository APIs](docs/embedding.md)
 - [Object formats and decoding](docs/object-decoding.md)
 - [Read/write hosting design](docs/hosting-design.md)
-- [Hosting benchmarks and cost model](docs/hosting-performance.md)
+- [Hosting benchmark commands and cost model](docs/hosting-performance.md)
 - [Development and validation](docs/validation.md)
 
 For plans and project workflow, see [ROADMAP.md](ROADMAP.md),
