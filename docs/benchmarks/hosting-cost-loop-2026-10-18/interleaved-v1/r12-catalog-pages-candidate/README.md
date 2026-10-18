@@ -8,6 +8,6 @@ The [design](../catalog-pages-design/design.md) supplies the conditional
 
 Rust-owned actual-backend contracts cover schema charges, unchanged R2 work,
 routing, peak-witness unions, failure/recovery, Native operation and process
-reopen. The validation ledger records raw local artifacts. All realistic shapes
+reopen. The [validation ledger](validation.json) records raw local artifacts. All realistic shapes
 must remain within the 24,576-byte SQLite guard. This is preparation evidence,
 not promotion, a cost-screen result, latency acceptance or a plateau claim.
