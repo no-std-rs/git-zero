@@ -136,6 +136,9 @@ running v2 DO uncertain; later ordinary mutations fail until generation-checked
 inventory reconciliation succeeds. A partial retirement can therefore return
 `[true, false, false]` after two actual DELETE attempts; the unattempted key stays
 in durable debt. Failed SQL cursors expose unknown row counts rather than zero.
+Native keeps a successful Cloudflare publication with incomplete retirement
+marked for recovery, so its next ordinary request runs authoritative GC before
+retrying that debt. The completed publication response remains successful.
 
 The existing cross-service crash boundary remains: a process can die after R2
 PUT succeeds but before SQLite records its catalog row. SQL reload recovers

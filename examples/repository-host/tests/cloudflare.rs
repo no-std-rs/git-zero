@@ -1716,6 +1716,113 @@ fn native_metrics(native: &NativeProcess) -> serde_json::Value {
 }
 
 #[test]
+#[ignore = "requires upload-fault.toml: actual registered Native must recover incomplete retirement before its next push"]
+fn faulted_registered_native_partial_retirement_recovers_before_next_push() {
+    let worker = RealWorker::new("upload-delete");
+    let directory = Directory(std::env::temp_dir().join(&worker.namespace));
+    let source = directory.0.join("source.git");
+    fs::create_dir_all(&source).unwrap();
+    git(
+        &source,
+        &["init", "--bare", "--quiet", "--object-format=sha1"],
+        &[],
+    );
+    git(
+        &source,
+        &["config", "user.name", "Retirement contract"],
+        &[],
+    );
+    git(
+        &source,
+        &["config", "user.email", "contract@example.invalid"],
+        &[],
+    );
+    let root = directory.0.join("native");
+    let native = start_registered_native(&worker, &root, 0);
+    let url = format!("{}/{}/repo.git", worker.origin, worker.namespace);
+    let mut parent: Option<String> = None;
+    let mut partial = None;
+    for generation in 1..=5 {
+        let data = format!("partial retirement generation {generation}\n").repeat(512);
+        let blob = String::from_utf8(git(
+            &source,
+            &["hash-object", "-w", "--stdin"],
+            data.as_bytes(),
+        ))
+        .unwrap()
+        .trim()
+        .to_owned();
+        let tree = String::from_utf8(git(
+            &source,
+            &["mktree"],
+            format!("100644 blob {blob}\tdata.txt\n").as_bytes(),
+        ))
+        .unwrap()
+        .trim()
+        .to_owned();
+        let mut args = vec!["commit-tree", &tree];
+        if let Some(parent) = &parent {
+            args.extend(["-p", parent]);
+        }
+        let tip = String::from_utf8(git(&source, &args, b"retirement recovery fixture\n"))
+            .unwrap()
+            .trim()
+            .to_owned();
+        // The fourth push publishes successfully despite one real DELETE
+        // failure. The fifth must recover through its ordinary gateway flow;
+        // no test-side GC, restart or object-stats request intervenes.
+        git(
+            &source,
+            &["push", "--quiet", &url, &format!("{tip}:refs/heads/main")],
+            &[],
+        );
+        let accounted = usage(&worker.services());
+        let manifest = DurableStateStore::new(worker.services()).load().unwrap();
+        assert_eq!(manifest.generation, generation);
+        assert_eq!(manifest.refs["refs/heads/main"], tip);
+        if generation == 4 {
+            assert_eq!(operation(&accounted, "r2_delete").attempts, 2);
+            assert_eq!(operation(&accounted, "r2_delete").successes, 1);
+            assert_eq!(operation(&accounted, "r2_delete").failures, 1);
+            assert_eq!(manifest.garbage.len(), 3);
+            assert_eq!(native_metrics(&native)["compactions"], 1);
+            partial = Some(accounted);
+        } else if generation == 5 {
+            let prior = partial.as_ref().unwrap();
+            let delta = accounted.checked_workload_delta(prior).unwrap();
+            assert_eq!(
+                delta.r2_class_a, 2,
+                "one authoritative recovery LIST plus the next actual PUT"
+            );
+            assert_eq!(operation(&accounted, "r2_delete").failures, 1);
+            assert!(manifest.garbage.is_empty());
+            assert!(accounted.r2_peak_bytes >= prior.r2_peak_bytes);
+            let live: std::collections::BTreeSet<_> = manifest
+                .packs
+                .iter()
+                .flat_map(StoredPack::chunks)
+                .map(|chunk| &chunk.key)
+                .collect();
+            assert_eq!(accounted.r2_live_objects, live.len() as u64);
+            let clone = directory.0.join("client.git");
+            git(
+                &directory.0,
+                &["clone", "--bare", "--quiet", &url, clone.to_str().unwrap()],
+                &[],
+            );
+            git(&clone, &["fsck", "--strict"], &[]);
+            git(&root.join("view/repo.git"), &["fsck", "--strict"], &[]);
+            assert_eq!(
+                git(&clone, &["cat-file", "blob", &blob], &[]),
+                data.as_bytes()
+            );
+        }
+        parent = Some(tip);
+    }
+    worker.services().unregister().unwrap();
+}
+
+#[test]
 #[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
 fn real_registered_gateway_push_fetch_invalidates_cache_and_recovers_after_codec_restart() {
     let worker = RealWorker::new("witness-git");

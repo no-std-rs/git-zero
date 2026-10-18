@@ -262,7 +262,7 @@ fn entire_native_framing_ref_set_and_response_headers_must_match() {
                 changed.insert(3, changed[3].clone());
             }
             2 => changed.swap(3, 4),
-            3 => changed[2][0] = b'0',
+            3 => changed[2][0] = if changed[2][0] == b'0' { b'1' } else { b'0' },
             4 => {
                 changed[2] = changed[2]
                     .iter()

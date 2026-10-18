@@ -1210,7 +1210,10 @@ impl NativeHost {
             .map(|outcome| outcome.key)
             .collect();
         self.metrics.receive_publication_seconds += publication_start.elapsed().as_secs_f64();
-        self.view_dirty = false;
+        // A v2 DO can require physical reconciliation after a failed delete.
+        // Publication still succeeded; recover before the next request instead
+        // of retrying scalar debt against an uncertain catalog indefinitely.
+        self.view_dirty = self.cloudflare.is_some() && !self.manifest.garbage.is_empty();
         self.cache = VecDeque::new();
         self.cache_bytes = 0;
         self.scope = ViewScope::Full {
