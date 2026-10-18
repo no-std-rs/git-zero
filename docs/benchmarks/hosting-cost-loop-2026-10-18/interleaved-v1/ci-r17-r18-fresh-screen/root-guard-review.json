@@ -1,0 +1,233 @@
+{
+  "run": 39113545149,
+  "attempt": 1,
+  "head": "556fa3bcacb46bf7cf1f7a3c04c6b3db77c54667",
+  "root_independently_rebuilt_from_original_reports": {
+    "reports": 8,
+    "ratios": 1408,
+    "resources": 36,
+    "profile_cost_guards": 4,
+    "latency_groups": 24,
+    "latency_limits": 48,
+    "failed_latency_groups": 5,
+    "failed_latency_limits": 5,
+    "every_group_maximum_tail": 48,
+    "manual_known_pricing_matches_all16trials_and2scores": true,
+    "all64_published_tail_rows_selected_metrics_equal_original_and_paired_git": true,
+    "all8_profile_top8_tail_selections_correct": true,
+    "all_failed_latency_groups_every_individual_pair_verified": 160
+  },
+  "known_costs": {
+    "r17": 1.49964143618,
+    "r18": 1.4232554361799998
+  },
+  "comparisons": [
+    {
+      "comparison": "r18-vs-r17",
+      "known_cost_reduction_fraction": 0.05093617591320776,
+      "cost_separated_by_at_least_one_percent": true,
+      "failed_resource_guards": [],
+      "failed_profile_cost_guards": [],
+      "failed_latency_groups": [
+        {
+          "profile": "16mib-warm",
+          "group": "history_no_haves",
+          "median_pass": true,
+          "p95_pass": false,
+          "baseline": {
+            "mean": 1.0255790394943483,
+            "min": 0.8624990675165141,
+            "max": 1.9325231165288232,
+            "median": 0.9798651344131017,
+            "p95": 1.9325231165288232
+          },
+          "candidate": {
+            "mean": 33.29953926767982,
+            "min": 0.8866885317005371,
+            "max": 193.18018001956503,
+            "median": 0.9903474574220166,
+            "p95": 193.18018001956503
+          }
+        },
+        {
+          "profile": "16mib-warm",
+          "group": "history_with_haves",
+          "median_pass": true,
+          "p95_pass": false,
+          "baseline": {
+            "mean": 5.868251038839765,
+            "min": 0.9312500803972266,
+            "max": 60.477764268740316,
+            "median": 2.4547346752711876,
+            "p95": 60.477764268740316
+          },
+          "candidate": {
+            "mean": 13.758593571242619,
+            "min": 1.0339325539160877,
+            "max": 187.43357114134093,
+            "median": 2.4269129742952624,
+            "p95": 187.43357114134093
+          }
+        },
+        {
+          "profile": "64mib-cold",
+          "group": "history_no_haves",
+          "median_pass": true,
+          "p95_pass": false,
+          "baseline": {
+            "mean": 1.454555641535967,
+            "min": 1.2695129212049647,
+            "max": 2.1330799921458445,
+            "median": 1.3947134897572993,
+            "p95": 2.1330799921458445
+          },
+          "candidate": {
+            "mean": 15.600868380175534,
+            "min": 1.1222302526774681,
+            "max": 181.9047934468861,
+            "median": 1.207224890688591,
+            "p95": 181.9047934468861
+          }
+        },
+        {
+          "profile": "64mib-warm",
+          "group": "history_no_haves",
+          "median_pass": true,
+          "p95_pass": false,
+          "baseline": {
+            "mean": 0.9545978218029811,
+            "min": 0.8708353877023018,
+            "max": 1.0606444865992433,
+            "median": 0.9508321833467144,
+            "p95": 1.0606444865992433
+          },
+          "candidate": {
+            "mean": 1.0165849052307598,
+            "min": 0.8640095639403407,
+            "max": 1.32781734690271,
+            "median": 0.9833728052538,
+            "p95": 1.32781734690271
+          }
+        },
+        {
+          "profile": "64mib-warm",
+          "group": "latest_recheck",
+          "median_pass": true,
+          "p95_pass": false,
+          "baseline": {
+            "mean": 0.8477304234538549,
+            "min": 0.7185789129990622,
+            "max": 1.1029689385063366,
+            "median": 0.848454148570307,
+            "p95": 1.1029689385063366
+          },
+          "candidate": {
+            "mean": 0.8526749040308732,
+            "min": 0.5523502597601596,
+            "max": 1.4270092199267284,
+            "median": 0.823002192278335,
+            "p95": 1.4270092199267284
+          }
+        }
+      ],
+      "formal_decision": "inconclusive",
+      "plateau_eligible": false
+    }
+  ],
+  "worst_operation": {
+    "profile": "64mib-cold",
+    "provider": "r18",
+    "sample": 1,
+    "workload": "history_no_haves_16",
+    "group": "history_no_haves",
+    "host_ms": 173087.366597,
+    "git_ms": 951.527243,
+    "ratio": 181.9047934468861
+  },
+  "worst_operation_by_provider": {
+    "r17": {
+      "profile": "64mib-cold",
+      "provider": "r17",
+      "sample": 1,
+      "workload": "history_with_haves_16",
+      "group": "history_with_haves",
+      "host_ms": 61078.433240000006,
+      "git_ms": 407.319429,
+      "ratio": 149.95217240177365
+    },
+    "r18": {
+      "profile": "64mib-cold",
+      "provider": "r18",
+      "sample": 1,
+      "workload": "history_no_haves_16",
+      "group": "history_no_haves",
+      "host_ms": 173087.366597,
+      "git_ms": 951.527243,
+      "ratio": 181.9047934468861
+    }
+  },
+  "limits": [
+    "Screens are Inconclusive and plateau-ineligible; no speed or formalpromotion.",
+    "Only provisional known-cost anchor may be selected afterallsource/guard/tail/scope reviews; fullbillNULL.",
+    "MandatoryfiveFRESHoriginalR1/finalpairsallfourprofiles remains undone."
+  ],
+  "root_counter_scope_review": {
+    "trials": 16,
+    "whole_observer_excluded_equals_fixed_plus_actual_startup": true,
+    "startup_known_subtotal_per_profile_1000_usd": 0.011407,
+    "startup_known_four_profile_objective_usd": 0.045628,
+    "startup_rows_written_each": 6,
+    "startup_worker_do_requests_each": 2,
+    "worker_category_sums_reconcile_including_legitimate_worker_less_than_do": true,
+    "worker_cpu_and_do_duration_remain_null": true
+  },
+  "root_known_saving_decomposition": {
+    "four_profile_mean_actual_operation_counts": {
+      "r17": {
+        "r2_class_a": 132.0,
+        "r2_class_b": 1010.0,
+        "worker_requests": 733.0,
+        "do_requests": 1133.0,
+        "do_rows_read": 1060.0,
+        "do_rows_written": 148.0
+      },
+      "r18": {
+        "r2_class_a": 132.0,
+        "r2_class_b": 852.0,
+        "worker_requests": 726.0,
+        "do_requests": 1017.0,
+        "do_rows_read": 1054.0,
+        "do_rows_written": 148.0
+      }
+    },
+    "saved_actual_operation_counts": {
+      "r2_class_a": 0.0,
+      "r2_class_b": 158.0,
+      "worker_requests": 7.0,
+      "do_requests": 116.0,
+      "do_rows_read": 6.0,
+      "do_rows_written": 0.0
+    },
+    "known_objective_saving_usd_by_dimension": {
+      "r2_class_a": 0.0,
+      "r2_class_b": 0.05688,
+      "worker_requests": 0.0021000000000000003,
+      "do_requests": 0.0174,
+      "do_rows_read": 6e-06,
+      "do_rows_written": 0.0
+    },
+    "total_known_saving_usd": 0.07638600000000006,
+    "physical_peak_storage_cost_delta_usd": 0,
+    "note": "Actual new-run trial means and frozen linear rates; no hypothetical GET count, CPU estimate or full-bill claim."
+  },
+  "root_publication_review": {
+    "mapped_payloads_exact_original_or_gzip": 86,
+    "capsule_file_bytes_match_publication": 89,
+    "original_archives": 5,
+    "capsule_bytes": 4616161,
+    "capsule_sha256": "ebb4bd55b46103544c3dffe5bd5826ae2738f5e988d23ddcca41e2faf309ae80",
+    "original_internal_checksums_independently_reviewed_by_measurer": 157,
+    "evidence_files_independently_verified_by_measurer": 364
+  },
+  "provisional_next_anchor_after_complete_review": "r18 for known-cost comparison only; no formal promotion, latency acceptance, speed or stopping"
+}

@@ -16,3 +16,8 @@ All15 attempt scopes remain explicit: ten accepted, one earlier corrected R19 so
 The17MiB later chunk-admission ceiling is an unallocated heuristic, not retained memory or a14MiB response cap. Full bill remains NULL; the$0.12168 model stays conditional. Ledger review, fresh measurement and final five original/final pairs remain separate.
 
 The original d565 ledger omitted seven actual runtime paths from its inventory. This correction adds their verified identities; the blocked original bundle/review remain preserved. Runtime bytes stay local-only.
+
+[Corrected ledger review](ledger-review.md) and [verification](ledger-verification.json.gz)
+independently verify all 5,135 local files and 2,241 capsule members. The
+[source and ledger identities](root-review-publication.json) distinguish approved
+continuity from the separate fresh cost screen.

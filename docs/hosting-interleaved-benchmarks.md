@@ -672,7 +672,7 @@ provisional known-cost anchor for the next fresh comparison. The R18 protected
 chunk cache is source-approved separately; its ledger is independently approved and the fresh screen is declared below. The bounded multi-chunk design is being implemented in isolation. No
 stopping condition is established.
 
-## Next declared screen: one protected verified chunk
+## Declared R17–R18 screen: one protected verified chunk
 
 After the complete R15–R17 source, receipt-scope, guard and tail review, a fresh
 screen compares the provisional R17 cost anchor with the source-reviewed R18
@@ -713,3 +713,110 @@ from both source pins. No stopping condition is established. The screen remains
 formally inconclusive and plateau-ineligible; five fresh original-R1/final pairs
 on all four profiles are still mandatory, and unknown compute keeps the full
 hosting bill null.
+
+## Completed screen: one protected verified chunk
+
+[Run 39113545149](https://github.com/no-std-rs/git-zero/actions/runs/39113545149),
+at exact head `556fa3bcacb46bf7cf1f7a3c04c6b3db77c54667`, completed all four
+profiles and scoring. All eight reports are fresh two-pair measurements; no
+sample or score from an earlier run is reused.
+
+| Provider | Known fixed objective | Change versus R17 |
+| --- | ---: | ---: |
+| R17 | $1.49964143618 | — |
+| R18 | $1.42325543618 | −5.093618% |
+
+This uses the same four-profile 32-push/56-fetch mix, 1,000 repetitions and one
+observed peak held for 30 days. All 36 resource guards, four profile-cost guards
+and the conservative separated 1% cost envelope pass. The $0.076386 saving
+comes from actual trial means: 158 fewer R2 GETs ($0.05688), 116 fewer DO calls
+($0.0174), seven fewer Worker requests ($0.0021), and six fewer SQL read rows
+($0.000006). Writes, physical storage peaks and their known prices are unchanged.
+The preceding R17 figure differs slightly from its earlier fresh screen because
+observed SQL read rows vary; comparisons here use this attempt alone.
+
+Cold16 GETs/read bytes fall 425 / 1,771,600,643 B to 346 / 1,096,568,553 B;
+cold64 falls 585 / 3,831,138,627 B to 506 / 2,505,738,563 B. Each retains one
+verified payload, 8,544,710 B or 16,777,216 B, with 79 timed hits and no evictions.
+First admission occurs at the first latest fetch. Warm payload GETs, admissions
+and hits remain zero. Every cold latest-after-push fetch still has a naturally
+required GET. The final observer uses one existing cached chunk separately and
+admits none. Preparation Unsupported paths, ordinary fallback and every paid
+socket Upgrade remain counted. The maximum observed joint owning gauge is
+29,857,423 B and source-exported retained peak 29,860,139 B, below the same
+32 MiB/256-entry limit including metadata, certificates and service sockets.
+
+The comparison remains **inconclusive and plateau-ineligible**: five latency
+groups fail five limits. R18's worst operation is 173.087 seconds versus paired
+Git's 0.952 seconds; R17's worst is 61.078 seconds versus 0.407 seconds. No
+cause, uniform speed improvement, formal promotion or stopping follows.
+
+[Fresh evidence and analysis](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/ci-r17-r18-fresh-screen/README.md)
+retains all five original archives (3,546,008 B), eight reports, both scores,
+the comparison, all 1,408 individual ratios, 64 selected tails and all 160
+individual pairs in the five failed latency groups. All 157 original checksums
+and 364 evidence hashes pass; the frozen Rust evaluator reproduces both scores
+and the comparison byte for byte. Root independently rebuilds all 16 priced
+trials, guards, tail selections, failed pairs, scope arithmetic and saving
+decomposition. Startup's known $0.045628 four-profile subtotal remains separate.
+Worker CPU, DO duration, monthly SQLite retention and Native hosting stay
+unknown, so the full bill remains null.
+
+After complete source, scope, guard and tail review, R18 is only the provisional
+known-cost comparison anchor. The R19 multi-chunk source is committed separately
+and under final independent review; it is absent from both measured source pins.
+Its optional admission headroom and the fresh-schema design remain unmeasured
+follow-ups. No stopping condition is established, and five fresh original-R1/final
+pairs on all four profiles are still mandatory.
+
+
+## Next declared screen: bounded secondary chunks
+
+After complete review of fresh R17–R18 sources, scopes, guards and tails, a new
+two-provider screen compares the provisional R18 cost anchor with R19. Each of
+the four profiles uses a fresh standard GitHub VM, separate provider processes
+and state, two measured pairs, and an excluded warmup. No older samples enter
+this comparison.
+
+| Label | Change | Exact source commit | Native source tree |
+| --- | --- | --- | --- |
+| r18 | Provisional known-cost anchor: one verified chunk | `f1ba8f548507dca1e5ab78e5c5d20d8360ecee21` | `c5b06db80540cc21a80e1ad19b4b8d1086425749` |
+| r19 | Bounded first-fit secondary chunks and confirmed pruning | `f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5` | `521d427a056711a58b757c9e52f3d5e047937f92` |
+
+The common six-module Worker stays `7f41db4407963ed04e6cbe19556b1416633caf18`,
+with index SHA256 `0b3183bb89d7920c9f1d0868895ec13414d74e74e096f8181b30654e418c0bbd`.
+Whole-source before/after and cross-profile checks, the Rust runner, original
+scalar reference, Git 2.53 preparation policy, dated prices, workload, storage
+limits and all resource/latency guards stay fixed.
+
+R19 can retain up to 32 verified chunks within the same joint 32 MiB/256-entry
+budget. It considers every already-required verified miss in selection order and
+never evicts a live owner to admit a later scan result. Beyond the first anchor,
+admission also limits total chunk owning bytes to 17 MiB, leaving 15 MiB
+unallocated as a response/control preference. That space is not charged as owned
+memory and does not cap responses at 14 MiB. Actual required memory pressure
+evicts newest secondary chunks, then the anchor, before response LRU entries;
+eligible responses up to 16 MiB remain retainable. Keys, headers, pool capacity
+and growth overlap, actual metadata and the 256 KiB socket reservation count.
+
+Pruning requires a trusted current Full manifest after confirmed publication or
+ordinary authoritative recovery. Proposed/stale/ambiguous manifests, projection
+views and observers do not prune. Logical pruning is distinct from physical
+retirement. Startup, observers, PUT and prewarming never admit chunks. Cold
+latest reads retain naturally required new-chunk GETs. Stable Full-receive tokens,
+exact ordered missing/cached resolution, paid discarded prefetch, unknown receipt
+states and same-Native physical GC before another upload remain enforced.
+
+[Candidate evidence](benchmarks/hosting-cost-loop-2026-10-18/interleaved-v1/r19-multi-chunk-candidate/README.md)
+separates local correctness controls from these new measurements. Same-source
+16/64 MiB ONE/MULTI controls, real response/allocator pressure, 38 fault rows,
+in-flight mask eviction, warm/HTTP and same-directory restart passed independent
+source and ledger review. Startup work in copied-fixture controls remains paid
+and separate from ordinary warm reads. Local counts and conditional replay are
+not the measured net saving of this fixed workload.
+
+The new joint-only admission proposal and fresh-schema bootstrap remain separate
+unmeasured designs and are absent from both source pins. The screen is formally
+inconclusive and plateau-ineligible. No stopping condition is established; five
+fresh original-R1/final pairs across all four profiles remain mandatory. Unknown
+cloud and Native compute keep the full hosting bill null.

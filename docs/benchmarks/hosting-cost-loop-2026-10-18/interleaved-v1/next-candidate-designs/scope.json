@@ -14,13 +14,100 @@
   "historical_scope_notice": "Earlier status descriptions record design/preparation time. They are not current implementation or measurement status; original proposal and review bytes are preserved.",
   "current_status_2026_10_18": {
     "r15_r16_r17": "Fresh run39109536794 completed. R17 is provisional known-cost anchor only; all comparisons Inconclusive, 28 failed latency groups, no speed or stopping claim. See ../ci-r15-r17-fresh-screen/.",
-    "r18": "Source f1ba8f548507dca1e5ab78e5c5d20d8360ecee21 and docs-only ledger64c70cf independently approved. Fresh R17/R18 two-provider screen is declared.",
-    "r19": "Independent design review and read-only implementation prep published here. Prep observed a provisional R18 snapshot, not an approved source base. Current isolated implementation uses exact approved f1ba; its source is not yet frozen/reviewed/measured."
+    "r18": "Fresh run39113545149 completed. Known objective5.0936%lower versusR17; all36resource4profilecostguards pass,5latencygroupsfail. R18ONLYprovisionalknowncostanchor afterwhole-source/scopes/guards/tails review, no formalpromotion/speed/stopping.",
+    "r19": "SOURCE f124 and corrected docs ledger3b265 independently approved; all5135 local files freshly rehashed, d565 blocked inventory omission preserved. Integrated for next fresh R18/R19 two-pair screen. No measured saving yet.",
+    "r20": "Joint-only policy independently design-approved and isolated implementation authorized at exact R19 f124; real same-source MULTI/Joint16/64 controls are running. No source/ledger approval or priced benchmark yet."
   },
   "r19_records": {
     "multi-chunk-independent-design-review.md": "/tmp/git-zero-multi-chunk-independent-design-review.md",
     "multi-chunk-independent-design-review.json": "/tmp/git-zero-multi-chunk-independent-design-review.json",
     "multi-chunk-implementation-prep.md": "/tmp/git-zero-multi-chunk-implementation-prep.md",
     "multi-chunk-implementation-prep.json": "/tmp/git-zero-multi-chunk-implementation-prep.json"
-  }
+  },
+  "fresh_bootstrap_records": [
+    {
+      "source": "/tmp/git-zero-fresh-bootstrap-design-audit.md",
+      "published": "fresh-bootstrap-design.md",
+      "source_bytes": 22547,
+      "source_sha256": "84cc5fe705deda9363678e1d088a00ddf7dcf92e3d2bd80548e667fe1726ecb8",
+      "published_sha256": "84cc5fe705deda9363678e1d088a00ddf7dcf92e3d2bd80548e667fe1726ecb8",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fresh-bootstrap-design-audit-data.json",
+      "published": "fresh-bootstrap-design-data.json.gz",
+      "source_bytes": 186821,
+      "source_sha256": "7a650cda9492592fe7cf9a265bb7a3405c0d667708b72c83e62774862639538d",
+      "published_sha256": "425e7fb48665b50d0b358d4a9d4656a6a5ce2cb0313b075c5087530b3581d91d",
+      "encoding": "gzip of exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fresh-bootstrap-independent-design-review.md",
+      "published": "fresh-bootstrap-independent-design-review.md",
+      "source_bytes": 18328,
+      "source_sha256": "6f2f6b8c13c2dd4992bf5c85fbebed903ec192a37c8267b73cb298e1a924ed7b",
+      "published_sha256": "6f2f6b8c13c2dd4992bf5c85fbebed903ec192a37c8267b73cb298e1a924ed7b",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-fresh-bootstrap-independent-design-review.json",
+      "published": "fresh-bootstrap-independent-design-review.json.gz",
+      "source_bytes": 104488,
+      "source_sha256": "15ffc28cb737eb7f13d0adcc579853915f31c792f73edf4112e8810ebae2e210",
+      "published_sha256": "12a8608ff9b9cbf36c7e12be4ffafcc4e9e4f3019767c8da6dc6db120aedebc0",
+      "encoding": "gzip of exact original bytes"
+    }
+  ],
+  "fresh_bootstrap_scope": "Conditionally independently reviewed design only. Gross$.016/netlowerbound0, substantive Native bootstrap replacesinitialload/strictack+activecapability/legacycommonWorker/actualGC-onlyvolatileeligibility/no probeor seed. Independent review corrects audit+3PRAGMA read sketch: moderncatalogPeak triggers additionalactualGC reload andschema-dependentreads, allstartupworkmustbecaptured/charged. CodeGO requires exactapprovedR19and root; no implementation or measuredsaving.",
+  "joint_chunk_records": [
+    {
+      "source": "/tmp/git-zero-cache-headroom-design-audit.md",
+      "published": "joint-chunk-design.md",
+      "source_bytes": 17311,
+      "source_sha256": "e845c488f97aa76cdd82af9403cb5e9503bf54e1f7d2aafd76b9abb71bfe9b63",
+      "published_sha256": "e845c488f97aa76cdd82af9403cb5e9503bf54e1f7d2aafd76b9abb71bfe9b63",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-cache-headroom-design-audit.json",
+      "published": "joint-chunk-design-data.json.gz",
+      "source_bytes": 1834013,
+      "source_sha256": "255f4d1ce511e71d7031c5c26963701b78d5776942a5c993466bb1aaa631c6df",
+      "published_sha256": "93211eef91aeec58e7c345b1d8c4936400df56ae06b7a6f8faa99ea0d0932323",
+      "encoding": "gzip of exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-cache-headroom-independent-design-review.md",
+      "published": "joint-chunk-independent-design-review.md",
+      "source_bytes": 13696,
+      "source_sha256": "8a871d3addad0a21549c2e0a7eac86611c314d106c4d63404e9f3a85ec9e8a38",
+      "published_sha256": "8a871d3addad0a21549c2e0a7eac86611c314d106c4d63404e9f3a85ec9e8a38",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-cache-headroom-independent-design-review.json",
+      "published": "joint-chunk-independent-design-review.json.gz",
+      "source_bytes": 2372648,
+      "source_sha256": "5e39abc14938e05e9e2ad836f510d5e96ae9adbbbcc37eb3a7748cc1637ec969",
+      "published_sha256": "60c8bc5ebd9d87fa5a42323dc257465105f7151e4fd837f62c12cf2cee0b567d",
+      "encoding": "gzip of exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-joint-chunk-implementation-prep.md",
+      "published": "joint-chunk-implementation-prep.md",
+      "source_bytes": 17637,
+      "source_sha256": "187b0452748bc813e234dc53242fd13b08aa13b7362451d46079a04d5046f71d",
+      "published_sha256": "187b0452748bc813e234dc53242fd13b08aa13b7362451d46079a04d5046f71d",
+      "encoding": "exact original bytes"
+    },
+    {
+      "source": "/tmp/git-zero-joint-chunk-implementation-prep.json",
+      "published": "joint-chunk-implementation-prep.json.gz",
+      "source_bytes": 17384,
+      "source_sha256": "280ddf3f0a8352985c24ce0cf9299a1b0285b6a9e3711cf08ef3a673f1cde62f",
+      "published_sha256": "da139868b14c53e574ab39c1854d5c4235e58a1552092ee0c40215890192a11a",
+      "encoding": "gzip of exact original bytes"
+    }
+  ],
+  "joint_chunk_scope": "R20 generic admission policy removes only unallocated15MiB secondary-admission heuristic; same actual32MiB/256/pool32/socket/response caps and required-pressure/current-Full-prune rules. Independent replay193GET/$.06948 conditional at1MiB nonchunk stress; measured boundary is not actual peak, residency is not a superset, hidden response/authority/pruning pressure makes unconditional net bound0. Source-approved R19 prerequisite met. Fresh bootstrap is deferred unnumbered design; earlier R20 bootstrap label was prospective only, no code or source pin."
 }

@@ -1,0 +1,21 @@
+{
+  "approved_source": "f124d3b71ce1acc44ab20d6850b2b619b4bd8ec5",
+  "approved_ledger": "3b2654166e07a4045b1f059178eafd3b2ca17abd",
+  "scope": "Independent source/correctness and corrected evidence continuity only. Raw large states/runtime payloads local-only. No achieved benchmark cost, acceptance or plateau claim. Historical d565 remains blocked; correction preserved original artifacts.",
+  "records": [
+    {
+      "original": "/tmp/git-zero-multi-chunk-ledger-review-3b2654166e07.md",
+      "published": "ledger-review.md",
+      "source_bytes": 7768,
+      "source_sha256": "fa82dfbe3cbeb1fe82cd7db2b88c38c22ea081f5b3b4a3428d38730dfa892342",
+      "published_sha256": "fa82dfbe3cbeb1fe82cd7db2b88c38c22ea081f5b3b4a3428d38730dfa892342"
+    },
+    {
+      "original": "/tmp/git-zero-multi-chunk-ledger-verification-3b2654166e07.json",
+      "published": "ledger-verification.json.gz",
+      "source_bytes": 1556689,
+      "source_sha256": "85390423bb1ab9c6ba1bd12d01bf931fb8ab20b50f2d2366466df5ad1f42d872",
+      "published_sha256": "ab49d27ffef92eb0c76b53d72f21dde9f86ab8b31e95192d34ee9bcfe037ae94"
+    }
+  ]
+}

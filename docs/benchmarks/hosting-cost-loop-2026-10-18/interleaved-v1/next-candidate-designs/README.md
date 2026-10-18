@@ -11,7 +11,9 @@ a speed win or global minimum.
 
 The [protected-chunk design](protected-chunk-cost-design.md), independent review
 and preparation describe one bounded immutable GET cache. Its exact R18 source
-is now independently approved; ledger review is complete and fresh measurement is declared.
+and ledger are approved. The [fresh screen](../ci-r17-r18-fresh-screen/README.md)
+measures a 5.0936% known-cost reduction; five latency groups fail, so it is only
+the provisional cost comparison anchor.
 It is absent from the completed R15–R17 screen.
 
 The [multi-chunk audit](multi-chunk-next-design.md), [independent review](multi-chunk-independent-design-review.md)
@@ -22,9 +24,31 @@ lower bound. A hard 14 MiB response cap is rejected; eligible responses up to
 16 MiB may reclaim chunks under actual joint pressure. Pruning requires trusted
 current Full authority. The preparation's provisional source snapshot is
 historical; the isolated R19 implementation starts at approved R18 `f1ba8f5`.
-R19 source approval, ownership/fault controls and fresh measurement are pending.
+R19 source, ownership/fault controls and corrected ledger review are approved.
+The next fresh R18/R19 screen remains unmeasured.
 
 All retain existing memory/storage/API limits and unknown compute costs. No
 acceptance or stopping conclusion follows. Verify this bundle with
 `sha256sum --check SHA256SUMS`; [scope.json](scope.json) distinguishes historical
 records from current status.
+
+The [fresh-bootstrap audit](fresh-bootstrap-design.md) and [independent review](fresh-bootstrap-independent-design-review.md)
+propose final schema columns and first eligible real-PUT inline ownership. The
+conditional gross saving is $0.016; net benefit has a zero established lower
+bound. This needs a substantive Native protocol, unchanged startup callbacks and
+writes, actual GC-derived eligibility and paid fallback. The independent review
+corrects the audit's incomplete three-row startup-read sketch: final columns
+trigger another actual catalog reload. All such work must be measured and
+charged. Source approval and real cursor/first-push gates remain pending; there
+is no code GO. Original report bytes and gzip data identities are preserved in
+[scope.json](scope.json). The separate joint-admission design below is the next implementation; bootstrap
+remains deferred without a source pin.
+
+The [joint-admission design](joint-chunk-design.md), [independent replay](joint-chunk-independent-design-review.md)
+and [implementation preparation](joint-chunk-implementation-prep.md) remove only
+the unallocated 15 MiB admission preference. All actual memory limits and pressure
+evictions remain. The model avoids 193 further GETs ($0.06948), with a zero
+unconditional net bound: larger resident sets can also lose later hits. R20 is
+this isolated Joint policy; actual same-source controls precede source review and
+a fresh priced screen. The bootstrap's earlier tentative R20 label never had code
+or a source pin.

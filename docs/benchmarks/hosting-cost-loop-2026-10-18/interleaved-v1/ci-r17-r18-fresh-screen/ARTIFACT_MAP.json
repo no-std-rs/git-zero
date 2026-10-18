@@ -1,0 +1,776 @@
+[
+  {
+    "published_path": "original-archives/hosting-64mib-cold.tar.gz",
+    "source_path": "downloads/hosting-screen-64mib-cold-1/hosting-64mib-cold.tar.gz",
+    "source_bytes": 966269,
+    "source_exact_SHA256": "05d781852ab638076e53249615eaa5f0f817136a6bab44d1a63e624345b6c876",
+    "published_bytes": 966269,
+    "published_SHA256": "05d781852ab638076e53249615eaa5f0f817136a6bab44d1a63e624345b6c876",
+    "encoding": "original bytes"
+  },
+  {
+    "published_path": "original-archives/hosting-16mib-warm.tar.gz",
+    "source_path": "downloads/hosting-screen-16mib-warm-1/hosting-16mib-warm.tar.gz",
+    "source_bytes": 779189,
+    "source_exact_SHA256": "9570e2baca0edaae75cfa1ae1b2a48fdec3d4f0ae29042e54b163a251127730e",
+    "published_bytes": 779189,
+    "published_SHA256": "9570e2baca0edaae75cfa1ae1b2a48fdec3d4f0ae29042e54b163a251127730e",
+    "encoding": "original bytes"
+  },
+  {
+    "published_path": "original-archives/hosting-scores.tar.gz",
+    "source_path": "downloads/hosting-scores-screen-1/hosting-scores.tar.gz",
+    "source_bytes": 93672,
+    "source_exact_SHA256": "79f885a350a6e58cd5a804daef7979aaa54a36a336ebbaa933fdb53b130bc6aa",
+    "published_bytes": 93672,
+    "published_SHA256": "79f885a350a6e58cd5a804daef7979aaa54a36a336ebbaa933fdb53b130bc6aa",
+    "encoding": "original bytes"
+  },
+  {
+    "published_path": "original-archives/hosting-64mib-warm.tar.gz",
+    "source_path": "downloads/hosting-screen-64mib-warm-1/hosting-64mib-warm.tar.gz",
+    "source_bytes": 789812,
+    "source_exact_SHA256": "e93ca4a7fe7999a99b86f575e1c720d23ab6419b135bf11a44047302e528d78d",
+    "published_bytes": 789812,
+    "published_SHA256": "e93ca4a7fe7999a99b86f575e1c720d23ab6419b135bf11a44047302e528d78d",
+    "encoding": "original bytes"
+  },
+  {
+    "published_path": "original-archives/hosting-16mib-cold.tar.gz",
+    "source_path": "downloads/hosting-screen-16mib-cold-1/hosting-16mib-cold.tar.gz",
+    "source_bytes": 917066,
+    "source_exact_SHA256": "604e5cf0f1ee44985333da4a1df378992e316e4fa84ef3600481a4f592f4f0e1",
+    "published_bytes": 917066,
+    "published_SHA256": "604e5cf0f1ee44985333da4a1df378992e316e4fa84ef3600481a4f592f4f0e1",
+    "encoding": "original bytes"
+  },
+  {
+    "published_path": "review/INDEPENDENT_REVIEW.json.gz",
+    "source_path": "INDEPENDENT_REVIEW.json",
+    "source_bytes": 4260,
+    "source_exact_SHA256": "2617f1620429eabc4295e1747defb55dc24051da5b8fe7665af70f0cff953884",
+    "published_bytes": 2017,
+    "published_SHA256": "2e51b466eac5915ae06b543dc30ac7fcc105e8116a84f1fbda2ee44fa4e1fff6",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/RAW_SHA256SUMS.gz",
+    "source_path": "RAW_SHA256SUMS",
+    "source_bytes": 848,
+    "source_exact_SHA256": "03f0319813152799d4f703a6e856124e6d176981e81c035b8b9c1044512e05f7",
+    "published_bytes": 407,
+    "published_SHA256": "1da0078ca59e5fc95c131cb90b691afd42f87ee71a410daf82916ca4fac75e8b",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/activation-review.json.gz",
+    "source_path": "activation-review.json",
+    "source_bytes": 23091,
+    "source_exact_SHA256": "0fc5aac4979c4375f0a501dcd318a064ac9d7fd169808b115f3a9bfbabf40304",
+    "published_bytes": 693,
+    "published_SHA256": "d55fbad6531ef81b508ec11ea833030851627a618935436d0d6ef204fcf3b022",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/actual-selected-packs-and-reads.tsv.gz",
+    "source_path": "actual-selected-packs-and-reads.tsv",
+    "source_bytes": 129097,
+    "source_exact_SHA256": "cafd058e1dc00d565a621c98ce7f266e3b207e690ac0cd398088dbf3c7189586",
+    "published_bytes": 7464,
+    "published_SHA256": "d2067bd01b08177f8b718f6427b97ec1931030589712e58a2fb862b98dd9cf81",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/all-four-outcomes.json.gz",
+    "source_path": "all-four-outcomes.json",
+    "source_bytes": 2923,
+    "source_exact_SHA256": "a4da9cbb31bebae7ccdd5013d8bfcee26f007897d6999e8b334bebd8ff70a7bf",
+    "published_bytes": 795,
+    "published_SHA256": "b990058c01bcdecb5096f43797ac77ca00280dcd4fb669c0762f44d94b9a8558",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/all-individual-ratio-extremes.json.gz",
+    "source_path": "all-individual-ratio-extremes.json",
+    "source_bytes": 61935,
+    "source_exact_SHA256": "dbe72c8d8606e6d1307412a14204058db0d2b84a7a3928d36b1fe360caf7bf86",
+    "published_bytes": 5952,
+    "published_SHA256": "17faaeb878e5fce3ac2409ba7f8527b34a9d214180feaef7e66598385bd60a9b",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/all-native-operation-metrics.json.gz",
+    "source_path": "all-native-operation-metrics.json",
+    "source_bytes": 5376267,
+    "source_exact_SHA256": "83e3a16c1cce5b5cee6c39f4bfaf076cbf014c54ee7edf2a82accbc865c9dfb0",
+    "published_bytes": 136929,
+    "published_SHA256": "ee61163b834035a4ffb10a11630858cd69e4afec4dcd75c0762b1d5a7da7e7bb",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/analysis.json.gz",
+    "source_path": "analysis.json",
+    "source_bytes": 2114,
+    "source_exact_SHA256": "7d911dad67061ef0413be898faf49bc7c4f9ae6ea154d23a20e9b2ed09ac10a4",
+    "published_bytes": 883,
+    "published_SHA256": "9e1f68294fafd05ae46589f0132913731bdcd62512f26121feddabd444fa6f45",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/archive-validation.json.gz",
+    "source_path": "archive-validation.json",
+    "source_bytes": 1696,
+    "source_exact_SHA256": "fa166d8ae55810f1d5f40b11c26554e0df6f2fea9509c8137580e351b5d91adf",
+    "published_bytes": 554,
+    "published_SHA256": "33bcf8986eb31b0438922e03370ccd896b01cd3008d464405536cb808ec2616f",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/artifact-index.json.gz",
+    "source_path": "artifact-index.json",
+    "source_bytes": 4459,
+    "source_exact_SHA256": "f29bade4a41158a291d0eb2dc5c2eee64151341a1358a8d0af34e1004efb4b82",
+    "published_bytes": 884,
+    "published_SHA256": "2e2eaeda1052ff9d170073275c20713355901597497f1f6042aa25c6374cce2c",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/binary-and-order-provenance-review.json.gz",
+    "source_path": "binary-and-order-provenance-review.json",
+    "source_bytes": 16242,
+    "source_exact_SHA256": "23f674b331e62b07b54d7505f77b572dd7cc45222b6e9eb7a96d89c87e6004f7",
+    "published_bytes": 1997,
+    "published_SHA256": "b7a3cc11df961c5ba676a9bfb400522edf398f78648289532a85ababea123297",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/comparison-summary.tsv.gz",
+    "source_path": "comparison-summary.tsv",
+    "source_bytes": 301,
+    "source_exact_SHA256": "67907dc82c51efce0f1cf67e94484153164929f02a07cc53dc209f1fb145d82e",
+    "published_bytes": 220,
+    "published_SHA256": "5e5e878f7dcce5522b1694bc7c8a368d7c2d64b8a563e4179435cb7f938c7099",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/counter-scopes.json.gz",
+    "source_path": "counter-scopes.json",
+    "source_bytes": 31165,
+    "source_exact_SHA256": "4630725092b3c4de2565ca0f93303f7a9df14f0ad25198a7257a70ae3ffcc861",
+    "published_bytes": 924,
+    "published_SHA256": "3cb375de19e9241488ed10d4fcdb53f48d7c311343d9d8725f2aff3d14f36a08",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/discovery-shortcut-metrics.json.gz",
+    "source_path": "discovery-shortcut-metrics.json",
+    "source_bytes": 36979,
+    "source_exact_SHA256": "5cdb78218f18c72eb2787a066cbc924f00fec51a8a5670d878a57b91781b6cf6",
+    "published_bytes": 1109,
+    "published_SHA256": "fd444dfb9da70ef271f7f2881a1ab6f8843a14933aa187e524e0f0e8cedc78a2",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/distribution-review.json.gz",
+    "source_path": "distribution-review.json",
+    "source_bytes": 323,
+    "source_exact_SHA256": "df29bd9a9eea57f6c4efd505f34ea1ae517ffca5031233c482f50d1d67560200",
+    "published_bytes": 179,
+    "published_SHA256": "27e02ad2f1c9a97fb16134500c37711dbf815661666ef57093809e2d03ef2416",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/expected-source-identities.json.gz",
+    "source_path": "expected-source-identities.json",
+    "source_bytes": 5953,
+    "source_exact_SHA256": "94385100dddc09f49729d5b77ec7b1891e141921510c0392f1384d092190f98b",
+    "published_bytes": 1694,
+    "published_SHA256": "9bb8bb49cb42221c2c4743aaf9434452702a66bb928041581dd5bca2b59df2ec",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/failure-log-export-review.json.gz",
+    "source_path": "failure-log-export-review.json",
+    "source_bytes": 667,
+    "source_exact_SHA256": "22e3e5d4e313792e6df219a4278c272361b8735ee982f0e147bcdf7bdf4618ba",
+    "published_bytes": 419,
+    "published_SHA256": "9d341ff85a9b8a38189a3f7c1916fd06e9093683ab890c676afd2087e416fc12",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/failure-only-runner-source-audit.json.gz",
+    "source_path": "failure-only-runner-source-audit.json",
+    "source_bytes": 397,
+    "source_exact_SHA256": "73b0f775645448564abd6e83641dd08cd49856532293637a2c564b04b622e138",
+    "published_bytes": 280,
+    "published_SHA256": "7dc8d4133a0efb262038eced85333e56a41817c89875e85cec36346b66bbf804",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/fresh-state-validation.json.gz",
+    "source_path": "fresh-state-validation.json",
+    "source_bytes": 1907,
+    "source_exact_SHA256": "d6bb987cb38b397168630641a929aae51fb80abff3d128469de49d04bf17f033",
+    "published_bytes": 377,
+    "published_SHA256": "fb2ae147d607fd41859fb4479dc50c1d4f9af9e416354b1ae2862a2c8f6c5de5",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/guard-report.json.gz",
+    "source_path": "guard-report.json",
+    "source_bytes": 103833,
+    "source_exact_SHA256": "370144ef5cbfe25339dca8ae4cd66d8ae59d0830544521a1940047add3e9791f",
+    "published_bytes": 12767,
+    "published_SHA256": "81b087283fd094a28166b21b47dca4b548d4f0242ad99d7c52b670280601bf5e",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/hardware-by-profile.json.gz",
+    "source_path": "hardware-by-profile.json",
+    "source_bytes": 4495,
+    "source_exact_SHA256": "b8607b3d610f057d185ae95ceaf7dcef7a34ba1ac3ebc9f48c9245f0044bef51",
+    "published_bytes": 736,
+    "published_SHA256": "2db6c7a06d518aac2ec20b8a826beca2e81ae5c56cc54c282c18fe1425f8ecce",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/history-selection-metrics.json.gz",
+    "source_path": "history-selection-metrics.json",
+    "source_bytes": 357493,
+    "source_exact_SHA256": "019218e7649555371e634717e10ed308e2e5ef906a41acd4ddabdb5d4ec3344e",
+    "published_bytes": 9023,
+    "published_SHA256": "28e7903e69da85eca8024bb69290cc81326351fa629e96487e603e74426bec1e",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/independent-validation.json.gz",
+    "source_path": "independent-validation.json",
+    "source_bytes": 8041,
+    "source_exact_SHA256": "9d389d26f5bfb250e4563e3639e601543e65ab5093dcf45fa14d6aa162ef9130",
+    "published_bytes": 2128,
+    "published_SHA256": "bc0bde9d2a8ef128681b0f0edaef89b9a9cb1ce1e424c7ff6001a8c42f11030a",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/jobs.json.gz",
+    "source_path": "jobs.json",
+    "source_bytes": 22317,
+    "source_exact_SHA256": "0b63cc90486c5a3ea642b07c7772ec5e1d8d203b30a7c549abbd4c0b9b528bfb",
+    "published_bytes": 1644,
+    "published_SHA256": "cebb8809ac7e0a96dcaaa7a29d0da1da4c0829fba486d84143cb78730b40e853",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/joint-cache-operation-gauges.json.gz",
+    "source_path": "joint-cache-operation-gauges.json",
+    "source_bytes": 1003304,
+    "source_exact_SHA256": "6873f1203e612f4155aab827c06e0702049d7efacd85913c10532d5aec2cdb88",
+    "published_bytes": 26983,
+    "published_SHA256": "b2dcd7078ce9a60bea1edabbb8ee28ec8d1e76d1607fc19cee7b02ea01fa9b9e",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/joint-cache-review.json.gz",
+    "source_path": "joint-cache-review.json",
+    "source_bytes": 23961,
+    "source_exact_SHA256": "3bee6bf5b63739f743c2138a36c036d45d792a7843571d76a68793578ad50d6f",
+    "published_bytes": 1193,
+    "published_SHA256": "5f5906be7c46f18b0d5af2c2992bf541b77445703ff7640711afca77dbf17c60",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/latency-failure-pair-details.json.gz",
+    "source_path": "latency-failure-pair-details.json",
+    "source_bytes": 1521219,
+    "source_exact_SHA256": "0893404f51ea9092307419d459b32900b2b0c57ba128bbcebb865858e3dadffe",
+    "published_bytes": 36376,
+    "published_SHA256": "02df842a9daa92eb9db8aaa713719d23945704de76e7f3d432cceea52e654bbd",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/latency-ratios.tsv.gz",
+    "source_path": "latency-ratios.tsv",
+    "source_bytes": 6656,
+    "source_exact_SHA256": "6c877c6ef3efd225451a00cb5b797c8ef51150fda222f7641040be3a1cecbe2c",
+    "published_bytes": 3097,
+    "published_SHA256": "8c43d56eb9d79d1e124186abda12d63be07bcc8e8655643b49a7f4330df711f8",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/monitor-state.json.gz",
+    "source_path": "monitor-state.json",
+    "source_bytes": 1171,
+    "source_exact_SHA256": "6f9093b5c3a0c3a9d9706d4d6376ba94a887ca515c4954f28e90425ecd4cac29",
+    "published_bytes": 373,
+    "published_SHA256": "8309b9cfcbcc60fcdfd48bc1ed8c9f23342dc68e59be6192579f95784345ed83",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/observable-lifecycle-review.json.gz",
+    "source_path": "observable-lifecycle-review.json",
+    "source_bytes": 1755615,
+    "source_exact_SHA256": "5c449be8a5e5e4115ea524bcf64b56a75f10ff08b18ad3b157db0d73505ca84e",
+    "published_bytes": 74729,
+    "published_SHA256": "ed92b1783c83eae9f40d4d8778398a207e66f3ff670c1b3fc2a8cab5061e380d",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/observer-physical-restore-metrics.json.gz",
+    "source_path": "observer-physical-restore-metrics.json",
+    "source_bytes": 74139,
+    "source_exact_SHA256": "a463ab99d901d1bb456e24a2859bd26c587bf119a9c1fa25607cb5dd4a133d6c",
+    "published_bytes": 1599,
+    "published_SHA256": "582749252e2b0d11cbadf7414ded51e8ebb53033ef4565713524eefc5826899a",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/operation-metrics.json.gz",
+    "source_path": "operation-metrics.json",
+    "source_bytes": 36835,
+    "source_exact_SHA256": "1ebbe9435b392d61bd282aeab7aaf8a740deb83519cc41a4397d4fabf3bf32ca",
+    "published_bytes": 2549,
+    "published_SHA256": "3343c2c2b1372263c04decd6179b2e6b0b1b504bff603fed89a33b4e6cd13942",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/operation-resource-receipts.tsv.gz",
+    "source_path": "operation-resource-receipts.tsv",
+    "source_bytes": 156973,
+    "source_exact_SHA256": "18cadce535ebc5e3e4986c0e21c8b61c795c497477f40dae05e6bbe9fc51f1dc",
+    "published_bytes": 25015,
+    "published_SHA256": "7016e9785157ddef1b5de56e6dfe2a19d8958d6c5e4963461e5e7c71504856de",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/operation-row-ratios.tsv.gz",
+    "source_path": "operation-row-ratios.tsv",
+    "source_bytes": 125395,
+    "source_exact_SHA256": "dbb7cb7d5b58189d165eb462b96ebacf01a12b417791f02bf2dc93bed87dc4c1",
+    "published_bytes": 37116,
+    "published_SHA256": "b7307272dfb4aab4fe41d021b7f287192063fa6f32e32792ebd51f8772256ee5",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/original-artifact-final-reverification.json.gz",
+    "source_path": "original-artifact-final-reverification.json",
+    "source_bytes": 190,
+    "source_exact_SHA256": "7b32a3549c01c97a90a4ef47c9f8b0c18ae0c46404eb8b7d2a1ad5bd6e9c32a8",
+    "published_bytes": 142,
+    "published_SHA256": "cd84eabf6cac6cb4774debfc975a8b1d487de77a8cf3456b4b7d0f9f8aed1409",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/peak-migration-metrics.json.gz",
+    "source_path": "peak-migration-metrics.json",
+    "source_bytes": 474903,
+    "source_exact_SHA256": "5d8319d4644bbf4d834d5f02bdf26612ddb87d1f5a9f4cfdf77d3a6081884e86",
+    "published_bytes": 7779,
+    "published_SHA256": "17474b58e0bed760edbcd19b5e8ba8a387e176d02e7dbe8fa8b476ffa199ac7a",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/per-rpc-accounting-and-selected-packs.json.gz",
+    "source_path": "per-rpc-accounting-and-selected-packs.json",
+    "source_bytes": 5323715,
+    "source_exact_SHA256": "945959aa23d98765a4ace76858a768557b93ce4126ef9e750c095a5cfb3f9ef8",
+    "published_bytes": 123182,
+    "published_SHA256": "2c86652615e4093188b8e8a7bdbd8000ad575a6fd2aacc5351ca09f6308f4bac",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/prospective-source-identities.json.gz",
+    "source_path": "prospective-source-identities.json",
+    "source_bytes": 1717,
+    "source_exact_SHA256": "168c8bad9aa82367ea459c79f184cced5ff032273652942faec3c286a4189399",
+    "published_bytes": 907,
+    "published_SHA256": "9a794b59973854ad98eb25e781f623db7b6dd85a66f02ba900b235f0e45739ca",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/protected-chunk-activation-and-scope-review.json.gz",
+    "source_path": "protected-chunk-activation-and-scope-review.json",
+    "source_bytes": 67228,
+    "source_exact_SHA256": "b8b52ced8866a5100d9dd165386db0ae20d5638604e9b8d684048591d1be7180",
+    "published_bytes": 2761,
+    "published_SHA256": "a1983e714497e6d234e2477e42b09fb30baf8912639ff57b52e79a2642c93622",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/protected-chunk-every-operation-receipts.json.gz",
+    "source_path": "protected-chunk-every-operation-receipts.json",
+    "source_bytes": 7558432,
+    "source_exact_SHA256": "3da21c2ecfed1ad1b9264ce0ceab731b05f728dba86147d37afa361abb692106",
+    "published_bytes": 197913,
+    "published_SHA256": "4b9064acae9f7fbc73e5c17086cca81bcbd67bdcee3f8f56bf35619b39353483",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/provider-profile-resources.json.gz",
+    "source_path": "provider-profile-resources.json",
+    "source_bytes": 18980,
+    "source_exact_SHA256": "f802c371ac56316b6a2543cfdfaa412a1d9eb7ff4910282191bde0fa281d9e5a",
+    "published_bytes": 1658,
+    "published_SHA256": "3deaf728886e42760a810f45c581afadc554af1e15a61c3a3b2e35687a0e7944",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/provider-profile-resources.tsv.gz",
+    "source_path": "provider-profile-resources.tsv",
+    "source_bytes": 4914,
+    "source_exact_SHA256": "c1ebc48af9c51343c7a9ff1025b5db8d28b7fd0f7e55add69c21727762e61359",
+    "published_bytes": 1272,
+    "published_SHA256": "80b382755d22f1042ccd9d3a8e1e76c282be8674f0793b9cd622a983e5cbd1f1",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/r17-r18-every-operation-physical-transport-differences.json.gz",
+    "source_path": "r17-r18-every-operation-physical-transport-differences.json",
+    "source_bytes": 17369481,
+    "source_exact_SHA256": "8639124c0d316cad3f5d48e46a17d838634b1800a860f013f5a71a49b577d965",
+    "published_bytes": 418342,
+    "published_SHA256": "ddb1b36d92f97232d2997a736e7d4b2598d74cc9db6c2b08e39ec58175c1e517",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/r17-r18-fixed-workload-transport-differences.json.gz",
+    "source_path": "r17-r18-fixed-workload-transport-differences.json",
+    "source_bytes": 17962,
+    "source_exact_SHA256": "b25ec034b3ca9c14358510cf42ef4482a765132d121f207fc7eadd5cc33f1fa6",
+    "published_bytes": 701,
+    "published_SHA256": "77b8fe78a4253fefb30edd9c5dd4a92289c0ab2050513bf4dfe83f7ef715a0ab",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/r17-r18-socket-upgrade-rotation-frames-cache-and-scopes.json.gz",
+    "source_path": "r17-r18-socket-upgrade-rotation-frames-cache-and-scopes.json",
+    "source_bytes": 120189,
+    "source_exact_SHA256": "aa5959ada30de414552d9417fbe62f60ec9817dd4ede598cedaec5d09accd135",
+    "published_bytes": 3838,
+    "published_SHA256": "e0a38c3890ace53ce515d3e66efb19dc58f449f3962bcdcb8684d9bdae0ec798",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/r17-r18-trial-activation-physical-SQL-receipts.json.gz",
+    "source_path": "r17-r18-trial-activation-physical-SQL-receipts.json",
+    "source_bytes": 111492,
+    "source_exact_SHA256": "b44232c81eeffd4cf5ff8888000ee5e42ea880688bfe3f7d9b6705f856994e01",
+    "published_bytes": 3039,
+    "published_SHA256": "230b7b58eb92843fbbbb9b8cf51fc63b172ee6dddad3fd2ae79f27355f5f6389",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/rebuilt-latency-distributions.json.gz",
+    "source_path": "rebuilt-latency-distributions.json",
+    "source_bytes": 34126,
+    "source_exact_SHA256": "5f211d0248cc39ee174180142bc8eb344d45ae0d41933aae1fd2d1b190089900",
+    "published_bytes": 6804,
+    "published_SHA256": "39472d9f80a0c3f17c9ac95e5ab427e378c53399f7686b4292f44b83cef162de",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/rebuilt-resource-distributions.json.gz",
+    "source_path": "rebuilt-resource-distributions.json",
+    "source_bytes": 22383,
+    "source_exact_SHA256": "5a58056567c3b52417149ea465e1c943191f98db8b973c06f4833cefeb63b71f",
+    "published_bytes": 1550,
+    "published_SHA256": "0a580e7cb41d29716d8924f52f15c6100c4db158a4e0c33299a78a7ef4652c9e",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/report-fingerprints.json.gz",
+    "source_path": "report-fingerprints.json",
+    "source_bytes": 3451,
+    "source_exact_SHA256": "d284571d28407d37035da037f30a775e7d6cb8bb489bf0ff2c3dbe8ff150519c",
+    "published_bytes": 918,
+    "published_SHA256": "14bb49cc5ac6e6a95c9f7cd124bf9612ff1fa54693fcc5a628664f2b6a4f5c95",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/resource-guards.tsv.gz",
+    "source_path": "resource-guards.tsv",
+    "source_bytes": 2964,
+    "source_exact_SHA256": "ac097fd3ac9307f020deb508bc75c38b41b6580e111241d2a6128ac1ce742481",
+    "published_bytes": 671,
+    "published_SHA256": "14abb07919649400e8b5cf340ed0849202358307caea64aae9e73eeceb67c12a",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/retained-tail-summary.json.gz",
+    "source_path": "retained-tail-summary.json",
+    "source_bytes": 271055,
+    "source_exact_SHA256": "fb65d37fd6dc0f27eacf6529ea33f789fb5b52df66e363bd3d445924b21923a8",
+    "published_bytes": 13398,
+    "published_SHA256": "65f9fe7dd93d300f89cf54313aa01748265b9bf5bd4dd2f03b04f32bc344aebf",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/run.json.gz",
+    "source_path": "run.json",
+    "source_bytes": 13642,
+    "source_exact_SHA256": "df4d6fc7a91f5ba9ba95f8a60bca29e1b822829825c66fbe1d8e878bab4b2e16",
+    "published_bytes": 1804,
+    "published_SHA256": "fc8d29ba76c11cc3a5c4164f8ba3393f6465c28ed0ae274ee18eb256dc7e9f45",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/strict-receipt-review.json.gz",
+    "source_path": "strict-receipt-review.json",
+    "source_bytes": 17906,
+    "source_exact_SHA256": "f3ab2310e1df3f7b13605316c63f803d2a283e2f49b3336362c4a2cc80f49d11",
+    "published_bytes": 1160,
+    "published_SHA256": "b064a8800eac504e236e1a9aecf3b540f347c68c49439f822287f5a08fa4a3c3",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/summary-console.json.gz",
+    "source_path": "summary-console.json",
+    "source_bytes": 2913,
+    "source_exact_SHA256": "f625b073a3322bb6eaad413cb818b2894ecd5a94fb2ce5f34c4ef77788bd8765",
+    "published_bytes": 748,
+    "published_SHA256": "68e33c100caaca72140bcd9d9388a4304001c63cf9c4665c80c31cdbc5f1f64d",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/summary.json.gz",
+    "source_path": "summary.json",
+    "source_bytes": 4106,
+    "source_exact_SHA256": "04c1d30128e5567116c4e8f059e300c8bfa4e4a9bd0650ddccd347dc966c6fb0",
+    "published_bytes": 1250,
+    "published_SHA256": "bbdb43dd992b89bbc2f153560c8a6034ddd087507b6e100d8945a4cd03fd2477",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/transport-activation-checks.json.gz",
+    "source_path": "transport-activation-checks.json",
+    "source_bytes": 264,
+    "source_exact_SHA256": "592ef649ba667b84f9d84584a2069eda55b6a70f5f24604c5aa9790c18cc5103",
+    "published_bytes": 214,
+    "published_SHA256": "65e28dc7c5839904959187c505123dad848e77c4e661a3e116eaf28c89af5240",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/warmup-first-DDL-and-SQLite-review.json.gz",
+    "source_path": "warmup-first-DDL-and-SQLite-review.json",
+    "source_bytes": 28535,
+    "source_exact_SHA256": "c3e03ec0ede6b056341ccc99fcc5f956fed9ac6c965f2704ed035bc06aa931b6",
+    "published_bytes": 659,
+    "published_SHA256": "9c6e02f53f5df667773dc39cc6eaa7f9f2115faa8d38d330b65d6298d14fb3f1",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "review/whole-source-and-cache-policy-review.json.gz",
+    "source_path": "whole-source-and-cache-policy-review.json",
+    "source_bytes": 11628,
+    "source_exact_SHA256": "27ac982b945c0e32356ce0d87c2eb9ff0e7b2de088db3765ad0282caac727b9a",
+    "published_bytes": 3192,
+    "published_SHA256": "61c3053268e2c36f4054521192aea72aee0820d0a3d13e4d7a0abc876f047091",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "offline/evaluator-provenance.json.gz",
+    "source_path": "offline/evaluator-provenance.json",
+    "source_bytes": 773,
+    "source_exact_SHA256": "490c7ea52582f4a952d361deda9b5e540cda31f5fbe72c82e3083f0e2c3497c4",
+    "published_bytes": 453,
+    "published_SHA256": "09dcbcf8efb252e82974871526221353c76795072c220b5c990d8d5c9e5da6a2",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "offline/r17-score.json.gz",
+    "source_path": "offline/r17-score.json",
+    "source_bytes": 239361,
+    "source_exact_SHA256": "0c33c8c301a585b009615a77862609cd53dff7b4ed6a17207d5c66b5663aee5c",
+    "published_bytes": 30292,
+    "published_SHA256": "7f7a6e7fc175d8219238d0a06b06148b7c19a4173e4cb1f3579633995ba47c59",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "offline/r18-score.json.gz",
+    "source_path": "offline/r18-score.json",
+    "source_bytes": 239373,
+    "source_exact_SHA256": "d750d4affe4b2bd175f18b7c0f44598081558f1766e5bfb1535ca6e8461ba560",
+    "published_bytes": 30297,
+    "published_SHA256": "c4fe8c5b15af562228bd597452ab8d29fe6432fcddbc68a23eaa3d534011fbdf",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "offline/r18-vs-r17.json.gz",
+    "source_path": "offline/r18-vs-r17.json",
+    "source_bytes": 252999,
+    "source_exact_SHA256": "dce901cbc8f74a71f8248103fe7c052b90c516a327442fa525739163c50744ce",
+    "published_bytes": 30818,
+    "published_SHA256": "4d769cd4d36b8d739457da465d82befedb42dc058123f5250e351d366766cc0c",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/LOCATION.json.gz",
+    "source_path": "verifier-source/LOCATION.json",
+    "source_bytes": 424,
+    "source_exact_SHA256": "2f94f36d1e8f7d222742cd299d9a00253c1cae51b23991e3e87fb1405bacdd3b",
+    "published_bytes": 305,
+    "published_SHA256": "8d278dacaeb963cdb858c2b62909c73e727b6309b56e2b30c77c68601929b4f8",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/binary-and-order-audit.py.gz",
+    "source_path": "verifier-source/binary-and-order-audit.py",
+    "source_bytes": 3690,
+    "source_exact_SHA256": "548116d309dc8bcbf8d3015c5675ad80fd8c453d63cd08578a1977cc871e7ee0",
+    "published_bytes": 1620,
+    "published_SHA256": "14c3048b140861ea0dfcd6cab99e0045bd5185397b70a600b38af6e934bacf0f",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/cache-joint-review.py.gz",
+    "source_path": "verifier-source/cache-joint-review.py",
+    "source_bytes": 5081,
+    "source_exact_SHA256": "8806678d559b542003e9eee1695e1dafe610422d3d8b96706db0ab9cd7f5ed3d",
+    "published_bytes": 1652,
+    "published_SHA256": "51b2f068fdf3bfacb67103b2d6b3e6fa8a93241a5bfbe905d1408c4c5d9bf7dc",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/detailed-metrics.py.gz",
+    "source_path": "verifier-source/detailed-metrics.py",
+    "source_bytes": 9418,
+    "source_exact_SHA256": "ad276c4d2ebc6a664004c7e270c05b3fef65766b05c7105d13424bc311921a0c",
+    "published_bytes": 2959,
+    "published_SHA256": "10549a1f384b5ec9bfb1751396c47b89d950f843b3bd14d29ab86a53f3bfd4b7",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/distribution-review.py.gz",
+    "source_path": "verifier-source/distribution-review.py",
+    "source_bytes": 7098,
+    "source_exact_SHA256": "5feae23c56806c93e0e3a14082eb64b6f4b9f4c35c430efd8a1dc2d0ea16ac90",
+    "published_bytes": 2343,
+    "published_SHA256": "6b1c27653b51cb4e611db86c1f75e429fcc4b1c961984a0c67c684336b58303a",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/failed-latency-pair-review.py.gz",
+    "source_path": "verifier-source/failed-latency-pair-review.py",
+    "source_bytes": 1810,
+    "source_exact_SHA256": "c7e69bbbf3b075f4460f2b7e8d0cc8ae7cb8c1db7301b7e4547d188913600930",
+    "published_bytes": 793,
+    "published_SHA256": "93a9b47209dd9d65a8e77ad4483af8c6d6eb1e8d65a08e1eb58e09d3ad456049",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/failure-log-review.py.gz",
+    "source_path": "verifier-source/failure-log-review.py",
+    "source_bytes": 2365,
+    "source_exact_SHA256": "7249af2a089c837ec3ec773df4778c35a1cde47fb9c01f850df5c8b40e131c25",
+    "published_bytes": 1100,
+    "published_SHA256": "c8d9129965ed6f255d8ccc91776bbcb546965f842e5355f30912bfef4731899d",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/finalize-evidence.py.gz",
+    "source_path": "verifier-source/finalize-evidence.py",
+    "source_bytes": 4164,
+    "source_exact_SHA256": "a3a3eff6a9c1f51f43baab56b16d1fb7063ebf1b356db92555d9d2c5f961d15c",
+    "published_bytes": 1978,
+    "published_SHA256": "0dd213ecc8747da291b962ef6ef3a0f9e40b3bad77818761e097d1a3952abf74",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/lifecycle-review.py.gz",
+    "source_path": "verifier-source/lifecycle-review.py",
+    "source_bytes": 6151,
+    "source_exact_SHA256": "1fe2e77590212494915d5f5e1f9eecf1f25d959b9a98e93f772b2e184711c75f",
+    "published_bytes": 2019,
+    "published_SHA256": "ae62e52b2bd6da304515c99fde33b16a1cfec6c33ed46d6cb546ded1e7b0a2c3",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/monitor-once.py.gz",
+    "source_path": "verifier-source/monitor-once.py",
+    "source_bytes": 4436,
+    "source_exact_SHA256": "e3fa25fee37698fee9c8fb776b8dd85c2dfc19f9d72b1888bf05973b3abd7160",
+    "published_bytes": 1735,
+    "published_SHA256": "4846ea63849fc6b0452deee642300e37440a8b867331b156fef7257cb7d3628b",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/protected-chunk-review.py.gz",
+    "source_path": "verifier-source/protected-chunk-review.py",
+    "source_bytes": 7088,
+    "source_exact_SHA256": "be504d2a90738dacf108114cbb50c6a510a5c6664eb043a5536f78b9c7755155",
+    "published_bytes": 2696,
+    "published_SHA256": "59229d8937320c500b8c0b32abc285ce3d8b1d1c827bf8ebfd335a96f6c66b8a",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/receipt-review.py.gz",
+    "source_path": "verifier-source/receipt-review.py",
+    "source_bytes": 13064,
+    "source_exact_SHA256": "965a224d29a8c19f94babb7fb96457563bcf9fab289f5ac5299f3db14af6ec8a",
+    "published_bytes": 3956,
+    "published_SHA256": "6b1b09ab778242ac2bbea47ffb9af517b656f2b7cb5e1f70de54e828befebf5e",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/score-offline.py.gz",
+    "source_path": "verifier-source/score-offline.py",
+    "source_bytes": 6039,
+    "source_exact_SHA256": "7a2a27308be94b3ee4b738c0babf0e93de7335a26a1a1f7c4542f3f91dc98cb4",
+    "published_bytes": 2068,
+    "published_SHA256": "f583b2b9a7ea9cf4afa4eb49ca914df1e916e1ba235e0d4093f513362270ee43",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/seal-screen.py.gz",
+    "source_path": "verifier-source/seal-screen.py",
+    "source_bytes": 15879,
+    "source_exact_SHA256": "3e0dd556bb1f88866cc3eed385f039f8dc583590aa787415706a761004cdf13f",
+    "published_bytes": 6112,
+    "published_SHA256": "a518eeec663bcf6f2fe316ae901832c6e6f14348a8e0737194923a243fe3414e",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/source-policy-review.py.gz",
+    "source_path": "verifier-source/source-policy-review.py",
+    "source_bytes": 4968,
+    "source_exact_SHA256": "6d003ddd4157b01adf020e8ba24b0254a4a4b1ddd9ddc7f77b77b5322c09e990",
+    "published_bytes": 2191,
+    "published_SHA256": "3ed159c7f701b8dcdfe3098fb7797294825fba6b6593163d7f9d5a58539e9ebe",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/summarize-chain.py.gz",
+    "source_path": "verifier-source/summarize-chain.py",
+    "source_bytes": 8090,
+    "source_exact_SHA256": "bcebd2187f8067dfe43d44eccdb634debe7551ed8f7f412066aad1e5dabaa0d0",
+    "published_bytes": 2261,
+    "published_SHA256": "c7d0bb0658a23868da13f166ba94dff716b5b81f97e6d1963a4e80960cc7d440",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/summarize-resources.py.gz",
+    "source_path": "verifier-source/summarize-resources.py",
+    "source_bytes": 5584,
+    "source_exact_SHA256": "90d0abbfa4d4ef6fe21aa313db3d4873ef29facfe00d163a5e1296b690cae54d",
+    "published_bytes": 1982,
+    "published_SHA256": "2e7cf21ec121fb40187a10efb57d8bae8e41a0c2ec17bc5735a4343f78742bee",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/transport-activation-review.py.gz",
+    "source_path": "verifier-source/transport-activation-review.py",
+    "source_bytes": 11761,
+    "source_exact_SHA256": "5d2e9ed8b2c4af000359561b45aa657da02c345ea0e73f1a9383f9c55d20ae49",
+    "published_bytes": 3554,
+    "published_SHA256": "3b0beb726a8cdfc36fb961aef6a4320d4c1de9b1864df8f9dfdcf6481883aaeb",
+    "encoding": "deterministic gzip of exact source bytes"
+  },
+  {
+    "published_path": "verifier-source/validate-profiles.py.gz",
+    "source_path": "verifier-source/validate-profiles.py",
+    "source_bytes": 18330,
+    "source_exact_SHA256": "7e5a40d08cf2a94da58f183515ae821edf2fd928262393e2ce19c83f36278504",
+    "published_bytes": 5254,
+    "published_SHA256": "71cc5d50b28752b1360c77593d6ec7a40103b66c7a75b1b11d8b6c83b8ed475b",
+    "encoding": "deterministic gzip of exact source bytes"
+  }
+]
