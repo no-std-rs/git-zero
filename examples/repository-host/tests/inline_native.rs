@@ -565,6 +565,7 @@ fn actual_registered_native_inline_faults_recover_before_next_mutation() {
     let runtime = Runtime::start(&root);
     let mut reports = Vec::new();
     for mode in [
+        "future-normalized-ack",
         "fused-sql-before",
         "fused-transaction",
         "fused-sync-after",
@@ -617,6 +618,15 @@ fn actual_registered_native_inline_faults_recover_before_next_mutation() {
         assert_eq!(manifest.packs.len(), 3);
         assert_eq!(initial["root"]["entries"].as_array().unwrap().len(), 3);
         assert!(initial["catalog"].as_array().unwrap().is_empty());
+        let future_ack = mode == "future-normalized-ack";
+        if future_ack {
+            worker.json(
+                "POST",
+                "/_services/test/inline-normalized-future",
+                json!({}),
+            );
+            save(&case_root, "future-normalized-state.json", &worker.state());
+        }
         let before = worker.usage();
         save(&case_root, "before-usage.json", &before);
         worker.page_fault(if mode == "delete-second" { mode } else { "" });
@@ -630,7 +640,10 @@ fn actual_registered_native_inline_faults_recover_before_next_mutation() {
         save(&case_root, "failed-state.json", &failed_state);
         let after = worker.usage();
         save(&case_root, "after-usage.json", &after);
-        let rollback = matches!(mode, "fused-sql-before" | "fused-transaction");
+        let rollback = matches!(
+            mode,
+            "fused-sql-before" | "fused-transaction" | "future-normalized-ack"
+        );
         let partial = mode == "delete-second";
         let unknown = mode == "cursor-unknown";
         let retired = matches!(
@@ -714,19 +727,22 @@ fn actual_registered_native_inline_faults_recover_before_next_mutation() {
             failed_state["certain"],
             mode == "lost-retirement-reply" || unknown
         );
-        assert!(failed_state["catalog"].as_array().unwrap().is_empty());
+        assert_eq!(
+            failed_state["catalog"].as_array().unwrap().len(),
+            usize::from(future_ack)
+        );
         assert_eq!(
             operation(&after, "r2_put").attempts - operation(&before, "r2_put").attempts,
-            1
+            u64::from(!future_ack)
         );
         assert_eq!(
             operation(&after, "r2_put").successes - operation(&before, "r2_put").successes,
-            1
+            u64::from(!future_ack)
         );
         assert_eq!(
             operation(&after, "manifest_cas").attempts
                 - operation(&before, "manifest_cas").attempts,
-            1
+            u64::from(!future_ack)
         );
         assert_eq!(
             operation(&after, "manifest_cas").successes
@@ -751,13 +767,25 @@ fn actual_registered_native_inline_faults_recover_before_next_mutation() {
             after.r2_live_objects,
             if retired {
                 if partial { 2 } else { 1 }
+            } else if future_ack {
+                3
             } else {
                 4
             }
         );
-        let peak = before
-            .r2_peak_bytes
-            .max(before.r2_live_bytes + frame["chunk"]["len"].as_u64().unwrap());
+        let peak = if future_ack {
+            before.r2_peak_bytes
+        } else {
+            before
+                .r2_peak_bytes
+                .max(before.r2_live_bytes + frame["chunk"]["len"].as_u64().unwrap())
+        };
+        if future_ack {
+            assert_eq!(upload_response.first.split_whitespace().nth(1), Some("409"));
+            let delta = after.checked_workload_delta(&before).unwrap();
+            assert_eq!(delta.r2_class_a + delta.r2_class_b + delta.r2_deletes, 0);
+            assert_eq!(delta.do_rows_written, Some(0));
+        }
         assert_eq!(
             after.r2_peak_bytes, peak,
             "full actual post-PUT/pre-retirement physical peak"
