@@ -134,9 +134,19 @@ impl Drop for Quarantine {
     }
 }
 
-fn lock_root(root: &Path) -> io::Result<File> {
+struct RootLock(File);
+
+impl Drop for RootLock {
+    fn drop(&mut self) {
+        // A concurrently forked child may retain this open file description
+        // until exec. Unlock explicitly rather than waiting for its final close.
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
+fn lock_root(root: &Path) -> io::Result<RootLock> {
     // Keep this inode permanently: unlinking a lockfile lets competing owners
-    // lock different files at the same path. Closing the file releases the lock.
+    // lock different files at the same path.
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -152,7 +162,7 @@ fn lock_root(root: &Path) -> io::Result<File> {
             ),
         )
     })?;
-    Ok(file)
+    Ok(RootLock(file))
 }
 
 pub struct NativeHost {
@@ -166,7 +176,7 @@ pub struct NativeHost {
     view_dirty: bool,
     manifest: Manifest,
     pub metrics: Metrics,
-    _root_lock: File,
+    _root_lock: RootLock,
 }
 
 impl NativeHost {
@@ -208,7 +218,7 @@ impl NativeHost {
 
     fn with_services(
         root: PathBuf,
-        root_lock: File,
+        root_lock: RootLock,
         repository: Repository<HostBlobs, HostState>,
         cloudflare: Option<Arc<HttpServices>>,
         cold_view: bool,
@@ -326,6 +336,46 @@ impl NativeHost {
             index_bytes: index.len() as u64,
             level: pack.level,
         })
+    }
+
+    fn store_candidate(
+        &mut self,
+        mut pack: CandidatePack,
+        input_pack: Option<&[u8]>,
+        input_keys: Option<&[String]>,
+    ) -> io::Result<StoredPack> {
+        if let Some(stored) = pack.stored.take() {
+            return Ok(stored);
+        }
+        let input = match input_pack {
+            Some(bytes) if file_matches(&pack.pack, bytes)? => Some(bytes),
+            _ => None,
+        };
+        let data;
+        let bytes = if let Some(bytes) = input {
+            self.metrics.receive_reused_pack_bytes += bytes.len() as u64;
+            bytes
+        } else {
+            data = fs::read(&pack.pack)?;
+            &data
+        };
+        let index = fs::read(&pack.index)?;
+        let keys = input.and(input_keys);
+        let stored = self.import_pack(&pack, bytes, &index, keys)?;
+        self.metrics.blob_puts += (stored.pack.len() + stored.index.len()) as u64;
+        self.metrics.blob_put_bytes += (bytes.len() + index.len()) as u64;
+        for (source, extension, verified) in [
+            (&pack.pack, "pack", bytes),
+            (&pack.index, "idx", index.as_slice()),
+        ] {
+            let destination = self
+                .view
+                .join(format!("objects/pack/pack-{}.{extension}", pack.id));
+            if !destination.exists() {
+                install_native_file(source, &destination, verified)?;
+            }
+        }
+        Ok(stored)
     }
 
     fn prune_native_packs(&self) -> io::Result<()> {
@@ -521,40 +571,8 @@ impl NativeHost {
             garbage: Vec::new(),
         };
         for pack in packs {
-            let stored = if let Some(stored) = pack.stored.clone() {
-                stored
-            } else {
-                let input = match input_pack {
-                    Some(bytes) if file_matches(&pack.pack, bytes)? => Some(bytes),
-                    _ => None,
-                };
-                let data;
-                let bytes = if let Some(bytes) = input {
-                    self.metrics.receive_reused_pack_bytes += bytes.len() as u64;
-                    bytes
-                } else {
-                    data = fs::read(&pack.pack)?;
-                    &data
-                };
-                let index = fs::read(&pack.index)?;
-                let keys = input.and(input_keys.as_deref());
-                let stored = self.import_pack(&pack, bytes, &index, keys)?;
-                self.metrics.blob_puts += (stored.pack.len() + stored.index.len()) as u64;
-                self.metrics.blob_put_bytes += (bytes.len() + index.len()) as u64;
-                for (source, extension, verified) in [
-                    (&pack.pack, "pack", bytes),
-                    (&pack.index, "idx", index.as_slice()),
-                ] {
-                    let destination = self
-                        .view
-                        .join(format!("objects/pack/pack-{}.{extension}", pack.id));
-                    if !destination.exists() {
-                        install_native_file(source, &destination, verified)?;
-                    }
-                }
-                stored
-            };
-            next.packs.push(stored);
+            next.packs
+                .push(self.store_candidate(pack, input_pack, input_keys.as_deref())?);
         }
         self.metrics.receive_storage_seconds += storage_start.elapsed().as_secs_f64();
         let publication_start = Instant::now();
@@ -771,6 +789,23 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         )))
+    }
+
+    #[test]
+    fn dropping_a_host_releases_ownership_despite_a_duplicated_descriptor() {
+        let directory = temporary_directory();
+        let host = NativeHost::open(directory.0.clone()).unwrap();
+        let inherited = host._root_lock.0.try_clone().unwrap();
+        assert!(NativeHost::open(directory.0.clone()).is_err());
+        drop(host);
+
+        let retained_after_drop = NativeHost::open(directory.0.clone()).is_err();
+        drop(inherited);
+        assert!(NativeHost::open(directory.0.clone()).is_ok());
+        assert!(
+            !retained_after_drop,
+            "ownership remained locked until the duplicated descriptor closed"
+        );
     }
 
     #[test]
