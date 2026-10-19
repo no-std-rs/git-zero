@@ -231,6 +231,13 @@ pub(crate) enum HostBlobs {
     Cloudflare(R2BlobStore<HttpServices>, Arc<HttpServices>),
 }
 impl HostBlobs {
+    fn as_store(&self) -> &dyn BlobStore {
+        match self {
+            Self::Local(blobs) => blobs,
+            Self::Cloudflare(blobs, _) => blobs,
+        }
+    }
+
     pub(crate) fn put_file(&self, key: &str, source: &Path, verified: &[u8]) -> io::Result<()> {
         match self {
             Self::Local(blobs) => blobs.put_file(key, source, verified),
@@ -257,22 +264,13 @@ impl HostBlobs {
 }
 impl BlobStore for HostBlobs {
     fn get(&self, key: &str) -> io::Result<Vec<u8>> {
-        match self {
-            Self::Local(b) => b.get(key),
-            Self::Cloudflare(b, _) => b.get(key),
-        }
+        self.as_store().get(key)
     }
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
-        match self {
-            Self::Local(b) => b.put(key, bytes),
-            Self::Cloudflare(b, _) => b.put(key, bytes),
-        }
+        self.as_store().put(key, bytes)
     }
     fn delete(&self, key: &str) -> io::Result<()> {
-        match self {
-            Self::Local(b) => b.delete(key),
-            Self::Cloudflare(b, _) => b.delete(key),
-        }
+        self.as_store().delete(key)
     }
 }
 pub(crate) enum HostState {
@@ -280,6 +278,13 @@ pub(crate) enum HostState {
     Cloudflare(DurableStateStore<HttpServices>),
 }
 impl HostState {
+    fn as_store(&self) -> &dyn StateStore {
+        match self {
+            Self::Local(state) => state,
+            Self::Cloudflare(state) => state,
+        }
+    }
+
     pub(crate) fn stabilize(&self) -> io::Result<()> {
         match self {
             Self::Local(state) => state.stabilize(),
@@ -289,16 +294,10 @@ impl HostState {
 }
 impl StateStore for HostState {
     fn load(&self) -> io::Result<Manifest> {
-        match self {
-            Self::Local(s) => s.load(),
-            Self::Cloudflare(s) => s.load(),
-        }
+        self.as_store().load()
     }
     fn compare_and_swap(&self, expected: u64, next: &Manifest) -> io::Result<bool> {
-        match self {
-            Self::Local(s) => s.compare_and_swap(expected, next),
-            Self::Cloudflare(s) => s.compare_and_swap(expected, next),
-        }
+        self.as_store().compare_and_swap(expected, next)
     }
 }
 
