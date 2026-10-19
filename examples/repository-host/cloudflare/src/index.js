@@ -192,6 +192,65 @@ function loopbackOrigin(value) {
   return origin.origin;
 }
 
+async function handleService(request, env, repo, url) {
+  const observer = url.pathname === "/_services/metrics";
+  const currentPhase = observer ? "stats" : phase(request);
+  workerCount(repo, observer ? "observer" : "service", currentPhase);
+  if (!env.LOCAL_TOKEN || request.headers.get("x-hosting-token") !== env.LOCAL_TOKEN) {
+    return json({ error: "invalid local service token" }, 401);
+  }
+  if (url.pathname === "/_services/register" && request.method === "POST") {
+    const body = await parseJson(request, 1024);
+    const origin = loopbackOrigin(body.codec_origin);
+    if (registry.has(repo) && registry.get(repo) !== origin) {
+      fail(409, "a different local codec is already registered; unregister it first");
+    }
+    if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
+    registry.set(repo, origin);
+    return json({ registered: true, repository: repo, codec_origin: origin });
+  }
+  if (url.pathname === "/_services/unregister" && request.method === "POST") {
+    registry.delete(repo);
+    return json({ registered: false, repository: repo });
+  }
+  const headers = new Headers(request.headers);
+  headers.set("x-hosting-repo", repo);
+  headers.set("x-hosting-phase", currentPhase);
+  const stub = env.REPOSITORIES.get(env.REPOSITORIES.idFromName(repo));
+  let response;
+  try { response = await stub.fetch(new Request(request, { headers })); }
+  catch (error) { incomplete(repo, "Durable Object dispatch failed; side effects may be unaccounted"); throw error; }
+  try { acceptReceipt(repo, response.headers.get(USAGE_HEADER)); }
+  catch { incomplete(repo, "missing or invalid Durable Object usage receipt"); }
+  const cleanHeaders = new Headers(response.headers);
+  cleanHeaders.delete(USAGE_HEADER);
+  const clean = new Response(response.body, { status: response.status, statusText: response.statusText, headers: cleanHeaders });
+  if (observer && clean.ok) return json(mergeWorkerUsage(await clean.json(), repo));
+  return clean;
+}
+
+async function handleGit(request, env, repo, url, prefixed) {
+  const forwardedPath = prefixed ? url.pathname.slice(repo.length + 1) : url.pathname;
+  if (!forwardedPath.startsWith("/repo.git/")) return json({ error: "unknown route" }, 404);
+  const origin = registry.get(repo)
+    ?? (repo === (env.REPO_ID ?? "demo") ? env.CODEC_ORIGIN : undefined);
+  if (!origin) return json({ error: "register a local Rust codec first" }, 503);
+  const gitPhase = forwardedPath.endsWith("/git-receive-pack")
+    || url.searchParams.get("service") === "git-receive-pack" ? "push" : "fetch";
+  workerCount(repo, "gateway", gitPhase);
+  const headers = new Headers(request.headers);
+  headers.delete("host");
+  headers.delete("x-hosting-token");
+  headers.set("x-hosting-repo", repo);
+  headers.set("x-hosting-phase", gitPhase);
+  const target = loopbackOrigin(origin) + forwardedPath + url.search;
+  // This awaits Rust outside a Durable Object. Rust can safely call back
+  // into /_services while its Git request is in flight.
+  return await fetch(new Request(target, {
+    method: request.method, headers, body: request.body, redirect: "manual",
+  }));
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -207,61 +266,9 @@ export default {
         workerCount(repo, "observer", "stats");
         return json({ ready: true, runtime: "workerd", local_only: true });
       }
-      if (service) {
-        const observer = url.pathname === "/_services/metrics";
-        const currentPhase = observer ? "stats" : phase(request);
-        workerCount(repo, observer ? "observer" : "service", currentPhase);
-        if (!env.LOCAL_TOKEN || request.headers.get("x-hosting-token") !== env.LOCAL_TOKEN) {
-          return json({ error: "invalid local service token" }, 401);
-        }
-        if (url.pathname === "/_services/register" && request.method === "POST") {
-          const body = await parseJson(request, 1024);
-          const origin = loopbackOrigin(body.codec_origin);
-          if (registry.has(repo) && registry.get(repo) !== origin) {
-            fail(409, "a different local codec is already registered; unregister it first");
-          }
-          if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
-          registry.set(repo, origin);
-          return json({ registered: true, repository: repo, codec_origin: origin });
-        }
-        if (url.pathname === "/_services/unregister" && request.method === "POST") {
-          registry.delete(repo);
-          return json({ registered: false, repository: repo });
-        }
-        const headers = new Headers(request.headers);
-        headers.set("x-hosting-repo", repo);
-        headers.set("x-hosting-phase", currentPhase);
-        const stub = env.REPOSITORIES.get(env.REPOSITORIES.idFromName(repo));
-        let response;
-        try { response = await stub.fetch(new Request(request, { headers })); }
-        catch (error) { incomplete(repo, "Durable Object dispatch failed; side effects may be unaccounted"); throw error; }
-        try { acceptReceipt(repo, response.headers.get(USAGE_HEADER)); }
-        catch { incomplete(repo, "missing or invalid Durable Object usage receipt"); }
-        const cleanHeaders = new Headers(response.headers);
-        cleanHeaders.delete(USAGE_HEADER);
-        const clean = new Response(response.body, { status: response.status, statusText: response.statusText, headers: cleanHeaders });
-        if (observer && clean.ok) return json(mergeWorkerUsage(await clean.json(), repo));
-        return clean;
-      }
-      const forwardedPath = prefixed ? url.pathname.slice(repo.length + 1) : url.pathname;
-      if (!forwardedPath.startsWith("/repo.git/")) return json({ error: "unknown route" }, 404);
-      const origin = registry.get(repo)
-        ?? (repo === (env.REPO_ID ?? "demo") ? env.CODEC_ORIGIN : undefined);
-      if (!origin) return json({ error: "register a local Rust codec first" }, 503);
-      const gitPhase = forwardedPath.endsWith("/git-receive-pack")
-        || url.searchParams.get("service") === "git-receive-pack" ? "push" : "fetch";
-      workerCount(repo, "gateway", gitPhase);
-      const headers = new Headers(request.headers);
-      headers.delete("host");
-      headers.delete("x-hosting-token");
-      headers.set("x-hosting-repo", repo);
-      headers.set("x-hosting-phase", gitPhase);
-      const target = loopbackOrigin(origin) + forwardedPath + url.search;
-      // This awaits Rust outside a Durable Object. Rust can safely call back
-      // into /_services while its Git request is in flight.
-      return await fetch(new Request(target, {
-        method: request.method, headers, body: request.body, redirect: "manual",
-      }));
+      return await (service
+        ? handleService(request, env, repo, url)
+        : handleGit(request, env, repo, url, prefixed));
     } catch (error) {
       return json({ error: String(error.message ?? error) }, error.status ?? 500);
     }
