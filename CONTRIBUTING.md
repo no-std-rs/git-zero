@@ -21,6 +21,13 @@ a minimum number of approvals.
 Auto-merge is available after required checks pass. Squash and rebase merges are
 enabled, and GitHub deletes merged branches automatically.
 
+## Test repositories
+
+Generate repository fixtures during tests, or download upstream repositories on
+demand and pin their full commit IDs. Keep datasets in `/tmp` or the ignored
+`test-repositories/` directory. Commit fixture generators and download instructions
+rather than repository clones, packs, bundles or exported snapshots.
+
 ## Complexity reports
 
 `buildbuddy.yaml` runs the advisory [llm-cc comparison](https://github.com/pawelchcki/llm-cc/blob/main/tools/comparison/README.md)
