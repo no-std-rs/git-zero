@@ -7,7 +7,7 @@ use crate::storage::{
     StoredPack, install_native_file,
 };
 use crate::{Repository, hash};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File, OpenOptions};
@@ -781,7 +781,7 @@ impl NativeHost {
         if let Some(services) = &self.cloudflare {
             let usage = services.usage()?;
             if include_objects {
-                let counters = serde_json::from_value(usage.clone())?;
+                let counters = crate::accounting::ServiceUsage::deserialize(&usage)?;
                 value["estimated_cost"] =
                     serde_json::to_value(crate::cost::estimate_service_usage(&counters, 1000)?)?;
             }

@@ -45,51 +45,95 @@ struct Entry<'a> {
     crc: u32,
 }
 
+struct IndexTables<'a> {
+    bytes: &'a [u8],
+    count: usize,
+    names_at: usize,
+    crcs_at: usize,
+    offsets_at: usize,
+    large_at: usize,
+    large_count: usize,
+}
+
+impl<'a> IndexTables<'a> {
+    fn new(pack: &[u8], index: &'a [u8]) -> io::Result<Self> {
+        const FIXED: usize = 8 + 256 * 4 + 40;
+        if pack.len() < 32
+            || pack.len() > MAX_PACK_BYTES
+            || &pack[..4] != b"PACK"
+            || !matches!(be32(pack, 4), 2 | 3)
+            || index.len() < FIXED
+            || &index[..4] != b"\xfftOc"
+            || be32(index, 4) != 2
+        {
+            return Err(invalid("invalid pack or v2 index header"));
+        }
+        let count = be32(index, 8 + 255 * 4) as usize;
+        if count != be32(pack, 8) as usize || count > (pack.len() - 32) / 2 {
+            return Err(invalid("invalid pack object count"));
+        }
+        let table_end = FIXED
+            .checked_add(
+                count
+                    .checked_mul(28)
+                    .ok_or_else(|| invalid("index too large"))?,
+            )
+            .ok_or_else(|| invalid("index too large"))?;
+        if index.len() < table_end || (index.len() - table_end) % 8 != 0 {
+            return Err(invalid("invalid index table length"));
+        }
+        let pack_hash = &pack[pack.len() - 20..];
+        if digest(&pack[..pack.len() - 20]) != pack_hash
+            || pack_hash != &index[index.len() - 40..index.len() - 20]
+            || digest(&index[..index.len() - 20]) != index[index.len() - 20..]
+        {
+            return Err(invalid("pack or index checksum mismatch"));
+        }
+        let names_at = 8 + 256 * 4;
+        let crcs_at = names_at + count * 20;
+        let offsets_at = crcs_at + count * 4;
+        let large_at = offsets_at + count * 4;
+        let large_count = (index.len() - table_end) / 8;
+        Ok(Self {
+            bytes: index,
+            count,
+            names_at,
+            crcs_at,
+            offsets_at,
+            large_at,
+            large_count,
+        })
+    }
+
+    fn offset(&self, n: usize, seen_large: &mut [bool]) -> io::Result<usize> {
+        let offset = be32(self.bytes, self.offsets_at + n * 4);
+        if offset & 0x8000_0000 == 0 {
+            Ok(offset as usize)
+        } else {
+            let slot = (offset & 0x7fff_ffff) as usize;
+            if slot >= self.large_count || seen_large[slot] {
+                return Err(invalid("invalid large-offset table reference"));
+            }
+            seen_large[slot] = true;
+            usize::try_from(u64::from_be_bytes(
+                self.bytes[self.large_at + slot * 8..self.large_at + (slot + 1) * 8]
+                    .try_into()
+                    .expect("checked large-offset table"),
+            ))
+            .map_err(|_| invalid("pack offset is too large"))
+        }
+    }
+}
+
 /// Read a v2 index into pack order, validating each table before slicing it.
 fn indexed(pack: &[u8], index: &[u8]) -> io::Result<Vec<Indexed>> {
-    const FIXED: usize = 8 + 256 * 4 + 40;
-    if pack.len() < 32
-        || pack.len() > MAX_PACK_BYTES
-        || &pack[..4] != b"PACK"
-        || !matches!(be32(pack, 4), 2 | 3)
-        || index.len() < FIXED
-        || &index[..4] != b"\xfftOc"
-        || be32(index, 4) != 2
-    {
-        return Err(invalid("invalid pack or v2 index header"));
-    }
-    let count = be32(index, 8 + 255 * 4) as usize;
-    if count != be32(pack, 8) as usize || count > (pack.len() - 32) / 2 {
-        return Err(invalid("invalid pack object count"));
-    }
-    let table_end = FIXED
-        .checked_add(
-            count
-                .checked_mul(28)
-                .ok_or_else(|| invalid("index too large"))?,
-        )
-        .ok_or_else(|| invalid("index too large"))?;
-    if index.len() < table_end || (index.len() - table_end) % 8 != 0 {
-        return Err(invalid("invalid index table length"));
-    }
-    let pack_hash = &pack[pack.len() - 20..];
-    if digest(&pack[..pack.len() - 20]) != pack_hash
-        || pack_hash != &index[index.len() - 40..index.len() - 20]
-        || digest(&index[..index.len() - 20]) != index[index.len() - 20..]
-    {
-        return Err(invalid("pack or index checksum mismatch"));
-    }
-    let names_at = 8 + 256 * 4;
-    let crcs_at = names_at + count * 20;
-    let offsets_at = crcs_at + count * 4;
-    let large_at = offsets_at + count * 4;
-    let large_count = (index.len() - table_end) / 8;
-    let mut seen_large = vec![false; large_count];
+    let tables = IndexTables::new(pack, index)?;
+    let mut seen_large = vec![false; tables.large_count];
     let mut fanout = [0_u32; 256];
     let mut previous = None;
-    let mut result = Vec::with_capacity(count);
-    for n in 0..count {
-        let id: Id = index[names_at + n * 20..names_at + (n + 1) * 20]
+    let mut result = Vec::with_capacity(tables.count);
+    for n in 0..tables.count {
+        let id: Id = tables.bytes[tables.names_at + n * 20..tables.names_at + (n + 1) * 20]
             .try_into()
             .expect("checked object table");
         if previous.is_some_and(|previous| previous >= id) {
@@ -97,29 +141,14 @@ fn indexed(pack: &[u8], index: &[u8]) -> io::Result<Vec<Indexed>> {
         }
         previous = Some(id);
         fanout[usize::from(id[0])] += 1;
-        let offset = be32(index, offsets_at + n * 4);
-        let offset = if offset & 0x8000_0000 == 0 {
-            offset as usize
-        } else {
-            let slot = (offset & 0x7fff_ffff) as usize;
-            if slot >= large_count || seen_large[slot] {
-                return Err(invalid("invalid large-offset table reference"));
-            }
-            seen_large[slot] = true;
-            usize::try_from(u64::from_be_bytes(
-                index[large_at + slot * 8..large_at + (slot + 1) * 8]
-                    .try_into()
-                    .expect("checked large-offset table"),
-            ))
-            .map_err(|_| invalid("pack offset is too large"))?
-        };
+        let offset = tables.offset(n, &mut seen_large)?;
         if !(12..pack.len() - 20).contains(&offset) {
             return Err(invalid("pack object offset is outside the pack"));
         }
         result.push(Indexed {
             id,
             offset,
-            crc: be32(index, crcs_at + n * 4),
+            crc: be32(tables.bytes, tables.crcs_at + n * 4),
         });
     }
     if seen_large.iter().any(|seen| !seen) {
@@ -128,7 +157,7 @@ fn indexed(pack: &[u8], index: &[u8]) -> io::Result<Vec<Indexed>> {
     let mut cumulative = 0;
     for (slot, objects) in fanout.iter().enumerate() {
         cumulative += objects;
-        if be32(index, 8 + slot * 4) != cumulative {
+        if be32(tables.bytes, 8 + slot * 4) != cumulative {
             return Err(invalid("invalid index fanout table"));
         }
     }
