@@ -3,6 +3,8 @@
 //! GIT_ZERO_CLOUDFLARE_TOKEN=git-zero-local-services \
 //! cargo test -p git-zero-host --test cloudflare real_ -- --ignored --test-threads=1
 //! Missing endpoint/token is an error on this opt-in path, never a silent skip.
+//! Set GIT_ZERO_CLOUDFLARE_PERSIST_DIR to Wrangler's --persist-to directory for
+//! the orphan recovery test, which injects a blob through the local R2 CLI.
 //! For process persistence, also set GIT_ZERO_CLOUDFLARE_RESTART_REPO to a fresh
 //! stable namespace; run seed_before_workerd_restart, restart Wrangler with the
 //! same persist-dir, then run verify_after_workerd_restart as separate commands.
@@ -69,6 +71,8 @@ fn git(directory: &std::path::Path, arguments: &[&str], input: &[u8]) -> Vec<u8>
 }
 
 const RESTART_DATA: &[u8] = b"persisted through a real local workerd process restart\n";
+const RESTART_STAGED_DATA: &[u8] = b"registered writer's unpublished chunk survives Worker restart";
+const RESTART_CODEC_ORIGIN: &str = "http://127.0.0.1:1";
 
 fn restart_fixture() -> RealWorker {
     let mut worker = RealWorker::new("restart");
@@ -82,6 +86,95 @@ fn restart_fixture() -> RealWorker {
 
 fn restart_marker(worker: &RealWorker) -> PathBuf {
     std::env::temp_dir().join(format!("git-zero-worker-restart-{}.json", worker.namespace))
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_rejected_tokens_do_not_reserve_repository_counter_slots() {
+    let worker = RealWorker::new("authentication");
+    for index in 0..=512 {
+        let rejected = HttpServices::new(
+            &worker.origin,
+            &format!("{}-{index}", worker.namespace),
+            "invalid-contract-token",
+        )
+        .unwrap();
+        assert_eq!(
+            rejected.usage().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied,
+            "unauthenticated namespace {index} must be rejected before counter allocation"
+        );
+    }
+    worker.services().usage().unwrap();
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd, installed Wrangler, and GIT_ZERO_CLOUDFLARE_PERSIST_DIR"]
+fn real_recovery_persists_the_peak_of_uncatalogued_r2_objects() {
+    let worker = RealWorker::new("orphan-peak");
+    let services = worker.services();
+    let directory = Directory(std::env::temp_dir().join(&worker.namespace));
+    fs::create_dir(&directory.0).unwrap();
+    let data = b"R2 PUT survived a crash before the blob catalog and high-water updates";
+    let key = format!("chunks/{}", hash(data));
+    let fixture = directory.0.join("orphan.bin");
+    fs::write(&fixture, data).unwrap();
+    let persist = std::env::var("GIT_ZERO_CLOUDFLARE_PERSIST_DIR")
+        .expect("set GIT_ZERO_CLOUDFLARE_PERSIST_DIR to the running local Wrangler's --persist-to directory");
+    let cloudflare = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cloudflare");
+    // Bypass the DO's catalog to reproduce a completed R2 PUT followed by a
+    // process crash before SQL accounting. This command is explicitly local.
+    let injected = Command::new(cloudflare.join("node_modules/.bin/wrangler"))
+        .current_dir(&cloudflare)
+        .env("WRANGLER_SEND_METRICS", "false")
+        .args([
+            "r2",
+            "object",
+            "put",
+            &format!("git-zero-local-repository-packs/{}/{key}", worker.namespace),
+            "--local",
+            "--persist-to",
+            &persist,
+            "--file",
+        ])
+        .arg(&fixture)
+        .output()
+        .unwrap();
+    assert!(
+        injected.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&injected.stdout),
+        String::from_utf8_lossy(&injected.stderr)
+    );
+    // Do not observe metrics before recovery: GC must record the orphan's
+    // physical bytes before deleting them, without an observer repairing it.
+    let _host = NativeHost::open_cloudflare(
+        directory.0.join("codec"),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        R2BlobStore::new(services.clone())
+            .get(&key)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    let before: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
+    assert_eq!(before.r2_live_bytes, 0);
+    assert_eq!(before.r2_peak_bytes, data.len() as u64);
+    std::thread::sleep(Duration::from_secs(13));
+    let mut after: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
+    if after.do_instance_epoch == before.do_instance_epoch {
+        std::thread::sleep(Duration::from_secs(13));
+        after = serde_json::from_value(services.usage().unwrap()).unwrap();
+    }
+    assert_ne!(after.do_instance_epoch, before.do_instance_epoch);
+    assert_eq!(after.r2_live_bytes, 0);
+    assert_eq!(after.r2_peak_bytes, data.len() as u64);
 }
 
 #[test]
@@ -409,6 +502,7 @@ fn seed_before_workerd_restart() {
         Manifest::default(),
         "restart proof requires a fresh namespace"
     );
+    services.register(RESTART_CODEC_ORIGIN).unwrap();
     let source = Directory(std::env::temp_dir().join(format!("{}-source", worker.namespace)));
     fs::create_dir(&source.0).unwrap();
     git(
@@ -445,10 +539,16 @@ fn seed_before_workerd_restart() {
         ..Manifest::default()
     };
     assert!(repository.publish(&previous, next.clone()).unwrap());
+    let staged_key = format!("chunks/{}", hash(RESTART_STAGED_DATA));
+    repository
+        .blobs
+        .put(&staged_key, RESTART_STAGED_DATA)
+        .unwrap();
     let usage: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
-    assert_eq!(usage.r2_live_objects, 2);
+    assert_eq!(usage.r2_live_objects, 3);
     let marker = serde_json::json!({
         "manifest":next, "object_id":object_id, "counter_epoch":usage.counter_epoch,
+        "staged_key":staged_key,
     });
     fs::write(
         restart_marker(&worker),
@@ -480,6 +580,39 @@ fn verify_after_workerd_restart() {
         marker["counter_epoch"],
         "Worker/DO runtime did not restart between the two test phases"
     );
+    // The first codec's claim remains reserved even if it has stopped. Only an
+    // explicit administrative unregister may let a replacement run recovery.
+    assert_eq!(
+        services.register("http://127.0.0.1:2").unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    let replacement_root =
+        Directory(std::env::temp_dir().join(format!("{}-rejected-replacement", worker.namespace)));
+    let replacement = Command::new(env!("CARGO_BIN_EXE_repository-host"))
+        .args([
+            "--cloudflare",
+            &worker.origin,
+            "--repo",
+            &worker.namespace,
+            "--token",
+            &worker.token,
+        ])
+        .arg(&replacement_root.0)
+        .arg("0")
+        .output()
+        .unwrap();
+    assert!(!replacement.status.success());
+    assert!(
+        String::from_utf8_lossy(&replacement.stderr).contains("already registered"),
+        "{}",
+        String::from_utf8_lossy(&replacement.stderr)
+    );
+    let staged_key = marker["staged_key"].as_str().unwrap();
+    assert_eq!(
+        repository.blobs.get(staged_key).unwrap(),
+        RESTART_STAGED_DATA
+    );
+    services.register(RESTART_CODEC_ORIGIN).unwrap();
     for pack in &expected.packs {
         assert_eq!(
             repository
@@ -506,6 +639,10 @@ fn verify_after_workerd_restart() {
     )
     .unwrap();
     assert_eq!(
+        repository.blobs.get(staged_key).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(
         git(
             &view.0.join("view/repo.git"),
             &["cat-file", "blob", object_id],
@@ -521,5 +658,8 @@ fn verify_after_workerd_restart() {
     assert!(retired.collect_garbage(&repository.blobs).is_empty());
     let usage: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
     assert_eq!(usage.r2_live_objects, 0);
+    services.unregister().unwrap();
+    services.register("http://127.0.0.1:2").unwrap();
+    services.unregister().unwrap();
     fs::remove_file(restart_marker(&worker)).unwrap();
 }

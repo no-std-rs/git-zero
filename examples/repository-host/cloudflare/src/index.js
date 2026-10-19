@@ -75,13 +75,17 @@ function repoName(value) {
   return value;
 }
 
-function workerCount(repo, kind, currentPhase) {
+function usageFor(repo) {
   if (!workerUsage.has(repo)) {
     if (workerUsage.size >= 512) fail(429, "local repository counter limit reached");
     workerUsage.set(repo, { totals: emptyUsage(), by_phase: {}, operations: {},
       accounting_complete: true, accounting_errors: [], do_instance_epoch: null });
   }
-  const usage = workerUsage.get(repo);
+  return workerUsage.get(repo);
+}
+
+function workerCount(repo, kind, currentPhase) {
+  const usage = usageFor(repo);
   usage.by_phase[currentPhase] ??= emptyUsage();
   for (const counter of [usage.totals, usage.by_phase[currentPhase]]) {
     counter.worker_requests++;
@@ -197,27 +201,15 @@ function loopbackOrigin(value) {
   return origin.origin;
 }
 
-async function handleService(request, env, repo, url) {
-  const observer = url.pathname === "/_services/metrics";
-  const currentPhase = observer ? "stats" : phase(request);
-  workerCount(repo, observer ? "observer" : "service", currentPhase);
-  if (!env.LOCAL_TOKEN || request.headers.get("x-hosting-token") !== env.LOCAL_TOKEN) {
-    return json({ error: "invalid local service token" }, 401);
-  }
-  if (url.pathname === "/_services/register" && request.method === "POST") {
-    const body = await parseJson(request, 1024);
-    const origin = loopbackOrigin(body.codec_origin);
-    if (registry.has(repo) && registry.get(repo) !== origin) {
-      fail(409, "a different local codec is already registered; unregister it first");
-    }
-    if (!registry.has(repo) && registry.size >= 256) fail(429, "local codec registry limit reached");
-    registry.set(repo, origin);
-    return json({ registered: true, repository: repo, codec_origin: origin });
-  }
-  if (url.pathname === "/_services/unregister" && request.method === "POST") {
-    registry.delete(repo);
-    return json({ registered: false, repository: repo });
-  }
+function cacheOrigin(repo, origin) {
+  registry.delete(repo);
+  registry.set(repo, origin);
+  if (registry.size > 256) registry.delete(registry.keys().next().value);
+}
+
+async function dispatchService(request, env, repo, currentPhase) {
+  // A cold gateway lookup is a DO call without another Worker invocation.
+  usageFor(repo);
   const headers = new Headers(request.headers);
   headers.set("x-hosting-repo", repo);
   headers.set("x-hosting-phase", currentPhase);
@@ -229,20 +221,48 @@ async function handleService(request, env, repo, url) {
   catch { incomplete(repo, "missing or invalid Durable Object usage receipt"); }
   const cleanHeaders = new Headers(response.headers);
   cleanHeaders.delete(USAGE_HEADER);
-  const clean = new Response(response.body, { status: response.status, statusText: response.statusText, headers: cleanHeaders });
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers: cleanHeaders });
+}
+
+async function handleService(request, env, repo, url) {
+  const observer = url.pathname === "/_services/metrics";
+  const currentPhase = observer ? "stats" : phase(request);
+  if (!env.LOCAL_TOKEN || request.headers.get("x-hosting-token") !== env.LOCAL_TOKEN) {
+    return json({ error: "invalid local service token" }, 401);
+  }
+  workerCount(repo, observer ? "observer" : "service", currentPhase);
+  const clean = await dispatchService(request, env, repo, currentPhase);
+  if (clean.ok && ["/_services/register", "/_services/unregister"].includes(url.pathname)) {
+    const registration = await clean.json();
+    if (registration.registered) cacheOrigin(repo, registration.codec_origin);
+    else registry.delete(repo);
+    return json(registration);
+  }
   if (observer && clean.ok) return json(mergeWorkerUsage(await clean.json(), repo));
   return clean;
+}
+
+async function registeredOrigin(env, repo, currentPhase) {
+  if (registry.has(repo)) return registry.get(repo);
+  const response = await dispatchService(
+    new Request("http://services.internal/_services/register"), env, repo, currentPhase,
+  );
+  if (!response.ok) fail(response.status, "codec registration lookup failed");
+  const registration = await response.json();
+  if (!registration.registered) return undefined;
+  cacheOrigin(repo, registration.codec_origin);
+  return registration.codec_origin;
 }
 
 async function handleGit(request, env, repo, url, prefixed) {
   const forwardedPath = prefixed ? url.pathname.slice(repo.length + 1) : url.pathname;
   if (!forwardedPath.startsWith("/repo.git/")) return json({ error: "unknown route" }, 404);
-  const origin = registry.get(repo)
-    ?? (repo === (env.REPO_ID ?? "demo") ? env.CODEC_ORIGIN : undefined);
-  if (!origin) return json({ error: "register a local Rust codec first" }, 503);
   const gitPhase = forwardedPath.endsWith("/git-receive-pack")
     || url.searchParams.get("service") === "git-receive-pack" ? "push" : "fetch";
   workerCount(repo, "gateway", gitPhase);
+  const origin = await registeredOrigin(env, repo, gitPhase)
+    ?? (repo === (env.REPO_ID ?? "demo") ? env.CODEC_ORIGIN : undefined);
+  if (!origin) return json({ error: "register a local Rust codec first" }, 503);
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.delete("x-hosting-token");
@@ -296,10 +316,12 @@ export class RepositoryServices {
     this.exec("CREATE TABLE IF NOT EXISTS repository_state (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, manifest TEXT NOT NULL)");
     this.exec("CREATE TABLE IF NOT EXISTS blob_catalog (key TEXT PRIMARY KEY, size INTEGER NOT NULL) WITHOUT ROWID");
     this.exec("CREATE TABLE IF NOT EXISTS high_water (id INTEGER PRIMARY KEY, bytes INTEGER NOT NULL)");
+    this.exec("CREATE TABLE IF NOT EXISTS codec_registration (id INTEGER PRIMARY KEY, origin TEXT NOT NULL)");
     const inventory = this.exec("SELECT COUNT(*) AS objects, COALESCE(SUM(size), 0) AS bytes FROM blob_catalog")[0];
     this.liveObjects = inventory.objects;
     this.liveBytes = inventory.bytes;
-    this.peakBytes = Math.max(this.liveBytes, this.exec("SELECT bytes FROM high_water WHERE id = 1")[0]?.bytes ?? 0);
+    this.peakBytes = this.exec("SELECT bytes FROM high_water WHERE id = 1")[0]?.bytes ?? 0;
+    this.updatePeak();
   }
 
   bump(name, value = 1) {
@@ -363,9 +385,9 @@ export class RepositoryServices {
     return objects;
   }
 
-  updatePeak() {
-    if (this.liveBytes > this.peakBytes) {
-      this.peakBytes = this.liveBytes;
+  updatePeak(bytes = this.liveBytes) {
+    if (bytes > this.peakBytes) {
+      this.peakBytes = bytes;
       this.exec("INSERT INTO high_water (id, bytes) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET bytes = excluded.bytes", this.peakBytes);
     }
   }
@@ -391,6 +413,9 @@ export class RepositoryServices {
     const repo = repoName(request.headers.get("x-hosting-repo"));
     const prefix = `${repo}/`;
     const path = new URL(request.url).pathname;
+    if (path === "/_services/register" || path === "/_services/unregister") {
+      return this.handleRegistration(request, repo, path);
+    }
     if (path.startsWith("/_services/blob/")) {
       return this.handleBlob(request, path.slice("/_services/blob/".length), prefix);
     }
@@ -402,6 +427,30 @@ export class RepositoryServices {
       return this.handleMetrics(repo, prefix);
     }
     return json({ error: "unknown service route" }, 404);
+  }
+
+  async handleRegistration(request, repo, path) {
+    if (path === "/_services/unregister" && request.method === "POST") {
+      // Administrative release: stop the old codec before releasing its claim.
+      this.exec("DELETE FROM codec_registration WHERE id = 1");
+      await this.ctx.storage.sync();
+      return json({ registered: false, repository: repo });
+    }
+    if (path !== "/_services/register") return json({ error: "method not allowed" }, 405);
+    const current = this.exec("SELECT origin FROM codec_registration WHERE id = 1")[0]?.origin;
+    if (request.method === "GET") {
+      return json(current ? { registered: true, repository: repo, codec_origin: current }
+        : { registered: false, repository: repo });
+    }
+    if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
+    const body = await parseJson(request, 1024);
+    const origin = loopbackOrigin(body.codec_origin);
+    if (current && current !== origin) {
+      fail(409, "a different local codec is already registered; unregister it first");
+    }
+    if (!current) this.exec("INSERT INTO codec_registration (id, origin) VALUES (1, ?)", origin);
+    await this.ctx.storage.sync();
+    return json({ registered: true, repository: repo, codec_origin: origin });
   }
 
   async handleBlob(request, key, prefix) {
@@ -472,6 +521,12 @@ export class RepositoryServices {
     if (body.expected_generation !== generation) fail(409, "stale GC generation");
     const live = new Set(body.live_keys);
     const objects = await this.inventory(prefix);
+    // A completed R2 PUT may outlive its interrupted catalog update. Record
+    // the full observed inventory durably before recovery deletes any bytes.
+    this.liveObjects = objects.length;
+    this.liveBytes = objects.reduce((sum, object) => sum + object.size, 0);
+    this.updatePeak();
+    await this.ctx.storage.sync();
     let removed = 0;
     for (const object of objects) {
       const key = object.key.slice(prefix.length);
@@ -495,7 +550,8 @@ export class RepositoryServices {
   async handleMetrics(repo, prefix) {
     const objects = await this.inventory(prefix);
     const liveBytes = objects.reduce((sum, object) => sum + object.size, 0);
-    this.peakBytes = Math.max(this.peakBytes, liveBytes);
+    this.updatePeak(liveBytes);
+    await this.ctx.storage.sync();
     const row = this.exec("SELECT LENGTH(CAST(manifest AS BLOB)) AS bytes FROM repository_state WHERE id = 1")[0];
     const counters = { ...this.totals };
     if (!this.sqlRowsKnown) { counters.do_rows_read = null; counters.do_rows_written = null; }
