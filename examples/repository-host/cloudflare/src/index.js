@@ -7,7 +7,7 @@ const PHASES = new Set(["startup", "push", "fetch", "maintenance", "stats"]);
 const REPO = /^[A-Za-z0-9_-]{1,80}$/;
 const BLOB = /^chunks\/[0-9a-f]{64}$/;
 const MAX_BLOB_BYTES = 16 * 1024 * 1024;
-const MAX_MANIFEST_BYTES = 1_500_000;
+const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 const USAGE_HEADER = "x-git-zero-service-usage";
 const OPERATIONS = new Set(["r2_get", "r2_head", "r2_put", "r2_list", "r2_delete", "manifest_get", "manifest_cas"]);
 const OP_FIELDS = ["attempts", "successes", "failures", "read_bytes", "written_bytes"];
@@ -240,7 +240,8 @@ export default {
       }
       const forwardedPath = prefixed ? url.pathname.slice(repo.length + 1) : url.pathname;
       if (!forwardedPath.startsWith("/repo.git/")) return json({ error: "unknown route" }, 404);
-      const origin = registry.get(repo) ?? env.CODEC_ORIGIN;
+      const origin = registry.get(repo)
+        ?? (repo === (env.REPO_ID ?? "demo") ? env.CODEC_ORIGIN : undefined);
       if (!origin) return json({ error: "register a local Rust codec first" }, 503);
       const gitPhase = forwardedPath.endsWith("/git-receive-pack")
         || url.searchParams.get("service") === "git-receive-pack" ? "push" : "fetch";

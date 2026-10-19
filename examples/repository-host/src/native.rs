@@ -707,17 +707,18 @@ impl NativeHost {
     fn receive(&mut self, request: &Request) -> io::Result<Response> {
         let prepare_start = Instant::now();
         self.cloud_read_view()?;
-        if !self
-            .manifest
-            .collect_garbage(&self.repository.blobs)
-            .is_empty()
-        {
+        let garbage = self.manifest.garbage.len();
+        let failed = self.manifest.collect_garbage(&self.repository.blobs);
+        self.metrics.retired_chunk_deletes += (garbage - failed.len()) as u64;
+        // Remember completed retries without changing the durable retirement
+        // debt, which remains available for recovery until the next publication.
+        self.manifest.garbage = failed;
+        if !self.manifest.garbage.is_empty() {
             return Err(io::Error::other(
                 "retired chunk cleanup must complete before another push",
             ));
         }
-        let mut previous = self.manifest.clone();
-        previous.garbage.clear();
+        let previous = self.manifest.clone();
         let quarantine = Quarantine(self.root.join("quarantine"));
         if quarantine.0.exists() {
             fs::remove_dir_all(&quarantine.0)?;
@@ -1105,6 +1106,69 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retirement_retries_count_partial_and_complete_cleanup_once() {
+        let directory = Quarantine(std::env::temp_dir().join(format!(
+            "git-zero-retirement-retry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        let mut host = NativeHost::open(directory.0.clone()).unwrap();
+        let removed_key = "chunks/removed";
+        let blocked_key = "chunks/blocked";
+        host.repository.blobs.put(removed_key, b"retired").unwrap();
+        let blob_root = directory.0.join("services/blobs");
+        let blocked = blob_root.join(blocked_key);
+        fs::create_dir(&blocked).unwrap();
+        let published = Manifest {
+            generation: 1,
+            garbage: vec![removed_key.into(), blocked_key.into()],
+            ..Manifest::default()
+        };
+        assert!(
+            host.repository
+                .state
+                .compare_and_swap(0, &published)
+                .unwrap()
+        );
+        host.manifest = published.clone();
+        let push = || Request {
+            method: "POST".into(),
+            target: "/repo.git/git-receive-pack".into(),
+            headers: BTreeMap::from([(
+                "content-type".into(),
+                "application/x-git-receive-pack-request".into(),
+            )]),
+            body: b"0000".to_vec(),
+        };
+
+        // One deletion succeeds even though another blocks the next push.
+        assert_eq!(host.handle(push()).status, 503);
+        assert!(!blob_root.join(removed_key).exists());
+        assert_eq!(host.metrics.retired_chunk_deletes, 1);
+        assert_eq!(host.manifest.garbage, [blocked_key]);
+        assert_eq!(host.repository.state.load().unwrap(), published);
+
+        // Retrying the blocked key must not recount the completed deletion.
+        assert_eq!(host.handle(push()).status, 503);
+        assert_eq!(host.metrics.retired_chunk_deletes, 1);
+        fs::remove_dir(&blocked).unwrap();
+        host.repository.blobs.put(blocked_key, b"retired").unwrap();
+        assert_eq!(host.handle(push()).status, 200);
+        assert!(!blocked.exists());
+        assert_eq!(host.metrics.retired_chunk_deletes, 2);
+        assert!(host.manifest.garbage.is_empty());
+
+        // With no ref update there is no CAS, so durable debt remains available
+        // for recovery while this host remembers that cleanup already finished.
+        assert_eq!(host.repository.state.load().unwrap(), published);
+        assert_eq!(host.handle(push()).status, 200);
+        assert_eq!(host.metrics.retired_chunk_deletes, 2);
+    }
 
     #[test]
     fn snapshot_limits_include_ref_only_growth_and_indexes() {

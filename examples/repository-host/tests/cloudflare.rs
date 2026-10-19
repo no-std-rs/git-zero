@@ -259,6 +259,84 @@ fn real_do_idle_eviction_keeps_complete_cumulative_accounting() {
 }
 
 #[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_large_ref_snapshot_matches_native_limits() {
+    let worker = RealWorker::new("large-refs");
+    let services = worker.services();
+    let repository = Repository::new(
+        R2BlobStore::new(services.clone()),
+        DurableStateStore::new(services),
+    );
+    let source = Directory(std::env::temp_dir().join(format!("{}-source", worker.namespace)));
+    fs::create_dir(&source.0).unwrap();
+    git(
+        &source.0,
+        &["init", "--bare", "--quiet", "--object-format=sha1"],
+        &[],
+    );
+    let object_id = String::from_utf8(git(
+        &source.0,
+        &["hash-object", "-w", "--stdin"],
+        b"large ref snapshot fixture\n",
+    ))
+    .unwrap()
+    .trim()
+    .to_owned();
+    let data = git(
+        &source.0,
+        &["pack-objects", "--stdout"],
+        format!("{object_id}\n").as_bytes(),
+    );
+    let indexed = String::from_utf8(git(
+        &source.0,
+        &["index-pack", "--stdin", "--strict"],
+        &data,
+    ))
+    .unwrap();
+    let id = indexed.split_whitespace().last().unwrap();
+    let index = fs::read(source.0.join(format!("objects/pack/pack-{id}.idx"))).unwrap();
+    let stored = repository.store_pack(id.into(), &data, &index, 0).unwrap();
+    let next = Manifest {
+        generation: 1,
+        refs: (0..16_000)
+            .map(|number| {
+                (
+                    format!("refs/tags/{number:05}-{}", "r".repeat(44)),
+                    object_id.clone(),
+                )
+            })
+            .collect(),
+        packs: vec![stored],
+        ..Manifest::default()
+    };
+    assert!(serde_json::to_vec(&next).unwrap().len() > 1_500_000);
+    assert!(
+        repository
+            .publish(&Manifest::default(), next.clone())
+            .unwrap()
+    );
+    assert!(repository.state.load().unwrap() == next);
+
+    // Reopening through the native host also validates its ref count/byte
+    // limits and reconstructs the real pack behind all of these tag refs.
+    let root = Directory(std::env::temp_dir().join(format!("{}-host", worker.namespace)));
+    let host = NativeHost::open_cloudflare(
+        root.0.clone(),
+        &worker.origin,
+        &worker.namespace,
+        &worker.token,
+        false,
+    )
+    .unwrap();
+    assert!(git_zero_host::native::refs(&root.0.join("view/repo.git")).unwrap() == next.refs);
+    drop(host);
+    let mut empty = Manifest::default();
+    empty.retire_replaced(&next);
+    assert!(repository.publish(&next, empty.clone()).unwrap());
+    assert!(empty.collect_garbage(&repository.blobs).is_empty());
+}
+
+#[test]
 #[ignore = "two-phase real Wrangler restart test; run seed, restart same persist-dir, then verify"]
 fn seed_before_workerd_restart() {
     let worker = restart_fixture();
