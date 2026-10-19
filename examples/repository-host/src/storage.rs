@@ -1,5 +1,9 @@
 //! Hosting service boundary. Local writers share one `LocalServices` instance
 //! (or its clones); independent processes/instances must not write the same root.
+//! The clone-shared mutexes serialize individual operations only. Callers provide
+//! external per-repository coordination across complete write sequences from
+//! blob puts through manifest CAS, readers of older generations, and collection.
+//! See [`Manifest::collect_garbage`].
 //! Cloudflare wrappers delegate to bindings, not a deployed Workers SDK adapter.
 
 use serde::{Deserialize, Serialize};
@@ -52,9 +56,15 @@ impl Manifest {
     }
 
     /// Collect only an authoritative, durably published generation's debt.
-    /// The caller must exclude readers of older generations and publication
-    /// while this runs. Failed or interrupted deletion leaves the published
-    /// list intact for idempotent retry; no bucket listing is necessary.
+    /// The caller must acquire external per-repository exclusion before loading
+    /// this authoritative manifest and hold it until collection returns. Exclude
+    /// readers of older generations and every complete write sequence, from
+    /// before its first blob put through the manifest CAS. This prevents deletion
+    /// of retired keys reused by a staged write before its CAS. Writers may share
+    /// access with each other while collection takes exclusive access.
+    /// `LocalServices` mutexes cover individual operations only.
+    /// Failed or interrupted deletion leaves the published list intact for
+    /// idempotent retry; no bucket listing is necessary.
     /// Returns the keys whose deletion failed. After successful collection,
     /// clear the in-memory debt before preparing the next generation.
     pub fn collect_garbage(&self, blobs: &dyn BlobStore) -> Vec<String> {

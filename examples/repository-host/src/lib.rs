@@ -17,6 +17,12 @@ pub fn hash(bytes: &[u8]) -> String {
 
 /// Shared publication logic: immutable compressed data precedes the ref CAS.
 /// Runtime-specific adapters implement the same blob/state traits.
+/// Callers must coordinate garbage collection with every writer using external
+/// per-repository exclusion held from before the first blob put through the
+/// manifest CAS. Writers may share access; collection requires exclusive access
+/// acquired before loading the authoritative manifest and held through deletion,
+/// with readers of older generations excluded. Local adapter mutexes cover
+/// individual operations only. See [`Manifest::collect_garbage`].
 pub struct Repository<B, S> {
     pub blobs: B,
     pub state: S,
