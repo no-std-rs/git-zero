@@ -135,6 +135,41 @@ fn compaction_selection(packs: &[CandidatePack], level: u32) -> Vec<usize> {
     selected.sort_unstable();
     selected
 }
+
+fn merge_candidates(
+    stage: &Path,
+    packs: &[CandidatePack],
+    selected: &[usize],
+    level: u32,
+) -> io::Result<CandidatePack> {
+    let sources: Vec<_> = selected
+        .iter()
+        .map(|index| {
+            Ok((
+                fs::read(&packs[*index].pack)?,
+                fs::read(&packs[*index].index)?,
+            ))
+        })
+        .collect::<io::Result<_>>()?;
+    let views: Vec<_> = sources
+        .iter()
+        .map(|(pack, index)| (pack.as_slice(), index.as_slice()))
+        .collect();
+    let (id, data, index_data) = crate::packed::merge_packs(&views)?;
+    let path = stage.join(format!("objects/pack/pack-{id}.pack"));
+    let index = path.with_extension("idx");
+    fs::write(&path, &data)?;
+    fs::write(&index, index_data)?;
+    Ok(CandidatePack {
+        stored: None,
+        id,
+        level: level + 1,
+        pack: path,
+        index,
+        bytes: data.len() as u64,
+    })
+}
+
 struct Quarantine(PathBuf);
 impl Drop for Quarantine {
     fn drop(&mut self) {
@@ -280,24 +315,29 @@ impl NativeHost {
         }
         init(&self.view)?;
         for pack in &manifest.packs {
-            let directory = self.view.join("objects/pack");
-            fs::create_dir_all(&directory)?;
-            for (extension, chunks, length) in [
-                ("pack", &pack.pack, pack.pack_bytes),
-                ("idx", &pack.index, pack.index_bytes),
-            ] {
-                let bytes = self.repository.read_chunks(chunks, length)?;
-                let path = directory.join(format!("pack-{}.{extension}", pack.id));
-                if chunks.len() == 1 {
-                    self.repository
-                        .blobs
-                        .materialize_file(&chunks[0].key, &path, &bytes)?;
-                } else {
-                    fs::write(path, bytes)?;
-                }
-            }
+            self.restore_pack(pack)?;
         }
         write_refs(&self.view, &manifest.refs)?;
+        Ok(())
+    }
+
+    fn restore_pack(&self, pack: &StoredPack) -> io::Result<()> {
+        let directory = self.view.join("objects/pack");
+        fs::create_dir_all(&directory)?;
+        for (extension, chunks, length) in [
+            ("pack", &pack.pack, pack.pack_bytes),
+            ("idx", &pack.index, pack.index_bytes),
+        ] {
+            let bytes = self.repository.read_chunks(chunks, length)?;
+            let path = directory.join(format!("pack-{}.{extension}", pack.id));
+            if chunks.len() == 1 {
+                self.repository
+                    .blobs
+                    .materialize_file(&chunks[0].key, &path, &bytes)?;
+            } else {
+                fs::write(path, bytes)?;
+            }
+        }
         Ok(())
     }
 
@@ -311,6 +351,32 @@ impl NativeHost {
         Ok(())
     }
 
+    fn import_chunks(
+        &self,
+        source: &Path,
+        bytes: &[u8],
+        keys: Option<&[String]>,
+    ) -> io::Result<Vec<Chunk>> {
+        bytes
+            .chunks(self.repository.chunk_bytes)
+            .enumerate()
+            .map(|(position, bytes)| {
+                let key = keys
+                    .map(|keys| keys[position].clone())
+                    .unwrap_or_else(|| format!("chunks/{}", hash(bytes)));
+                if position == 0 && source.metadata()?.len() == bytes.len() as u64 {
+                    self.repository.blobs.put_file(&key, source, bytes)?;
+                } else {
+                    self.repository.blobs.put(&key, bytes)?;
+                }
+                Ok(Chunk {
+                    key,
+                    len: bytes.len() as u64,
+                })
+            })
+            .collect()
+    }
+
     fn import_pack(
         &self,
         pack: &CandidatePack,
@@ -318,31 +384,10 @@ impl NativeHost {
         index: &[u8],
         pack_keys: Option<&[String]>,
     ) -> io::Result<StoredPack> {
-        let store =
-            |source: &Path, bytes: &[u8], keys: Option<&[String]>| -> io::Result<Vec<Chunk>> {
-                bytes
-                    .chunks(self.repository.chunk_bytes)
-                    .enumerate()
-                    .map(|(position, bytes)| {
-                        let key = keys
-                            .map(|keys| keys[position].clone())
-                            .unwrap_or_else(|| format!("chunks/{}", hash(bytes)));
-                        if position == 0 && source.metadata()?.len() == bytes.len() as u64 {
-                            self.repository.blobs.put_file(&key, source, bytes)?;
-                        } else {
-                            self.repository.blobs.put(&key, bytes)?;
-                        }
-                        Ok(Chunk {
-                            key,
-                            len: bytes.len() as u64,
-                        })
-                    })
-                    .collect()
-            };
         Ok(StoredPack {
             id: pack.id.clone(),
-            pack: store(&pack.pack, data, pack_keys)?,
-            index: store(&pack.index, index, None)?,
+            pack: self.import_chunks(&pack.pack, data, pack_keys)?,
+            index: self.import_chunks(&pack.index, index, None)?,
             pack_bytes: data.len() as u64,
             index_bytes: index.len() as u64,
             level: pack.level,
@@ -436,36 +481,12 @@ impl NativeHost {
                 continue;
             }
             let start = Instant::now();
-            let sources: Vec<_> = selected
-                .iter()
-                .map(|index| {
-                    Ok((
-                        fs::read(&packs[*index].pack)?,
-                        fs::read(&packs[*index].index)?,
-                    ))
-                })
-                .collect::<io::Result<_>>()?;
-            let views: Vec<_> = sources
-                .iter()
-                .map(|(pack, index)| (pack.as_slice(), index.as_slice()))
-                .collect();
-            let (id, data, index_data) = crate::packed::merge_packs(&views)?;
-            let path = stage.join(format!("objects/pack/pack-{id}.pack"));
-            let index = path.with_extension("idx");
-            fs::write(&path, &data)?;
-            fs::write(&index, index_data)?;
-            let result_bytes = data.len() as u64;
+            let merged = merge_candidates(stage, packs, &selected, level)?;
+            let result_bytes = merged.bytes;
             for i in selected.into_iter().rev() {
                 packs.remove(i);
             }
-            packs.push(CandidatePack {
-                stored: None,
-                id,
-                level: level + 1,
-                pack: path,
-                index,
-                bytes: result_bytes,
-            });
+            packs.push(merged);
             self.metrics.compactions += 1;
             self.metrics.compaction_input_bytes += bytes;
             self.metrics.compaction_output_bytes += result_bytes;

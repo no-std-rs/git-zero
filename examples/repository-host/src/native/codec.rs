@@ -140,6 +140,12 @@ pub(super) fn init(repo: &Path) -> io::Result<()> {
 
 pub fn refs(repo: &Path) -> io::Result<BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
+    read_packed_refs(repo, &mut result)?;
+    read_loose_refs(repo, &mut result)?;
+    Ok(result)
+}
+
+fn read_packed_refs(repo: &Path, result: &mut BTreeMap<String, String>) -> io::Result<()> {
     match fs::read_to_string(repo.join("packed-refs")) {
         Ok(packed) => {
             for line in packed
@@ -156,6 +162,10 @@ pub fn refs(repo: &Path) -> io::Result<BTreeMap<String, String>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
+    Ok(())
+}
+
+fn read_loose_refs(repo: &Path, result: &mut BTreeMap<String, String>) -> io::Result<()> {
     let mut directories = vec![repo.join("refs")];
     while let Some(directory) = directories.pop() {
         for entry in fs::read_dir(directory)? {
@@ -183,7 +193,7 @@ pub fn refs(repo: &Path) -> io::Result<BTreeMap<String, String>> {
             result.insert(name.to_string(), id.to_string());
         }
     }
-    Ok(result)
+    Ok(())
 }
 
 fn validate_ref(name: &str, id: &str) -> io::Result<()> {
@@ -274,6 +284,10 @@ pub fn http_backend(repo: &Path, request: &Request) -> io::Result<Response> {
         );
     }
     let output = command(process, &request.body)?.stdout;
+    parse_cgi_response(&output)
+}
+
+fn parse_cgi_response(output: &[u8]) -> io::Result<Response> {
     let (boundary, skip) = output
         .windows(4)
         .position(|x| x == b"\r\n\r\n")

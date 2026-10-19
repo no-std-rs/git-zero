@@ -176,7 +176,7 @@ function acceptReceipt(repo, encoded) {
 
 function mergeWorkerUsage(result, repo) {
   const usage = workerUsage.get(repo);
-  for (const key of Object.keys(usage.totals)) result[key] = usage.totals[key];
+  for (const key of USAGE_FIELDS) result[key] = usage.totals[key];
   result.by_phase = usage.by_phase;
   result.operations = usage.operations;
   result.counter_epoch = workerEpoch;
@@ -318,20 +318,23 @@ export class RepositoryServices {
     return result;
   }
 
+  keyOperation(name, key) {
+    if (key === undefined) return undefined;
+    const keyOp = this.keyUsage.get(key) ?? { key, get_attempts: 0, head_attempts: 0, put_attempts: 0,
+      delete_attempts: 0, failures: 0, read_bytes: 0, written_bytes: 0 };
+    this.keyUsage.delete(key);
+    keyOp[`${name.slice(3)}_attempts`]++;
+    this.keyUsage.set(key, keyOp);
+    if (this.keyUsage.size > 256) {
+      this.keyUsage.delete(this.keyUsage.keys().next().value);
+      this.keyUsageTruncated = true;
+    }
+    return keyOp;
+  }
+
   async operation(name, callback, readBytes = () => 0, writeBytes = 0, key) {
     const op = this.operations[name] ??= { attempts: 0, successes: 0, failures: 0, read_bytes: 0, written_bytes: 0 };
-    let keyOp;
-    if (key !== undefined) {
-      keyOp = this.keyUsage.get(key) ?? { key, get_attempts: 0, head_attempts: 0, put_attempts: 0,
-        delete_attempts: 0, failures: 0, read_bytes: 0, written_bytes: 0 };
-      this.keyUsage.delete(key);
-      keyOp[`${name.slice(3)}_attempts`]++;
-      this.keyUsage.set(key, keyOp);
-      if (this.keyUsage.size > 256) {
-        this.keyUsage.delete(this.keyUsage.keys().next().value);
-        this.keyUsageTruncated = true;
-      }
-    }
+    const keyOp = this.keyOperation(name, key);
     op.attempts++;
     const billing = R2_BILLING.get(name);
     if (billing) this.bump(billing);
