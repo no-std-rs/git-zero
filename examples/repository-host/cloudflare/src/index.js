@@ -377,117 +377,130 @@ export class RepositoryServices {
     const prefix = `${repo}/`;
     const path = new URL(request.url).pathname;
     if (path.startsWith("/_services/blob/")) {
-      const key = path.slice("/_services/blob/".length);
-      if (!BLOB.test(key)) fail(400, "expected a content-addressed chunks/<SHA256> key");
-      if (request.method === "GET") {
-        const data = await this.operation("r2_get", async () => {
-          const object = await this.env.BLOBS.get(prefix + key);
-          return object ? new Uint8Array(await object.arrayBuffer()) : null;
-        }, (value) => value?.byteLength ?? 0, 0, key);
-        return data ? new Response(data, { headers: { "Content-Type": "application/octet-stream" } })
-          : json({ error: "blob not found" }, 404);
-      }
-      if (request.method === "PUT") {
-        const data = await bytes(request, MAX_BLOB_BYTES);
-        const sha = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
-        const hex = Array.from(sha, (byte) => byte.toString(16).padStart(2, "0")).join("");
-        if (key !== `chunks/${hex}`) fail(409, "content does not match immutable blob key");
-        const previous = this.exec("SELECT size FROM blob_catalog WHERE key = ?", key)[0];
-        await this.operation("r2_put", () => this.env.BLOBS.put(prefix + key, data), () => 0, data.byteLength, key);
-        this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size", key, data.byteLength);
-        if (!previous) this.liveObjects++;
-        this.liveBytes += data.byteLength - (previous?.size ?? 0);
-        this.updatePeak();
-        await this.ctx.storage.sync();
-        return new Response(null, { status: 204 });
-      }
-      if (request.method === "DELETE") {
-        await this.remove(key, prefix);
-        await this.ctx.storage.sync();
-        return new Response(null, { status: 204 });
-      }
-      return json({ error: "method not allowed" }, 405);
+      return this.handleBlob(request, path.slice("/_services/blob/".length), prefix);
     }
-    if (path === "/_services/manifest") {
-      if (request.method === "GET") {
-        return this.operation("manifest_get", async () => {
-          const row = this.exec("SELECT manifest FROM repository_state WHERE id = 1")[0];
-          return json(row ? JSON.parse(row.manifest) : { generation: 0, refs: {}, packs: [] });
-        });
-      }
-      if (request.method === "POST") {
-        const body = await parseJson(request, MAX_MANIFEST_BYTES);
-        if (!Number.isSafeInteger(body.expected) || body.expected < 0
-            || body.next?.generation !== body.expected + 1 || !Number.isSafeInteger(body.next.generation)
-            || !body.next.refs || typeof body.next.refs !== "object" || Array.isArray(body.next.refs)
-            || !Array.isArray(body.next.packs)) fail(400, "invalid manifest generation or shape");
-        return this.operation("manifest_cas", async () => {
-          const published = this.ctx.storage.transactionSync(() => {
-            const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
-            if (generation !== body.expected) return false;
-            this.exec("INSERT INTO repository_state (id, generation, manifest) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET generation = excluded.generation, manifest = excluded.manifest",
-              body.next.generation, JSON.stringify(body.next));
-            return true;
-          });
-          await this.ctx.storage.sync();
-          return json({ published });
-        });
-      }
-      return json({ error: "method not allowed" }, 405);
-    }
+    if (path === "/_services/manifest") return this.handleManifest(request);
     if (path === "/_services/gc" && request.method === "POST") {
-      const body = await parseJson(request, MAX_MANIFEST_BYTES);
-      if (!Array.isArray(body.live_keys) || body.live_keys.some((key) => !BLOB.test(key))) fail(400, "invalid GC live keys");
-      const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
-      if (!Number.isSafeInteger(body.expected_generation) || body.expected_generation < 0) fail(400, "GC requires expected_generation");
-      if (body.expected_generation !== generation) fail(409, "stale GC generation");
-      const live = new Set(body.live_keys);
-      const objects = await this.inventory(prefix);
-      let removed = 0;
-      for (const object of objects) {
-        const key = object.key.slice(prefix.length);
-        if (!live.has(key)) { await this.remove(key, prefix, object.size); removed++; }
-      }
-      // Reconcile catalog state after interrupted put/catalog updates as well.
-      this.ctx.storage.transactionSync(() => {
-        this.exec("DELETE FROM blob_catalog");
-        for (const object of objects) {
-          const key = object.key.slice(prefix.length);
-          if (live.has(key)) this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?)", key, object.size);
-        }
-      });
-      this.liveObjects = objects.filter((object) => live.has(object.key.slice(prefix.length))).length;
-      this.liveBytes = objects.filter((object) => live.has(object.key.slice(prefix.length))).reduce((sum, object) => sum + object.size, 0);
-      this.updatePeak();
-      await this.ctx.storage.sync();
-      return json({ deleted: removed });
+      return this.handleGc(request, prefix);
     }
     if (path === "/_services/metrics" && request.method === "GET") {
-      const objects = await this.inventory(prefix);
-      const liveBytes = objects.reduce((sum, object) => sum + object.size, 0);
-      this.peakBytes = Math.max(this.peakBytes, liveBytes);
-      const row = this.exec("SELECT LENGTH(CAST(manifest AS BLOB)) AS bytes FROM repository_state WHERE id = 1")[0];
-      const counters = { ...this.totals };
-      if (!this.sqlRowsKnown) { counters.do_rows_read = null; counters.do_rows_written = null; }
-      return json({
-        ...counters, r2_live_objects: objects.length, r2_live_bytes: liveBytes,
-        r2_peak_bytes: this.peakBytes, do_sqlite_bytes: this.ctx.storage.sql.databaseSize,
-        manifest_bytes: row?.bytes ?? 0, worker_cpu_ms: null, do_gb_seconds: null,
-        repository: repo, by_phase: this.byPhase, operations: this.operations,
-        r2_key_access: {
-          capacity: 256, tracked_keys: this.keyUsage.size, truncated: this.keyUsageTruncated,
-          counter_scope: "recent R2 binding calls in this Durable Object instance; aggregate counters remain authoritative",
-          top_keys: [...this.keyUsage.values()].sort((a, b) => b.read_bytes - a.read_bytes
-            || b.get_attempts - a.get_attempts || b.put_attempts - a.put_attempts
-            || a.key.localeCompare(b.key)).slice(0, 10),
-        },
-        counter_scope: "current Worker runtime / Durable Object instance; R2 inventory persists",
-        counter_epoch: this.epoch,
-        local_only: true, runtime: "workerd", observation_phase: "stats",
-        topology: "Worker gateway -> local Rust Git codec -> Worker service bridge -> Durable Object -> R2/SQLite",
-      });
+      return this.handleMetrics(repo, prefix);
     }
     return json({ error: "unknown service route" }, 404);
+  }
+
+  async handleBlob(request, key, prefix) {
+    if (!BLOB.test(key)) fail(400, "expected a content-addressed chunks/<SHA256> key");
+    if (request.method === "GET") {
+      const data = await this.operation("r2_get", async () => {
+        const object = await this.env.BLOBS.get(prefix + key);
+        return object ? new Uint8Array(await object.arrayBuffer()) : null;
+      }, (value) => value?.byteLength ?? 0, 0, key);
+      return data ? new Response(data, { headers: { "Content-Type": "application/octet-stream" } })
+        : json({ error: "blob not found" }, 404);
+    }
+    if (request.method === "PUT") {
+      const data = await bytes(request, MAX_BLOB_BYTES);
+      const sha = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+      const hex = Array.from(sha, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      if (key !== `chunks/${hex}`) fail(409, "content does not match immutable blob key");
+      const previous = this.exec("SELECT size FROM blob_catalog WHERE key = ?", key)[0];
+      await this.operation("r2_put", () => this.env.BLOBS.put(prefix + key, data), () => 0, data.byteLength, key);
+      this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size", key, data.byteLength);
+      if (!previous) this.liveObjects++;
+      this.liveBytes += data.byteLength - (previous?.size ?? 0);
+      this.updatePeak();
+      await this.ctx.storage.sync();
+      return new Response(null, { status: 204 });
+    }
+    if (request.method === "DELETE") {
+      await this.remove(key, prefix);
+      await this.ctx.storage.sync();
+      return new Response(null, { status: 204 });
+    }
+    return json({ error: "method not allowed" }, 405);
+  }
+
+  async handleManifest(request) {
+    if (request.method === "GET") {
+      return this.operation("manifest_get", async () => {
+        const row = this.exec("SELECT manifest FROM repository_state WHERE id = 1")[0];
+        return json(row ? JSON.parse(row.manifest) : { generation: 0, refs: {}, packs: [] });
+      });
+    }
+    if (request.method === "POST") {
+      const body = await parseJson(request, MAX_MANIFEST_BYTES);
+      if (!Number.isSafeInteger(body.expected) || body.expected < 0
+          || body.next?.generation !== body.expected + 1 || !Number.isSafeInteger(body.next.generation)
+          || !body.next.refs || typeof body.next.refs !== "object" || Array.isArray(body.next.refs)
+          || !Array.isArray(body.next.packs)) fail(400, "invalid manifest generation or shape");
+      return this.operation("manifest_cas", async () => {
+        const published = this.ctx.storage.transactionSync(() => {
+          const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
+          if (generation !== body.expected) return false;
+          this.exec("INSERT INTO repository_state (id, generation, manifest) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET generation = excluded.generation, manifest = excluded.manifest",
+            body.next.generation, JSON.stringify(body.next));
+          return true;
+        });
+        await this.ctx.storage.sync();
+        return json({ published });
+      });
+    }
+    return json({ error: "method not allowed" }, 405);
+  }
+
+  async handleGc(request, prefix) {
+    const body = await parseJson(request, MAX_MANIFEST_BYTES);
+    if (!Array.isArray(body.live_keys) || body.live_keys.some((key) => !BLOB.test(key))) fail(400, "invalid GC live keys");
+    const generation = this.exec("SELECT generation FROM repository_state WHERE id = 1")[0]?.generation ?? 0;
+    if (!Number.isSafeInteger(body.expected_generation) || body.expected_generation < 0) fail(400, "GC requires expected_generation");
+    if (body.expected_generation !== generation) fail(409, "stale GC generation");
+    const live = new Set(body.live_keys);
+    const objects = await this.inventory(prefix);
+    let removed = 0;
+    for (const object of objects) {
+      const key = object.key.slice(prefix.length);
+      if (!live.has(key)) { await this.remove(key, prefix, object.size); removed++; }
+    }
+    // Reconcile catalog state after interrupted put/catalog updates as well.
+    this.ctx.storage.transactionSync(() => {
+      this.exec("DELETE FROM blob_catalog");
+      for (const object of objects) {
+        const key = object.key.slice(prefix.length);
+        if (live.has(key)) this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?)", key, object.size);
+      }
+    });
+    this.liveObjects = objects.filter((object) => live.has(object.key.slice(prefix.length))).length;
+    this.liveBytes = objects.filter((object) => live.has(object.key.slice(prefix.length))).reduce((sum, object) => sum + object.size, 0);
+    this.updatePeak();
+    await this.ctx.storage.sync();
+    return json({ deleted: removed });
+  }
+
+  async handleMetrics(repo, prefix) {
+    const objects = await this.inventory(prefix);
+    const liveBytes = objects.reduce((sum, object) => sum + object.size, 0);
+    this.peakBytes = Math.max(this.peakBytes, liveBytes);
+    const row = this.exec("SELECT LENGTH(CAST(manifest AS BLOB)) AS bytes FROM repository_state WHERE id = 1")[0];
+    const counters = { ...this.totals };
+    if (!this.sqlRowsKnown) { counters.do_rows_read = null; counters.do_rows_written = null; }
+    return json({
+      ...counters, r2_live_objects: objects.length, r2_live_bytes: liveBytes,
+      r2_peak_bytes: this.peakBytes, do_sqlite_bytes: this.ctx.storage.sql.databaseSize,
+      manifest_bytes: row?.bytes ?? 0, worker_cpu_ms: null, do_gb_seconds: null,
+      repository: repo, by_phase: this.byPhase, operations: this.operations,
+      r2_key_access: {
+        capacity: 256, tracked_keys: this.keyUsage.size, truncated: this.keyUsageTruncated,
+        counter_scope: "recent R2 binding calls in this Durable Object instance; aggregate counters remain authoritative",
+        top_keys: [...this.keyUsage.values()].sort((a, b) => b.read_bytes - a.read_bytes
+          || b.get_attempts - a.get_attempts || b.put_attempts - a.put_attempts
+          || a.key.localeCompare(b.key)).slice(0, 10),
+      },
+      counter_scope: "current Worker runtime / Durable Object instance; R2 inventory persists",
+      counter_epoch: this.epoch,
+      local_only: true, runtime: "workerd", observation_phase: "stats",
+      topology: "Worker gateway -> local Rust Git codec -> Worker service bridge -> Durable Object -> R2/SQLite",
+    });
   }
 
   fetch(request) {
