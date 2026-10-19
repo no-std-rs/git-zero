@@ -392,11 +392,12 @@ fn durable_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         std::process::id(),
         TEMP_ID.fetch_add(1, Ordering::Relaxed)
     ));
+    // A failed creation must not remove a pre-existing blob at this name.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
