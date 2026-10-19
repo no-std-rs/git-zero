@@ -109,6 +109,14 @@ struct CandidatePack {
     bytes: u64,
 }
 
+fn validate_candidate_bytes(packs: &[CandidatePack]) -> io::Result<()> {
+    let sizes = packs
+        .iter()
+        .map(|pack| Ok((pack.bytes, pack.index.metadata()?.len())))
+        .collect::<io::Result<Vec<_>>>()?;
+    validate_snapshot_bytes(sizes.into_iter())
+}
+
 fn compaction_selection(packs: &[CandidatePack], level: u32) -> Vec<usize> {
     let mut candidates: Vec<_> = packs
         .iter()
@@ -468,6 +476,41 @@ impl NativeHost {
         Ok(())
     }
 
+    fn prepare_candidates(&mut self, stage: &Path) -> io::Result<Vec<CandidatePack>> {
+        let mut packs: Vec<_> = self
+            .manifest
+            .packs
+            .iter()
+            .map(|pack| self.native_pack(pack))
+            .collect();
+        for entry in fs::read_dir(stage.join("objects/pack"))? {
+            let path = entry?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("pack") {
+                continue;
+            }
+            let id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .trim_start_matches("pack-")
+                .to_string();
+            if !packs.iter().any(|pack| pack.id == id) {
+                packs.push(CandidatePack {
+                    stored: None,
+                    id,
+                    level: 0,
+                    index: path.with_extension("idx"),
+                    bytes: path.metadata()?.len(),
+                    pack: path,
+                });
+            }
+        }
+        validate_candidate_bytes(&packs)?;
+        self.compact(stage, &mut packs)?;
+        validate_candidate_bytes(&packs)?;
+        Ok(packs)
+    }
+
     fn collect_retired_chunks(&mut self) {
         let garbage = self.manifest.garbage.len();
         let failed = self.manifest.collect_garbage(&self.repository.blobs);
@@ -486,7 +529,6 @@ impl NativeHost {
                 "retired chunk cleanup must complete before another push",
             ));
         }
-        let previous = self.manifest.clone();
         let quarantine = Quarantine(self.root.join("quarantine"));
         if quarantine.0.exists() {
             fs::remove_dir_all(&quarantine.0)?;
@@ -500,7 +542,7 @@ impl NativeHost {
             // fixed sibling layout also handles non-UTF-8 and newline roots.
             b"../../../view/repo.git/objects\n",
         )?;
-        write_refs(&stage, &previous.refs)?;
+        write_refs(&stage, &self.manifest.refs)?;
         self.metrics.receive_prepare_seconds += prepare_start.elapsed().as_secs_f64();
         let codec_start = Instant::now();
         // Hash large input streams while strict native validation runs. Reuse
@@ -527,48 +569,16 @@ impl NativeHost {
         };
         let next_refs = refs(&stage)?;
         self.metrics.receive_codec_seconds += codec_start.elapsed().as_secs_f64();
-        if response.status != 200 || next_refs == previous.refs {
+        if response.status != 200 || next_refs == self.manifest.refs {
             return Ok(response);
         }
         validate_snapshot_refs(&next_refs)?;
         self.view_dirty = true;
-        let mut packs: Vec<_> = previous.packs.iter().map(|p| self.native_pack(p)).collect();
-        for entry in fs::read_dir(stage.join("objects/pack"))? {
-            let path = entry?.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("pack") {
-                continue;
-            }
-            let id = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .trim_start_matches("pack-")
-                .to_string();
-            if !packs.iter().any(|p| p.id == id) {
-                packs.push(CandidatePack {
-                    stored: None,
-                    id,
-                    level: 0,
-                    index: path.with_extension("idx"),
-                    bytes: path.metadata()?.len(),
-                    pack: path,
-                });
-            }
-        }
-        let sizes = packs
-            .iter()
-            .map(|pack| Ok((pack.bytes, pack.index.metadata()?.len())))
-            .collect::<io::Result<Vec<_>>>()?;
-        validate_snapshot_bytes(sizes.into_iter())?;
-        self.compact(&stage, &mut packs)?;
-        let sizes = packs
-            .iter()
-            .map(|pack| Ok((pack.bytes, pack.index.metadata()?.len())))
-            .collect::<io::Result<Vec<_>>>()?;
-        validate_snapshot_bytes(sizes.into_iter())?;
+        let packs = self.prepare_candidates(&stage)?;
         let storage_start = Instant::now();
         let mut next = Manifest {
-            generation: previous
+            generation: self
+                .manifest
                 .generation
                 .checked_add(1)
                 .ok_or_else(|| io::Error::other("generation overflow"))?,
@@ -582,14 +592,14 @@ impl NativeHost {
         }
         self.metrics.receive_storage_seconds += storage_start.elapsed().as_secs_f64();
         let publication_start = Instant::now();
-        next.retire_replaced(&previous);
+        next.retire_replaced(&self.manifest);
         // A manifest write can become visible before an I/O error is reported.
         // Recover from authoritative state before serving any later request.
         self.view_dirty = true;
         if !self
             .repository
             .state
-            .compare_and_swap(previous.generation, &next)?
+            .compare_and_swap(self.manifest.generation, &next)?
         {
             return Err(io::Error::other("concurrent generation update"));
         }
