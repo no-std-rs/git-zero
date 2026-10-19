@@ -1,6 +1,7 @@
 //! Observer-only Git inventory. These scans are excluded from request timings.
 use crate::native::command;
 use crate::storage::Manifest;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,6 +24,25 @@ struct Entry {
     logical: u64,
     compressed: u64,
     representations: u64,
+}
+
+#[derive(Default, Serialize)]
+struct TypeSummary {
+    unique_objects: u64,
+    logical_bytes: u64,
+    reachable_objects: u64,
+    encoded_representations: u64,
+}
+
+#[derive(Serialize)]
+struct ObjectSummary<'a> {
+    id: &'a str,
+    #[serde(rename = "type")]
+    kind: &'a str,
+    logical_bytes: u64,
+    minimum_encoded_bytes: u64,
+    representations: u64,
+    reachable: bool,
 }
 
 pub fn inventory(repo: &Path, manifest: &Manifest) -> io::Result<Value> {
@@ -133,28 +153,32 @@ pub fn inventory(repo: &Path, manifest: &Manifest) -> io::Result<Value> {
         .map_err(io::Error::other)?
         .lines()
         .collect();
-    let mut by_type = BTreeMap::<String, Value>::new();
+    let mut by_type = BTreeMap::<&str, TypeSummary>::new();
     let mut logical_bytes = 0u64;
     let mut minimum_encoded_bytes = 0u64;
     for (id, entry) in &objects {
         logical_bytes += entry.logical;
         minimum_encoded_bytes += entry.compressed;
-        let row = by_type.entry(entry.kind.clone()).or_insert_with(|| json!({"unique_objects":0,"logical_bytes":0,"reachable_objects":0,"encoded_representations":0}));
-        for (field, amount) in [
-            ("unique_objects", 1),
-            ("logical_bytes", entry.logical),
-            (
-                "reachable_objects",
-                u64::from(reachable.contains(id.as_str())),
-            ),
-            ("encoded_representations", entry.representations),
-        ] {
-            row[field] = json!(row[field].as_u64().unwrap_or(0) + amount);
-        }
+        let row = by_type.entry(&entry.kind).or_default();
+        row.unique_objects += 1;
+        row.logical_bytes += entry.logical;
+        row.reachable_objects += u64::from(reachable.contains(id.as_str()));
+        row.encoded_representations += entry.representations;
     }
     let mut largest: Vec<_> = objects.iter().collect();
     largest.sort_unstable_by(|a, b| b.1.logical.cmp(&a.1.logical).then_with(|| a.0.cmp(b.0)));
-    let largest: Vec<_> = largest.into_iter().take(10).map(|(id, entry)|json!({"id":id,"type":entry.kind,"logical_bytes":entry.logical,"minimum_encoded_bytes":entry.compressed,"representations":entry.representations,"reachable":reachable.contains(id.as_str())})).collect();
+    let largest: Vec<_> = largest
+        .into_iter()
+        .take(10)
+        .map(|(id, entry)| ObjectSummary {
+            id,
+            kind: &entry.kind,
+            logical_bytes: entry.logical,
+            minimum_encoded_bytes: entry.compressed,
+            representations: entry.representations,
+            reachable: reachable.contains(id.as_str()),
+        })
+        .collect();
     Ok(json!({
         "scope":"observer-only native Git scan; inventory, not per-object access frequency",
         "unique_objects":objects.len(),"reachable_objects":reachable.len(),
