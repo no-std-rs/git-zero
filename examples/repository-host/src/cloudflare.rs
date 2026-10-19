@@ -8,7 +8,6 @@ use crate::storage::{
 use crate::wire::{self, Policy};
 use serde_json::{Value, json};
 use std::{
-    fs::OpenOptions,
     io::{self, BufRead, BufReader, Write},
     net::TcpStream,
     path::Path,
@@ -246,11 +245,7 @@ impl HostBlobs {
     ) -> io::Result<()> {
         match self {
             Self::Local(blobs) => blobs.materialize_file(key, destination, verified),
-            Self::Cloudflare(..) => OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(destination)?
-                .write_all(verified),
+            Self::Cloudflare(..) => crate::storage::write_native_file(destination, verified),
         }
     }
     pub(crate) fn reclaim_unreferenced(&self, manifest: &Manifest) -> io::Result<usize> {

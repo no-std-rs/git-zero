@@ -1,11 +1,15 @@
+use git_zero_host::hash;
 use git_zero_host::http::{Request, Response};
 use git_zero_host::native::{NativeHost, command, refs};
-use git_zero_host::storage::{LocalServices, Manifest, StateStore};
+use git_zero_host::storage::{BlobStore, LocalServices, Manifest, StateStore};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 const ZERO_ID: &str = "0000000000000000000000000000000000000000";
 const MAIN: &str = "refs/heads/main";
@@ -49,6 +53,99 @@ fn git_text(repository: &Path, arguments: &[&str], input: &[u8]) -> String {
         .unwrap()
         .trim()
         .to_string()
+}
+
+struct TestProcess(Child);
+
+impl Drop for TestProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn start_cli(root: &Path) -> (TestProcess, String) {
+    let mut process = TestProcess(
+        Command::new(env!("CARGO_BIN_EXE_repository-host"))
+            .arg(root)
+            .arg("0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = process.0.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut url = String::new();
+        let ready = BufReader::new(stdout).read_line(&mut url).map(|_| url);
+        let _ = sender.send(ready);
+    });
+    let url = receiver
+        .recv_timeout(Duration::from_secs(15))
+        .expect("repository-host did not announce readiness")
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(url.starts_with("http://127.0.0.1:") && url.ends_with("/repo.git"));
+    (process, url)
+}
+
+fn capture_output(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).unwrap();
+        bytes
+    })
+}
+
+fn git_http(repository: &Path, arguments: &[&str]) {
+    let mut process = TestProcess(
+        Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args([
+                "-c",
+                "http.version=HTTP/1.1",
+                "-c",
+                "http.postBuffer=65536",
+                "-c",
+                "http.proxy=",
+            ])
+            .args(arguments)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_TRACE_CURL", repository.join("http.trace"))
+            .env("GIT_TRACE_CURL_NO_DATA", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = capture_output(process.0.stdout.take().unwrap());
+    let stderr = capture_output(process.0.stderr.take().unwrap());
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = process.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "git {arguments:?} timed out"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let stdout = stdout.join().unwrap();
+    let stderr = stderr.join().unwrap();
+    assert!(
+        status.success(),
+        "git {arguments:?}: {}{}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
 }
 
 fn source_repository(directory: &TestDirectory) -> PathBuf {
@@ -157,6 +254,142 @@ fn assert_push_ok(response: &Response) {
     assert!(body.contains("unpack ok\n"), "{body}");
     assert!(body.contains(&format!("ok {MAIN}\n")), "{body}");
     assert!(!body.contains(&format!("ng {MAIN} ")), "{body}");
+}
+
+#[test]
+fn native_root_ownership_excludes_other_processes_before_recovery() {
+    let directory = TestDirectory::new();
+    let root = directory.0.join("owned-host");
+    let (server, _) = start_cli(&root);
+    let services = LocalServices::new(root.join("services")).unwrap();
+    let data = b"immutable bytes staged by the active owner before its manifest CAS";
+    let key = format!("chunks/{}", hash(data));
+    services.blobs.put(&key, data).unwrap();
+
+    let rejected = NativeHost::open(root.clone()).err();
+    let staged = services.blobs.get(&key);
+    assert!(
+        rejected.is_some(),
+        "second host opened; active writer's staged chunk survived: {}",
+        staged.is_ok()
+    );
+    assert_eq!(staged.unwrap(), data);
+    let cloud_rejected = NativeHost::open_cloudflare(
+        root.clone(),
+        "http://127.0.0.1:1",
+        "owned-host",
+        "local-test-token",
+        false,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(cloud_rejected.kind(), rejected.unwrap().kind());
+
+    // Killing and waiting for the actual CLI releases its OS lock. Recovery by
+    // the next owner may now collect the interrupted writer's uncommitted blob.
+    drop(server);
+    let _recovered = NativeHost::open(root).unwrap();
+    assert_eq!(
+        services.blobs.get(&key).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+}
+
+#[test]
+fn git_clients_push_clone_and_fetch_through_the_cli_across_restart() {
+    let directory = TestDirectory::new();
+    let source = source_repository(&directory);
+    let root = directory.0.join("http-host");
+    let (server, url) = start_cli(&root);
+    let mut state = 0x9e3779b97f4a7c15u64;
+    let bytes: Vec<_> = (0..256 * 1024)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state as u8
+        })
+        .collect();
+    let blob = git_text(&source, &["hash-object", "-w", "--stdin"], &bytes);
+    let tree = git_text(
+        &source,
+        &["mktree"],
+        format!("100644 blob {blob}\tdata.bin\n").as_bytes(),
+    );
+    let first = git_text(&source, &["commit-tree", &tree], b"Initial HTTP push\n");
+    git(&source, &["update-ref", MAIN, &first], &[]);
+    git(&source, &["update-ref", "refs/tags/first", &first], &[]);
+    git_http(
+        &source,
+        &["push", "--quiet", "--atomic", &url, MAIN, "refs/tags/first"],
+    );
+    let trace = fs::read_to_string(source.join("http.trace")).unwrap();
+    assert!(
+        trace
+            .to_ascii_lowercase()
+            .contains("transfer-encoding: chunked")
+    );
+
+    let cloned = directory.0.join("cloned");
+    git_http(
+        &directory.0,
+        &["clone", "--quiet", &url, cloned.to_str().unwrap()],
+    );
+    assert_eq!(git_text(&cloned, &["rev-parse", "HEAD"], &[]), first);
+    assert_eq!(fs::read(cloned.join("data.bin")).unwrap(), bytes);
+
+    let second = commit(&source, Some(&first), 2);
+    let latest = git(&source, &["show", &format!("{second}:README.md")], &[]);
+    git(&source, &["update-ref", MAIN, &second], &[]);
+    git_http(&source, &["push", "--quiet", &url, MAIN]);
+    git_http(&cloned, &["fetch", "--quiet", "origin"]);
+    assert_eq!(
+        git_text(&cloned, &["rev-parse", "origin/main"], &[]),
+        second
+    );
+    assert_eq!(
+        git_text(&cloned, &["rev-parse", "refs/tags/first"], &[]),
+        first
+    );
+    assert_eq!(
+        git(&cloned, &["show", "origin/main:README.md"], &[]),
+        latest
+    );
+
+    let historical = directory.0.join("historical.git");
+    fs::create_dir(&historical).unwrap();
+    git(&historical, &["init", "--bare", "--quiet"], &[]);
+    git_http(
+        &historical,
+        &[
+            "fetch",
+            "--quiet",
+            &url,
+            "refs/tags/first:refs/heads/history",
+        ],
+    );
+    assert_eq!(git_text(&historical, &["rev-parse", "history"], &[]), first);
+    assert_eq!(git(&historical, &["show", "history:data.bin"], &[]), bytes);
+
+    drop(server);
+    fs::remove_dir_all(root.join("view")).unwrap();
+    let (_restarted, url) = start_cli(&root);
+    git_http(&historical, &["fetch", "--quiet", &url, MAIN]);
+    assert_eq!(
+        git_text(&historical, &["rev-parse", "FETCH_HEAD"], &[]),
+        second
+    );
+    assert_eq!(
+        git_text(&historical, &["rev-list", "--count", "FETCH_HEAD"], &[]),
+        "2"
+    );
+    assert_eq!(
+        git(&historical, &["show", "FETCH_HEAD:README.md"], &[]),
+        latest
+    );
+    assert_eq!(git(&historical, &["show", "history:data.bin"], &[]), bytes);
+    assert_eq!(manifest(&root).refs.get(MAIN), Some(&second));
+    assert_eq!(manifest(&root).generation, 2);
 }
 
 #[test]

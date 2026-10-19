@@ -143,6 +143,23 @@ pub struct LocalBlobStore {
 }
 
 impl LocalBlobStore {
+    fn stabilize_existing(path: &Path, verified: &[u8]) -> io::Result<bool> {
+        match fs::read(path) {
+            Ok(existing) if existing == verified => {
+                // A prior attempt may have failed after rename but before sync.
+                File::open(path)?.sync_all()?;
+                File::open(path.parent().expect("blob has a root"))?.sync_all()?;
+                Ok(true)
+            }
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "immutable blob conflict",
+            )),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Rebuild a disposable native file from a previously verified chunk.
     /// The caller has validated `verified` against this immutable blob key.
     /// A native view needs no additional durability barrier: its manifest and
@@ -162,15 +179,7 @@ impl LocalBlobStore {
                 "blob length differs from verified bytes",
             ));
         }
-        match fs::hard_link(source, destination) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
-            Err(_) => OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(destination)?
-                .write_all(verified),
-        }
+        install_native_file(&source, destination, verified)
     }
 
     /// Import a trusted, immutable codec output without writing another copy.
@@ -181,19 +190,8 @@ impl LocalBlobStore {
         validate_key(key)?;
         let guard = self.writes.lock().map_err(poisoned)?;
         let path = self.root.join(key);
-        match fs::read(&path) {
-            Ok(existing) if existing == verified => {
-                File::open(&path)?.sync_all()?;
-                return File::open(path.parent().expect("blob has a root"))?.sync_all();
-            }
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "immutable blob conflict",
-                ));
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        if Self::stabilize_existing(&path, verified)? {
+            return Ok(());
         }
         let file = File::open(source)?;
         if file.metadata()?.len() != verified.len() as u64 {
@@ -268,20 +266,8 @@ impl BlobStore for LocalBlobStore {
         validate_key(key)?;
         let _guard = self.writes.lock().map_err(poisoned)?;
         let path = self.root.join(key);
-        match fs::read(&path) {
-            Ok(existing) if existing == bytes => {
-                // A prior attempt may have failed after rename but before sync.
-                File::open(&path)?.sync_all()?;
-                return File::open(path.parent().expect("blob has a root"))?.sync_all();
-            }
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "immutable blob conflict",
-                ));
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        if Self::stabilize_existing(&path, bytes)? {
+            return Ok(());
         }
         durable_write(&path, bytes)
     }
@@ -469,6 +455,34 @@ fn poisoned<T>(_: std::sync::PoisonError<T>) -> io::Error {
 
 fn invalid_data(error: serde_json::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
+}
+
+/// Install a disposable view file, preferring an immutable shared source inode.
+/// Only authoritative imports need a durability barrier; neither path replaces
+/// an existing destination or removes a file whose creation it did not own.
+pub(crate) fn install_native_file(
+    source: &Path,
+    destination: &Path,
+    verified: &[u8],
+) -> io::Result<()> {
+    match fs::hard_link(source, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
+        Err(_) => write_native_file(destination, verified),
+    }
+}
+
+pub(crate) fn write_native_file(destination: &Path, verified: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    let result = file.write_all(verified);
+    drop(file);
+    if result.is_err() {
+        let _ = fs::remove_file(destination);
+    }
+    result
 }
 
 /// Sync each newly created directory's parent, including nested chunk prefixes.

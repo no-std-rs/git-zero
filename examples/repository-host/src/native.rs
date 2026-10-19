@@ -4,14 +4,14 @@ use crate::cloudflare::{HostBlobs, HostState, HttpServices};
 use crate::http::{Request, Response};
 use crate::storage::{
     BlobStore, Chunk, DurableStateStore, LocalServices, Manifest, R2BlobStore, StateStore,
-    StoredPack,
+    StoredPack, install_native_file,
 };
 use crate::{Repository, hash};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -70,27 +70,6 @@ fn file_matches(path: &Path, bytes: &[u8]) -> io::Result<bool> {
         }
     }
     Ok(true)
-}
-
-fn install_native_file(source: &Path, destination: &Path, verified: &[u8]) -> io::Result<()> {
-    match fs::hard_link(source, destination) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
-        Err(_) => {
-            // Native views are disposable. Only the authoritative import needs
-            // a durability barrier; a failed copy may remove only our new file.
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(destination)?;
-            let result = file.write_all(verified);
-            drop(file);
-            if result.is_err() {
-                let _ = fs::remove_file(destination);
-            }
-            result
-        }
-    }
 }
 
 #[derive(Default, Serialize)]
@@ -155,6 +134,27 @@ impl Drop for Quarantine {
     }
 }
 
+fn lock_root(root: &Path) -> io::Result<File> {
+    // Keep this inode permanently: unlinking a lockfile lets competing owners
+    // lock different files at the same path. Closing the file releases the lock.
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join(".native-host.lock"))?;
+    fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "cannot acquire repository ownership for {}: {error}",
+                root.display()
+            ),
+        )
+    })?;
+    Ok(file)
+}
+
 pub struct NativeHost {
     root: PathBuf,
     view: PathBuf,
@@ -166,12 +166,14 @@ pub struct NativeHost {
     view_dirty: bool,
     manifest: Manifest,
     pub metrics: Metrics,
+    _root_lock: File,
 }
 
 impl NativeHost {
     pub fn open(root: PathBuf) -> io::Result<Self> {
         crate::storage::durable_create_dir_all(&root)?;
         let root = root.canonicalize()?;
+        let root_lock = lock_root(&root)?;
         if let Some(parent) = root.parent() {
             File::open(parent)?.sync_all()?;
         }
@@ -183,7 +185,7 @@ impl NativeHost {
         // A 16 MiB local chunk keeps ordinary imported packs on the zero-copy
         // inode path. The shared storage engine keeps this a policy parameter.
         repository.chunk_bytes = 16 * 1024 * 1024;
-        Self::with_services(root, repository, None, false)
+        Self::with_services(root, root_lock, repository, None, false)
     }
 
     pub fn open_cloudflare(
@@ -195,16 +197,18 @@ impl NativeHost {
     ) -> io::Result<Self> {
         crate::storage::durable_create_dir_all(&root)?;
         let root = root.canonicalize()?;
+        let root_lock = lock_root(&root)?;
         let services = Arc::new(HttpServices::new(origin, repo, token)?);
         let repository = Repository::new(
             HostBlobs::Cloudflare(R2BlobStore::new(services.clone()), services.clone()),
             HostState::Cloudflare(DurableStateStore::new(services.clone())),
         );
-        Self::with_services(root, repository, Some(services), cold_view)
+        Self::with_services(root, root_lock, repository, Some(services), cold_view)
     }
 
     fn with_services(
         root: PathBuf,
+        root_lock: File,
         repository: Repository<HostBlobs, HostState>,
         cloudflare: Option<Arc<HttpServices>>,
         cold_view: bool,
@@ -221,6 +225,7 @@ impl NativeHost {
             view_dirty: false,
             manifest: Manifest::default(),
             metrics: Metrics::default(),
+            _root_lock: root_lock,
         };
         host.recover()?;
         Ok(host)
@@ -410,15 +415,19 @@ impl NativeHost {
         Ok(())
     }
 
-    fn receive(&mut self, request: &Request, route: Route) -> io::Result<Response> {
-        let prepare_start = Instant::now();
-        self.cloud_read_view()?;
+    fn collect_retired_chunks(&mut self) {
         let garbage = self.manifest.garbage.len();
         let failed = self.manifest.collect_garbage(&self.repository.blobs);
         self.metrics.retired_chunk_deletes += (garbage - failed.len()) as u64;
         // Remember completed retries without changing the durable retirement
         // debt, which remains available for recovery until the next publication.
         self.manifest.garbage = failed;
+    }
+
+    fn receive(&mut self, request: &Request, route: Route) -> io::Result<Response> {
+        let prepare_start = Instant::now();
+        self.cloud_read_view()?;
+        self.collect_retired_chunks();
         if !self.manifest.garbage.is_empty() {
             return Err(io::Error::other(
                 "retired chunk cleanup must complete before another push",
@@ -561,12 +570,9 @@ impl NativeHost {
         write_refs(&self.view, &next.refs)?;
         self.manifest = next;
         self.prune_native_packs()?;
-        let garbage = self.manifest.garbage.len();
-        let failed = self.manifest.collect_garbage(&self.repository.blobs);
-        self.metrics.retired_chunk_deletes += (garbage - failed.len()) as u64;
         // Failed deletions remain in the durable manifest and are retried
         // before accepting more data; publication itself is already durable.
-        self.manifest.garbage = failed;
+        self.collect_retired_chunks();
         self.metrics.receive_publication_seconds += publication_start.elapsed().as_secs_f64();
         self.view_dirty = false;
         self.cache.clear();
