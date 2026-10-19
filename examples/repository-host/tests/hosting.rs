@@ -118,8 +118,12 @@ fn request(method: &str, target: &str, body: Vec<u8>, content_type: Option<&str>
 }
 
 fn push_request(source: &Path, old: &str, new: &str) -> Request {
+    push_ref_request(source, old, new, MAIN)
+}
+
+fn push_ref_request(source: &Path, old: &str, new: &str, name: &str) -> Request {
     let mut body = packet(&format!(
-        "{old} {new} {MAIN}\0report-status atomic ofs-delta\n"
+        "{old} {new} {name}\0report-status atomic ofs-delta\n"
     ));
     body.extend_from_slice(b"0000");
     if new != ZERO_ID {
@@ -153,6 +157,65 @@ fn assert_push_ok(response: &Response) {
     assert!(body.contains("unpack ok\n"), "{body}");
     assert!(body.contains(&format!("ok {MAIN}\n")), "{body}");
     assert!(!body.contains(&format!("ng {MAIN} ")), "{body}");
+}
+
+#[cfg(unix)]
+#[test]
+fn thin_pushes_support_non_utf8_and_newline_root_names() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let directory = TestDirectory::new();
+    let source = source_repository(&directory);
+    let root = directory
+        .0
+        .join(std::ffi::OsStr::from_bytes(b"host-\xff\nrepository"));
+    let mut host = NativeHost::open(root.clone()).unwrap();
+    let first = commit(&source, None, 1);
+    assert_push_ok(&host.handle(push_request(&source, ZERO_ID, &first)));
+    let second = commit(&source, Some(&first), 2);
+    assert_push_ok(&host.handle(push_request(&source, &first, &second)));
+    assert_eq!(manifest(&root).refs.get(MAIN), Some(&second));
+    let view = root.join("view/repo.git");
+    git(&view, &["fsck", "--strict", "--no-reflogs"], &[]);
+    assert_eq!(git_text(&view, &["rev-list", "--count", MAIN], &[]), "2");
+}
+
+#[test]
+fn master_only_publication_and_recovery_produce_a_checked_out_clone() {
+    let directory = TestDirectory::new();
+    let source = source_repository(&directory);
+    let root = directory.0.join("host");
+    let mut host = NativeHost::open(root.clone()).unwrap();
+    let tip = commit(&source, None, 1);
+    let response = host.handle(push_ref_request(
+        &source,
+        ZERO_ID,
+        &tip,
+        "refs/heads/master",
+    ));
+    assert_eq!(response.status, 200);
+    let body = String::from_utf8_lossy(&response.body);
+    assert!(body.contains("ok refs/heads/master\n"), "{body}");
+    let view = root.join("view/repo.git");
+    let clone_and_check = |name: &str| {
+        let cloned = directory.0.join(name);
+        let mut process = Command::new("git");
+        process
+            .args(["clone", "--quiet", "--no-local"])
+            .arg(&view)
+            .arg(&cloned);
+        command(process, &[]).unwrap();
+        assert_eq!(git_text(&cloned, &["rev-parse", "HEAD"], &[]), tip);
+        assert_eq!(
+            git_text(&cloned, &["symbolic-ref", "HEAD"], &[]),
+            "refs/heads/master"
+        );
+        assert!(cloned.join("README.md").is_file());
+    };
+    clone_and_check("before-restart");
+    drop(host);
+    let _recovered = NativeHost::open(root.clone()).unwrap();
+    clone_and_check("after-restart");
 }
 
 #[test]

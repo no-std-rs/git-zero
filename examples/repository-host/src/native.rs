@@ -181,6 +181,17 @@ fn write_refs(repo: &Path, wanted: &BTreeMap<String, String>) -> io::Result<()> 
     fs::rename(repo.join("packed-refs.next"), repo.join("packed-refs"))?;
     fs::remove_dir_all(repo.join("refs"))?;
     fs::create_dir(repo.join("refs"))?;
+    let head = ["refs/heads/main", "refs/heads/master"]
+        .into_iter()
+        .find(|name| wanted.contains_key(*name))
+        .or_else(|| {
+            wanted
+                .keys()
+                .find(|name| name.starts_with("refs/heads/"))
+                .map(String::as_str)
+        })
+        .unwrap_or("refs/heads/main");
+    fs::write(repo.join("HEAD"), format!("ref: {head}\n"))?;
     Ok(())
 }
 
@@ -388,6 +399,27 @@ fn file_matches(path: &Path, bytes: &[u8]) -> io::Result<bool> {
     Ok(true)
 }
 
+fn install_native_file(source: &Path, destination: &Path, verified: &[u8]) -> io::Result<()> {
+    match fs::hard_link(source, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
+        Err(_) => {
+            // Native views are disposable. Only the authoritative import needs
+            // a durability barrier; a failed copy may remove only our new file.
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)?;
+            let result = file.write_all(verified);
+            drop(file);
+            if result.is_err() {
+                let _ = fs::remove_file(destination);
+            }
+            result
+        }
+    }
+}
+
 #[derive(Default, Serialize)]
 pub struct Metrics {
     pub requests: u64,
@@ -523,7 +555,7 @@ impl NativeHost {
 
     fn recover(&mut self) -> io::Result<()> {
         self.repository.state.stabilize()?;
-        let manifest = self.repository.state.load()?;
+        let mut manifest = self.repository.state.load()?;
         validate_snapshot_refs(&manifest.refs)?;
         validate_snapshot_bytes(manifest.packs.iter().map(|p| (p.pack_bytes, p.index_bytes)))?;
         self.rebuild_view(&manifest)?;
@@ -532,6 +564,7 @@ impl NativeHost {
         self.view_dirty = true;
         self.metrics.retired_chunk_deletes +=
             self.repository.blobs.reclaim_unreferenced(&manifest)? as u64;
+        manifest.garbage.clear();
         self.manifest = manifest;
         self.cache.clear();
         self.cache_bytes = 0;
@@ -728,7 +761,9 @@ impl NativeHost {
         fs::create_dir_all(stage.join("objects/info"))?;
         fs::write(
             stage.join("objects/info/alternates"),
-            format!("{}\n", self.view.join("objects").display()),
+            // Git resolves relative alternates from the object database. This
+            // fixed sibling layout also handles non-UTF-8 and newline roots.
+            b"../../../view/repo.git/objects\n",
         )?;
         write_refs(&stage, &previous.refs)?;
         self.metrics.receive_prepare_seconds += prepare_start.elapsed().as_secs_f64();
@@ -824,12 +859,15 @@ impl NativeHost {
                 let stored = self.import_pack(&pack, bytes, &index, keys)?;
                 self.metrics.blob_puts += (stored.pack.len() + stored.index.len()) as u64;
                 self.metrics.blob_put_bytes += (bytes.len() + index.len()) as u64;
-                for (source, extension) in [(&pack.pack, "pack"), (&pack.index, "idx")] {
+                for (source, extension, verified) in [
+                    (&pack.pack, "pack", bytes),
+                    (&pack.index, "idx", index.as_slice()),
+                ] {
                     let destination = self
                         .view
                         .join(format!("objects/pack/pack-{}.{extension}", pack.id));
                     if !destination.exists() {
-                        fs::hard_link(source, destination)?;
+                        install_native_file(source, &destination, verified)?;
                     }
                 }
                 stored
@@ -1107,16 +1145,119 @@ impl NativeHost {
 mod tests {
     use super::*;
 
-    #[test]
-    fn retirement_retries_count_partial_and_complete_cleanup_once() {
-        let directory = Quarantine(std::env::temp_dir().join(format!(
-            "git-zero-retirement-retry-{}-{}",
+    fn temporary_directory() -> Quarantine {
+        Quarantine(std::env::temp_dir().join(format!(
+            "git-zero-native-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        )));
+        )))
+    }
+
+    #[test]
+    fn recovery_cleanup_is_not_counted_again_before_a_push() {
+        let directory = temporary_directory();
+        let services = LocalServices::new(directory.0.join("services")).unwrap();
+        let retired = "chunks/retired";
+        services.blobs.put(retired, b"retired").unwrap();
+        let published = Manifest {
+            generation: 1,
+            garbage: vec![retired.into()],
+            ..Manifest::default()
+        };
+        assert!(services.state.compare_and_swap(0, &published).unwrap());
+        let mut host = NativeHost::open(directory.0.clone()).unwrap();
+        assert_eq!(host.metrics.retired_chunk_deletes, 1);
+        assert_eq!(host.repository.state.load().unwrap(), published);
+
+        let response = host.handle(Request {
+            method: "POST".into(),
+            target: "/repo.git/git-receive-pack".into(),
+            headers: BTreeMap::from([(
+                "content-type".into(),
+                "application/x-git-receive-pack-request".into(),
+            )]),
+            body: b"0000".to_vec(),
+        });
+        assert_eq!(response.status, 200);
+        assert_eq!(host.metrics.retired_chunk_deletes, 1);
+        assert!(host.manifest.garbage.is_empty());
+        assert_eq!(host.repository.state.load().unwrap(), published);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_installation_copies_when_hard_links_cross_devices() {
+        use std::os::unix::fs::MetadataExt;
+
+        let directory = temporary_directory();
+        fs::create_dir(&directory.0).unwrap();
+        let source = Path::new("/proc/self/cmdline");
+        let verified = fs::read(source).unwrap();
+        assert!(!verified.is_empty());
+        let copied = directory.0.join("copied.pack");
+        assert_eq!(
+            fs::hard_link(source, &copied).unwrap_err().kind(),
+            io::ErrorKind::CrossesDevices
+        );
+        install_native_file(source, &copied, &verified).unwrap();
+        assert_eq!(fs::read(&copied).unwrap(), verified);
+        assert_eq!(
+            install_native_file(source, &copied, b"replacement")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&copied).unwrap(), verified);
+
+        let source = directory.0.join("source.pack");
+        fs::write(&source, &verified).unwrap();
+        let linked = directory.0.join("linked.pack");
+        install_native_file(&source, &linked, &verified).unwrap();
+        assert_eq!(
+            fs::metadata(source).unwrap().ino(),
+            fs::metadata(linked).unwrap().ino()
+        );
+    }
+
+    #[test]
+    fn derived_head_prefers_main_then_master_then_the_first_branch() {
+        let directory = temporary_directory();
+        init(&directory.0).unwrap();
+        let id = "a".repeat(40);
+        for (names, expected) in [
+            (
+                vec!["refs/heads/zeta", "refs/heads/alpha"],
+                "refs/heads/alpha",
+            ),
+            (
+                vec!["refs/heads/alpha", "refs/heads/master"],
+                "refs/heads/master",
+            ),
+            (
+                vec!["refs/heads/master", "refs/heads/main", "refs/heads/alpha"],
+                "refs/heads/main",
+            ),
+            (vec!["refs/tags/release"], "refs/heads/main"),
+            (vec![], "refs/heads/main"),
+        ] {
+            let wanted = names
+                .into_iter()
+                .map(|name| (name.into(), id.clone()))
+                .collect();
+            write_refs(&directory.0, &wanted).unwrap();
+            assert_eq!(
+                fs::read_to_string(directory.0.join("HEAD")).unwrap(),
+                format!("ref: {expected}\n")
+            );
+        }
+    }
+
+    #[test]
+    fn retirement_retries_count_partial_and_complete_cleanup_once() {
+        let directory = temporary_directory();
         let mut host = NativeHost::open(directory.0.clone()).unwrap();
         let removed_key = "chunks/removed";
         let blocked_key = "chunks/blocked";
