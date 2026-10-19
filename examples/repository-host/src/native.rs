@@ -257,10 +257,10 @@ impl NativeHost {
         let mut manifest = self.repository.state.load()?;
         validate_snapshot_refs(&manifest.refs)?;
         validate_snapshot_bytes(manifest.packs.iter().map(|p| (p.pack_bytes, p.index_bytes)))?;
-        self.rebuild_view(&manifest)?;
         // Cleanup may fail after rebuilding. Retry recovery until the view,
         // in-memory manifest and cached responses agree on this generation.
         self.view_dirty = true;
+        self.rebuild_view(&manifest)?;
         self.metrics.retired_chunk_deletes +=
             self.repository.blobs.reclaim_unreferenced(&manifest)? as u64;
         manifest.garbage.clear();
@@ -271,8 +271,7 @@ impl NativeHost {
         Ok(())
     }
 
-    fn rebuild_view(&mut self, manifest: &Manifest) -> io::Result<()> {
-        self.view_dirty = true;
+    fn rebuild_view(&self, manifest: &Manifest) -> io::Result<()> {
         // The alternate object DB must contain only published data. In
         // particular, a pre-CAS crash can leave native pack links that are not
         // in the authoritative manifest. Never let a later push depend on them.
@@ -299,13 +298,14 @@ impl NativeHost {
             }
         }
         write_refs(&self.view, &manifest.refs)?;
-        self.view_dirty = false;
         Ok(())
     }
 
     fn cloud_read_view(&mut self) -> io::Result<()> {
         if self.cloudflare.is_some() && self.cold_view {
-            self.rebuild_view(&self.manifest.clone())?;
+            self.view_dirty = true;
+            self.rebuild_view(&self.manifest)?;
+            self.view_dirty = false;
             self.metrics.cloud_view_rehydrates += 1;
         }
         Ok(())
@@ -736,44 +736,44 @@ impl NativeHost {
         self.cache.push_back((key, response.clone()));
     }
 
+    fn statistics_value(&mut self, include_objects: bool) -> io::Result<serde_json::Value> {
+        if let Some(services) = &self.cloudflare {
+            services.set_phase("stats")?;
+        }
+        if self.view_dirty {
+            self.recover()?;
+        }
+        self.metrics.cache_bytes = self.cache_bytes as u64;
+        self.metrics.cache_budget_bytes = CACHE_BYTES as u64;
+        self.metrics.cache_entries = self.cache.len() as u64;
+        self.metrics.cache_entry_limit = CACHE_ENTRIES as u64;
+        let mut value = serde_json::to_value(&self.metrics)?;
+        value["native_view_policy"] = serde_json::json!(if self.cold_view {
+            "full-rehydrate-on-codec-cache-miss"
+        } else {
+            "persistent-native-view-up-to128MiB-packs-and-indexes"
+        });
+        if include_objects {
+            value["manifest"] = serde_json::to_value(&self.manifest)?;
+            value["objects"] = crate::objects::inventory(&self.view, &self.manifest)?;
+        }
+        if let Some(services) = &self.cloudflare {
+            let usage = services.usage()?;
+            if include_objects {
+                let counters = serde_json::from_value(usage.clone())?;
+                value["estimated_cost"] =
+                    serde_json::to_value(crate::cost::estimate_service_usage(&counters, 1000)?)?;
+            }
+            value["cloudflare_services"] = usage;
+        }
+        Ok(value)
+    }
+
     pub fn handle(&mut self, request: Request) -> Response {
         if request.method == "GET"
             && matches!(request.target.as_str(), "/metrics" | "/_object-stats")
         {
-            let result = (|| -> io::Result<serde_json::Value> {
-                if let Some(services) = &self.cloudflare {
-                    services.set_phase("stats")?;
-                }
-                if self.view_dirty {
-                    self.recover()?;
-                }
-                self.metrics.cache_bytes = self.cache_bytes as u64;
-                self.metrics.cache_budget_bytes = CACHE_BYTES as u64;
-                self.metrics.cache_entries = self.cache.len() as u64;
-                self.metrics.cache_entry_limit = CACHE_ENTRIES as u64;
-                let mut value = serde_json::to_value(&self.metrics)?;
-                value["native_view_policy"] = serde_json::json!(if self.cold_view {
-                    "full-rehydrate-on-codec-cache-miss"
-                } else {
-                    "persistent-native-view-up-to128MiB-packs-and-indexes"
-                });
-                if request.target == "/_object-stats" {
-                    value["manifest"] = serde_json::to_value(&self.manifest)?;
-                    value["objects"] = crate::objects::inventory(&self.view, &self.manifest)?;
-                }
-                if let Some(services) = &self.cloudflare {
-                    let usage = services.usage()?;
-                    if request.target == "/_object-stats" {
-                        let counters = serde_json::from_value(usage.clone())?;
-                        value["estimated_cost"] = serde_json::to_value(
-                            crate::cost::estimate_service_usage(&counters, 1000)?,
-                        )?;
-                    }
-                    value["cloudflare_services"] = usage;
-                }
-                Ok(value)
-            })();
-            return match result {
+            return match self.statistics_value(request.target == "/_object-stats") {
                 Ok(value) => Response {
                     status: 200,
                     headers: BTreeMap::from([("Content-Type".into(), "application/json".into())]),
