@@ -198,6 +198,9 @@ impl NativeHost {
         Self::with_services(root, root_lock, repository, None, false)
     }
 
+    /// The caller must hold exclusive repository namespace ownership before
+    /// opening, as the CLI does through registration. The root lock protects
+    /// this local codec view; it does not coordinate different cache roots.
     pub fn open_cloudflare(
         root: PathBuf,
         origin: &str,
@@ -565,7 +568,10 @@ impl NativeHost {
         validate_snapshot_bytes(sizes.into_iter())?;
         let storage_start = Instant::now();
         let mut next = Manifest {
-            generation: previous.generation + 1,
+            generation: previous
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| io::Error::other("generation overflow"))?,
             refs: next_refs,
             packs: Vec::new(),
             garbage: Vec::new(),
@@ -580,7 +586,11 @@ impl NativeHost {
         // A manifest write can become visible before an I/O error is reported.
         // Recover from authoritative state before serving any later request.
         self.view_dirty = true;
-        if !self.repository.publish(&previous, next.clone())? {
+        if !self
+            .repository
+            .state
+            .compare_and_swap(previous.generation, &next)?
+        {
             return Err(io::Error::other("concurrent generation update"));
         }
         // Publication is authoritative. A restart reconstructs refs from it if
