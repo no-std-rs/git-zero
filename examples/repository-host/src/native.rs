@@ -100,6 +100,21 @@ pub struct Metrics {
     pub cloud_view_rehydrates: u64,
 }
 
+#[derive(Serialize)]
+struct StatisticsResponse<'a> {
+    #[serde(flatten)]
+    metrics: &'a Metrics,
+    native_view_policy: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manifest: Option<&'a Manifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    objects: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cloudflare_services: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimated_cost: Option<crate::cost::ServiceCostReport>,
+}
+
 struct CandidatePack {
     stored: Option<StoredPack>,
     id: String,
@@ -757,7 +772,7 @@ impl NativeHost {
         self.cache.push_back((key, response.clone()));
     }
 
-    fn statistics_value(&mut self, include_objects: bool) -> io::Result<serde_json::Value> {
+    fn statistics_bytes(&mut self, include_objects: bool) -> io::Result<Vec<u8>> {
         if let Some(services) = &self.cloudflare {
             services.set_phase("stats")?;
         }
@@ -768,37 +783,42 @@ impl NativeHost {
         self.metrics.cache_budget_bytes = CACHE_BYTES as u64;
         self.metrics.cache_entries = self.cache.len() as u64;
         self.metrics.cache_entry_limit = CACHE_ENTRIES as u64;
-        let mut value = serde_json::to_value(&self.metrics)?;
-        value["native_view_policy"] = serde_json::json!(if self.cold_view {
-            "full-rehydrate-on-codec-cache-miss"
-        } else {
-            "persistent-native-view-up-to128MiB-packs-and-indexes"
-        });
+        let mut response = StatisticsResponse {
+            metrics: &self.metrics,
+            native_view_policy: if self.cold_view {
+                "full-rehydrate-on-codec-cache-miss"
+            } else {
+                "persistent-native-view-up-to128MiB-packs-and-indexes"
+            },
+            manifest: include_objects.then_some(&self.manifest),
+            objects: None,
+            cloudflare_services: None,
+            estimated_cost: None,
+        };
         if include_objects {
-            value["manifest"] = serde_json::to_value(&self.manifest)?;
-            value["objects"] = crate::objects::inventory(&self.view, &self.manifest)?;
+            response.objects = Some(crate::objects::inventory(&self.view, &self.manifest)?);
         }
         if let Some(services) = &self.cloudflare {
             let usage = services.usage()?;
             if include_objects {
                 let counters = crate::accounting::ServiceUsage::deserialize(&usage)?;
-                value["estimated_cost"] =
-                    serde_json::to_value(crate::cost::estimate_service_usage(&counters, 1000)?)?;
+                response.estimated_cost =
+                    Some(crate::cost::estimate_service_usage(&counters, 1000)?);
             }
-            value["cloudflare_services"] = usage;
+            response.cloudflare_services = Some(usage);
         }
-        Ok(value)
+        Ok(serde_json::to_vec(&response).unwrap_or_default())
     }
 
     pub fn handle(&mut self, request: Request) -> Response {
         if request.method == "GET"
             && matches!(request.target.as_str(), "/metrics" | "/_object-stats")
         {
-            return match self.statistics_value(request.target == "/_object-stats") {
-                Ok(value) => Response {
+            return match self.statistics_bytes(request.target == "/_object-stats") {
+                Ok(body) => Response {
                     status: 200,
                     headers: BTreeMap::from([("Content-Type".into(), "application/json".into())]),
-                    body: serde_json::to_vec(&value).unwrap_or_default().into(),
+                    body: body.into(),
                 },
                 Err(error) => {
                     eprintln!("statistics failed: {error}");
