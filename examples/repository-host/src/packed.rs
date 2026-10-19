@@ -151,83 +151,119 @@ fn entries<'a>(pack: &'a [u8], index: &[u8]) -> io::Result<Vec<Entry<'a>>> {
             .get(n + 1)
             .map_or(pack.len() - 20, |entry| entry.offset);
         let bytes = &pack[object.offset..end];
-        if crc32(bytes) != object.crc {
-            return Err(invalid("pack entry CRC mismatch"));
+        result.push(decode_entry(bytes, object, &objects)?);
+    }
+    Ok(result)
+}
+
+fn decode_entry<'a>(
+    bytes: &'a [u8],
+    object: &Indexed,
+    objects: &[Indexed],
+) -> io::Result<Entry<'a>> {
+    if crc32(bytes) != object.crc {
+        return Err(invalid("pack entry CRC mismatch"));
+    }
+    let kind = (bytes[0] >> 4) & 7;
+    if !matches!(kind, 1..=4 | 6 | 7) {
+        return Err(invalid("invalid pack entry kind"));
+    }
+    let mut cursor = 1;
+    let mut previous = bytes[0];
+    let mut shift = 4;
+    let mut size = u64::from(previous & 15);
+    while previous & 128 != 0 {
+        previous = *bytes
+            .get(cursor)
+            .ok_or_else(|| invalid("truncated entry header"))?;
+        if shift >= 64 || u64::from(previous & 127) > (u64::MAX >> shift) {
+            return Err(invalid("pack entry size overflow"));
         }
-        let kind = (bytes[0] >> 4) & 7;
-        if !matches!(kind, 1..=4 | 6 | 7) {
-            return Err(invalid("invalid pack entry kind"));
-        }
-        let mut cursor = 1;
-        let mut previous = bytes[0];
-        let mut shift = 4;
-        let mut size = u64::from(previous & 15);
-        while previous & 128 != 0 {
+        size |= u64::from(previous & 127) << shift;
+        shift += 7;
+        cursor += 1;
+    }
+    let _ = size; // Object sizes were checked by strict receive validation.
+    let header_len = cursor;
+    let base = match kind {
+        6 => {
             previous = *bytes
                 .get(cursor)
-                .ok_or_else(|| invalid("truncated entry header"))?;
-            if shift >= 64 || u64::from(previous & 127) > (u64::MAX >> shift) {
-                return Err(invalid("pack entry size overflow"));
-            }
-            size |= u64::from(previous & 127) << shift;
-            shift += 7;
+                .ok_or_else(|| invalid("truncated delta offset"))?;
             cursor += 1;
-        }
-        let _ = size; // Object sizes were checked by strict receive validation.
-        let header_len = cursor;
-        let base = match kind {
-            6 => {
+            let mut distance = usize::from(previous & 127);
+            while previous & 128 != 0 {
                 previous = *bytes
                     .get(cursor)
                     .ok_or_else(|| invalid("truncated delta offset"))?;
                 cursor += 1;
-                let mut distance = usize::from(previous & 127);
-                while previous & 128 != 0 {
-                    previous = *bytes
-                        .get(cursor)
-                        .ok_or_else(|| invalid("truncated delta offset"))?;
-                    cursor += 1;
-                    distance = distance
-                        .checked_add(1)
-                        .and_then(|n| n.checked_mul(128))
-                        .and_then(|n| n.checked_add(usize::from(previous & 127)))
-                        .ok_or_else(|| invalid("delta offset overflow"))?;
-                }
-                if distance == 0 || distance > object.offset {
-                    return Err(invalid("invalid delta base offset"));
-                }
-                let base_offset = object.offset - distance;
-                let base = objects
-                    .binary_search_by_key(&base_offset, |entry| entry.offset)
-                    .map_err(|_| invalid("delta base does not point to an entry"))?;
-                Some(objects[base].id)
+                distance = distance
+                    .checked_add(1)
+                    .and_then(|n| n.checked_mul(128))
+                    .and_then(|n| n.checked_add(usize::from(previous & 127)))
+                    .ok_or_else(|| invalid("delta offset overflow"))?;
             }
-            7 => {
-                let end = cursor + 20;
-                let id = bytes
-                    .get(cursor..end)
-                    .ok_or_else(|| invalid("truncated delta base ID"))?
-                    .try_into()
-                    .expect("20-byte base ID");
-                cursor = end;
-                Some(id)
+            if distance == 0 || distance > object.offset {
+                return Err(invalid("invalid delta base offset"));
             }
-            _ => None,
-        };
-        if cursor >= bytes.len() {
-            return Err(invalid("missing compressed object payload"));
+            let base_offset = object.offset - distance;
+            let base = objects
+                .binary_search_by_key(&base_offset, |entry| entry.offset)
+                .map_err(|_| invalid("delta base does not point to an entry"))?;
+            Some(objects[base].id)
         }
-        result.push(Entry {
-            id: object.id,
-            bytes,
-            header_len,
-            payload_at: cursor,
-            base,
-            ofs_delta: kind == 6,
-            crc: object.crc,
-        });
+        7 => {
+            let end = cursor + 20;
+            let id = bytes
+                .get(cursor..end)
+                .ok_or_else(|| invalid("truncated delta base ID"))?
+                .try_into()
+                .expect("20-byte base ID");
+            cursor = end;
+            Some(id)
+        }
+        _ => None,
+    };
+    if cursor >= bytes.len() {
+        return Err(invalid("missing compressed object payload"));
     }
-    Ok(result)
+    Ok(Entry {
+        id: object.id,
+        bytes,
+        header_len,
+        payload_at: cursor,
+        base,
+        ofs_delta: kind == 6,
+        crc: object.crc,
+    })
+}
+
+fn validate_delta_graph(parents: &[Option<usize>]) -> io::Result<()> {
+    // Every object has at most one dependency. Walk paths without recursive
+    // stack growth, including adversarial cyclic REF-delta graphs.
+    let mut colors = vec![0_u8; parents.len()];
+    let mut path = Vec::new();
+    for start in 0..parents.len() {
+        if colors[start] != 0 {
+            continue;
+        }
+        let mut cursor = Some(start);
+        while let Some(current) = cursor {
+            match colors[current] {
+                1 => return Err(invalid("cyclic delta dependencies")),
+                2 => break,
+                _ => {
+                    colors[current] = 1;
+                    path.push(current);
+                    cursor = parents[current];
+                }
+            }
+        }
+        for current in path.drain(..) {
+            colors[current] = 2;
+        }
+    }
+    Ok(())
 }
 
 /// Merge trusted SHA-1 Git packs by copying their compressed object streams.
@@ -269,30 +305,7 @@ pub(crate) fn merge_packs(inputs: &[(&[u8], &[u8])]) -> io::Result<(String, Vec<
     if output_bytes > MAX_PACK_BYTES || objects.len() > u32::MAX as usize {
         return Err(invalid("merged pack exceeds prototype limit"));
     }
-    // Every object has at most one dependency. Walk paths without recursive
-    // stack growth, including adversarial cyclic REF-delta graphs.
-    let mut colors = vec![0_u8; objects.len()];
-    let mut path = Vec::new();
-    for start in 0..objects.len() {
-        if colors[start] != 0 {
-            continue;
-        }
-        let mut cursor = Some(start);
-        while let Some(current) = cursor {
-            match colors[current] {
-                1 => return Err(invalid("cyclic delta dependencies")),
-                2 => break,
-                _ => {
-                    colors[current] = 1;
-                    path.push(current);
-                    cursor = parents[current];
-                }
-            }
-        }
-        for current in path.drain(..) {
-            colors[current] = 2;
-        }
-    }
+    validate_delta_graph(&parents)?;
 
     let mut pack = Vec::with_capacity(output_bytes);
     pack.extend_from_slice(b"PACK\0\0\0\x02");

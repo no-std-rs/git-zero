@@ -16,6 +16,7 @@ const R2_BILLING = new Map([
 ]);
 const OPERATIONS = new Set([...R2_BILLING.keys(), "manifest_get", "manifest_cas"]);
 const OP_FIELDS = ["attempts", "successes", "failures", "read_bytes", "written_bytes"];
+const USAGE_FIELDS = Object.keys(emptyUsage());
 
 function emptyUsage() {
   return {
@@ -111,34 +112,32 @@ function addCount(left, right) {
   return result;
 }
 
-function addCounters(target, delta, fields = Object.keys(emptyUsage())) {
+function addCounters(target, delta, fields = USAGE_FIELDS) {
   for (const key of fields) target[key] = addCount(target[key] === undefined ? 0 : target[key], delta[key]);
 }
 
-function acceptReceipt(repo, encoded) {
-  if (!encoded || encoded.length > 16384) throw new Error("missing or oversized service receipt");
-  const receipt = JSON.parse(encoded);
-  const fields = Object.keys(emptyUsage());
+function validateServiceCounters(counters) {
+  if (!plainObject(counters) || Object.keys(counters).length !== USAGE_FIELDS.length
+      || USAGE_FIELDS.some((key) => !validCount(counters[key], nullableCounter(key)))
+      || USAGE_FIELDS.some((key) => key.startsWith("worker_") && counters[key] !== 0)) {
+    throw new Error("invalid service counter delta");
+  }
+}
+
+function validateReceipt(receipt) {
   if (receipt.version !== 1 || !plainObject(receipt.totals) || !plainObject(receipt.by_phase)
       || !plainObject(receipt.operations) || typeof receipt.do_instance_epoch !== "string"
       || !/^[0-9a-f-]{36}$/.test(receipt.do_instance_epoch)) throw new Error("invalid service receipt shape");
-  const validateCounters = (counters) => {
-    if (!plainObject(counters) || Object.keys(counters).length !== fields.length
-        || fields.some((key) => !validCount(counters[key], nullableCounter(key)))
-        || fields.some((key) => key.startsWith("worker_") && counters[key] !== 0)) {
-      throw new Error("invalid service counter delta");
-    }
-  };
-  validateCounters(receipt.totals);
+  validateServiceCounters(receipt.totals);
   if (receipt.totals.do_requests !== 1 || Object.keys(receipt.by_phase).length > 6
       || Object.keys(receipt.operations).length > OPERATIONS.size) throw new Error("invalid service receipt cardinality");
   const phaseSum = emptyUsage();
   for (const [name, counters] of Object.entries(receipt.by_phase)) {
     if (!PHASES.has(name) && name !== "unclassified") throw new Error("invalid service receipt phase");
-    validateCounters(counters);
+    validateServiceCounters(counters);
     addCounters(phaseSum, counters);
   }
-  if (fields.some((key) => receipt.totals[key] !== phaseSum[key])) throw new Error("inconsistent service phase totals");
+  if (USAGE_FIELDS.some((key) => receipt.totals[key] !== phaseSum[key])) throw new Error("inconsistent service phase totals");
   const expectedR2 = { r2_class_a: 0, r2_class_b: 0, r2_deletes: 0, r2_read_bytes: 0, r2_written_bytes: 0 };
   for (const [name, op] of Object.entries(receipt.operations)) {
     if (!OPERATIONS.has(name) || !plainObject(op) || Object.keys(op).length !== OP_FIELDS.length
@@ -152,6 +151,12 @@ function acceptReceipt(repo, encoded) {
     }
   }
   if (Object.keys(expectedR2).some((key) => receipt.totals[key] !== expectedR2[key])) throw new Error("inconsistent R2 operation totals");
+}
+
+function acceptReceipt(repo, encoded) {
+  if (!encoded || encoded.length > 16384) throw new Error("missing or oversized service receipt");
+  const receipt = JSON.parse(encoded);
+  validateReceipt(receipt);
   // Apply to a copy first: a malformed/overflowing receipt must never leave
   // half of its counters added before accounting is marked incomplete.
   const usage = workerUsage.get(repo);
@@ -470,15 +475,15 @@ export class RepositoryServices {
       if (!live.has(key)) { await this.remove(key, prefix, object.size); removed++; }
     }
     // Reconcile catalog state after interrupted put/catalog updates as well.
+    const retained = objects.filter((object) => live.has(object.key.slice(prefix.length)));
     this.ctx.storage.transactionSync(() => {
       this.exec("DELETE FROM blob_catalog");
-      for (const object of objects) {
-        const key = object.key.slice(prefix.length);
-        if (live.has(key)) this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?)", key, object.size);
+      for (const object of retained) {
+        this.exec("INSERT INTO blob_catalog (key, size) VALUES (?, ?)", object.key.slice(prefix.length), object.size);
       }
     });
-    this.liveObjects = objects.filter((object) => live.has(object.key.slice(prefix.length))).length;
-    this.liveBytes = objects.filter((object) => live.has(object.key.slice(prefix.length))).reduce((sum, object) => sum + object.size, 0);
+    this.liveObjects = retained.length;
+    this.liveBytes = retained.reduce((sum, object) => sum + object.size, 0);
     this.updatePeak();
     await this.ctx.storage.sync();
     return json({ deleted: removed });
