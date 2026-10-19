@@ -143,6 +143,76 @@ pub struct LocalBlobStore {
 }
 
 impl LocalBlobStore {
+    fn stabilize_existing(path: &Path, verified: &[u8]) -> io::Result<bool> {
+        match fs::read(path) {
+            Ok(existing) if existing == verified => {
+                // A prior attempt may have failed after rename but before sync.
+                File::open(path)?.sync_all()?;
+                File::open(path.parent().expect("blob has a root"))?.sync_all()?;
+                Ok(true)
+            }
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "immutable blob conflict",
+            )),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Rebuild a disposable native file from a previously verified chunk.
+    /// The caller has validated `verified` against this immutable blob key.
+    /// A native view needs no additional durability barrier: its manifest and
+    /// blob remain authoritative. Never replace an existing destination.
+    pub(crate) fn materialize_file(
+        &self,
+        key: &str,
+        destination: &Path,
+        verified: &[u8],
+    ) -> io::Result<()> {
+        validate_key(key)?;
+        let _guard = self.writes.lock().map_err(poisoned)?;
+        let source = self.root.join(key);
+        if fs::metadata(&source)?.len() != verified.len() as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "blob length differs from verified bytes",
+            ));
+        }
+        install_native_file(&source, destination, verified)
+    }
+
+    /// Import a trusted, immutable codec output without writing another copy.
+    /// `verified` must contain this exact file's bytes; the caller must keep
+    /// the source immutable while this method runs and after a successful link.
+    /// Filesystems without hard links fall back to the ordinary durable put.
+    pub(crate) fn put_file(&self, key: &str, source: &Path, verified: &[u8]) -> io::Result<()> {
+        validate_key(key)?;
+        let guard = self.writes.lock().map_err(poisoned)?;
+        let path = self.root.join(key);
+        if Self::stabilize_existing(&path, verified)? {
+            return Ok(());
+        }
+        let file = File::open(source)?;
+        if file.metadata()?.len() != verified.len() as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "source length differs from verified bytes",
+            ));
+        }
+        file.sync_all()?;
+        let parent = path.parent().expect("blob has a root");
+        durable_create_dir_all(parent)?;
+        match fs::hard_link(source, &path) {
+            Ok(()) => File::open(parent)?.sync_all(),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
+            Err(_) => {
+                drop(guard);
+                self.put(key, verified)
+            }
+        }
+    }
+
     /// Reclaim uncommitted writes after startup or failed publication. This
     /// recovery scan is intentionally separate from ordinary push retirement.
     /// The caller must hold exclusive repository ownership, load authoritative
@@ -196,20 +266,8 @@ impl BlobStore for LocalBlobStore {
         validate_key(key)?;
         let _guard = self.writes.lock().map_err(poisoned)?;
         let path = self.root.join(key);
-        match fs::read(&path) {
-            Ok(existing) if existing == bytes => {
-                // A prior attempt may have failed after rename but before sync.
-                File::open(&path)?.sync_all()?;
-                return File::open(path.parent().expect("blob has a root"))?.sync_all();
-            }
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "immutable blob conflict",
-                ));
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        if Self::stabilize_existing(&path, bytes)? {
+            return Ok(());
         }
         durable_write(&path, bytes)
     }
@@ -237,6 +295,49 @@ impl BlobStore for LocalBlobStore {
 pub struct LocalStateStore {
     path: PathBuf,
     writes: Arc<Mutex<()>>,
+}
+
+impl LocalStateStore {
+    /// A prior publication can fail after rename but before directory sync.
+    /// Stabilize the visible generation before recovery may retire older data.
+    /// NativeHost holds exclusive repository ownership during this operation.
+    pub(crate) fn stabilize(&self) -> io::Result<()> {
+        let _guard = self.writes.lock().map_err(poisoned)?;
+        match File::open(&self.path) {
+            Ok(file) => file.sync_all()?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let parent = self.path.parent().expect("manifest has a root");
+        // Stabilize an ambiguously published rename before retiring anything.
+        // A killed writer can also leave its pre-rename snapshot behind. This
+        // directory is exclusively owned during recovery, so those regular
+        // temporary files cannot belong to a live publication.
+        File::open(parent)?.sync_all()?;
+        let mut removed = false;
+        for entry in fs::read_dir(parent)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let is_temporary = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(".write-"))
+                .and_then(|suffix| suffix.split_once('-'))
+                .is_some_and(|(process, sequence)| {
+                    !process.is_empty()
+                        && !sequence.is_empty()
+                        && process.bytes().all(|byte| byte.is_ascii_digit())
+                        && sequence.bytes().all(|byte| byte.is_ascii_digit())
+                });
+            if is_temporary && entry.file_type()?.is_file() {
+                fs::remove_file(entry.path())?;
+                removed = true;
+            }
+        }
+        if removed {
+            File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    }
 }
 
 impl StateStore for LocalStateStore {
@@ -354,6 +455,34 @@ fn poisoned<T>(_: std::sync::PoisonError<T>) -> io::Error {
 
 fn invalid_data(error: serde_json::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
+}
+
+/// Install a disposable view file, preferring an immutable shared source inode.
+/// Only authoritative imports need a durability barrier; neither path replaces
+/// an existing destination or removes a file whose creation it did not own.
+pub(crate) fn install_native_file(
+    source: &Path,
+    destination: &Path,
+    verified: &[u8],
+) -> io::Result<()> {
+    match fs::hard_link(source, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
+        Err(_) => write_native_file(destination, verified),
+    }
+}
+
+pub(crate) fn write_native_file(destination: &Path, verified: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    let result = file.write_all(verified);
+    drop(file);
+    if result.is_err() {
+        let _ = fs::remove_file(destination);
+    }
+    result
 }
 
 /// Sync each newly created directory's parent, including nested chunk prefixes.
@@ -714,10 +843,116 @@ mod tests {
     }
 
     #[test]
+    fn immutable_codec_outputs_can_be_imported_without_another_write() {
+        let root = temporary_root();
+        let services = LocalServices::new(root.clone()).unwrap();
+        let source = root.join("codec.pack");
+        fs::write(&source, b"compressed").unwrap();
+        services
+            .blobs
+            .put_file("chunks/imported", &source, b"compressed")
+            .unwrap();
+        let materialized = root.join("restored.pack");
+        services
+            .blobs
+            .materialize_file("chunks/imported", &materialized, b"compressed")
+            .unwrap();
+        assert_eq!(
+            services
+                .blobs
+                .materialize_file("chunks/imported", &materialized, b"compressed")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        services
+            .blobs
+            .put_file("chunks/imported", &source, b"compressed")
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                fs::metadata(&source).unwrap().ino(),
+                fs::metadata(root.join("blobs/chunks/imported"))
+                    .unwrap()
+                    .ino()
+            );
+            assert_eq!(
+                fs::metadata(&source).unwrap().ino(),
+                fs::metadata(&materialized).unwrap().ino()
+            );
+        }
+        assert_eq!(
+            services
+                .blobs
+                .put_file("chunks/imported", &source, b"different!")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(
+            services
+                .blobs
+                .put_file("chunks/other", &source, b"wrong length")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        services.blobs.delete("chunks/imported").unwrap();
+        assert_eq!(fs::read(source).unwrap(), b"compressed");
+        assert_eq!(fs::read(materialized).unwrap(), b"compressed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn old_manifests_without_retirement_debt_remain_readable() {
         let legacy = br#"{"generation":1,"refs":{},"packs":[]}"#;
         let manifest: Manifest = serde_json::from_slice(legacy).unwrap();
         assert!(manifest.garbage.is_empty());
         assert_eq!(serde_json::to_vec(&manifest).unwrap(), legacy);
+    }
+
+    #[test]
+    fn recovery_removes_abandoned_state_snapshots_without_publishing_them() {
+        let root = temporary_root();
+        let services = LocalServices::new(root.clone()).unwrap();
+        let first_temporary = root.join(".write-987654321-0");
+        fs::write(&first_temporary, b"interrupted initial snapshot").unwrap();
+        services.state.stabilize().unwrap();
+        assert!(!first_temporary.exists());
+        assert_eq!(services.state.load().unwrap(), Manifest::default());
+        assert!(!root.join("manifest.json").exists());
+
+        let published = Manifest {
+            generation: 1,
+            ..Manifest::default()
+        };
+        assert!(services.state.compare_and_swap(0, &published).unwrap());
+        let published_bytes = fs::read(root.join("manifest.json")).unwrap();
+        let abandoned = root.join(".write-987654321-1");
+        let unpublished = Manifest {
+            generation: 2,
+            ..Manifest::default()
+        };
+        fs::write(&abandoned, serde_json::to_vec(&unpublished).unwrap()).unwrap();
+        let unrelated = root.join(".write-keep-this");
+        fs::write(&unrelated, b"unrelated file").unwrap();
+        let directory = root.join(".write-987654321-2");
+        fs::create_dir(&directory).unwrap();
+        services.blobs.put("chunks/live", b"durable pack").unwrap();
+
+        services.state.stabilize().unwrap();
+        services.state.stabilize().unwrap();
+        assert!(!abandoned.exists());
+        assert!(unrelated.exists());
+        assert!(directory.is_dir());
+        assert_eq!(
+            fs::read(root.join("manifest.json")).unwrap(),
+            published_bytes
+        );
+        assert_eq!(services.state.load().unwrap(), published);
+        assert_eq!(services.blobs.get("chunks/live").unwrap(), b"durable pack");
+        fs::remove_dir_all(root).unwrap();
     }
 }

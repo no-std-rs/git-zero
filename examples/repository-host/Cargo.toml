@@ -8,11 +8,16 @@ publish = false
 description = "Local-first compressed repository hosting experiment"
 
 [dependencies]
+fs2 = "0.4.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10.9"
 sha1 = "0.10.7"
 git-zero-core = { path = "../../crates/git-zero-core", default-features = false, features = ["read"] }
+
+[[bin]]
+name = "repository-host"
+path = "src/bin/repository-host.rs"
 
 [lints]
 workspace = true
