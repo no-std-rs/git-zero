@@ -116,18 +116,28 @@ fn read_request(stream: &mut TcpStream) -> io::Result<Request> {
     })
 }
 
-pub fn serve(port: u16, mut handler: impl FnMut(Request) -> Response) -> io::Result<()> {
-    serve_with_ready(port, &mut handler, |_| Ok(()))
+pub fn serve(port: u16, handler: impl FnMut(Request) -> Response) -> io::Result<()> {
+    serve_with_ready(port, handler, |_| Ok(()))
 }
 
 pub fn serve_with_ready(
     port: u16,
-    mut handler: impl FnMut(Request) -> Response,
+    handler: impl FnMut(Request) -> Response,
     ready: impl FnOnce(&str) -> io::Result<()>,
+) -> io::Result<()> {
+    serve_with_factory(port, |origin| {
+        ready(origin)?;
+        Ok(handler)
+    })
+}
+
+pub fn serve_with_factory<H: FnMut(Request) -> Response>(
+    port: u16,
+    factory: impl FnOnce(&str) -> io::Result<H>,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let origin = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
-    ready(&origin)?;
+    let mut handler = factory(&origin)?;
     println!("{origin}/repo.git");
     io::stdout().flush()?;
     for stream in listener.incoming() {

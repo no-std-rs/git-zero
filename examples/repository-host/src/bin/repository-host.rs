@@ -60,18 +60,27 @@ fn main() -> io::Result<()> {
         if arguments.next().is_some() {
             return Err(io::Error::other("unexpected argument"));
         }
-        let mut host =
-            NativeHost::open_cloudflare(PathBuf::from(root), &origin, &repo, &token, cold)?;
-        return http::serve_with_ready(
-            port,
-            |request| host.handle(request),
-            |native_origin| {
-                services.register(native_origin)?;
-                eprintln!("Git gateway: {origin}/{repo}/repo.git");
-                eprintln!("Object statistics and cost estimates: {native_origin}/_object-stats");
-                Ok(())
-            },
-        );
+        return http::serve_with_factory(port, |native_origin| {
+            services.register(native_origin)?;
+            let mut host = match NativeHost::open_cloudflare(
+                PathBuf::from(root),
+                &origin,
+                &repo,
+                &token,
+                cold,
+            ) {
+                Ok(host) => host,
+                Err(error) => {
+                    if let Err(release_error) = services.unregister() {
+                        eprintln!("failed to release codec registration: {release_error}");
+                    }
+                    return Err(error);
+                }
+            };
+            eprintln!("Git gateway: {origin}/{repo}/repo.git");
+            eprintln!("Object statistics and cost estimates: {native_origin}/_object-stats");
+            Ok(move |request| host.handle(request))
+        });
     }
     let first = arguments
         .next()

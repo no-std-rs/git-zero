@@ -142,6 +142,64 @@ fn real_r2_immutability_namespaces_and_operation_accounting() {
 
 #[test]
 #[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_rejected_cli_registration_preserves_the_active_writers_staged_chunks() {
+    use std::net::TcpListener;
+
+    let worker = RealWorker::new("cli-ownership");
+    let services = worker.services();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let active_origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    services.register(&active_origin).unwrap();
+    let blobs = R2BlobStore::new(services.clone());
+    let data = b"active writer's immutable chunk staged before its manifest CAS";
+    let key = format!("chunks/{}", hash(data));
+    blobs.put(&key, data).unwrap();
+    let root = Directory(std::env::temp_dir().join(&worker.namespace));
+
+    let run_cli = |path: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_repository-host"))
+            .args([
+                "--cloudflare",
+                &worker.origin,
+                "--repo",
+                &worker.namespace,
+                "--token",
+                &worker.token,
+            ])
+            .arg(path)
+            .arg("0")
+            .output()
+            .unwrap()
+    };
+    let replacement = run_cli(&root.0);
+    let error = String::from_utf8_lossy(&replacement.stderr);
+    assert!(!replacement.status.success(), "{error}");
+    assert!(error.contains("already registered"), "{error}");
+
+    // A rejected replacement must neither release the active registration nor
+    // run startup collection against the active writer's unpublished objects.
+    assert_eq!(
+        services.register("http://127.0.0.1:1").unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    let staged = blobs.get(&key);
+    services.unregister().unwrap();
+    assert_eq!(staged.unwrap(), data);
+
+    // Once the namespace is free, a CLI that acquires it but cannot open its
+    // local root must release that new registration so another codec can start.
+    fs::create_dir_all(&root.0).unwrap();
+    let blocked = root.0.join("not-a-directory");
+    fs::write(&blocked, b"block local startup").unwrap();
+    let failed = run_cli(&blocked);
+    assert!(!failed.status.success());
+    let reacquired = services.register(&active_origin);
+    services.unregister().unwrap();
+    reacquired.unwrap();
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
 fn real_durable_object_cas_and_failed_publication_recovery() {
     let worker = RealWorker::new("cas");
     let services = worker.services();
