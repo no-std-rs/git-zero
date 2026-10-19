@@ -207,18 +207,28 @@ function cacheOrigin(repo, origin) {
   if (registry.size > 256) registry.delete(registry.keys().next().value);
 }
 
-async function dispatchService(request, env, repo, currentPhase) {
-  // A cold gateway lookup is a DO call without another Worker invocation.
-  usageFor(repo);
+function recordServiceReceipt(repo, encoded) {
+  try { acceptReceipt(repo, encoded); }
+  catch { incomplete(repo, "missing or invalid Durable Object usage receipt"); }
+}
+
+async function dispatchService(request, env, repo, currentPhase, deferred) {
+  if (!deferred) usageFor(repo);
   const headers = new Headers(request.headers);
   headers.set("x-hosting-repo", repo);
   headers.set("x-hosting-phase", currentPhase);
   const stub = env.REPOSITORIES.get(env.REPOSITORIES.idFromName(repo));
   let response;
   try { response = await stub.fetch(new Request(request, { headers })); }
-  catch (error) { incomplete(repo, "Durable Object dispatch failed; side effects may be unaccounted"); throw error; }
-  try { acceptReceipt(repo, response.headers.get(USAGE_HEADER)); }
-  catch { incomplete(repo, "missing or invalid Durable Object usage receipt"); }
+  catch (error) {
+    const reason = "Durable Object dispatch failed; side effects may be unaccounted";
+    if (deferred) deferred.error = reason;
+    else incomplete(repo, reason);
+    throw error;
+  }
+  const encoded = response.headers.get(USAGE_HEADER);
+  if (deferred) deferred.encoded = encoded && encoded.length <= 16384 ? encoded : null;
+  else recordServiceReceipt(repo, encoded);
   const cleanHeaders = new Headers(response.headers);
   cleanHeaders.delete(USAGE_HEADER);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: cleanHeaders });
@@ -242,10 +252,10 @@ async function handleService(request, env, repo, url) {
   return clean;
 }
 
-async function registeredOrigin(env, repo, currentPhase) {
+async function registeredOrigin(env, repo, currentPhase, deferred) {
   if (registry.has(repo)) return registry.get(repo);
   const response = await dispatchService(
-    new Request("http://services.internal/_services/register"), env, repo, currentPhase,
+    new Request("http://services.internal/_services/register"), env, repo, currentPhase, deferred,
   );
   if (!response.ok) fail(response.status, "codec registration lookup failed");
   const registration = await response.json();
@@ -259,9 +269,20 @@ async function handleGit(request, env, repo, url, prefixed) {
   if (!forwardedPath.startsWith("/repo.git/")) return json({ error: "unknown route" }, 404);
   const gitPhase = forwardedPath.endsWith("/git-receive-pack")
     || url.searchParams.get("service") === "git-receive-pack" ? "push" : "fetch";
-  workerCount(repo, "gateway", gitPhase);
-  const origin = await registeredOrigin(env, repo, gitPhase)
-    ?? (repo === (env.REPO_ID ?? "demo") ? env.CODEC_ORIGIN : undefined);
+  const deferred = {};
+  let origin = repo === (env.REPO_ID ?? "demo") ? env.CODEC_ORIGIN : undefined;
+  try {
+    origin = await registeredOrigin(env, repo, gitPhase, deferred) ?? origin;
+  } finally {
+    // Cold unknown-namespace receipts stay request-local until admission.
+    // An authenticated request may concurrently create a live entry: merge
+    // into its current counters rather than replacing or deleting that entry.
+    if (origin || workerUsage.has(repo)) {
+      workerCount(repo, "gateway", gitPhase);
+      if (deferred.error) incomplete(repo, deferred.error);
+      else if ("encoded" in deferred) recordServiceReceipt(repo, deferred.encoded);
+    }
+  }
   if (!origin) return json({ error: "register a local Rust codec first" }, 503);
   const headers = new Headers(request.headers);
   headers.delete("host");

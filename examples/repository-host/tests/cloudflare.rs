@@ -90,6 +90,45 @@ fn restart_marker(worker: &RealWorker) -> PathBuf {
 
 #[test]
 #[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
+fn real_unknown_git_namespaces_do_not_exhaust_authenticated_accounting() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+
+    let worker = RealWorker::new("unknown-git");
+    let authority = worker.origin.strip_prefix("http://").unwrap();
+    for index in 0..513 {
+        let mut stream = TcpStream::connect(authority).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        write!(
+            stream,
+            "GET /{}-{index}/repo.git/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n",
+            worker.namespace
+        )
+        .unwrap();
+        let mut status = String::new();
+        BufReader::new(stream).read_line(&mut status).unwrap();
+        assert_eq!(
+            status.split_whitespace().nth(1),
+            Some("503"),
+            "unknown namespace {index}: {status}"
+        );
+    }
+    let services = worker.services();
+    services.register("http://127.0.0.1:1").unwrap();
+    let usage: ServiceUsage = serde_json::from_value(services.usage().unwrap()).unwrap();
+    assert!(usage.calls.worker_service_requests >= 1);
+    assert!(usage.calls.do_requests >= 2);
+    assert_eq!(usage.accounting_complete, Some(true));
+    services.unregister().unwrap();
+}
+
+#[test]
+#[ignore = "requires real local Wrangler/workerd; see module-level invocation"]
 fn real_rejected_tokens_do_not_reserve_repository_counter_slots() {
     let worker = RealWorker::new("authentication");
     for index in 0..=512 {
