@@ -8,6 +8,7 @@ pub mod native;
 pub mod objects;
 mod packed;
 pub mod storage;
+mod wire;
 
 use sha2::{Digest, Sha256};
 use std::io;

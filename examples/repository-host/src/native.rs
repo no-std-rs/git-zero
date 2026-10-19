@@ -591,43 +591,46 @@ impl NativeHost {
         if route.service == Some(Service::Receive) && !route.advertise {
             return self.receive(request, route);
         }
-        if route.service == Some(Service::Upload) && !route.advertise {
-            let key = self.cache_key(request);
-            if let Some((_, response)) = self.cache.iter().find(|(k, _)| k == &key) {
-                self.metrics.cache_hits += 1;
-                return Ok(response.clone());
-            }
-            self.metrics.cache_misses += 1;
-            self.cloud_read_view()?;
-            let codec_start = Instant::now();
-            let response = git_rpc(&self.view, request, route)?;
-            self.metrics.upload_codec_seconds += codec_start.elapsed().as_secs_f64();
-            self.cache_insert(key, &response);
-            return Ok(response);
-        }
-        if route.advertise {
-            let key = self.cache_key(request);
-            if let Some((_, response)) = self.cache.iter().find(|(entry, _)| entry == &key) {
-                self.metrics.discovery_cache_hits += 1;
-                return Ok(response.clone());
-            }
-            let protocol = request
-                .headers
-                .get("git-protocol")
-                .map(String::as_str)
-                .unwrap_or("");
-            let response = if route.service == Some(Service::Receive)
-                && (protocol.is_empty() || protocol == "version=0")
-            {
-                receive_advertisement(&self.manifest.refs)?
-            } else {
-                self.cloud_read_view()?;
-                git_rpc(&self.view, request, route)?
-            };
-            self.cache_insert(key, &response);
-            return Ok(response);
+        if route.advertise || route.service == Some(Service::Upload) {
+            return self.cached_read(request, route);
         }
         git_rpc(&self.view, request, route)
+    }
+
+    fn cached_read(&mut self, request: &Request, route: Route) -> io::Result<Response> {
+        let key = self.cache_key(request);
+        if let Some((_, response)) = self.cache.iter().find(|(entry, _)| entry == &key) {
+            if route.advertise {
+                self.metrics.discovery_cache_hits += 1;
+            } else {
+                self.metrics.cache_hits += 1;
+            }
+            return Ok(response.clone());
+        }
+        if !route.advertise {
+            self.metrics.cache_misses += 1;
+        }
+        let protocol = request
+            .headers
+            .get("git-protocol")
+            .map(String::as_str)
+            .unwrap_or("");
+        let response = if route.advertise
+            && route.service == Some(Service::Receive)
+            && (protocol.is_empty() || protocol == "version=0")
+        {
+            receive_advertisement(&self.manifest.refs)?
+        } else {
+            self.cloud_read_view()?;
+            let codec_start = (!route.advertise).then(Instant::now);
+            let response = git_rpc(&self.view, request, route)?;
+            if let Some(start) = codec_start {
+                self.metrics.upload_codec_seconds += start.elapsed().as_secs_f64();
+            }
+            response
+        };
+        self.cache_insert(key, &response);
+        Ok(response)
     }
 
     fn cache_key(&self, request: &Request) -> String {

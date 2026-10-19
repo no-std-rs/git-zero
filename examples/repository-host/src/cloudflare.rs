@@ -5,11 +5,11 @@ use crate::storage::{
     BlobStore, CloudflareBindings, DurableStateStore, LocalBlobStore, LocalStateStore, Manifest,
     R2BlobStore, StateStore,
 };
+use crate::wire::{self, Policy};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
     fs::OpenOptions,
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Write},
     net::TcpStream,
     path::Path,
     sync::{Arc, Mutex},
@@ -17,6 +17,39 @@ use std::{
 };
 
 const MAX_RESPONSE: usize = 128 * 1024 * 1024;
+
+fn read_response(reader: &mut impl BufRead, method: &str) -> io::Result<Response> {
+    let first = wire::line(reader, 8192, Policy::Response)?;
+    if !first.starts_with("HTTP/1.") || !first.ends_with("\r\n") {
+        return Err(io::Error::other("invalid emulator status line"));
+    }
+    let status = first
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| io::Error::other("missing HTTP status"))?
+        .parse()
+        .map_err(io::Error::other)?;
+    let headers = wire::headers(reader, first.len(), Policy::Response)?;
+    let body = if status == 204 || status == 304 || method == "HEAD" {
+        // These statuses have no message body, even on a persistent socket.
+        Vec::new()
+    } else if headers
+        .get("transfer-encoding")
+        .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
+    {
+        wire::chunked(reader, MAX_RESPONSE, Policy::Response)?
+    } else if let Some(length) = headers.get("content-length") {
+        let length: usize = length.parse().map_err(io::Error::other)?;
+        wire::exact(reader, length, MAX_RESPONSE)?
+    } else {
+        wire::to_end(reader, MAX_RESPONSE)?
+    };
+    Ok(Response {
+        status,
+        headers,
+        body: body.into(),
+    })
+}
 
 pub struct HttpServices {
     authority: String,
@@ -88,105 +121,23 @@ impl HttpServices {
             body.len()
         )?;
         stream.write_all(body)?;
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.by_ref().take(8193).read_line(&mut line)?;
-        if line.len() > 8192 || !line.starts_with("HTTP/1.") || !line.ends_with("\r\n") {
-            return Err(io::Error::other("invalid emulator status line"));
-        }
-        let status = line
-            .split_whitespace()
-            .nth(1)
-            .ok_or_else(|| io::Error::other("missing HTTP status"))?
-            .parse()
-            .map_err(io::Error::other)?;
-        let mut headers = BTreeMap::new();
-        let mut total_headers = line.len();
-        loop {
-            line.clear();
-            let read = reader.by_ref().take(8193).read_line(&mut line)?;
-            total_headers += read;
-            if read == 0 || read > 8192 || total_headers > 65536 {
-                return Err(io::Error::other("invalid emulator HTTP headers"));
-            }
-            if line == "\r\n" {
-                break;
-            }
-            let (name, value) = line
-                .split_once(':')
-                .ok_or_else(|| io::Error::other("invalid emulator header"))?;
-            headers.insert(name.to_ascii_lowercase(), value.trim().to_string());
-        }
-        let mut bytes = Vec::new();
-        if status == 204 || status == 304 || method == "HEAD" {
-            // These statuses have no message body, even on a persistent socket.
-        } else if headers
-            .get("transfer-encoding")
-            .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
-        {
-            loop {
-                line.clear();
-                reader.by_ref().take(129).read_line(&mut line)?;
-                if line.len() > 128 {
-                    return Err(io::Error::other("invalid HTTP chunk"));
-                }
-                let length = usize::from_str_radix(line.trim().split(';').next().unwrap_or(""), 16)
-                    .map_err(io::Error::other)?;
-                if length == 0 {
-                    break;
-                }
-                if length > MAX_RESPONSE - bytes.len() {
-                    return Err(io::Error::other("emulator response too large"));
-                }
-                let start = bytes.len();
-                bytes.resize(start + length, 0);
-                reader.read_exact(&mut bytes[start..])?;
-                let mut ending = [0u8; 2];
-                reader.read_exact(&mut ending)?;
-                if ending != *b"\r\n" {
-                    return Err(io::Error::other("invalid HTTP chunk ending"));
-                }
-            }
-        } else if let Some(length) = headers.get("content-length") {
-            let length: usize = length.parse().map_err(io::Error::other)?;
-            if length > MAX_RESPONSE {
-                return Err(io::Error::other("emulator response too large"));
-            }
-            bytes.resize(length, 0);
-            reader.read_exact(&mut bytes)?;
-        } else {
-            reader
-                .take((MAX_RESPONSE + 1) as u64)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > MAX_RESPONSE {
-                return Err(io::Error::other("emulator response too large"));
-            }
-            if let Some(length) = headers.get("content-length") {
-                let length: usize = length.parse().map_err(io::Error::other)?;
-                if bytes.len() != length {
-                    return Err(io::Error::other("truncated emulator response"));
-                }
-            }
-        }
-        if !(200..300).contains(&status) {
+        let response = read_response(&mut BufReader::new(stream), method)?;
+        if !(200..300).contains(&response.status) {
             return Err(io::Error::new(
-                match status {
+                match response.status {
                     404 => io::ErrorKind::NotFound,
                     409 => io::ErrorKind::AlreadyExists,
                     401 | 403 => io::ErrorKind::PermissionDenied,
                     _ => io::ErrorKind::Other,
                 },
                 format!(
-                    "emulator {method} {route}: {status}: {}",
-                    String::from_utf8_lossy(&bytes[..bytes.len().min(1024)])
+                    "emulator {method} {route}: {}: {}",
+                    response.status,
+                    String::from_utf8_lossy(&response.body[..response.body.len().min(1024)])
                 ),
             ));
         }
-        Ok(Response {
-            status,
-            headers,
-            body: bytes.into(),
-        })
+        Ok(response)
     }
 
     fn json(
@@ -359,6 +310,47 @@ impl StateStore for HostState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_framing_handles_content_length_chunk_extensions_and_eof() {
+        use std::io::Cursor;
+
+        for (framing, payload, remaining) in [
+            ("Content-Length: 4\r\n", "datafollowing", "following"),
+            (
+                "Transfer-Encoding: Chunked\r\nContent-Length: 999\r\n",
+                "2;name=value\r\nda\r\n2\r\nta\r\n0\r\n\r\n",
+                "\r\n",
+            ),
+            ("", "data", ""),
+        ] {
+            let mut reader = Cursor::new(format!("HTTP/1.1 200 OK\r\n{framing}\r\n{payload}"));
+            let response = read_response(&mut reader, "GET").unwrap();
+            assert_eq!(&*response.body, b"data");
+            assert_eq!(reader.fill_buf().unwrap(), remaining.as_bytes());
+        }
+        let mut truncated = Cursor::new(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\ndata");
+        assert_eq!(
+            read_response(&mut truncated, "GET").err().unwrap().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+    }
+
+    #[test]
+    fn bodyless_responses_do_not_parse_framing_or_consume_body_bytes() {
+        use std::io::Cursor;
+
+        for (method, status) in [("HEAD", 200), ("GET", 204), ("GET", 304)] {
+            let mut reader = Cursor::new(format!(
+                "HTTP/1.1 {status} No body\r\nContent-Length: invalid\r\nTransfer-Encoding: chunked\r\n\r\nuntouched"
+            ));
+            let response = read_response(&mut reader, method).unwrap();
+            assert_eq!(response.status, status);
+            assert!(response.body.is_empty());
+            assert_eq!(reader.fill_buf().unwrap(), b"untouched");
+        }
+    }
+
     #[test]
     fn service_bridge_rejects_nonlocal_origins_and_header_injection() {
         assert!(HttpServices::new("http://127.0.0.1:8787", "demo", "local-token").is_ok());

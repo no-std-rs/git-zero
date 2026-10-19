@@ -9,7 +9,12 @@ const BLOB = /^chunks\/[0-9a-f]{64}$/;
 const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 const USAGE_HEADER = "x-git-zero-service-usage";
-const OPERATIONS = new Set(["r2_get", "r2_head", "r2_put", "r2_list", "r2_delete", "manifest_get", "manifest_cas"]);
+const R2_BILLING = new Map([
+  ["r2_get", "r2_class_b"], ["r2_head", "r2_class_b"],
+  ["r2_put", "r2_class_a"], ["r2_list", "r2_class_a"],
+  ["r2_delete", "r2_deletes"],
+]);
+const OPERATIONS = new Set([...R2_BILLING.keys(), "manifest_get", "manifest_cas"]);
 const OP_FIELDS = ["attempts", "successes", "failures", "read_bytes", "written_bytes"];
 
 function emptyUsage() {
@@ -134,19 +139,19 @@ function acceptReceipt(repo, encoded) {
     addCounters(phaseSum, counters);
   }
   if (fields.some((key) => receipt.totals[key] !== phaseSum[key])) throw new Error("inconsistent service phase totals");
+  const expectedR2 = { r2_class_a: 0, r2_class_b: 0, r2_deletes: 0, r2_read_bytes: 0, r2_written_bytes: 0 };
   for (const [name, op] of Object.entries(receipt.operations)) {
     if (!OPERATIONS.has(name) || !plainObject(op) || Object.keys(op).length !== OP_FIELDS.length
         || OP_FIELDS.some((key) => !validCount(op[key]))
         || op.attempts !== op.successes + op.failures) throw new Error("invalid service operation delta");
+    const billing = R2_BILLING.get(name);
+    if (billing) {
+      expectedR2[billing] = addCount(expectedR2[billing], op.attempts);
+      expectedR2.r2_read_bytes = addCount(expectedR2.r2_read_bytes, op.read_bytes);
+      expectedR2.r2_written_bytes = addCount(expectedR2.r2_written_bytes, op.written_bytes);
+    }
   }
-  const attempts = (name) => receipt.operations[name]?.attempts ?? 0;
-  const sumBytes = (field) => Object.entries(receipt.operations)
-    .filter(([name]) => name.startsWith("r2_")).reduce((sum, [, op]) => addCount(sum, op[field]), 0);
-  if (receipt.totals.r2_class_a !== attempts("r2_put") + attempts("r2_list")
-      || receipt.totals.r2_class_b !== attempts("r2_get") + attempts("r2_head")
-      || receipt.totals.r2_deletes !== attempts("r2_delete")
-      || receipt.totals.r2_read_bytes !== sumBytes("read_bytes")
-      || receipt.totals.r2_written_bytes !== sumBytes("written_bytes")) throw new Error("inconsistent R2 operation totals");
+  if (Object.keys(expectedR2).some((key) => receipt.totals[key] !== expectedR2[key])) throw new Error("inconsistent R2 operation totals");
   // Apply to a copy first: a malformed/overflowing receipt must never leave
   // half of its counters added before accounting is marked incomplete.
   const usage = workerUsage.get(repo);
@@ -305,23 +310,19 @@ export class RepositoryServices {
     const op = this.operations[name] ??= { attempts: 0, successes: 0, failures: 0, read_bytes: 0, written_bytes: 0 };
     let keyOp;
     if (key !== undefined) {
-      keyOp = this.keyUsage.get(key);
-      if (keyOp) this.keyUsage.delete(key);
-      else {
-        if (this.keyUsage.size >= 256) {
-          this.keyUsage.delete(this.keyUsage.keys().next().value);
-          this.keyUsageTruncated = true;
-        }
-        keyOp = { key, get_attempts: 0, head_attempts: 0, put_attempts: 0,
-          delete_attempts: 0, failures: 0, read_bytes: 0, written_bytes: 0 };
-      }
+      keyOp = this.keyUsage.get(key) ?? { key, get_attempts: 0, head_attempts: 0, put_attempts: 0,
+        delete_attempts: 0, failures: 0, read_bytes: 0, written_bytes: 0 };
+      this.keyUsage.delete(key);
       keyOp[`${name.slice(3)}_attempts`]++;
       this.keyUsage.set(key, keyOp);
+      if (this.keyUsage.size > 256) {
+        this.keyUsage.delete(this.keyUsage.keys().next().value);
+        this.keyUsageTruncated = true;
+      }
     }
     op.attempts++;
-    if (["r2_put", "r2_list"].includes(name)) this.bump("r2_class_a");
-    if (["r2_get", "r2_head"].includes(name)) this.bump("r2_class_b");
-    if (name === "r2_delete") this.bump("r2_deletes");
+    const billing = R2_BILLING.get(name);
+    if (billing) this.bump(billing);
     try {
       const result = await callback();
       op.successes++;
