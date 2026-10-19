@@ -159,6 +159,95 @@ fn assert_push_ok(response: &Response) {
     assert!(!body.contains(&format!("ng {MAIN} ")), "{body}");
 }
 
+#[test]
+fn inherited_git_environment_cannot_escape_quarantine() {
+    const FIXTURE: &str = "GIT_ZERO_HOST_ENVIRONMENT_FIXTURE";
+    if let Some(directory) = std::env::var_os(FIXTURE) {
+        let directory = PathBuf::from(directory);
+        let mut host = NativeHost::open(directory.join("host")).unwrap();
+        assert_push_ok(&host.handle(request(
+            "POST",
+            "/repo.git/git-receive-pack",
+            fs::read(directory.join("push.bin")).unwrap(),
+            Some("application/x-git-receive-pack-request"),
+        )));
+        return;
+    }
+
+    let directory = TestDirectory::new();
+    let source = source_repository(&directory);
+    let tip = commit(&source, None, 1);
+    fs::write(
+        directory.0.join("push.bin"),
+        push_request(&source, ZERO_ID, &tip).body,
+    )
+    .unwrap();
+    let external = directory.0.join("external-objects");
+    fs::create_dir_all(external.join("pack")).unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "inherited_git_environment_cannot_escape_quarantine",
+            "--nocapture",
+        ])
+        .env(FIXTURE, &directory.0)
+        .env("GIT_OBJECT_DIRECTORY", &external)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "polluted child: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let root = directory.0.join("host");
+    let published = manifest(&root);
+    assert_eq!(published.refs.get(MAIN), Some(&tip));
+    eprintln!(
+        "accepted push stored {} authoritative packs",
+        published.packs.len()
+    );
+    fs::remove_dir_all(external).unwrap();
+    fs::remove_dir_all(root.join("view")).unwrap();
+    let mut recovered = NativeHost::open(root.clone()).unwrap();
+    verify_uploaded_pack(
+        &directory.0.join("download.git"),
+        &recovered.handle(upload_request(&tip)),
+        &tip,
+    );
+
+    let injected_config = directory.0.join("injected.gitconfig");
+    fs::write(
+        &injected_config,
+        b"[receive]\ndenyNonFastForwards = false\n",
+    )
+    .unwrap();
+    for overrides in [
+        vec![("GIT_CONFIG", injected_config.to_str().unwrap())],
+        vec![(
+            "GIT_CONFIG_PARAMETERS",
+            "'receive.denyNonFastForwards=false'",
+        )],
+        vec![
+            ("GIT_CONFIG_COUNT", "1"),
+            ("GIT_CONFIG_KEY_0", "receive.denyNonFastForwards"),
+            ("GIT_CONFIG_VALUE_0", "false"),
+        ],
+    ] {
+        let mut process = Command::new("git");
+        process
+            .arg("-C")
+            .arg(root.join("view/repo.git"))
+            .args(["config", "--get", "receive.denyNonFastForwards"])
+            .envs(overrides.iter().copied());
+        assert_eq!(
+            command(process, &[]).unwrap().stdout,
+            b"true\n",
+            "configuration override escaped sanitization: {overrides:?}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn thin_pushes_support_non_utf8_and_newline_root_names() {
