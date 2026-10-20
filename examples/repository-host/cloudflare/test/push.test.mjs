@@ -92,6 +92,24 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       assert.deepEqual(await refs(server, namespace), [{ name: "refs/heads/main", oid: second }]);
 
       const zero = "0".repeat(first.length);
+      const advert = Buffer.from(await (await fetch(`${remote}/info/refs?service=git-receive-pack`, { headers: headers() })).arrayBuffer());
+      let refPacket;
+      for (let at = 0; at < advert.length;) {
+        const length = Number.parseInt(advert.subarray(at, at + 4).toString(), 16);
+        if (length > 4 && advert.subarray(at + 4, at + length).includes(Buffer.from(" refs/heads/main\0"))) refPacket = length;
+        at += Math.max(4, length);
+      }
+      assert.ok(refPacket);
+      const headNamespace = `head-limit-${format}-${randomUUID()}`, headRemote = `${server.origin}/${headNamespace}.git`;
+      const headName = "refs/heads/" + "a".repeat(65520 - refPacket + "refs/heads/main".length - "refs/heads/".length);
+      const fixture = project(format);
+      await json(await fetch(`${server.origin}/_test/${headNamespace}/initialize`, { method: "POST", headers: headers(format) }));
+      const headResponse = await fetch(`${headRemote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: fixture.root.id.toString("hex"), name: "refs/tags/carrier" }, { old: zero, new: fixture.root.id.toString("hex"), name: headName }], true, fixture.pack) });
+      assert.equal(headResponse.status, 200); assert.ok((await headResponse.text()).includes(`ok ${headName}`));
+      // The largest receive-compatible branch becomes symbolic HEAD. Ordinary
+      // discovery must fit too, with exactly the host-backed upload capabilities.
+      for (const version of [0, 1, 2]) assert.ok((await git(root, "-c", `protocol.version=${version}`, "ls-remote", "--symref", headRemote, "HEAD")).includes(`ref: ${headName}\tHEAD`));
+
       const commands = [{ old: first, new: second, name: "refs/heads/main" }, { old: zero, new: second, name: "refs/heads/accepted" }];
       let response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, commands) });
       assert.match(await response.text(), /ng refs\/heads\/accepted atomic push failed/);
