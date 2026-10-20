@@ -14,6 +14,8 @@ mod policy;
 pub use policy::{WantOptions, WantPolicy};
 pub mod receive;
 mod route;
+#[cfg(feature = "read")]
+pub mod stored;
 pub mod stream;
 mod upload;
 mod v2;

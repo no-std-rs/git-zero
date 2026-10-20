@@ -7,10 +7,12 @@ use git_zero::{
     Error, ObjectFormat, ObjectId, ObjectKind, Result, http::receive::Capabilities, pack::ObjectKey,
 };
 
+mod compose;
 mod graph;
 mod ranges;
 mod receive;
 mod source;
+mod upload;
 mod wire;
 
 pub(super) const INPUT_BYTES: usize = 65536;

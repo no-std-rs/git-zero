@@ -602,3 +602,79 @@ fn detached_encoders_preserve_wire_bytes_across_fresh_sinks_and_reject_bad_state
         );
     }
 }
+
+#[cfg(feature = "read")]
+#[test]
+fn external_catalog_requests_validate_then_revisit_typed_objects_without_allocations() {
+    use git_zero::http::stored::{Command, ObjectRequest, Request};
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let wanted = id(format, 1);
+        let have = id(format, 2);
+        let mut want = b"want ".to_vec();
+        want.extend_from_slice(wanted.to_hex().as_bytes());
+        want.extend_from_slice(b" multi_ack_detailed side-band-64k ");
+        want.extend_from_slice(format.capability());
+        let mut body = packets(&[&want]);
+        let mut output = Bytes(body);
+        pktline::write_parts(&mut output, &[b"have ", have.to_hex().as_bytes(), b"\n"]).unwrap();
+        pktline::write(&mut output, b"done\n").unwrap();
+        body = output.0;
+        allocations::without_allocations(|| {
+            let request = Request::parse(&body, format, 0).unwrap();
+            assert_eq!(request.command(), Command::Fetch);
+            assert!(request.done());
+            assert_eq!(request.band(), 2);
+            let mut objects = request.objects();
+            assert_eq!(objects.next(), Some(ObjectRequest::Want(wanted)));
+            assert_eq!(objects.next(), Some(ObjectRequest::Have(have)));
+            assert_eq!(objects.next(), None);
+            request.require_complete().unwrap();
+        });
+        body.extend_from_slice(b"0000");
+        assert!(Request::parse(&body, format, 0).is_err());
+    }
+}
+
+#[cfg(feature = "read")]
+#[test]
+fn external_ls_refs_matches_raw_prefixes_and_preserves_symbolic_attributes() {
+    use git_zero::http::stored::Request;
+    let mut output = Bytes(vec![]);
+    pktline::write(&mut output, b"command=ls-refs\n").unwrap();
+    output.0.extend_from_slice(b"0001");
+    output.0.extend_from_slice(&packets(&[
+        b"ref-prefix refs/tags/\xff",
+        b"symrefs",
+        b"peel",
+    ]));
+    let request = Request::parse(&output.0, ObjectFormat::Sha1, 2).unwrap();
+    let mut storage = [0; 512];
+    let mut writer = SliceWriter::new(&mut storage);
+    allocations::without_allocations(|| {
+        request
+            .reference(
+                Some(id(ObjectFormat::Sha1, 1)),
+                b"refs/heads/main",
+                None,
+                None,
+                &mut writer,
+            )
+            .unwrap();
+        assert!(writer.as_bytes().is_empty());
+        request
+            .reference(
+                Some(id(ObjectFormat::Sha1, 2)),
+                b"refs/tags/\xff",
+                Some(b"refs/heads/main"),
+                Some(id(ObjectFormat::Sha1, 3)),
+                &mut writer,
+            )
+            .unwrap();
+    });
+    assert!(
+        writer
+            .as_bytes()
+            .windows(b" refs/tags/\xff symref-target:refs/heads/main peeled:".len())
+            .any(|bytes| bytes == b" refs/tags/\xff symref-target:refs/heads/main peeled:")
+    );
+}

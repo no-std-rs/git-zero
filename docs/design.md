@@ -85,6 +85,12 @@ graph links before a SQLite transaction publishes refs. The catalog stays in
 place when published; refs and stage visibility change atomically. No Git
 executable or external codec service participates in this path.
 
+Chunk ownership is recorded before R2 writes. Failed intake reclaims its claims
+and deletes bytes only when no other stage owns the same chunk. Deletion keeps
+its retry record until R2 confirms it; alarms and cold-start recovery finish
+interrupted cleanup. Test-retained quarantines can expire through the private
+test API; production jobs never retain an unpublished verified pack indefinitely.
+
 From that Cloudflare directory, `npm ci` and `npm run test:streamed` build the
 Wasm module and run actual Wrangler R2/SQLite tests. Tests include ordinary Git
 push clients in SHA-1/SHA-256, thin incremental packs, protocol preference 0/1/2,
@@ -94,8 +100,23 @@ private fixture endpoints require both test mode and authentication. Public
 receive requests use `/<repository>.git/info/refs?service=git-receive-pack` and
 `/<repository>.git/git-receive-pack`, with `HOST_TOKEN` supplied as a secret.
 
-This receive prototype does not yet serve clone/fetch. It has not passed a full
-Linux push through Wrangler or a live deployment. Linux-scale metadata storage,
+The own-codec path also serves full clone/fetch in protocols 0/1/2, including
+SHA-256, raw ref prefixes, symbolic HEAD, annotated-tag peeling, gzip control
+bodies and incremental negotiation. The existing Rust request parsers and ACK
+encoder serve both repository adapters and the external catalog. A fixed 4 MiB
+control arena keeps validated packet storage immutable while iterating wants and
+haves. Total Wasm linear memory is bounded at 6 MiB; object bodies remain outside
+that arena and the runtime caches remain bounded at 48 MiB.
+
+Fetch selection uses SQLite queues, not repository-sized JS arrays. Compressed
+entries are copied in physical pack order; OFS deltas become REF deltas. When a
+base is outside the selected pack, Rust reconstructs and streams a canonical
+stored-block zlib representation instead. This keeps a full pack independent of
+the client's existing bases. Real Git clones, fetches, checkouts and strict fsck
+pass through Wrangler for both formats and all three protocol versions.
+
+The new storage path does not yet enable shallow/filtered fetch. It has not
+passed a full Linux push through Wrangler or a live deployment. Linux-scale metadata storage,
 ingress beyond Cloudflare request limits and measured hosting cost remain open;
 component pack-decoder measurements are not end-to-end hosting results. The
 default older example config is still a separate reference implementation.

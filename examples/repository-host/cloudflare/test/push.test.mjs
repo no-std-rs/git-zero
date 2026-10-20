@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { test } from "node:test";
 import { entry, object, packet, pack, project, wire } from "./fixture.mjs";
 import { headers, start, TOKEN } from "./wrangler.mjs";
@@ -25,7 +26,7 @@ function request(format, commands, atomic = true, packed = pack(format, [])) {
   return Buffer.concat([...commands.map((command, i) => packet(`${command.old} ${command.new} ${command.name}${i ? "" : `\0${caps}`}\n`)), Buffer.from("0000"), packed]);
 }
 
-test("ordinary Git pushes publish durable refs, thin updates, options and deletions", { timeout: 120000 }, async () => {
+test("ordinary Git pushes, clones and fetches interoperate with durable R2/SQLite", { timeout: 120000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-push-"));
   let server;
   try {
@@ -35,6 +36,7 @@ test("ordinary Git pushes publish durable refs, thin updates, options and deleti
       await mkdir(directory);
       const remote = `${server.origin}/${namespace}.git`;
       await json(await fetch(`${server.origin}/_test/${namespace}/initialize`, { method: "POST", headers: headers(format) }));
+      await git(root, "clone", remote, join(root, `empty-${format}`));
       await git(directory, "init", "--initial-branch=main", `--object-format=${format ? "sha256" : "sha1"}`);
       const body = Array.from({ length: 4000 }, (_, i) => `line ${i}: immutable shared content for delta reconstruction\n`).join("");
       await writeFile(join(directory, "file"), body);
@@ -42,6 +44,13 @@ test("ordinary Git pushes publish durable refs, thin updates, options and deleti
       const first = await git(directory, "rev-parse", "HEAD");
       await git(directory, "-c", "protocol.version=0", "push", "--atomic", "--push-option=ci.skip", remote, "main");
       assert.deepEqual(await refs(server, namespace), [{ name: "refs/heads/main", oid: first }]);
+      const clones = [];
+      for (const version of [0, 1, 2]) {
+        const clone = join(root, `clone-${format}-${version}`);
+        await git(root, "-c", `protocol.version=${version}`, "clone", remote, clone);
+        assert.equal(await git(clone, "rev-parse", "HEAD"), first);
+        clones.push({ directory: clone, version });
+      }
       await writeFile(join(directory, "file"), body.replace("line 2000:", "changed line 2000:"));
       await git(directory, "commit", "-am", "incremental");
       const second = await git(directory, "rev-parse", "HEAD");
@@ -55,6 +64,27 @@ test("ordinary Git pushes publish durable refs, thin updates, options and deleti
       const reconstructed = await fetch(`${server.origin}/_test/${namespace}/object/${stage.id}?node=${thin.node}&data=1`, { headers: headers() });
       assert.equal(reconstructed.status, 200);
       assert.equal(Buffer.from(await reconstructed.arrayBuffer()).toString(), body.replace("line 2000:", "changed line 2000:"));
+      for (const clone of clones) {
+        await git(clone.directory, "-c", `protocol.version=${clone.version}`, "fetch", "origin");
+        assert.equal(await git(clone.directory, "rev-parse", "origin/main"), second);
+        await git(clone.directory, "merge", "--ff-only", "origin/main");
+        await git(clone.directory, "fsck", "--full", "--strict");
+      }
+      await git(directory, "tag", "--annotate", "annotated", "--message", "tag target");
+      await git(directory, "push", remote, "refs/tags/annotated");
+      for (const version of [0, 1, 2]) {
+        const listing = await git(root, "-c", `protocol.version=${version}`, "ls-remote", remote, "refs/tags/annotated*");
+        assert.ok(listing.includes(`${second}\trefs/tags/annotated^{}`), `protocol ${version} must advertise peeled tag IDs`);
+      }
+      const fresh = join(root, `fresh-${format}`);
+      await git(root, "-c", "protocol.version=2", "clone", remote, fresh);
+      await git(fresh, "fsck", "--full", "--strict");
+      assert.equal(await git(fresh, "rev-parse", "annotated^{}"), second);
+      await git(directory, "push", remote, ":refs/tags/annotated");
+      const control = Buffer.concat([packet(`want ${second} multi_ack_detailed side-band-64k object-format=${format ? "sha256" : "sha1"}\n`), Buffer.from("0000"), packet("done\n")]);
+      const zipped = await fetch(`${remote}/git-upload-pack`, { method: "POST", headers: { ...headers(), "content-type": "application/x-git-upload-pack-request", "content-encoding": "gzip" }, body: gzipSync(control) });
+      assert.equal(zipped.status, 200, await zipped.clone().text());
+      assert.ok(Buffer.from(await zipped.arrayBuffer()).includes(Buffer.from("PACK")));
       await git(directory, "-c", "protocol.version=1", "push", "--atomic", remote, "main:refs/heads/topic", "main:refs/tags/release");
       assert.equal((await refs(server, namespace)).length, 3);
       await git(directory, "push", remote, ":refs/heads/topic", ":refs/tags/release");
@@ -112,6 +142,10 @@ test("ordinary Git pushes publish durable refs, thin updates, options and deleti
       assert.equal((await refs(server, name)).find((ref) => ref.name === "refs/heads/main").oid, head);
       await git(directory, "push", remote, "main:refs/heads/after-restart");
       assert.equal((await refs(server, name)).length, 3);
+      const cold = join(root, `cold-${name}`);
+      await git(root, "clone", "--bare", remote, cold);
+      assert.equal(await git(cold, "rev-parse", "HEAD"), head);
+      await git(cold, "fsck", "--full", "--strict");
     }
   } catch (error) { error.message += `\n${server?.logs() ?? ""}`; throw error; }
   finally { await server?.stop(); await rm(root, { recursive: true, force: true }); }

@@ -159,21 +159,24 @@ impl<'a> Refs<'a> {
         Ok(refs)
     }
 
-    fn matches(&self, name: &str) -> bool {
+    fn matches(&self, name: &[u8]) -> bool {
         let mut prefixes = arguments(self.args)
             .filter_map(|arg| arg.strip_prefix(b"ref-prefix "))
             .peekable();
-        prefixes.peek().is_none() || prefixes.any(|prefix| name.as_bytes().starts_with(prefix))
+        prefixes.peek().is_none() || prefixes.any(|prefix| name.starts_with(prefix))
     }
 
-    fn write_ref(
+    pub(crate) fn write_ref(
         &self,
         id: Option<ObjectId>,
-        name: &str,
-        symbolic: Option<&str>,
+        name: &[u8],
+        symbolic: Option<&[u8]>,
         peeled: Option<ObjectId>,
         output: &mut impl Write,
     ) -> Result<()> {
+        if id.is_none() && !(self.unborn && self.symrefs) {
+            return Ok(());
+        }
         if !self.matches(name) {
             return Ok(());
         }
@@ -182,10 +185,8 @@ impl<'a> Refs<'a> {
             .as_ref()
             .map_or(b"unborn".as_slice(), |hex| hex.as_ref());
         let peeled_hex = peeled.filter(|_| self.peel).map(|id| id.to_hex());
-        let [symbolic_marker, symbolic] = attribute(
-            b" symref-target:",
-            symbolic.filter(|_| self.symrefs).map(str::as_bytes),
-        );
+        let [symbolic_marker, symbolic] =
+            attribute(b" symref-target:", symbolic.filter(|_| self.symrefs));
         let [peeled_marker, peeled] =
             attribute(b" peeled:", peeled_hex.as_ref().map(|hex| hex.as_ref()));
         pktline::write_parts(
@@ -193,7 +194,7 @@ impl<'a> Refs<'a> {
             &[
                 id,
                 b" ",
-                name.as_bytes(),
+                name,
                 symbolic_marker,
                 symbolic,
                 peeled_marker,
@@ -221,7 +222,7 @@ impl<'a> Refs<'a> {
                 Head::Symbolic { target, .. } => Some(resolve_reference(repository, target)?.0),
                 _ => head.target(),
             };
-            self.write_ref(head.id(), "HEAD", target, None, output)?;
+            self.write_ref(head.id(), b"HEAD", target.map(str::as_bytes), None, output)?;
         }
         for index in 0..repository.reference_count() {
             let name = repository
@@ -233,8 +234,8 @@ impl<'a> Refs<'a> {
                 .transpose()?;
             self.write_ref(
                 repository.reference_id(index),
-                name,
-                symbolic,
+                name.as_bytes(),
+                symbolic.map(str::as_bytes),
                 repository.reference_peeled(index),
                 output,
             )?;
@@ -285,25 +286,4 @@ impl Fetch {
         extensions.require_filter_capability(true)?;
         Ok(fetch)
     }
-}
-
-pub(crate) fn acknowledge(
-    done: bool,
-    common: impl Iterator<Item = Result<ObjectId>>,
-    output: &mut impl Write,
-) -> Result<()> {
-    if done {
-        return pktline::write(output, b"packfile\n");
-    }
-    pktline::write(output, b"acknowledgments\n")?;
-    let mut known = false;
-    for id in common {
-        pktline::write_parts(output, &[b"ACK ", &id?.to_hex(), b"\n"])?;
-        known = true;
-    }
-    if !known {
-        pktline::write(output, b"NAK\n")?
-    }
-    // Wait for done; never claim an early sufficient cut point.
-    output.write_all(b"0000")
 }

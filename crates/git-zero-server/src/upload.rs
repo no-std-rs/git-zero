@@ -312,34 +312,12 @@ impl<'a> UploadRequest<'a> {
     }
 
     pub fn acknowledge(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
-        if self.v2 {
-            return crate::v2::acknowledge(self.done, self.common(repository), output);
-        }
-        if self.extensions.options.depth.is_some() && self.haves.is_empty() {
-            // The v0 shallow-list probe precedes any have/done round. A NAK
-            // here would be consumed as the next replay's shallow-list header.
-            return Ok(());
-        }
-        let mut last = None;
+        let mut acknowledgments = Acknowledgments::new(self);
+        acknowledgments.start(output)?;
         for id in self.common(repository) {
-            let id = id?;
-            if self.capabilities.ack() == 0 {
-                pktline::write_parts(output, &[b"ACK ", &id.to_hex(), b"\n"])?;
-                return Ok(());
-            }
-            let status: &[u8] = if self.capabilities.ack() == 1 {
-                b" continue\n"
-            } else {
-                b" common\n"
-            };
-            pktline::write_parts(output, &[b"ACK ", &id.to_hex(), status])?;
-            last = Some(id);
+            acknowledgments.common(id?, output)?;
         }
-        if let Some(id) = last.filter(|_| self.done) {
-            pktline::write_parts(output, &[b"ACK ", &id.to_hex(), b"\n"])
-        } else {
-            pktline::write(output, b"NAK\n")
-        }
+        acknowledgments.finish(output)
     }
 
     pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
@@ -451,4 +429,90 @@ pub fn write_upload_error(error: Error, output: &mut impl Write) -> Result<()> {
         _ => b"invalid upload request",
     };
     pktline::write_parts(output, &[b"ERR ", message, b"\n"])
+}
+
+/// Feed only host-verified common commit IDs. Sinks may change between calls.
+/// The host must not acknowledge private/unreachable IDs or claim an early cut.
+pub struct Acknowledgments {
+    v2: bool,
+    done: bool,
+    mode: u8,
+    suppress: bool,
+    last: Option<ObjectId>,
+    started: bool,
+    finished: bool,
+}
+impl Acknowledgments {
+    pub(crate) fn new(request: &UploadRequest<'_>) -> Self {
+        Self {
+            v2: request.v2,
+            done: request.done,
+            mode: request.capabilities.ack(),
+            suppress: !request.v2
+                && request.extensions.options.depth.is_some()
+                && request.haves.is_empty(),
+            last: None,
+            started: false,
+            finished: false,
+        }
+    }
+    pub fn start(&mut self, output: &mut impl Write) -> Result<()> {
+        if self.started || self.finished {
+            return Err(Error::InvalidRequest);
+        }
+        self.started = true;
+        if self.v2 {
+            pktline::write(
+                output,
+                if self.done {
+                    b"packfile\n"
+                } else {
+                    b"acknowledgments\n"
+                },
+            )?;
+        }
+        Ok(())
+    }
+    pub fn common(&mut self, id: ObjectId, output: &mut impl Write) -> Result<()> {
+        if !self.started || self.finished || id.is_zero() {
+            return Err(Error::InvalidRequest);
+        }
+        if self.suppress
+            || (self.v2 && self.done)
+            || (!self.v2 && self.mode == 0 && self.last.is_some())
+        {
+            return Ok(());
+        }
+        let suffix: &[u8] = if self.v2 || self.mode == 0 {
+            b"\n"
+        } else if self.mode == 1 {
+            b" continue\n"
+        } else {
+            b" common\n"
+        };
+        pktline::write_parts(output, &[b"ACK ", id.to_hex().as_bytes(), suffix])?;
+        self.last = Some(id);
+        Ok(())
+    }
+    pub fn finish(&mut self, output: &mut impl Write) -> Result<()> {
+        if !self.started || self.finished {
+            return Err(Error::InvalidRequest);
+        }
+        self.finished = true;
+        if self.v2 {
+            if !self.done {
+                if self.last.is_none() {
+                    pktline::write(output, b"NAK\n")?;
+                }
+                output.write_all(b"0000")?;
+            }
+        } else if !self.suppress && !(self.mode == 0 && self.last.is_some()) {
+            if let Some(id) = self.last.filter(|_| self.done) {
+                pktline::write_parts(output, &[b"ACK ", id.to_hex().as_bytes(), b"\n"])?;
+            } else {
+                pktline::write(output, b"NAK\n")?;
+            }
+        }
+        Ok(())
+    }
 }

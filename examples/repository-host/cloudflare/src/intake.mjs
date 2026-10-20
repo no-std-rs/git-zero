@@ -134,7 +134,8 @@ export class Intake {
         wasmMemoryBytes: this.codec.memory.byteLength,
       };
     } catch (error) {
-      this.store.exec("UPDATE stages SET phase='failed' WHERE id=?", this.stage);
+      error.commands = this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", this.stage);
+      await this.store.abandon(this.stage);
       throw error;
     } finally {
       this.codec.receiveCancel(); this.codec.sourceCancel(); this.codec.rangeCancel(); this.codec.graphCancel();

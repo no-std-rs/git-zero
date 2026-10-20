@@ -5,6 +5,7 @@ import { ObjectSource } from "./source.mjs";
 import { Store } from "./storage.mjs";
 import { bytes } from "./storage.mjs";
 import { publish } from "./publication.mjs";
+import { FetchJob } from "./fetch.mjs";
 
 const REPOSITORY = /^[A-Za-z0-9_-]{1,80}$/;
 const UUID = /^[0-9a-f-]{36}$/;
@@ -27,7 +28,7 @@ function authorized(request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === "/health") return json({ ready: true, runtime: "workerd", codec: "no_std Wasm", durableStorage: "R2 and SQLite", gitReceive: true, gitFetch: false });
+    if (url.pathname === "/health") return json({ ready: true, runtime: "workerd", codec: "no_std Wasm", durableStorage: "R2 and SQLite", gitReceive: true, gitFetch: true });
     if (!authorized(request, env)) return new Response("authentication required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="git-zero"' } });
     const parts = url.pathname.split("/");
     const test = env.TEST_MODE === "true" && parts[1] === "_test";
@@ -51,6 +52,15 @@ export class OwnRepository {
     const job = this.queue.then(() => { this.streamDone = null; return this.handle(request); });
     this.queue = job.then(() => this.streamDone).catch(() => {});
     return job;
+  }
+  alarm() {
+    const job = this.queue.then(async () => {
+      const identity = this.ctx.storage.sql.exec("SELECT namespace FROM host_identity WHERE id=1").toArray()[0];
+      if (!identity) return;
+      this.store ??= new Store(this.ctx, this.env, identity.namespace);
+      await this.store.recover();
+    });
+    this.queue = job.catch(() => {}); return job;
   }
   stream(generator, type) {
     let finish;
@@ -85,22 +95,29 @@ export class OwnRepository {
     const stage = this.store.stage(codec.format);
     try {
       await new Intake(this.store, codec, stage).run(request);
-    } catch {
+    } catch (error) {
       const selected = this.store.exec("SELECT selected FROM stages WHERE id=?", stage)[0].selected;
       if (!selected) return json({ error: "invalid receive request" }, 400);
-      const outcomes = this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", stage).map((row) => ({ ...row, error: "unpacker error" }));
+      const names = error.commands ?? this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", stage);
+      await this.store.abandon(stage);
+      const outcomes = names.map((row) => ({ ...row, error: "unpacker error" }));
       return this.stream(this.report(codec, selected, outcomes, true), "application/x-git-receive-pack-result");
     }
     const outcomes = publish(this.store, stage);
     const selected = this.store.exec("SELECT selected FROM stages WHERE id=?", stage)[0].selected;
+    if (outcomes.length && outcomes.every((outcome) => outcome.error)) await this.store.abandon(stage);
     return this.stream(this.report(codec, selected, outcomes, false), "application/x-git-receive-pack-result");
+  }
+  async *uploadAdvertisement(codec, version) {
+    yield codec.uploadAdvert(version);
+    if (version !== 2) yield* new FetchJob(this.store, codec, version).references();
   }
   async handle(request) {
     try {
       if (!authorized(request, this.env)) return json({ error: "unknown route" }, 404);
       const namespace = request.headers.get("x-git-zero-namespace");
       if (!REPOSITORY.test(namespace ?? "")) return json({ error: "invalid repository" }, 400);
-      this.store ??= new Store(this.ctx, this.env, namespace);
+      if (!this.store) { this.store = new Store(this.ctx, this.env, namespace); await this.store.recover(); }
       if (this.store.namespace !== namespace) throw new Error("repository identity differs");
       const url = new URL(request.url), parts = url.pathname.split("/");
       if (parts[1] !== "_test") {
@@ -108,7 +125,15 @@ export class OwnRepository {
         this.store.initialize(format);
         const codec = new Codec(module, format, { capabilities: RECEIVE_CAPABILITIES });
         if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-receive-pack") return this.stream(this.advertise(codec), "application/x-git-receive-pack-advertisement");
+        const version = codec.uploadVersion(request.headers.get("git-protocol"));
+        if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-upload-pack") return this.stream(this.uploadAdvertisement(codec, version), "application/x-git-upload-pack-advertisement");
         if (request.method === "POST" && parts[2] === "git-receive-pack" && parts.length === 3 && request.headers.get("content-type")?.split(";")[0].trim() === "application/x-git-receive-pack-request") return await this.receive(request, codec);
+        if (request.method === "POST" && parts[2] === "git-upload-pack" && parts.length === 3 && request.headers.get("content-type")?.split(";")[0].trim() === "application/x-git-upload-pack-request") {
+          const fetch = new FetchJob(this.store, codec, version);
+          try { await fetch.decode(request); }
+          catch (error) { codec.uploadCancel(); fetch.reset(); throw error; }
+          return this.stream(fetch.response(), "application/x-git-upload-pack-result");
+        }
         return json({ error: "unknown Git route" }, 404);
       }
       if (this.env.TEST_MODE !== "true") return json({ error: "unknown route" }, 404);
@@ -118,9 +143,16 @@ export class OwnRepository {
       if (request.method === "POST" && parts[3] === "intake") {
         const format = Number(request.headers.get("x-test-format") ?? this.env.REPO_FORMAT ?? 0);
         const codec = new Codec(module, format, { capabilities: 255 });
-        const stage = this.store.stage(format);
+        const stage = this.store.stage(format, true);
         const result = await new Intake(this.store, codec, stage).run(request);
         return json({ ...result, epoch: this.epoch, usage: this.store.statistics().usage });
+      }
+      if (request.method === "POST" && parts[3] === "stage" && UUID.test(parts[4] ?? "") && parts[5] === "expire") {
+        const stage = this.store.exec("SELECT id FROM stages WHERE id=? AND phase='verified' AND retained=1", parts[4])[0];
+        if (!stage) return json({ error: "retained quarantine not found" }, 404);
+        this.store.exec("UPDATE stages SET phase='failed',retained=0 WHERE id=?", stage.id);
+        await this.ctx.storage.setAlarm(Date.now() + 60000);
+        return json({ cleanupScheduled: true });
       }
       if (request.method === "GET" && parts[3] === "stage" && UUID.test(parts[4] ?? "")) {
         const stage = this.store.exec("SELECT * FROM stages WHERE id=?", parts[4])[0];

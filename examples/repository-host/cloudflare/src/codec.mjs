@@ -120,6 +120,40 @@ export class Codec {
   statusFinish() { return this.event("host_status_finish", null).data; }
   progress(selected, message) { return this.event("host_progress", message, selected).data; }
 
+  uploadInit(version) { this.invoke("host_upload_init", this.format, version); }
+  uploadVersion(header) { const bytes = new TextEncoder().encode(header ?? ""); this.stage(bytes); return this.invoke("host_upload_version", bytes.length, Number(header !== null)); }
+  uploadAppend(bytes) { this.stage(bytes); this.invoke("host_upload_append", bytes.length); }
+  uploadParse() { return this.event("host_upload_parse", null); }
+  uploadNext() { return this.event("host_upload_next", null); }
+  uploadAdvert(version, selection = false) { return this.event("host_upload_advert", null, this.format, version, Number(selection)).data; }
+  uploadRef(ref, { v2 = false, first = false, selection = false } = {}) {
+    const name = ref.name, target = ref.target ?? new Uint8Array();
+    const f = fields(80 + name.length + target.length);
+    f.word(64, (ref.id ? 1 : 0) | (ref.peeled ? 2 : 0));
+    if (ref.id) this.id(f, 0, ref.id);
+    if (ref.peeled) this.id(f, 32, ref.peeled);
+    f.word(68, name.length); f.word(72, target.length); f.bytes.set(name, 80); f.bytes.set(target, 80 + name.length);
+    // IDs are staged at padded ABI slots 0/32, distinct from frame event slots.
+    return this.event("host_upload_ref", f.bytes, Number(v2), Number(first), Number(selection)).data;
+  }
+  uploadFlush() { return this.event("host_upload_flush", null).data; }
+  uploadAckStart() { return this.event("host_upload_ack_start", null).data; }
+  uploadAckCommon(id) { return this.event("host_upload_ack_common", id).data; }
+  uploadAckFinish() { return this.event("host_upload_ack_finish", null).data; }
+  uploadCancel() { this.invoke("host_upload_cancel"); }
+
+  packStart(count, band) { return this.event("host_pack_start", null, this.format, count, BigInt(this.limits.maxPackBytes), band).data; }
+  packEntry(entry) {
+    const f = fields(88); f.word(0, entry.kind); f.word(4, Number(entry.fallback ?? false));
+    this.id(f, 8, entry.id); if (entry.base) this.id(f, 40, entry.base);
+    f.wide(72, entry.size); f.wide(80, entry.compressedSize ?? 0);
+    return this.event("host_pack_entry", f.bytes).data;
+  }
+  packFeed(bytes) { return this.event("host_pack_feed", bytes).data; }
+  packEntryFinish() { return this.event("host_pack_entry_finish", null).data; }
+  packFinish() { return this.event("host_pack_finish", null).data; }
+  packCancel() { this.invoke("host_pack_cancel"); }
+
   rangeInit(key, range = null) {
     const f = fields(104), l = this.limits;
     f.word(0, this.format); this.key(f, 4, 8, 16, key);

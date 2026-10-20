@@ -30,20 +30,22 @@ export class ByteCache {
 }
 
 const SCHEMA = [
+  "CREATE TABLE IF NOT EXISTS host_identity (id INTEGER PRIMARY KEY, namespace TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS repository (id INTEGER PRIMARY KEY, format INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0, object_count INTEGER NOT NULL DEFAULT 0, head BLOB NOT NULL)",
-  "CREATE TABLE IF NOT EXISTS stages (id TEXT PRIMARY KEY, format INTEGER NOT NULL, phase TEXT NOT NULL, created INTEGER NOT NULL, pack TEXT, bytes INTEGER NOT NULL DEFAULT 0, selected INTEGER NOT NULL DEFAULT 0, expected INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS stages (id TEXT PRIMARY KEY, format INTEGER NOT NULL, phase TEXT NOT NULL, retained INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, pack TEXT, bytes INTEGER NOT NULL DEFAULT 0, selected INTEGER NOT NULL DEFAULT 0, expected INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_commands (stage TEXT NOT NULL, seq INTEGER NOT NULL, name BLOB NOT NULL, old_oid TEXT NOT NULL, new_oid TEXT NOT NULL, branch INTEGER NOT NULL, creation INTEGER NOT NULL, deletion INTEGER NOT NULL, PRIMARY KEY(stage,seq), UNIQUE(stage,name)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_options (stage TEXT NOT NULL, seq INTEGER NOT NULL, value BLOB NOT NULL, PRIMARY KEY(stage,seq)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_shallow (stage TEXT NOT NULL, oid TEXT NOT NULL, PRIMARY KEY(stage,oid)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_chunks (stage TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS stage_chunk_offsets ON stage_chunks(stage,start)",
+  "CREATE INDEX IF NOT EXISTS stage_chunk_keys ON stage_chunks(key,stage)",
   "CREATE TABLE IF NOT EXISTS stage_objects (stage TEXT NOT NULL, node INTEGER NOT NULL, wire_kind INTEGER NOT NULL, packed_size INTEGER NOT NULL, compressed_offset INTEGER NOT NULL, end_offset INTEGER, crc INTEGER, wire_base_offset INTEGER, wire_base_id TEXT, oid TEXT, kind INTEGER, size INTEGER, depth INTEGER, base_stage TEXT, base_node INTEGER, base_oid TEXT, verified INTEGER NOT NULL DEFAULT 0, scanned INTEGER NOT NULL DEFAULT 0, ready INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(stage,node)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS stage_object_ids ON stage_objects(stage,oid)",
-  "CREATE INDEX IF NOT EXISTS published_object_ids ON stage_objects(oid,stage)",
-  "CREATE INDEX IF NOT EXISTS stage_object_work ON stage_objects(stage,verified,scanned,node)",
-  "CREATE INDEX IF NOT EXISTS stage_ready_work ON stage_objects(stage,verified,ready,node)",
-  "CREATE INDEX IF NOT EXISTS stage_offset_dependencies ON stage_objects(stage,wire_base_offset,verified)",
-  "CREATE INDEX IF NOT EXISTS stage_id_dependencies ON stage_objects(stage,wire_base_id,verified)",
+  "CREATE INDEX IF NOT EXISTS published_object_ids ON stage_objects(oid,depth,stage)",
+  "CREATE INDEX IF NOT EXISTS stage_object_work ON stage_objects(stage,node) WHERE verified=1 AND scanned=0",
+  "CREATE INDEX IF NOT EXISTS stage_ready_work ON stage_objects(stage,node) WHERE verified=0 AND ready=1",
+  "CREATE INDEX IF NOT EXISTS stage_offset_dependencies ON stage_objects(stage,wire_base_offset) WHERE verified=0 AND wire_base_offset IS NOT NULL",
+  "CREATE INDEX IF NOT EXISTS stage_id_dependencies ON stage_objects(stage,wire_base_id) WHERE verified=0 AND wire_base_id IS NOT NULL",
   "CREATE TABLE IF NOT EXISTS stage_edges (stage TEXT NOT NULL, node INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, relation INTEGER NOT NULL, PRIMARY KEY(stage,node,relation,dst)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_names (stage TEXT NOT NULL, node INTEGER NOT NULL, name BLOB NOT NULL, mode INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, PRIMARY KEY(stage,node,name)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS temp_chunks (stage TEXT NOT NULL, object TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,object,seq)) WITHOUT ROWID",
@@ -51,6 +53,13 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS temp_objects (stage TEXT NOT NULL, object TEXT NOT NULL, oid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(stage,object)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS refs (name BLOB PRIMARY KEY, oid TEXT NOT NULL) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS proposed_refs (name BLOB PRIMARY KEY, seq INTEGER) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS fetch_wants (oid TEXT PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS fetch_haves (oid TEXT PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS fetch_common (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0, stage TEXT, node INTEGER) WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS fetch_common_work ON fetch_common(walked,oid)",
+  "CREATE TABLE IF NOT EXISTS fetch_selected (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0, stage TEXT, node INTEGER) WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS fetch_selected_work ON fetch_selected(walked,oid)",
+  "CREATE INDEX IF NOT EXISTS fetch_selected_physical ON fetch_selected(stage,node)",
 ];
 
 export class Store {
@@ -59,6 +68,8 @@ export class Store {
     this.usage = { sqlCalls: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2Puts: 0, r2Deletes: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
     this.sqlKnown = true;
     for (const statement of SCHEMA) this.exec(statement);
+    this.exec("INSERT OR IGNORE INTO host_identity(id,namespace) VALUES(1,?)", namespace);
+    if (this.exec("SELECT namespace FROM host_identity WHERE id=1")[0].namespace !== namespace) throw new Error("stored repository identity differs");
   }
   exec(statement, ...bindings) {
     const cursor = this.ctx.storage.sql.exec(statement, ...bindings);
@@ -74,10 +85,10 @@ export class Store {
     if (current && current.format !== format) throw new Error("repository object format differs");
     if (!current) this.exec("INSERT INTO repository(id,format,generation,head) VALUES(1,?,0,?)", format, blob(new TextEncoder().encode("refs/heads/main")));
   }
-  stage(format) {
+  stage(format, retained = false) {
     this.initialize(format);
     const id = crypto.randomUUID();
-    this.exec("INSERT INTO stages(id,format,phase,created) VALUES(?,?,?,?)", id, format, "receiving", Date.now());
+    this.exec("INSERT INTO stages(id,format,phase,created,retained) VALUES(?,?,?,?,?)", id, format, "receiving", Date.now(), Number(retained));
     return id;
   }
   node(stage, node) { return this.exec("SELECT * FROM stage_objects WHERE stage=? AND node=?", stage, node)[0]; }
@@ -86,13 +97,22 @@ export class Store {
       ?? this.published(oid);
   }
   published(oid) {
-    return this.exec("SELECT o.* FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE o.oid=? AND s.phase='published' AND o.verified=1 LIMIT 1", oid)[0];
+    return this.exec("SELECT o.* FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE o.oid=? AND s.phase='published' AND o.verified=1 ORDER BY o.depth,o.stage LIMIT 1", oid)[0];
+  }
+  *references() {
+    let after = new Uint8Array();
+    for (;;) {
+      const rows = this.exec("SELECT name,oid FROM refs WHERE name>? ORDER BY name LIMIT 128", blob(after));
+      if (!rows.length) return;
+      for (const row of rows) { after = bytes(row.name); yield { ...row, name: after }; }
+    }
   }
   statistics() {
     return {
       usage: { ...this.usage, sqlRowsRead: this.sqlKnown ? this.usage.sqlRowsRead : null, sqlRowsWritten: this.sqlKnown ? this.usage.sqlRowsWritten : null },
       objects: this.exec("SELECT object_count FROM repository WHERE id=1")[0]?.object_count ?? 0,
       stagedObjects: this.exec("SELECT COUNT(*) AS count FROM stage_objects")[0].count,
+      stagedChunks: this.exec("SELECT COUNT(*) AS count FROM stage_chunks")[0].count,
       refs: this.exec("SELECT COUNT(*) AS count FROM refs")[0].count,
       stages: this.exec("SELECT id,format,phase,bytes,expected FROM stages ORDER BY created DESC LIMIT 64"),
       databaseBytes: this.ctx.storage.sql.databaseSize ?? null,
@@ -115,13 +135,56 @@ export class Store {
     cache.put(chunk.key, data); return data;
   }
   async clearTemporary(stage) {
-    const keys = this.exec("SELECT key FROM temp_chunks WHERE stage=?", stage).map((row) => row.key);
-    for (let offset = 0; offset < keys.length; offset += 1000) {
-      const batch = keys.slice(offset, offset + 1000);
+    try {
+    for (;;) {
+      const rows = this.exec("SELECT object,seq,key FROM temp_chunks WHERE stage=? LIMIT 1000", stage);
+      if (!rows.length) break;
+      const batch = rows.map((row) => row.key);
       this.usage.r2Deletes += batch.length; await this.env.BLOBS.delete(batch);
+      for (const row of rows) this.exec("DELETE FROM temp_chunks WHERE stage=? AND object=? AND seq=?", stage, row.object, row.seq);
     }
-    this.exec("DELETE FROM temp_chunks WHERE stage=?", stage);
     this.exec("DELETE FROM temp_objects WHERE stage=?", stage);
+    } catch (error) { await this.ctx.storage.setAlarm(Date.now() + 60000); throw error; }
+  }
+  async abandon(stage) {
+    const current = this.exec("SELECT phase FROM stages WHERE id=?", stage)[0];
+    if (!current || current.phase === "published") throw new Error("cannot abandon published or absent storage");
+    this.exec("UPDATE stages SET phase='failed' WHERE id=?", stage);
+    try {
+      await this.clearTemporary(stage);
+      for (;;) {
+        const rows = this.exec("SELECT seq,key FROM stage_chunks WHERE stage=? LIMIT 128", stage);
+        if (!rows.length) break;
+        for (const row of rows) {
+          // Claims precede R2 puts. Delete the last owner's bytes before its
+          // claim, so a crash/outage always leaves a durable retry record.
+          if (!this.exec("SELECT 1 FROM stage_chunks WHERE key=? AND stage<>? LIMIT 1", row.key, stage).length) {
+            this.usage.r2Deletes++; await this.env.BLOBS.delete(row.key);
+          }
+          this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
+        }
+      }
+      for (const table of ["stage_objects", "stage_edges", "stage_names", "stage_commands", "stage_options", "stage_shallow"]) this.exec(`DELETE FROM ${table} WHERE stage=?`, stage);
+    } catch (error) {
+      await this.ctx.storage.setAlarm(Date.now() + 60000);
+      throw error;
+    }
+  }
+  async recover() {
+    // A new durable instance has no previous in-flight writer. Private decoded
+    // stages can be abandoned; verified test fixtures and published packs stay.
+    for (;;) {
+      const temporary = this.exec("SELECT stage FROM temp_chunks LIMIT 1")[0];
+      if (!temporary) break;
+      await this.clearTemporary(temporary.stage);
+    }
+    this.exec("DELETE FROM temp_objects");
+    this.exec("UPDATE stages SET phase='failed' WHERE phase IN ('receiving','decoded') OR (phase='verified' AND retained=0)");
+    for (;;) {
+      const pending = this.exec("SELECT s.id FROM stages s WHERE s.phase='failed' AND (EXISTS(SELECT 1 FROM stage_chunks c WHERE c.stage=s.id) OR EXISTS(SELECT 1 FROM stage_objects o WHERE o.stage=s.id) OR EXISTS(SELECT 1 FROM temp_chunks t WHERE t.stage=s.id) OR EXISTS(SELECT 1 FROM stage_commands c WHERE c.stage=s.id)) LIMIT 1")[0];
+      if (!pending) return;
+      await this.abandon(pending.id);
+    }
   }
 }
 
@@ -144,10 +207,10 @@ export class ChunkWriter {
     const sha = await sha256(data);
     const prefix = `repositories/${this.store.namespace}`;
     const key = this.temporary === null ? `${prefix}/chunks/${sha}` : `${prefix}/tmp/${this.stage}/${this.temporary}/${this.seq}`;
-    await this.store.put(key, data);
     const values = [this.stage, this.seq, key, this.position, this.used, sha];
     if (this.temporary === null) this.store.exec("INSERT INTO stage_chunks(stage,seq,key,start,length,sha) VALUES(?,?,?,?,?,?)", ...values);
     else this.store.exec("INSERT INTO temp_chunks(stage,object,seq,key,start,length,sha) VALUES(?,?,?,?,?,?,?)", this.stage, this.temporary, ...values.slice(1));
+    await this.store.put(key, data);
     this.position += this.used; this.seq++; this.used = 0;
   }
   async finish() { await this.flush(); this.buffer = new Uint8Array(); return this.position; }

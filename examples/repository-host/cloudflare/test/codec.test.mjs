@@ -92,7 +92,7 @@ test("hosting Wasm has fixed memory, no imports and no allocator", () => {
   assert.deepEqual(WebAssembly.Module.imports(module), []);
   assert.ok(!WebAssembly.Module.exports(module).some(({ name }) => /alloc|free/.test(name)));
   const codec = new Codec(module);
-  assert.ok(codec.memory.byteLength <= 32 * 65536, "hosting state exceeds its 2 MiB linear-memory budget");
+  assert.ok(codec.memory.byteLength <= 96 * 65536, "hosting state plus 4 MiB frozen controls exceeds its 6 MiB linear-memory budget");
 });
 
 test("streamed receive validates compressed plain/OFS/REF intake in both formats", () => {

@@ -1,5 +1,54 @@
 use git_zero::{io::SliceWriter, zlib};
 
+#[test]
+fn streamed_stored_blocks_have_exact_size_and_are_fragment_independent() {
+    use zlib::StoredEncoder;
+    for length in [0, 1, 65534, 65535, 65536, 131071] {
+        let body: Vec<_> = (0..length).map(|i| (i * 17) as u8).collect();
+        let mut reference_storage = vec![0; length + 256];
+        let mut reference = SliceWriter::new(&mut reference_storage);
+        zlib::write_parts(&mut reference, &[&body]).unwrap();
+        assert_eq!(
+            StoredEncoder::encoded_size(length as u64).unwrap(),
+            reference.as_bytes().len() as u64
+        );
+        for fragment in [1, 7, 65535, 65536] {
+            let mut storage = vec![0; reference.as_bytes().len()];
+            let mut output = SliceWriter::new(&mut storage);
+            let mut encoder = StoredEncoder::new(length as u64, &mut output).unwrap();
+            for bytes in body.chunks(fragment) {
+                encoder.write(bytes, &mut output).unwrap();
+            }
+            encoder.finish(&mut output).unwrap();
+            assert_eq!(output.as_bytes(), reference.as_bytes());
+            assert_eq!(
+                encoder.finish(&mut output),
+                Err(git_zero::Error::InvalidRequest)
+            );
+        }
+    }
+    assert_eq!(
+        StoredEncoder::encoded_size(u64::MAX),
+        Err(git_zero::Error::LimitExceeded)
+    );
+    let mut storage = [0; 64];
+    let mut output = SliceWriter::new(&mut storage);
+    let mut encoder = StoredEncoder::new(1, &mut output).unwrap();
+    assert_eq!(
+        encoder.write(b"ab", &mut output),
+        Err(git_zero::Error::InvalidObject)
+    );
+    assert_eq!(output.as_bytes(), &[0x78, 0x01]);
+    assert_eq!(
+        encoder.write(b"a", &mut output),
+        Err(git_zero::Error::InvalidObject)
+    );
+    assert_eq!(
+        encoder.finish(&mut output),
+        Err(git_zero::Error::InvalidObject)
+    );
+}
+
 fn checksum(parts: &[&[u8]]) -> u32 {
     let mut storage = vec![0; parts.iter().map(|part| part.len()).sum::<usize>() + 256];
     let mut output = SliceWriter::new(&mut storage);

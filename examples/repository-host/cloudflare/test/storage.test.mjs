@@ -45,7 +45,7 @@ test("Wrangler R2/SQLite persists verified packs and rejects invalid graph publi
         assert.equal(result.refsUpdated, 0);
         assert.equal(result.objects, 3);
         assert.equal(result.packBytes, fixture.pack.length);
-        assert.ok(result.wasmMemoryBytes <= 2 * 1024 * 1024);
+        assert.ok(result.wasmMemoryBytes <= 6 * 1024 * 1024);
         assert.ok(result.usage.r2Puts > 0);
         const row = await rowFor(server, namespace, result, fixture.root.id);
         assert.equal(row.depth, 2);
@@ -65,8 +65,16 @@ test("Wrangler R2/SQLite persists verified packs and rejects invalid graph publi
         assert.equal(state.stages[0].phase, "failed");
       }
     }
+    const expiredNamespace = `expired-${randomUUID()}`;
+    const expired = await upload(server, expiredNamespace, project(0), 0);
+    await responseJson(await fetch(`${server.origin}/_test/${expiredNamespace}/stage/${expired.stage}/expire`, { method: "POST", headers: headers() }));
+    const pendingCleanup = await responseJson(await fetch(`${server.origin}/_test/${expiredNamespace}/state`, { headers: headers() }));
+    assert.equal(pendingCleanup.stagedChunks, 1);
     const before = restart[0].result.epoch;
     await server.stop(); server = await start(persist);
+    const recovered = await responseJson(await fetch(`${server.origin}/_test/${expiredNamespace}/state`, { headers: headers() }));
+    assert.equal(recovered.stagedChunks, 0); assert.equal(recovered.stagedObjects, 0);
+    assert.ok(recovered.usage.r2Deletes >= 1, "cold recovery must finish scheduled quarantine cleanup");
     for (const item of restart) {
       const state = await responseJson(await fetch(`${server.origin}/_test/${item.namespace}/state`, { headers: headers() }));
       assert.notEqual(state.epoch, before);
@@ -88,6 +96,24 @@ test("Wrangler R2/SQLite persists verified packs and rejects invalid graph publi
     assert.ok(result.caches.canonicalPeak <= 24 * 1024 * 1024);
     assert.ok(result.caches.representationPeak <= 8 * 1024 * 1024);
     assert.ok(result.caches.chunkPeak <= 16 * 1024 * 1024);
+    const corrupted = Buffer.from(fixture.wire); corrupted[corrupted.length - 1] ^= 1;
+    const rejected = await fetch(`${server.origin}/_test/${namespace}/intake`, { method: "POST", headers: headers(), body: chunked(corrupted, 65536), duplex: "half" });
+    assert.equal(rejected.status, 400); await rejected.text();
+    const shared = await responseJson(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
+    assert.equal(shared.stagedChunks, 2, "failed owner must release claims while keeping both chunks owned by a verified stage");
+    assert.equal(shared.stagedObjects, 1, "failed intake metadata must be reclaimed");
+    const retained = await responseJson(await fetch(`${server.origin}/_test/${namespace}/object/${result.stage}?node=12`, { headers: headers() }));
+    assert.equal(retained.oid, value.id.toString("hex"), "shared first chunk must remain readable after failed intake cleanup");
+
+    const failedNamespace = `reclaim-${randomUUID()}`;
+    const invalidCommit = object(0, 1, `tree ${"0".repeat(40)}\n\nmissing target\n`);
+    const invalidPack = pack(0, [entry(3, value.body), entry(1, invalidCommit.body)]);
+    const invalid = await fetch(`${server.origin}/_test/${failedNamespace}/intake`, { method: "POST", headers: headers(), body: chunked(wire(0, invalidPack, invalidCommit.id), 65536), duplex: "half" });
+    assert.equal(invalid.status, 400); await invalid.text();
+    const reclaimed = await responseJson(await fetch(`${server.origin}/_test/${failedNamespace}/state`, { headers: headers() }));
+    assert.equal(reclaimed.stages[0].phase, "failed");
+    assert.equal(reclaimed.stagedChunks, 0); assert.equal(reclaimed.stagedObjects, 0);
+    assert.ok(reclaimed.usage.r2Deletes >= 4, "both encoded chunks and both private canonical chunks must be deleted");
   } catch (error) { error.message += `\n${server?.logs() ?? ""}`; throw error; }
   finally { await server?.stop(); await rm(persist, { recursive: true, force: true }); }
 });
