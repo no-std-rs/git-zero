@@ -40,7 +40,8 @@ for (const [runtime, format] of [["wrangler", "sha1"], ["workerd", "sha256"]]) t
       assert.equal(diagnostics.reachableDiagnostics.length, 1);
       assert.ok(diagnostics.reachableDiagnostics[0].includes(`${tree}: badFilemode:`));
       assert.equal(report.phases.at(-1).matchesSource, true);
-      if (previous) assert.equal(report.phases[0].reusedFrom, previous);
+      assert.equal(report.phases[0].phase, "freeze-runtime");
+      if (previous) assert.equal(report.phases.find((phase) => phase.phase === "source-strict-fsck").reusedFrom, previous);
       previous = join(work, "report.json");
     }
   } finally { await rm(root, { recursive: true, force: true }); }

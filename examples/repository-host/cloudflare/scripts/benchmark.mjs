@@ -2,7 +2,7 @@
 // with actual local Wrangler R2/SQLite, or direct workerd with the S3 fixture.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { headers, start, TOKEN } from "../test/wrangler.mjs";
@@ -13,6 +13,7 @@ const options = Object.fromEntries(args.reduce((pairs, value, index) => { if (in
 if (args.length % 2 || !options["--source"] || !options["--work-dir"]) throw new Error("usage: node scripts/benchmark.mjs --source REPO --work-dir NEW_DIRECTORY [--revision HEAD] [--runtime wrangler|workerd] [--baseline-report MATCHING_SOURCE_REPORT]");
 const root = fileURLToPath(new URL("../", import.meta.url));
 const source = resolve(options["--source"]), work = resolve(options["--work-dir"]);
+const bundle = join(work, "frozen");
 const runtime = options["--runtime"] ?? "wrangler";
 if (!["wrangler", "workerd"].includes(runtime)) throw new Error("unknown runtime");
 await mkdir(work); // Existing evidence is never overwritten.
@@ -82,6 +83,22 @@ try {
   report.resources.clockTicksPerSecond = Number((await command("getconf", ["CLK_TCK"], root)).stdout);
   report.resources.sampleIntervalMs = 1000;
   progressTimer = setInterval(() => { progress({ phase, elapsedSeconds: (performance.now() - started) / 1000, recentClientProgress: recent, resources: report.resources }); save().catch(() => {}); }, 20000);
+  await phaseRun("freeze-runtime", async () => {
+    if (runtime === "wrangler") {
+      await command(process.execPath, [join(root, "node_modules/wrangler/bin/wrangler.js"), "deploy", "--config", "wrangler.toml", "--dry-run", "--outdir", bundle], root);
+      await writeFile(join(bundle, "wrangler.toml"), `name = "git-zero-own-scale-proof"\nmain = "streamed.js"\ncompatibility_date = "2026-10-06"\nsend_metrics = false\n[vars]\nREPO_FORMAT = "${report.objectFormat === "sha256" ? 1 : 0}"\n[[r2_buckets]]\nbinding = "BLOBS"\nbucket_name = "git-zero-repository-data"\nremote = false\n[[durable_objects.bindings]]\nname = "REPOSITORIES"\nclass_name = "OwnRepository"\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["OwnRepository"]\n`);
+    } else {
+      await command(process.execPath, ["scripts/build.mjs"], root);
+      await mkdir(join(bundle, "src"), { recursive: true });
+      await mkdir(join(bundle, "build"));
+      for (const file of await readdir(join(root, "src"))) if (file.endsWith(".mjs")) await copyFile(join(root, "src", file), join(bundle, "src", file));
+      await copyFile(join(root, "build/git_zero_host_wasm.wasm"), join(bundle, "build/git_zero_host_wasm.wasm"));
+      await copyFile(join(root, "workerd.capnp"), join(bundle, "workerd.capnp"));
+    }
+    // Isolate package/config discovery and file watchers from the checkout.
+    await writeFile(join(bundle, "package.json"), '{"name":"git-zero-frozen-runtime","private":true,"type":"module"}\n');
+    return { directory: bundle };
+  });
   const baseline = await phaseRun("source-strict-fsck", async () => {
     if (options["--baseline-report"]) {
       const previous = JSON.parse(await readFile(options["--baseline-report"], "utf8"));
@@ -110,13 +127,7 @@ try {
     return { reachableDiagnostics: baseline.diagnostics, unrelatedDiagnostics: baseline.allSourceDiagnostics.length - baseline.diagnostics.length };
   });
   const persist = join(work, "state");
-  if (runtime === "wrangler") {
-    const bundle = join(work, "frozen");
-    await command(process.execPath, [join(root, "node_modules/wrangler/bin/wrangler.js"), "deploy", "--config", "wrangler.toml", "--dry-run", "--outdir", bundle], root);
-    const config = join(bundle, "wrangler.toml");
-    await writeFile(config, `name = "git-zero-own-scale-proof"\nmain = "streamed.js"\ncompatibility_date = "2026-10-06"\nsend_metrics = false\n[vars]\nREPO_FORMAT = "${report.objectFormat === "sha256" ? 1 : 0}"\n[[r2_buckets]]\nbinding = "BLOBS"\nbucket_name = "git-zero-repository-data"\nremote = false\n[[durable_objects.bindings]]\nname = "REPOSITORIES"\nclass_name = "OwnRepository"\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["OwnRepository"]\n`);
-    server = await start(persist, { config });
-  } else server = await startStandalone(persist, { format: report.objectFormat === "sha256" ? 1 : 0 });
+  server = runtime === "wrangler" ? await start(persist, { config: join(bundle, "wrangler.toml"), cwd: bundle, frozen: true }) : await startStandalone(persist, { format: report.objectFormat === "sha256" ? 1 : 0, cwd: bundle });
   report.origin = server.origin; await save();
   const repo = `${server.origin}/kernel.git`;
   sampleTimer = setInterval(() => { resources().catch((error) => { report.resourceError = error.message; }); }, 1000);
@@ -141,7 +152,7 @@ try {
   });
   await phaseRun("cold-fetch", async () => {
     await server.stop();
-    server = runtime === "wrangler" ? await start(persist, { config: join(work, "frozen/wrangler.toml") }) : await startStandalone(persist, { format: report.objectFormat === "sha256" ? 1 : 0 });
+    server = runtime === "wrangler" ? await start(persist, { config: join(bundle, "wrangler.toml"), cwd: bundle, frozen: true }) : await startStandalone(persist, { format: report.objectFormat === "sha256" ? 1 : 0, cwd: bundle });
     // Keep the ordinary client remote, then fetch from the restarted endpoint.
     await git(clone, ["remote", "set-url", "origin", `${server.origin}/kernel.git`]);
     await git(clone, ["fetch", "--progress", "origin"]);
