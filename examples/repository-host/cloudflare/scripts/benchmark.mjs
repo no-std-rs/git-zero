@@ -116,7 +116,7 @@ try {
     const config = join(bundle, "wrangler.toml");
     await writeFile(config, `name = "git-zero-own-scale-proof"\nmain = "streamed.js"\ncompatibility_date = "2026-10-06"\nsend_metrics = false\n[vars]\nREPO_FORMAT = "${report.objectFormat === "sha256" ? 1 : 0}"\n[[r2_buckets]]\nbinding = "BLOBS"\nbucket_name = "git-zero-repository-data"\nremote = false\n[[durable_objects.bindings]]\nname = "REPOSITORIES"\nclass_name = "OwnRepository"\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["OwnRepository"]\n`);
     server = await start(persist, { config });
-  } else server = await startStandalone(persist);
+  } else server = await startStandalone(persist, { format: report.objectFormat === "sha256" ? 1 : 0 });
   report.origin = server.origin; await save();
   const repo = `${server.origin}/kernel.git`;
   sampleTimer = setInterval(() => { resources().catch((error) => { report.resourceError = error.message; }); }, 1000);
@@ -141,7 +141,7 @@ try {
   });
   await phaseRun("cold-fetch", async () => {
     await server.stop();
-    server = runtime === "wrangler" ? await start(persist, { config: join(work, "frozen/wrangler.toml") }) : await startStandalone(persist);
+    server = runtime === "wrangler" ? await start(persist, { config: join(work, "frozen/wrangler.toml") }) : await startStandalone(persist, { format: report.objectFormat === "sha256" ? 1 : 0 });
     // Keep the ordinary client remote, then fetch from the restarted endpoint.
     await git(clone, ["remote", "set-url", "origin", `${server.origin}/kernel.git`]);
     await git(clone, ["fetch", "--progress", "origin"]);

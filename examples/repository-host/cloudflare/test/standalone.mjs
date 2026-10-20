@@ -48,13 +48,13 @@ async function s3(directory) {
   return { url: `http://127.0.0.1:${server.address().port}/bucket`, stop: async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 
-export async function startStandalone(persist) {
+export async function startStandalone(persist, { format = 0 } = {}) {
   const state = join(persist, "sqlite"); await mkdir(state, { recursive: true });
   const storage = await s3(join(persist, "r2"));
   const child = spawn(fileURLToPath(new URL("node_modules/workerd/bin/workerd", root)), [
     "serve", "workerd.capnp", "--experimental", "--directory-path", `state=${state}`,
     "--socket-addr", "http=127.0.0.1:0", "--control-fd", "1",
-  ], { cwd: fileURLToPath(root), env: { ...process.env, HOST_TOKEN: TOKEN, TEST_MODE: "true", R2_S3_URL: storage.url, R2_ACCESS_KEY_ID: ACCESS, R2_SECRET_ACCESS_KEY: SECRET }, stdio: ["ignore", "pipe", "pipe"] });
+  ], { cwd: fileURLToPath(root), env: { ...process.env, HOST_TOKEN: TOKEN, TEST_MODE: "true", REPO_FORMAT: String(format), R2_S3_URL: storage.url, R2_ACCESS_KEY_ID: ACCESS, R2_SECRET_ACCESS_KEY: SECRET }, stdio: ["ignore", "pipe", "pipe"] });
   let logs = "", exited = false;
   child.once("exit", () => { exited = true; });
   const stop = async () => {

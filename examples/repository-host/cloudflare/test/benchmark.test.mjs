@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const execute = promisify(execFile);
-test("scale harness preserves reachable warnings and excludes unrelated source objects", { timeout: 120000 }, async () => {
+for (const [runtime, format] of [["wrangler", "sha1"], ["workerd", "sha256"]]) test(`${runtime} ${format} scale harness preserves only reachable source warnings`, { timeout: 120000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-benchmark-contract-"));
   const source = join(root, "source.git"), cwd = fileURLToPath(new URL("../", import.meta.url));
   await mkdir(source);
@@ -22,7 +22,7 @@ test("scale harness preserves reachable warnings and excludes unrelated source o
     assert.equal(await done, 0, err); return out.trim();
   };
   try {
-    await git(["init", "--bare", "--initial-branch=master", "--object-format=sha1"]);
+    await git(["init", "--bare", "--initial-branch=master", `--object-format=${format}`]);
     const blob = await git(["hash-object", "-w", "--stdin"], "historical tree bytes\n");
     const tree = await git(["hash-object", "-w", "--literally", "-t", "tree", "--stdin"], Buffer.concat([Buffer.from("100664 file\0"), Buffer.from(blob, "hex")]));
     const commit = await git(["commit-tree", tree], "reachable tree warning\n");
@@ -30,7 +30,7 @@ test("scale harness preserves reachable warnings and excludes unrelated source o
     await git(["hash-object", "-w", "--literally", "-t", "tag", "--stdin"], `object ${commit}\ntype commit\ntag orphan\n\nunreachable tag warning\n`);
     let previous;
     for (const label of ["fresh", "cached"]) {
-      const work = join(root, label), args = ["scripts/benchmark.mjs", "--source", source, "--work-dir", work];
+      const work = join(root, label), args = ["scripts/benchmark.mjs", "--source", source, "--work-dir", work, "--runtime", runtime];
       if (previous) args.push("--baseline-report", previous);
       await execute(process.execPath, args, { cwd, env, timeout: 60000, killSignal: "SIGTERM", maxBuffer: 65536 });
       const report = JSON.parse(await readFile(join(work, "report.json"), "utf8"));
