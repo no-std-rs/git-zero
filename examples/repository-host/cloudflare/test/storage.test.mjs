@@ -64,6 +64,19 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     }
     assert.equal(batchRows.length, batches.length, "the last partial batch must be flushed");
     for (const at of [0, 511, 1024]) await canonical(server, batchNamespace, batchResult, batchRows[at], batches[at]);
+    const queueNamespace = `validation-queue-${randomUUID()}`;
+    const prefix = Array.from({ length: 4097 }, (_, i) => object(0, 3, `completed prefix ${i}`));
+    const base = prefix[0];
+    const pending = Array.from({ length: 1025 }, (_, i) => {
+      const suffix = Buffer.from(` suffix ${i}`);
+      const tag = object(0, 4, `object ${base.id.toString("hex")}\ntype blob\ntag pending-${i}\n\nqueued\n`);
+      const delta = Buffer.concat([Buffer.from([base.body.length, base.body.length + suffix.length, 0x90, base.body.length, suffix.length]), suffix]);
+      return [entry(4, tag.body), entry(7, delta, base.id)];
+    });
+    const queued = pack(0, [...prefix.map((item) => entry(3, item.body)), ...pending.flat()]);
+    const queueResult = await upload(server, queueNamespace, { wire: wire(0, queued, base.id) }, 0);
+    assert.equal(queueResult.objects, prefix.length + pending.length * 2);
+    assert.ok(queueResult.usage.sqlRowsRead < queueResult.objects * 8, `validation must visit pending work instead of repeatedly scanning the completed prefix: ${queueResult.usage.sqlRowsRead} rows read`);
     const wideNamespace = `wide-tree-${randomUUID()}`;
     const leaf = object(0, 3, "wide tree payload");
     const wide = object(0, 2, Buffer.concat(Array.from({ length: 257 }, (_, i) => Buffer.concat([Buffer.from(`100644 file${String(i).padStart(3, "0")}\0`), leaf.id]))));

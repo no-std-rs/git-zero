@@ -101,14 +101,16 @@ export class Intake {
   async validate() {
     // Plain objects already have canonical IDs from intake; scan their links
     // and warm bounded canonical caches before processing ready deltas.
+    // Without statistics SQLite prefers the stage's primary key, rescanning
+    // completed objects on every page and every dependency update.
     for (;;) {
-      const rows = this.store.exec("SELECT * FROM stage_objects WHERE stage=? AND verified=1 AND scanned=0 ORDER BY node LIMIT 128", this.stage);
+      const rows = this.store.exec("SELECT * FROM stage_objects INDEXED BY stage_object_work WHERE stage=? AND verified=1 AND scanned=0 ORDER BY node LIMIT 128", this.stage);
       if (!rows.length) break;
       for (const row of rows) await this.source.process(row, true);
     }
     this.store.exec("UPDATE stage_objects AS e SET ready=1 WHERE e.stage=? AND e.verified=0 AND ((e.wire_base_offset IS NOT NULL AND EXISTS(SELECT 1 FROM stage_objects b WHERE b.stage=e.stage AND b.node=e.wire_base_offset AND b.verified=1)) OR (e.wire_base_id IS NOT NULL AND (EXISTS(SELECT 1 FROM stage_objects b WHERE b.stage=e.stage AND b.oid=e.wire_base_id AND b.verified=1) OR EXISTS(SELECT 1 FROM stage_objects b JOIN stages p ON p.id=b.stage WHERE b.oid=e.wire_base_id AND p.phase='published'))))", this.stage);
     for (;;) {
-      const rows = this.store.exec("SELECT * FROM stage_objects WHERE stage=? AND verified=0 AND ready=1 ORDER BY node LIMIT 128", this.stage);
+      const rows = this.store.exec("SELECT * FROM stage_objects INDEXED BY stage_ready_work WHERE stage=? AND verified=0 AND ready=1 ORDER BY node LIMIT 128", this.stage);
       if (!rows.length) break;
       for (const row of rows) await this.delta(row);
     }
@@ -130,8 +132,8 @@ export class Intake {
     const id = await this.source.process(row, true);
     // Indexed dependency updates avoid repeatedly scanning all unresolved
     // objects when a pack uses forward reference-delta chains.
-    this.store.exec("UPDATE stage_objects SET ready=1 WHERE stage=? AND wire_base_offset=? AND verified=0", this.stage, row.node);
-    this.store.exec("UPDATE stage_objects SET ready=1 WHERE stage=? AND wire_base_id=? AND verified=0", this.stage, id);
+    this.store.exec("UPDATE stage_objects INDEXED BY stage_offset_dependencies SET ready=1 WHERE stage=? AND wire_base_offset=? AND verified=0", this.stage, row.node);
+    this.store.exec("UPDATE stage_objects INDEXED BY stage_id_dependencies SET ready=1 WHERE stage=? AND wire_base_id=? AND verified=0", this.stage, id);
   }
 
   async run(request) {
