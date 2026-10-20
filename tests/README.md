@@ -160,6 +160,14 @@ reverses all entry order, converts OFS bases to verified reference IDs and reuse
 the original compressed streams. Git's strict indexer accepts the result and
 generates exactly the same index as the composer's CRCs/offsets.
 
+`object_links` checks streamed root/parent/tag edges and tree entries for both
+formats, arbitrary fragmentation, raw byte names, gitlinks, historical modes,
+large opaque headers/messages, exact EOF, syntax errors and separate byte/link
+budgets. It tracks allocations and guards caller name buffers. Git-generated
+objects are compared with complete structural views; the graph fuzz target also
+compares full/fragmented scanner events and terminal failures. Complete target
+and duplicate-name validation belongs to the host's persistent graph index.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are

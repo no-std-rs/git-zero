@@ -46,6 +46,14 @@ pub fn graph(data: &[u8]) {
     } else {
         ObjectFormat::Sha256
     };
+    let kind = if data[0] & 2 != 0 {
+        ObjectKind::Tag
+    } else if data[0] & 1 == 0 {
+        ObjectKind::Tree
+    } else {
+        ObjectKind::Commit
+    };
+    super::object_links::check(&data[2..], kind, format);
     let blob = Object {
         kind: ObjectKind::Blob,
         data: b"seed\n",

@@ -552,6 +552,7 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
         verify_git_object(entry, object, expected, crc, offsets);
         writeln!(requests, "{expected}").unwrap();
         let body = object.object();
+        verify_git_links(body, object.id().format());
         writeln!(
             decoded,
             "{expected} {} {}",
@@ -569,6 +570,85 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
     // One independent Git process validates every body and its batch envelope.
     assert_eq!(decoded, git(directory, &["cat-file", "--batch"], &requests));
     verify_reused_git_pack(directory, &bytes, &entries, &resolved, offsets);
+}
+
+fn verify_git_links(object: Object<'_>, format: git_zero::ObjectFormat) {
+    use git_zero::object::{LinkDecoder, LinkLimits, LinkStatus, Tag, Tree};
+    let mut names = [0; 512];
+    let mut decoder = LinkDecoder::new(
+        object.info(),
+        format,
+        &mut names,
+        LinkLimits {
+            max_body_bytes: 1 << 20,
+            max_links: 1000,
+        },
+    )
+    .unwrap();
+    let mut actual = Vec::new();
+    let mut offset = 0;
+    loop {
+        let end = (offset + 7).min(object.data.len());
+        let step = decoder
+            .update(&object.data[offset..end], end == object.data.len())
+            .unwrap();
+        offset += step.consumed;
+        match step.status {
+            LinkStatus::Link { id, kind, .. } => actual.push((id, Some(kind), Vec::new())),
+            LinkStatus::TreeEntry {
+                id,
+                kind,
+                name,
+                canonical_mode,
+                ..
+            } => {
+                assert!(canonical_mode);
+                actual.push((id, kind, name.to_vec()));
+            }
+            LinkStatus::Finished => break,
+            LinkStatus::NeedInput => {}
+        }
+    }
+    decoder.finish().unwrap();
+    let expected: Vec<_> = match object.kind {
+        ObjectKind::Blob => vec![],
+        ObjectKind::Tree => Tree::parse_with_format(object.data, format)
+            .unwrap()
+            .entries()
+            .map(|entry| {
+                (
+                    entry.id,
+                    match entry.mode {
+                        0o040000 => Some(ObjectKind::Tree),
+                        0o160000 => None,
+                        _ => Some(ObjectKind::Blob),
+                    },
+                    entry.name.to_vec(),
+                )
+            })
+            .collect(),
+        ObjectKind::Tag => {
+            let tag = Tag::parse(object.data).unwrap();
+            vec![(tag.target, Some(tag.target_kind), Vec::new())]
+        }
+        ObjectKind::Commit => {
+            let mut lines = object.data.split(|byte| *byte == b'\n');
+            let mut result = vec![(
+                ObjectId::from_hex(&lines.next().unwrap()[5..]).unwrap(),
+                Some(ObjectKind::Tree),
+                Vec::new(),
+            )];
+            for line in lines.take_while(|line| line.starts_with(b"parent ")) {
+                result.push((
+                    ObjectId::from_hex(&line[7..]).unwrap(),
+                    Some(ObjectKind::Commit),
+                    Vec::new(),
+                ));
+            }
+            result
+        }
+    };
+    assert_eq!(actual, expected);
 }
 
 fn verify_reused_git_pack(

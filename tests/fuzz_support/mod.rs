@@ -3,6 +3,7 @@ mod client_responses;
 mod delta;
 mod http_routing;
 mod loose_objects;
+mod object_links;
 mod pack_entries;
 mod packet_lines;
 mod receive;

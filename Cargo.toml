@@ -105,6 +105,10 @@ name = "object_parse"
 required-features = ["read"]
 
 [[test]]
+name = "object_links"
+required-features = ["read"]
+
+[[test]]
 name = "pack_git"
 required-features = ["write"]
 

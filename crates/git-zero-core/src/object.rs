@@ -9,6 +9,11 @@ mod parse;
 #[cfg(feature = "read")]
 pub use parse::{Commit, Tag, Tree, TreeEntries, TreeEntry};
 
+#[cfg(feature = "read")]
+mod links;
+#[cfg(feature = "read")]
+pub use links::{LinkDecoder, LinkLimits, LinkProgress, LinkRelation, LinkStatus};
+
 /// One repository's object/hash encoding. Object formats cannot be mixed.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash)]
 pub enum ObjectFormat {

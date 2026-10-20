@@ -46,6 +46,14 @@ allow a host to reorder entries or move OFS deltas between packs after resolving
 their base IDs. The host supplies a unique authorized selection and its delta
 base closure, and awaits storage between writes. Errors invalidate partial output.
 
+`object::LinkDecoder` streams commit parents, root trees, tag targets and tree
+entries into a host-owned graph index. It retains two caller-sized tree names,
+fixed header scratch and 64-bit positions; opaque messages and blobs need no
+body storage. Historical recognized tree modes are preserved and flagged when
+noncanonical. The host authenticates objects, checks target existence/kinds and
+all duplicate tree names, and enforces reachability and ref-update policy.
+Scanner completion alone is not proof of a valid repository graph.
+
 `read` enables zlib inflation, pack/delta decoding and repository validation.
 `write` enables snapshots, pack/zlib encoding and pack caching. Both are enabled
 by default. Object IDs, borrowed objects, repositories, readers, packet lines and

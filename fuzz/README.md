@@ -38,6 +38,8 @@ standalone instructions and reserved types. `pack::validate` retains its origina
 framing/SHA-1 behavior; `pack::Reader` also checks entry bodies and exact closure.
 The `entries` target additionally executes fragmented delta events against a
 fixed patterned base and compares acceptance and result bytes with `apply_delta`.
+The `graph` target compares full/fragmented `object::LinkDecoder` event digests
+and errors, with guarded 512-byte name scratch and a 128-link budget.
 
 Install the pinned CI tools and run a bounded campaign from the repository root:
 
