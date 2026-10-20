@@ -27,27 +27,31 @@ fn bounded_composition_has_correct_crcs_checksums_and_no_allocations() {
         for chunk in 1..=ZLIB.len() {
             let mut storage = [0; 128];
             allocations::without_allocations(|| {
-                let mut output = SliceWriter::new(&mut storage);
-                let mut composer = PackComposer::new(format, 1, 128, &mut output).unwrap();
-                assert!(core::mem::size_of_val(&composer) < 512);
-                assert_eq!(composer.checksum(), None);
-                composer.start_entry(entry(format), &mut output).unwrap();
-                for chunk in ZLIB.chunks(chunk) {
-                    composer.write_compressed(chunk, &mut output).unwrap();
-                }
-                let metadata = composer.finish_entry().unwrap();
-                assert_eq!(metadata.offset, 12);
-                assert_eq!(metadata.id, entry(format).id);
-                assert_eq!(metadata.crc32, pack::crc32(&output.as_bytes()[12..]));
-                let id = composer.finish(&mut output).unwrap();
-                assert_eq!(composer.finish(&mut output), Ok(id));
-                assert_eq!(composer.checksum(), Some(id));
-                assert_eq!(composer.position(), output.len() as u64);
-                pack::validate_with_format(output.as_bytes(), format).unwrap();
-                assert_eq!(&output.as_bytes()[13..13 + ZLIB.len()], ZLIB);
+                check_blob_composition(format, chunk, &mut storage);
             });
         }
     }
+}
+
+fn check_blob_composition(format: ObjectFormat, chunk: usize, storage: &mut [u8]) {
+    let mut output = SliceWriter::new(storage);
+    let mut composer = PackComposer::new(format, 1, 128, &mut output).unwrap();
+    assert!(core::mem::size_of_val(&composer) < 512);
+    assert_eq!(composer.checksum(), None);
+    composer.start_entry(entry(format), &mut output).unwrap();
+    for chunk in ZLIB.chunks(chunk) {
+        composer.write_compressed(chunk, &mut output).unwrap();
+    }
+    let metadata = composer.finish_entry().unwrap();
+    assert_eq!(metadata.offset, 12);
+    assert_eq!(metadata.id, entry(format).id);
+    assert_eq!(metadata.crc32, pack::crc32(&output.as_bytes()[12..]));
+    let id = composer.finish(&mut output).unwrap();
+    assert_eq!(composer.finish(&mut output), Ok(id));
+    assert_eq!(composer.checksum(), Some(id));
+    assert_eq!(composer.position(), output.len() as u64);
+    pack::validate_with_format(output.as_bytes(), format).unwrap();
+    assert_eq!(&output.as_bytes()[13..13 + ZLIB.len()], ZLIB);
 }
 
 #[test]

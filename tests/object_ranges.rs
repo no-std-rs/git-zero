@@ -185,26 +185,30 @@ fn terminal(resolver: &mut RangeResolver<'_>, error: Error) {
 fn nested_delta_reconstruction_and_every_partial_range_match() {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let records = fixture(format);
-        let expected = b"?hello!?";
         for input in [1, 2, 7, 64] {
             for output in [1, 3, 64] {
-                assert_eq!(
-                    run(&records, format, ObjectRange::All, LIMITS, 3, input, output).unwrap(),
-                    expected
-                );
-                for offset in 0..=expected.len() {
-                    for length in 0..=expected.len() - offset {
-                        let range = ObjectRange::Bytes {
-                            offset: offset as u64,
-                            length: length as u64,
-                        };
-                        assert_eq!(
-                            run(&records, format, range, LIMITS, 3, input, output).unwrap(),
-                            &expected[offset..offset + length]
-                        );
-                    }
-                }
+                check_all_ranges(&records, format, input, output);
             }
+        }
+    }
+}
+
+fn check_all_ranges(records: &[Record<'_>], format: ObjectFormat, input: usize, output: usize) {
+    let expected = b"?hello!?";
+    assert_eq!(
+        run(records, format, ObjectRange::All, LIMITS, 3, input, output).unwrap(),
+        expected
+    );
+    for offset in 0..=expected.len() {
+        for length in 0..=expected.len() - offset {
+            let range = ObjectRange::Bytes {
+                offset: offset as u64,
+                length: length as u64,
+            };
+            assert_eq!(
+                run(records, format, range, LIMITS, 3, input, output).unwrap(),
+                &expected[offset..offset + length]
+            );
         }
     }
 }
