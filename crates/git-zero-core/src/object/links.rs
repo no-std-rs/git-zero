@@ -216,27 +216,9 @@ impl State {
             self.position += 1;
             match self.phase {
                 Phase::Mode => self.mode_byte(byte)?,
-                Phase::Name => {
-                    if byte == 0 {
-                        self.phase = Phase::Id;
-                        self.id_len = 0;
-                    } else {
-                        *names
-                            .current
-                            .get_mut(self.current_len)
-                            .ok_or(Error::BufferTooSmall)? = byte;
-                        self.current_len += 1;
-                    }
-                }
+                Phase::Name => self.name_byte(byte, names)?,
                 Phase::Id => {
-                    self.id[self.id_len] = byte;
-                    self.id_len += 1;
-                    if self.id_len == self.format.id_length() {
-                        let id = ObjectId::from_bytes(self.format, &self.id[..self.id_len])?;
-                        if id.is_zero() {
-                            return Err(Error::InvalidObject);
-                        }
-                        self.tree_entry(names)?;
+                    if let Some(id) = self.id_byte(byte, names)? {
                         return Ok(LinkProgress {
                             consumed,
                             status: LinkStatus::TreeEntry {
@@ -251,28 +233,62 @@ impl State {
                     }
                 }
                 _ => {
-                    if byte == b'\n' {
-                        let status = self.line()?;
-                        self.header_len = 0;
-                        self.header_overflow = false;
-                        if let Some(status) = status {
-                            self.charge()?;
-                            return Ok(LinkProgress { consumed, status });
-                        }
-                    } else {
-                        if byte == 0 {
-                            return Err(Error::InvalidObject);
-                        }
-                        if self.header_len == self.header.len() {
-                            self.header_overflow = true;
-                        } else {
-                            self.header[self.header_len] = byte;
-                            self.header_len += 1;
-                        }
+                    if let Some(status) = self.header_byte(byte)? {
+                        return Ok(LinkProgress { consumed, status });
                     }
                 }
             }
         }
+    }
+
+    fn name_byte(&mut self, byte: u8, names: &mut Names<'_>) -> Result<()> {
+        if byte == 0 {
+            self.phase = Phase::Id;
+            self.id_len = 0;
+            return Ok(());
+        }
+        *names
+            .current
+            .get_mut(self.current_len)
+            .ok_or(Error::BufferTooSmall)? = byte;
+        self.current_len += 1;
+        Ok(())
+    }
+
+    fn id_byte(&mut self, byte: u8, names: &mut Names<'_>) -> Result<Option<ObjectId>> {
+        self.id[self.id_len] = byte;
+        self.id_len += 1;
+        if self.id_len != self.format.id_length() {
+            return Ok(None);
+        }
+        let id = ObjectId::from_bytes(self.format, &self.id[..self.id_len])?;
+        if id.is_zero() {
+            return Err(Error::InvalidObject);
+        }
+        self.tree_entry(names)?;
+        Ok(Some(id))
+    }
+
+    fn header_byte(&mut self, byte: u8) -> Result<Option<LinkStatus<'static>>> {
+        if byte == b'\n' {
+            let status = self.line()?;
+            self.header_len = 0;
+            self.header_overflow = false;
+            if status.is_some() {
+                self.charge()?;
+            }
+            return Ok(status);
+        }
+        if byte == 0 {
+            return Err(Error::InvalidObject);
+        }
+        if self.header_len == self.header.len() {
+            self.header_overflow = true;
+        } else {
+            self.header[self.header_len] = byte;
+            self.header_len += 1;
+        }
+        Ok(None)
     }
 
     fn end(&mut self, eof: bool) -> Result<LinkStatus<'static>> {
