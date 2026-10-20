@@ -6,6 +6,7 @@ import { Store } from "./storage.mjs";
 import { bytes } from "./storage.mjs";
 import { publish } from "./publication.mjs";
 import { FetchJob } from "./fetch.mjs";
+import { streamResponse } from "./response.mjs";
 
 const REPOSITORY = /^[A-Za-z0-9_-]{1,80}$/;
 const UUID = /^[0-9a-f-]{36}$/;
@@ -63,18 +64,9 @@ export class OwnRepository {
     this.queue = job.catch(() => {}); return job;
   }
   stream(generator, type) {
-    let finish;
-    this.streamDone = new Promise((resolve) => { finish = resolve; });
-    return new Response(new ReadableStream({
-      async pull(controller) {
-        try {
-          const next = await generator.next();
-          if (next.done) { controller.close(); finish(); }
-          else controller.enqueue(next.value);
-        } catch (error) { controller.error(error); finish(); }
-      },
-      async cancel() { try { await generator.return(); } finally { finish(); } },
-    }), { headers: { "Content-Type": type, "Cache-Control": "no-store" } });
+    const result = streamResponse(generator, type);
+    this.streamDone = result.done;
+    return result.response;
   }
   async *advertise(codec) {
     yield codec.advertStart();
