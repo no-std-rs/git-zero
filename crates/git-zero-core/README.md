@@ -39,6 +39,13 @@ input bytes, and reports its CRC and plain-object ID. Compare those with the
 authenticated index; resolve delta instructions separately. It verifies neither
 the enclosing pack checksum nor graph connectivity.
 
+With `write`, `pack::PackComposer` assembles fetch packs from authenticated zlib
+streams without inflation/recompression. It writes fresh entry headers, CRCs and
+a pack checksum with a bounded wire budget and fixed state. Reference deltas
+allow a host to reorder entries or move OFS deltas between packs after resolving
+their base IDs. The host supplies a unique authorized selection and its delta
+base closure, and awaits storage between writes. Errors invalidate partial output.
+
 `read` enables zlib inflation, pack/delta decoding and repository validation.
 `write` enables snapshots, pack/zlib encoding and pack caching. Both are enabled
 by default. Object IDs, borrowed objects, repositories, readers, packet lines and

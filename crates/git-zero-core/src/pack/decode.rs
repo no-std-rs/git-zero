@@ -25,6 +25,7 @@ pub struct EntryHeader {
 /// than a Git object body; resolve it against an authenticated materialized base.
 pub struct Entry<'a> {
     offset: u64,
+    compressed_offset: u64,
     end_offset: u64,
     crc: u32,
     kind: EntryKind,
@@ -38,6 +39,10 @@ impl<'a> Entry<'a> {
     }
     pub fn end_offset(&self) -> u64 {
         self.end_offset
+    }
+    /// First byte of the zlib stream, after type/size and delta-base metadata.
+    pub fn compressed_offset(&self) -> u64 {
+        self.compressed_offset
     }
     pub fn crc32(&self) -> u32 {
         self.crc
@@ -254,6 +259,7 @@ impl<'a> Reader<'a> {
         self.remaining -= 1;
         Ok(Some(Entry {
             offset: start as u64,
+            compressed_offset: cursor as u64,
             end_offset: end as u64,
             crc,
             kind,

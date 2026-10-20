@@ -568,6 +568,79 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
     assert_eq!(kinds, [true; 4], "commit/tree/blob/tag coverage");
     // One independent Git process validates every body and its batch envelope.
     assert_eq!(decoded, git(directory, &["cat-file", "--batch"], &requests));
+    verify_reused_git_pack(directory, &bytes, &entries, &resolved, offsets);
+}
+
+fn verify_reused_git_pack(
+    directory: &Path,
+    bytes: &[u8],
+    entries: &[Entry<'_>],
+    resolved: &[Option<ResolvedObject<'_>>],
+    offsets: bool,
+) {
+    use pack::{CompressedEntry, CompressedKind, PackComposer};
+    let mut output = Bytes(Vec::new());
+    let mut composer = PackComposer::new(
+        git_zero::ObjectFormat::Sha1,
+        entries.len() as u32,
+        1 << 24,
+        &mut output,
+    )
+    .unwrap();
+    let mut metadata = Vec::new();
+    // Reverse order forces deltas before their bases and moves all offsets.
+    // Replacing OFS bases with verified IDs keeps compressed zlib bytes intact.
+    for (entry, object) in entries.iter().zip(resolved).rev() {
+        let kind = match entry.kind() {
+            EntryKind::Object(kind) => CompressedKind::Object(kind),
+            EntryKind::ReferenceDelta { base_id } => CompressedKind::Delta { base_id },
+            EntryKind::OffsetDelta { base_offset } => CompressedKind::Delta {
+                base_id: resolved
+                    .iter()
+                    .flatten()
+                    .find(|base| base.offset() == Some(base_offset))
+                    .unwrap()
+                    .id(),
+            },
+        };
+        let compressed = &bytes[entry.compressed_offset() as usize..entry.end_offset() as usize];
+        composer
+            .start_entry(
+                CompressedEntry {
+                    id: object.as_ref().unwrap().id(),
+                    kind,
+                    inflated_size: entry.data().len() as u64,
+                    compressed_size: compressed.len() as u64,
+                },
+                &mut output,
+            )
+            .unwrap();
+        for chunk in compressed.chunks(7) {
+            composer.write_compressed(chunk, &mut output).unwrap();
+        }
+        metadata.push(composer.finish_entry().unwrap());
+    }
+    let checksum = composer.finish(&mut output).unwrap();
+    metadata.sort_unstable_by_key(|entry| entry.id);
+    let mut index = Bytes(Vec::new());
+    pack::write_index(&metadata, checksum, &mut index).unwrap();
+    let name = if offsets { "reused-ofs" } else { "reused-ref" };
+    let pack_path = directory.join(format!("{name}.pack"));
+    let index_path = directory.join(format!("{name}.idx"));
+    std::fs::write(&pack_path, &output.0).unwrap();
+    git(
+        directory,
+        &[
+            "index-pack",
+            "--strict",
+            "--index-version=2",
+            "-o",
+            index_path.to_str().unwrap(),
+            pack_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(std::fs::read(index_path).unwrap(), index.0);
 }
 
 fn verify_index_ranges(index: &[u8], pack_bytes: u64, rows: &[(ObjectId, u32, u64)]) {

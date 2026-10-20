@@ -153,6 +153,13 @@ the synthetic pack fixture and Git-generated packs. Tests cover offsets above
 4 GiB, preservation of trailing entries, truncated bodies, wire budgets,
 zero-output backpressure, repeated completion and allocation-free state.
 
+`pack_reuse` checks fixed-state compressed-entry assembly in both formats,
+forward reference deltas, exact wire limits, malformed metadata and terminal
+sink failures in every framing/body/trailer position. The real Git delta fixture
+reverses all entry order, converts OFS bases to verified reference IDs and reuses
+the original compressed streams. Git's strict indexer accepts the result and
+generates exactly the same index as the composer's CRCs/offsets.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are

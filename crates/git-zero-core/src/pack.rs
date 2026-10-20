@@ -54,6 +54,11 @@ pub use encode::{
 #[cfg(feature = "write")]
 pub use stream::{Encoder, LooseEncoder};
 
+#[cfg(feature = "write")]
+mod reuse;
+#[cfg(feature = "write")]
+pub use reuse::{CompressedEntry, CompressedKind, PackComposer};
+
 /// Check the framing and checksum of a downloaded pack. Object/delta validation
 /// and indexing are separate responsibilities; this does not decode objects.
 #[cfg(feature = "read")]

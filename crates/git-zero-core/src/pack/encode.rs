@@ -92,8 +92,11 @@ fn drain_encoder(
 }
 
 pub(super) fn write_entry_header(info: ObjectInfo, output: &mut impl Write) -> Result<()> {
-    let mut size = info.size;
-    let mut byte = ((info.kind as u8) << 4) | (size as u8 & 15);
+    write_typed_header(info.kind as u8, info.size, output)
+}
+
+pub(super) fn write_typed_header(kind: u8, mut size: u64, output: &mut impl Write) -> Result<()> {
+    let mut byte = (kind << 4) | (size as u8 & 15);
     size >>= 4;
     loop {
         output.write_all(&[byte | if size > 0 { 128 } else { 0 }])?;
