@@ -6,11 +6,43 @@ import { deflateSync, gzipSync } from "node:zlib";
 import { Codec, CodecError, hex, integer } from "../src/codec.mjs";
 
 import { FetchJob } from "../src/fetch.mjs";
+import { ObjectSource } from "../src/source.mjs";
+import { PAGE_BYTES } from "../src/storage.mjs";
 
 const module = await WebAssembly.compile(await readFile(new URL("../build/git_zero_host_wasm.wasm", import.meta.url)));
 const empty = new Uint8Array();
 const objectId = (format, kind, body) => createHash(format === 0 ? "sha1" : "sha256").update(`${kind} ${body.length}\0`).update(body).digest();
 const packet = (bytes) => { bytes = Buffer.from(bytes); return Buffer.concat([Buffer.from((bytes.length + 4).toString(16).padStart(4, "0")), bytes]); };
+
+test("canonical capture scans whole pages across tiny delta copies", async () => {
+  const copies = PAGE_BYTES + 1, body = Buffer.alloc(copies, 122);
+  const variable = []; let size = copies;
+  do { const byte = size & 127; size = Math.floor(size / 128); variable.push(byte | (size ? 128 : 0)); } while (size);
+  const instructions = Buffer.from([1, ...variable]);
+  const encoded = Buffer.alloc(instructions.length + copies * 2);
+  encoded.set(instructions);
+  for (let at = instructions.length; at < encoded.length; at += 2) encoded.set([0x90, 1], at);
+  for (const format of [0, 1]) {
+    const codec = new Codec(module, format);
+    const base = { stage: "capture", node: 12, verified: 1, kind: 3, size: 1, oid: hex(objectId(format, "blob", Buffer.from("z"))) };
+    const root = { ...base, node: 13, size: copies, oid: hex(objectId(format, "blob", body)) };
+    const source = new ObjectSource({ exec: () => [] }, codec, "capture");
+    source.descriptor = (row) => row === base ? { info: { kind: 3, size: 1 } } : { info: { kind: 3, size: copies }, base: { key: source.key(base), info: { kind: 3, size: 1 }, depth: 0 }, instructionsSize: encoded.length };
+    source.readRow = async (row, kind, offset, length) => {
+      const bytes = row === base ? Buffer.from("z") : encoded;
+      assert.equal(kind, row === base ? 0 : 1);
+      return bytes.subarray(offset, offset + length);
+    };
+    let scans = 0, requests = 0;
+    const feed = codec.graphFeed.bind(codec), request = codec.rangeRequest.bind(codec);
+    codec.graphFeed = (...args) => { scans++; return feed(...args); };
+    codec.rangeRequest = () => { requests++; return request(); };
+    assert.equal(await source.process(root, false), root.oid);
+    assert.deepEqual(source.canonical.get(root.oid), new Uint8Array(body));
+    assert.equal(scans, Math.ceil(copies / PAGE_BYTES));
+    assert.ok(requests <= copies + 2, "rangeFeed already returns the next typed request");
+  }
+});
 
 test("paged shallow changes retain frozen controls and exact protocol framing", () => {
   for (const format of [0, 1]) for (const version of [0, 1, 2]) for (const done of [false, true]) {

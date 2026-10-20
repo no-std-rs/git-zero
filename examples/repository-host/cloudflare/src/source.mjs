@@ -207,13 +207,13 @@ export class ObjectSource {
     this.codec.rangeInit(rootKey); this.codec.graphInit(info(row));
     const captured = row.size <= CANONICAL_ENTRY_BYTES ? new Uint8Array(row.size) : null;
     const temporary = captured === null ? new ChunkWriter(this.store, this.stage, rowKey(row)) : null;
-    let written = 0, digest;
+    let written = 0, digest, request = this.codec.rangeRequest();
     for (;;) {
-      const request = this.codec.rangeRequest();
       if (request.tag === 20) {
         // The root may be quarantined; every descended base must be verified.
         const current = request.key.staged !== undefined && integer(request.key.staged) === rootKey.staged ? row : this.lookup(request.key);
         this.codec.rangeDescribe(current === row ? descriptor : this.descriptor(current));
+        request = this.codec.rangeRequest();
       } else if (request.tag === 21) {
         const root = request.key.staged !== undefined && integer(request.key.staged) === rootKey.staged;
         const offset = integer(request.a), length = integer(request.b);
@@ -222,9 +222,19 @@ export class ObjectSource {
         if (captured) captured.set(event.data, written);
         if (temporary && event.data.length) await temporary.write(event.data);
         written += event.written;
-        digest ??= this.scan(row, event.data, event.tag === 22, scan);
+        if (!captured && (event.data.length || event.tag === 22)) digest ??= this.scan(row, event.data, event.tag === 22, scan);
+        request = event;
       } else if (request.tag === 22) {
-        digest ??= this.scan(row, new Uint8Array(), true, scan);
+        // Captured bytes are already bounded and owned by this query. Scan
+        // whole pages instead of crossing the ABI for each tiny delta copy.
+        if (captured) {
+          let cursor = 0;
+          do {
+            const end = Math.min(cursor + PAGE_BYTES, captured.length);
+            digest = this.scan(row, captured.subarray(cursor, end), end === captured.length, scan);
+            cursor = end;
+          } while (cursor < captured.length);
+        } else digest ??= this.scan(row, new Uint8Array(), true, scan);
         break;
       } else throw new Error("unexpected reconstruction event");
     }
