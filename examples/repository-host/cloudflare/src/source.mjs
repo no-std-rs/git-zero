@@ -1,5 +1,5 @@
 import { hex, integer } from "./codec.mjs";
-import { ByteCache, ChunkWriter, PAGE_BYTES } from "./storage.mjs";
+import { ByteCache, CacheBuffers, ChunkWriter, PAGE_BYTES } from "./storage.mjs";
 
 const CANONICAL_ENTRY_BYTES = 8 * 1024 * 1024;
 const REPRESENTATION_ENTRY_BYTES = 1024 * 1024;
@@ -12,15 +12,24 @@ const info = (row) => ({ kind: row.kind, size: row.size });
 // reconstruction queries. Keeping verified bases resolved avoids repeatedly
 // interpreting the same deep delta chain for each requested output fragment.
 export class ObjectSource {
-  constructor(store, codec, stage, namespace) {
-    this.store = store; this.codec = codec; this.stage = stage; this.namespace = namespace;
-    this.canonical = new ByteCache(24 * 1024 * 1024);
-    this.representations = new ByteCache(8 * 1024 * 1024);
-    this.chunks = new ByteCache(16 * 1024 * 1024);
-    this.reader = null;
+  constructor(store, codec, stage, { ownedBuffers = false } = {}) {
+    this.store = store; this.codec = codec; this.stage = stage; this.ownsBuffers = ownedBuffers;
+    // Owned views cannot escape beyond the next cache mutation. Intake consumes
+    // them synchronously; fetch copies them into codec frames before yielding.
+    const ownership = ownedBuffers ? new CacheBuffers() : null;
+    this.canonical = new ByteCache(24 * 1024 * 1024, 8192, ownership);
+    this.representations = new ByteCache(8 * 1024 * 1024, 8192, ownership);
+    this.chunks = new ByteCache(16 * 1024 * 1024, 8192, ownership);
+    this.reader = null; this.readBuffer = null;
     this.temporary = new Map();
     this.names = []; this.edges = [];
     this.queries = 0; this.storageReads = 0; this.historicalModes = 0;
+  }
+
+  releaseCaches() {
+    this.readBuffer?.buffer.transfer(0);
+    this.reader = null; this.readBuffer = null;
+    for (const cache of [this.canonical, this.representations, this.chunks]) cache.clear();
   }
 
   key(row) {
@@ -95,6 +104,12 @@ export class ObjectSource {
       if (reader.cursor === reader.input.length) {
         const bytes = await this.chunkAt(row, reader.wire);
         reader.input = bytes.subarray(0, Math.min(bytes.length, row.end_offset - reader.wire, PAGE_BYTES));
+        // The inflater can resume this page after other chunk-cache reads.
+        if (this.ownsBuffers) {
+          this.readBuffer ??= new Uint8Array(PAGE_BYTES);
+          this.readBuffer.set(reader.input);
+          reader.input = this.readBuffer.subarray(0, reader.input.length);
+        }
         reader.cursor = 0;
       }
       const input = reader.input.subarray(reader.cursor);

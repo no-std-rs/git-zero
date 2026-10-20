@@ -25,8 +25,25 @@ export async function sha256(value) {
   return hex(digest);
 }
 
+// A group of caches can share complete owned buffers (plain intake seeds do).
+// Release backing storage when the last cache owner retires it, independently
+// of when the runtime collects the retired JavaScript buffer wrappers.
+export class CacheBuffers {
+  constructor() { this.references = new WeakMap(); }
+  retain(value) {
+    if (value.byteOffset !== 0 || value.byteLength !== value.buffer.byteLength) throw new TypeError("owned cache requires a complete buffer");
+    this.references.set(value.buffer, (this.references.get(value.buffer) ?? 0) + 1);
+  }
+  release(value) {
+    const count = this.references.get(value.buffer);
+    if (count === undefined) throw new Error("cache buffer has no owner");
+    if (count === 1) { this.references.delete(value.buffer); value.buffer.transfer(0); }
+    else this.references.set(value.buffer, count - 1);
+  }
+}
+
 export class ByteCache {
-  constructor(limit, maxEntries = 8192) { this.limit = limit; this.maxEntries = maxEntries; this.size = 0; this.peak = 0; this.entries = new Map(); }
+  constructor(limit, maxEntries = 8192, ownership = null) { this.limit = limit; this.maxEntries = maxEntries; this.ownership = ownership; this.size = 0; this.peak = 0; this.entries = new Map(); }
   get(key) {
     const value = this.entries.get(key);
     if (value === undefined) return undefined;
@@ -35,13 +52,19 @@ export class ByteCache {
   put(key, value) {
     if (!(value instanceof Uint8Array)) throw new TypeError("cache stores bytes");
     if (value.byteLength > this.limit || this.maxEntries === 0) return;
+    this.ownership?.retain(value);
     const old = this.entries.get(key);
-    if (old !== undefined) { this.entries.delete(key); this.size -= old.byteLength; }
+    if (old !== undefined) { this.entries.delete(key); this.size -= old.byteLength; this.ownership?.release(old); }
     while (this.size + value.byteLength > this.limit || this.entries.size >= this.maxEntries) {
       const first = this.entries.keys().next().value;
-      this.size -= this.entries.get(first).byteLength; this.entries.delete(first);
+      const retired = this.entries.get(first);
+      this.size -= retired.byteLength; this.entries.delete(first); this.ownership?.release(retired);
     }
     this.entries.set(key, value); this.size += value.byteLength; this.peak = Math.max(this.peak, this.size);
+  }
+  clear() {
+    for (const value of this.entries.values()) this.ownership?.release(value);
+    this.entries.clear(); this.size = 0;
   }
 }
 

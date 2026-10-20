@@ -11,7 +11,7 @@ export class FetchJob {
   constructor(store, codec, version) {
     this.store = store; this.codec = codec; this.version = version;
     this.temporary = crypto.randomUUID();
-    this.source = new ObjectSource(store, codec, this.temporary, store.namespace);
+    this.source = new ObjectSource(store, codec, this.temporary, { ownedBuffers: true });
     this.steps = 0; this.allCommitWants = true;
   }
   reset() { for (const table of FETCH_TABLES) this.store.exec(`DELETE FROM ${table}`); }
@@ -248,6 +248,7 @@ export class FetchJob {
       if (this.done) yield* this.pack();
     } finally {
       this.codec.uploadCancel(); this.codec.packCancel(); this.reset();
+      this.source.releaseCaches();
       await this.store.clearTemporary(this.temporary);
     }
   }

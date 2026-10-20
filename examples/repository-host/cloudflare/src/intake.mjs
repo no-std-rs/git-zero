@@ -11,7 +11,7 @@ const OBJECT_VALUES = "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 export class Intake {
   constructor(store, codec, stage) {
     this.store = store; this.codec = codec; this.stage = stage;
-    this.source = new ObjectSource(store, codec, stage, store.namespace);
+    this.source = new ObjectSource(store, codec, stage, { ownedBuffers: true });
     this.writer = null; this.inPack = false; this.pack = null;
     this.commands = 0; this.options = 0; this.objects = 0; this.expected = 0;
     this.pendingObjects = [];
@@ -156,6 +156,7 @@ export class Intake {
       throw error;
     } finally {
       this.codec.receiveCancel(); this.codec.sourceCancel(); this.codec.rangeCancel(); this.codec.graphCancel();
+      this.source.releaseCaches();
       await this.store.clearTemporary(this.stage);
     }
   }

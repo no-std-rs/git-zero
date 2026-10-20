@@ -168,7 +168,7 @@ export class OwnRepository {
         const row = this.store.node(stage.id, node);
         if (!row?.verified || !row.scanned) return json({ error: "verified staged object not found" }, 404);
         const codec = new Codec(module, stage.format);
-        const source = new ObjectSource(this.store, codec, stage.id, namespace);
+        const source = new ObjectSource(this.store, codec, stage.id);
         try {
           if (row.wire_kind >= 5) await source.warm(source.base(row));
           const id = await source.process(row, false);
