@@ -8,6 +8,16 @@ verified entry metadata can be streamed separately with `pack::write_index`.
 
 Allocation-free Git objects, repositories, pack and zlib primitives. Safe `no_std` Rust without `alloc`.
 
+With `read`, `pack::Decoder` accepts fragmented SHA-1/SHA-256 packs without
+retaining a complete pack, object body, or object-count-sized index. The host
+supplies a 32 KiB inflate window and arbitrary input/output slices. Events expose
+entry headers, body fragments, entry CRCs, plain-object IDs, and the verified
+pack checksum. Offset/reference deltas emit instruction bytes for separate base
+resolution. Wire size, object count, inflation size and expansion ratio have
+independent limits. Stage all output privately until the trailer and subsequent
+object/base/connectivity validation pass; this decoder alone is not a push
+validator. No Git executable, filesystem, allocator or runtime API is used.
+
 `read` enables zlib inflation, pack/delta decoding and repository validation.
 `write` enables snapshots, pack/zlib encoding and pack caching. Both are enabled
 by default. Object IDs, borrowed objects, repositories, readers, packet lines and
