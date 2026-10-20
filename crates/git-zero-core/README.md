@@ -33,6 +33,12 @@ await reads and cache larger immutable storage pages. Authenticate index bytes,
 ordering and their pack relationship before using this lookup API; parsing a
 header alone does not establish integrity or trustworthy absence.
 
+`pack::EntryDecoder` resumes at a trusted pack offset using the same bounded
+entry parser as pack intake. It stops after one entry, preserving following
+input bytes, and reports its CRC and plain-object ID. Compare those with the
+authenticated index; resolve delta instructions separately. It verifies neither
+the enclosing pack checksum nor graph connectivity.
+
 `read` enables zlib inflation, pack/delta decoding and repository validation.
 `write` enables snapshots, pack/zlib encoding and pack caching. Both are enabled
 by default. Object IDs, borrowed objects, repositories, readers, packet lines and

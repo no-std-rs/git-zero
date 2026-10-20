@@ -78,6 +78,91 @@ pub struct Decoder<'a> {
     failure: Option<Error>,
 }
 
+/// Stream one entry from a trusted pack offset, without loading the pack or
+/// its index. This shares framing, CRC, inflation, size and object-ID handling
+/// with `Decoder`. It does not verify the whole pack's checksum or graph.
+/// Compare the final CRC/ID with authenticated index metadata before use.
+///
+/// Events are `EntryStart`, `NeedInput`, `NeedOutput` and `EntryEnd`. At entry
+/// completion the following bytes stay unconsumed, even if `end_of_input` is
+/// true. Completed updates repeat `EntryEnd` with zero bytes consumed/written.
+/// The host may await storage between updates, retaining only the inflate
+/// window and this fixed state. Delta bodies contain instructions, not objects.
+pub struct EntryDecoder<'a> {
+    decoder: Decoder<'a>,
+    completion: Option<DecodeStatus>,
+}
+
+impl<'a> EntryDecoder<'a> {
+    pub fn new(
+        format: ObjectFormat,
+        offset: u64,
+        window: &'a mut [u8; WINDOW_SIZE],
+        max_entry_bytes: u64,
+        inflate: InflateLimits,
+    ) -> Result<Self> {
+        if offset < 12 {
+            return Err(Error::CorruptPack);
+        }
+        let end = offset
+            .checked_add(max_entry_bytes)
+            .ok_or(Error::LimitExceeded)?;
+        let mut decoder = Decoder::new(
+            format,
+            window,
+            DecodeLimits {
+                max_pack_bytes: end,
+                max_objects: 1,
+                inflate,
+            },
+        );
+        decoder.phase = Phase::Entry;
+        decoder.offset = offset;
+        decoder.entry_offset = offset;
+        decoder.remaining = 1;
+        Ok(Self {
+            decoder,
+            completion: None,
+        })
+    }
+
+    pub fn position(&self) -> u64 {
+        self.decoder.position()
+    }
+
+    pub fn update(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        end_of_input: bool,
+    ) -> Result<DecodeProgress> {
+        if let Some(status) = self.completion {
+            return Ok(DecodeProgress {
+                consumed: 0,
+                written: 0,
+                status,
+            });
+        }
+        let progress = self.decoder.update(input, output, end_of_input)?;
+        if matches!(progress.status, DecodeStatus::EntryEnd { .. }) {
+            self.completion = Some(progress.status);
+        }
+        Ok(progress)
+    }
+
+    /// Require a complete entry. Calling early leaves the decoder resumable.
+    pub fn finish(&self) -> Result<()> {
+        if let Some(error) = self.decoder.failure {
+            return Err(error);
+        }
+        if self.completion.is_some() {
+            Ok(())
+        } else {
+            Err(Error::CorruptPack)
+        }
+    }
+}
+
 impl<'a> Decoder<'a> {
     pub fn new(
         format: ObjectFormat,

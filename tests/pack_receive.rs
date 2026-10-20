@@ -4,7 +4,7 @@ mod allocations;
 use git_zero::{
     Error, Object, ObjectFormat, ObjectId, ObjectKind,
     io::Write,
-    pack::{self, DecodeLimits, DecodeStatus, Decoder, EntryHeader, EntryKind},
+    pack::{self, DecodeLimits, DecodeStatus, Decoder, EntryDecoder, EntryHeader, EntryKind},
     zlib::{self, InflateLimits, WINDOW_SIZE},
 };
 use sha1::{Digest, Sha1};
@@ -198,6 +198,9 @@ fn arbitrary_fragmentation_preserves_plain_and_delta_entries_for_both_formats() 
             ),
         };
         for input in 1..=pack.len() {
+            for entry in &expected.entries {
+                compare_entry_range(&pack, format, entry, input);
+            }
             for output in [1, 2, 5, 16, 64] {
                 assert_eq!(
                     decode(&pack, format, input, output, LIMITS).unwrap(),
@@ -506,6 +509,7 @@ fn compare_git_entries(bytes: &[u8]) {
     let mut window = [0; WINDOW_SIZE];
     let mut deltas = 0;
     for entry in actual.entries {
+        compare_entry_range(bytes, ObjectFormat::Sha1, &entry, 7);
         let expected = reader
             .read_entry(&mut output, &mut window, LIMITS.inflate)
             .unwrap()
@@ -521,4 +525,127 @@ fn compare_git_entries(bytes: &[u8]) {
     }
     assert!(deltas > 0);
     reader.finish().unwrap();
+}
+
+fn compare_entry_range(bytes: &[u8], format: ObjectFormat, expected: &DecodedEntry, chunk: usize) {
+    let mut window = [0; WINDOW_SIZE];
+    let mut output = [0; 31];
+    let mut decoder = EntryDecoder::new(
+        format,
+        expected.header.offset,
+        &mut window,
+        expected.end_offset - expected.header.offset,
+        LIMITS.inflate,
+    )
+    .unwrap();
+    let mut offset = expected.header.offset as usize;
+    let mut body = Vec::new();
+    loop {
+        let end = (offset + chunk).min(bytes.len());
+        let progress = decoder
+            .update(&bytes[offset..end], &mut output, end == bytes.len())
+            .unwrap();
+        offset += progress.consumed;
+        body.extend_from_slice(&output[..progress.written]);
+        assert_eq!(decoder.position(), offset as u64);
+        match progress.status {
+            DecodeStatus::EntryStart(header) => assert_eq!(header, expected.header),
+            DecodeStatus::EntryEnd {
+                end_offset,
+                crc32,
+                object_id,
+            } => {
+                assert_eq!(end_offset, expected.end_offset);
+                assert_eq!(crc32, expected.crc32);
+                assert_eq!(object_id, expected.object_id);
+                assert_eq!(body, expected.data);
+                decoder.finish().unwrap();
+                let repeat = decoder.update(&bytes[offset..], &mut output, true).unwrap();
+                assert_eq!(repeat.status, progress.status);
+                assert_eq!((repeat.consumed, repeat.written), (0, 0));
+                return;
+            }
+            DecodeStatus::NeedInput | DecodeStatus::NeedOutput => {}
+            _ => panic!("single-entry decoder emitted a pack event"),
+        }
+    }
+}
+
+#[test]
+fn range_entries_preserve_64_bit_offsets_budgets_and_terminal_errors() {
+    let bytes = wire(&[0x35], b"hello");
+    let start = 1_u64 << 40;
+    let mut window = [0; WINDOW_SIZE];
+    let mut output = [0; 5];
+    allocations::without_allocations(|| {
+        let mut decoder = EntryDecoder::new(
+            ObjectFormat::Sha1,
+            start,
+            &mut window,
+            bytes.len() as u64,
+            LIMITS.inflate,
+        )
+        .unwrap();
+        assert!(core::mem::size_of_val(&decoder) < 4096);
+        assert_eq!(decoder.position(), start);
+        assert_eq!(decoder.finish(), Err(Error::CorruptPack));
+        let header = decoder.update(&bytes, &mut [], false).unwrap();
+        assert_eq!(
+            header.status,
+            DecodeStatus::EntryStart(EntryHeader {
+                offset: start,
+                kind: EntryKind::Object(ObjectKind::Blob),
+                size: 5
+            })
+        );
+        let body = decoder
+            .update(&bytes[header.consumed..], &mut [], true)
+            .unwrap();
+        assert_eq!(body.status, DecodeStatus::NeedOutput);
+        let mut offset = header.consumed + body.consumed;
+        loop {
+            let step = decoder.update(&bytes[offset..], &mut output, true).unwrap();
+            offset += step.consumed;
+            if let DecodeStatus::EntryEnd { end_offset, .. } = step.status {
+                assert_eq!(end_offset, start + bytes.len() as u64);
+                assert_eq!(output, *b"hello");
+                break;
+            }
+        }
+        decoder.finish().unwrap();
+    });
+    for end in 0..bytes.len() {
+        let mut decoder =
+            EntryDecoder::new(ObjectFormat::Sha1, start, &mut window, 100, LIMITS.inflate).unwrap();
+        let mut offset = 0;
+        loop {
+            match decoder.update(&bytes[offset..end], &mut output, true) {
+                Ok(step) => offset += step.consumed,
+                Err(error) => {
+                    assert_eq!(error, Error::CorruptPack);
+                    assert_eq!(decoder.finish(), Err(error));
+                    assert_eq!(decoder.update(&bytes, &mut output, true), Err(error));
+                    break;
+                }
+            }
+        }
+    }
+    let mut decoder =
+        EntryDecoder::new(ObjectFormat::Sha1, start, &mut window, 1, LIMITS.inflate).unwrap();
+    assert!(matches!(
+        decoder.update(&bytes, &mut output, false).unwrap().status,
+        DecodeStatus::EntryStart(_)
+    ));
+    assert_eq!(
+        decoder.update(&bytes[1..], &mut output, true),
+        Err(Error::LimitExceeded)
+    );
+    assert!(matches!(
+        EntryDecoder::new(ObjectFormat::Sha1, 11, &mut window, 100, LIMITS.inflate),
+        Err(Error::CorruptPack)
+    ));
+    assert!(matches!(
+        EntryDecoder::new(ObjectFormat::Sha1, u64::MAX, &mut window, 1, LIMITS.inflate),
+        Err(Error::LimitExceeded)
+    ));
 }

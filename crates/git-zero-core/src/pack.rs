@@ -29,7 +29,7 @@ pub use delta::{DeltaDecoder, DeltaProgress, DeltaStatus};
 #[cfg(feature = "read")]
 mod receive;
 #[cfg(feature = "read")]
-pub use receive::{DecodeLimits, DecodeProgress, DecodeStatus, Decoder};
+pub use receive::{DecodeLimits, DecodeProgress, DecodeStatus, Decoder, EntryDecoder};
 
 #[cfg(feature = "read")]
 mod materialize;

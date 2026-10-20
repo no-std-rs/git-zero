@@ -148,6 +148,11 @@ and logical index offsets above 4 GiB without allocating the index. Lookup state
 is allocation tracked; the real Git pack fixture checks every Git-produced index
 entry through the same resumable range interface.
 
+Single-entry range decoding also checks every fragmented plain/OFS/REF entry in
+the synthetic pack fixture and Git-generated packs. Tests cover offsets above
+4 GiB, preservation of trailing entries, truncated bodies, wire budgets,
+zero-output backpressure, repeated completion and allocation-free state.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are
