@@ -1,7 +1,10 @@
 use super::MAX_INPUT;
 use git_zero::{
     Error, Object, ObjectFormat, ObjectKind,
-    pack::{self, DecodeLimits, DecodeStatus, Decoder, DeltaLimits, Entry, Reader, ResolvedObject},
+    pack::{
+        self, DecodeLimits, DecodeProgress, DecodeStatus, Decoder, DeltaLimits, Entry, Reader,
+        ResolvedObject,
+    },
     zlib::{InflateLimits, WINDOW_SIZE},
 };
 use sha1::{Digest, Sha1};
@@ -57,8 +60,10 @@ fn entries_with_format(data: &[u8], format: ObjectFormat) {
             }
         }
     }
-    streamed(bytes, format);
+    let mut stream_window = [0; WINDOW_SIZE];
+    let mut stream = Fragmented::new(bytes, format, &mut stream_window);
     let Ok(mut reader) = Reader::new_with_format(bytes, format) else {
+        assert!(stream.drain().is_err());
         return;
     };
     let mut window = [0; WINDOW_SIZE];
@@ -73,6 +78,7 @@ fn entries_with_format(data: &[u8], format: ObjectFormat) {
             Ok(None) => {
                 assert_eq!(size.unwrap(), None);
                 reader.finish().unwrap();
+                assert_eq!(stream.drain().unwrap(), reader.pack_id());
                 return;
             }
             Err(error) => {
@@ -85,6 +91,7 @@ fn entries_with_format(data: &[u8], format: ObjectFormat) {
                     Error::CorruptPack | Error::BufferTooSmall | Error::LimitExceeded
                 ));
                 assert_eq!(inflated[OUTPUT], 0xa5);
+                assert!(stream.drain().is_err());
                 return;
             }
         };
@@ -92,6 +99,7 @@ fn entries_with_format(data: &[u8], format: ObjectFormat) {
         assert_eq!(entry.offset(), before);
         assert!(entry.end_offset() > before);
         assert_eq!(entry.end_offset(), reader.position());
+        stream.compare(&entry);
         check_object(&entry, bytes, &base, &mut output[..OUTPUT]);
         assert_eq!(inflated[OUTPUT], 0xa5);
         assert_eq!(output[OUTPUT], 0xa5);
@@ -99,95 +107,132 @@ fn entries_with_format(data: &[u8], format: ObjectFormat) {
     panic!("pack entries failed to make bounded cursor progress");
 }
 
-fn streamed(bytes: &[u8], format: ObjectFormat) {
-    let mut window = [0; WINDOW_SIZE];
-    let mut decoder = Decoder::new(
-        format,
-        &mut window,
-        DecodeLimits {
-            max_pack_bytes: MAX_INPUT as u64,
-            max_objects: MAX_INPUT as u32,
-            inflate: INFLATE,
-        },
-    );
-    let mut output = [0xa5; 18];
-    let mut body = [0; OUTPUT];
-    let mut offset = 0;
-    let mut length = 0;
-    let mut header = None;
-    let mut count = 0;
-    let mut expected_count = None;
-    // Each successful pull consumes input, emits body bytes, or finishes a
-    // header/entry. Per-entry output and wire budgets also bound zero-input work.
-    for _ in 0..MAX_INPUT * (OUTPUT + 4) {
-        let end = (offset + 1 + bytes.first().copied().unwrap_or(0) as usize % 31).min(bytes.len());
-        let progress =
-            match decoder.update(&bytes[offset..end], &mut output[..17], end == bytes.len()) {
-                Ok(progress) => progress,
-                Err(error) => {
-                    assert_eq!(decoder.finish(), Err(error));
-                    assert_eq!(decoder.update(&[], &mut output[..17], true), Err(error));
-                    assert_eq!(output[17], 0xa5);
-                    return;
-                }
-            };
-        assert!(progress.consumed <= end - offset);
-        assert!(progress.written <= 17);
-        assert_eq!(output[17], 0xa5);
-        offset += progress.consumed;
-        assert_eq!(decoder.position(), offset as u64);
-        let body_end = length + progress.written;
-        assert!(body_end <= OUTPUT);
-        body[length..body_end].copy_from_slice(&output[..progress.written]);
-        length = body_end;
-        match progress.status {
-            DecodeStatus::Header { objects, .. } => {
-                assert_eq!(expected_count.replace(objects), None);
-            }
-            DecodeStatus::EntryStart(entry) => {
-                assert!(header.replace(entry).is_none());
-                assert_eq!(length, 0);
-            }
-            DecodeStatus::EntryEnd {
-                end_offset,
-                crc32,
-                object_id,
-            } => {
-                let entry = header.take().unwrap();
-                assert_eq!(end_offset, offset as u64);
-                assert_eq!(entry.size, length as u64);
-                assert_eq!(crc32, pack::crc32(&bytes[entry.offset as usize..offset]));
-                if let pack::EntryKind::Object(kind) = entry.kind {
-                    assert_eq!(
-                        object_id,
-                        Some(
-                            Object {
-                                kind,
-                                data: &body[..length]
-                            }
-                            .id_with_format(format)
-                        )
-                    );
-                } else {
-                    assert_eq!(object_id, None);
-                }
-                length = 0;
-                count += 1;
-            }
-            DecodeStatus::Finished(id) => {
-                assert!(header.is_none());
-                assert_eq!(offset, bytes.len());
-                assert_eq!(expected_count, Some(count));
-                pack::validate_with_format(bytes, format).unwrap();
-                assert_eq!(decoder.finish(), Ok(id));
-                return;
-            }
-            DecodeStatus::NeedInput | DecodeStatus::NeedOutput => {
-                assert!(progress.consumed != 0 || progress.written != 0);
-            }
+struct Fragmented<'input, 'window> {
+    bytes: &'input [u8],
+    decoder: Decoder<'window>,
+    offset: usize,
+    output: [u8; 18],
+}
+
+impl<'input, 'window> Fragmented<'input, 'window> {
+    fn new(
+        bytes: &'input [u8],
+        format: ObjectFormat,
+        window: &'window mut [u8; WINDOW_SIZE],
+    ) -> Self {
+        Self {
+            bytes,
+            decoder: Decoder::new(
+                format,
+                window,
+                DecodeLimits {
+                    max_pack_bytes: MAX_INPUT as u64,
+                    // The whole-pack reader has no separate count budget. The
+                    // finite wire and per-entry limits bound differential work.
+                    max_objects: u32::MAX,
+                    inflate: INFLATE,
+                },
+            ),
+            offset: 0,
+            output: [0xa5; 18],
         }
     }
-    panic!("streaming pack decoder failed to make bounded progress");
+
+    fn step(&mut self) -> git_zero::Result<DecodeProgress> {
+        let end = (self.offset + 1 + self.bytes.first().copied().unwrap_or(0) as usize % 31)
+            .min(self.bytes.len());
+        let result = self.decoder.update(
+            &self.bytes[self.offset..end],
+            &mut self.output[..17],
+            end == self.bytes.len(),
+        );
+        assert_eq!(self.output[17], 0xa5);
+        let progress = match result {
+            Ok(progress) => progress,
+            Err(error) => {
+                assert_eq!(self.decoder.finish(), Err(error));
+                assert_eq!(
+                    self.decoder.update(&[], &mut self.output[..17], true),
+                    Err(error)
+                );
+                return Err(error);
+            }
+        };
+        assert!(progress.consumed <= end - self.offset);
+        assert!(progress.written <= 17);
+        self.offset += progress.consumed;
+        assert_eq!(self.decoder.position(), self.offset as u64);
+        match progress.status {
+            DecodeStatus::Header { objects, version } => {
+                assert_eq!(self.offset, 12);
+                assert_eq!(
+                    objects,
+                    u32::from_be_bytes(self.bytes[8..12].try_into().unwrap())
+                );
+                assert_eq!(
+                    version,
+                    u32::from_be_bytes(self.bytes[4..8].try_into().unwrap())
+                );
+            }
+            DecodeStatus::EntryEnd { end_offset, .. } => assert_eq!(end_offset, self.offset as u64),
+            DecodeStatus::Finished(id) => {
+                assert_eq!(self.offset, self.bytes.len());
+                assert_eq!(self.decoder.finish(), Ok(id));
+            }
+            DecodeStatus::NeedInput | DecodeStatus::NeedOutput => {
+                assert!(progress.consumed != 0 || progress.written != 0)
+            }
+            _ => {}
+        }
+        Ok(progress)
+    }
+
+    fn compare(&mut self, expected: &Entry<'_>) {
+        let mut written = 0;
+        let mut started = false;
+        for _ in 0..MAX_INPUT + OUTPUT + 4 {
+            let progress = self.step().unwrap();
+            let end = written + progress.written;
+            assert_eq!(
+                &self.output[..progress.written],
+                &expected.data()[written..end]
+            );
+            written = end;
+            match progress.status {
+                DecodeStatus::EntryStart(header) => {
+                    assert!(!started);
+                    started = true;
+                    assert_eq!(header.offset, expected.offset());
+                    assert_eq!(header.kind, expected.kind());
+                    assert_eq!(header.size, expected.data().len() as u64);
+                }
+                DecodeStatus::EntryEnd {
+                    end_offset,
+                    crc32,
+                    object_id,
+                } => {
+                    assert!(started);
+                    assert_eq!(written, expected.data().len());
+                    assert_eq!(end_offset, expected.end_offset());
+                    assert_eq!(crc32, expected.crc32());
+                    assert_eq!(object_id, expected.object().map(|object| object.id()));
+                    return;
+                }
+                DecodeStatus::Finished(_) => panic!("stream ended before the reader's entry"),
+                _ => {}
+            }
+        }
+        panic!("entry decoder failed to make bounded progress");
+    }
+
+    fn drain(&mut self) -> git_zero::Result<git_zero::ObjectId> {
+        for _ in 0..MAX_INPUT * (OUTPUT + 4) {
+            if let DecodeStatus::Finished(id) = self.step()?.status {
+                return Ok(id);
+            }
+        }
+        panic!("pack decoder failed to make bounded progress");
+    }
 }
 
 fn check_object(entry: &Entry<'_>, bytes: &[u8], base: &ResolvedObject<'_>, output: &mut [u8]) {

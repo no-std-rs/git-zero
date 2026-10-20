@@ -1,8 +1,8 @@
 //! Incremental pack intake. All emitted bytes and metadata are provisional
 //! until the pack trailer is verified. The host owns quarantine and publication.
-use super::{EntryKind, crc::Crc32};
+use super::{EntryHeader, EntryKind, crc::Crc32, decode::parse_entry_header};
 use crate::{
-    Error, ObjectFormat, ObjectId, ObjectInfo, ObjectKind, Result,
+    Error, ObjectFormat, ObjectId, ObjectInfo, Result,
     object::Hash,
     zlib::{InflateLimits, InflateStatus, Inflater, WINDOW_SIZE},
 };
@@ -15,14 +15,6 @@ pub struct DecodeLimits {
     /// Bounds inflated object bodies or delta instruction streams, not the
     /// eventual result of applying a delta. Hosts must bound delta resolution.
     pub inflate: InflateLimits,
-}
-
-/// Pack-relative position, representation, and inflated length of one entry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EntryHeader {
-    pub offset: u64,
-    pub kind: EntryKind,
-    pub size: u64,
 }
 
 /// Events stop decoding before the next entry. Hosts can stage body fragments
@@ -207,65 +199,61 @@ impl<'a> Decoder<'a> {
 
     fn header_byte(&mut self) -> Result<Option<DecodeStatus>> {
         match self.phase {
-            Phase::Header if self.header_len == 12 => {
-                let version = u32::from_be_bytes(self.header[4..8].try_into().unwrap());
-                if &self.header[..4] != b"PACK" || !matches!(version, 2 | 3) {
-                    return Err(Error::CorruptPack);
-                }
-                self.remaining = u32::from_be_bytes(self.header[8..12].try_into().unwrap());
-                if self.remaining > self.limits.max_objects {
-                    return Err(Error::LimitExceeded);
-                }
-                self.next();
-                Ok(Some(DecodeStatus::Header {
-                    version,
-                    objects: self.remaining,
-                }))
-            }
-            Phase::Entry => {
-                let Some(entry) = entry_header(
-                    &self.header[..self.header_len],
-                    self.entry_offset,
-                    self.format,
-                )?
-                else {
-                    return Ok(None);
-                };
-                if entry.size > self.limits.inflate.max_output {
-                    return Err(Error::LimitExceeded);
-                }
-                self.inflater.reset(InflateLimits {
-                    max_output: entry.size,
-                    ..self.limits.inflate
-                });
-                self.object_hash = if let EntryKind::Object(kind) = entry.kind {
-                    let mut hash = self.format.hash();
-                    let mut header = [0; 32];
-                    hash.update(
-                        ObjectInfo {
-                            kind,
-                            size: entry.size,
-                        }
-                        .header(&mut header)?,
-                    );
-                    Some(hash)
-                } else {
-                    None
-                };
-                self.header_len = 0;
-                self.phase = Phase::Body(entry);
-                Ok(Some(DecodeStatus::EntryStart(entry)))
-            }
+            Phase::Header if self.header_len == 12 => self.pack_header().map(Some),
+            Phase::Entry => self.start_entry(),
             Phase::Trailer if self.header_len == self.format.id_length() => {
-                let id = self.hash.clone().finish();
-                if id.as_bytes() != &self.header[..self.header_len] {
-                    return Err(Error::CorruptPack);
-                }
-                self.phase = Phase::Done(id);
+                self.verify_trailer()?;
                 Ok(None)
             }
             _ => Ok(None),
         }
+    }
+
+    fn pack_header(&mut self) -> Result<DecodeStatus> {
+        let version = u32::from_be_bytes(self.header[4..8].try_into().unwrap());
+        if &self.header[..4] != b"PACK" || !matches!(version, 2 | 3) {
+            return Err(Error::CorruptPack);
+        }
+        self.remaining = u32::from_be_bytes(self.header[8..12].try_into().unwrap());
+        if self.remaining > self.limits.max_objects {
+            return Err(Error::LimitExceeded);
+        }
+        self.next();
+        Ok(DecodeStatus::Header {
+            version,
+            objects: self.remaining,
+        })
+    }
+
+    fn start_entry(&mut self) -> Result<Option<DecodeStatus>> {
+        let Some(entry) = entry_header(
+            &self.header[..self.header_len],
+            self.entry_offset,
+            self.format,
+        )?
+        else {
+            return Ok(None);
+        };
+        if entry.size > self.limits.inflate.max_output {
+            return Err(Error::LimitExceeded);
+        }
+        self.inflater.reset(InflateLimits {
+            max_output: entry.size,
+            ..self.limits.inflate
+        });
+        self.object_hash = entry_hash(entry, self.format)?;
+        self.header_len = 0;
+        self.phase = Phase::Body(entry);
+        Ok(Some(DecodeStatus::EntryStart(entry)))
+    }
+
+    fn verify_trailer(&mut self) -> Result<()> {
+        let id = self.hash.clone().finish();
+        if id.as_bytes() != &self.header[..self.header_len] {
+            return Err(Error::CorruptPack);
+        }
+        self.phase = Phase::Done(id);
+        Ok(())
     }
 
     fn next(&mut self) {
@@ -324,62 +312,28 @@ impl<'a> Decoder<'a> {
     }
 }
 
-fn entry_header(bytes: &[u8], offset: u64, format: ObjectFormat) -> Result<Option<EntryHeader>> {
-    let first = bytes[0];
-    let mut size = u64::from(first & 15);
-    let mut cursor = 1;
-    let mut previous = first;
-    let mut shift = 4;
-    while previous & 128 != 0 {
-        let Some(&byte) = bytes.get(cursor) else {
-            return Ok(None);
-        };
-        if shift >= 64 || u64::from(byte & 127) > (u64::MAX >> shift) {
-            return Err(Error::CorruptPack);
-        }
-        size |= u64::from(byte & 127) << shift;
-        shift += 7;
-        cursor += 1;
-        previous = byte;
-    }
-    let kind = match (first >> 4) & 7 {
-        1 => EntryKind::Object(ObjectKind::Commit),
-        2 => EntryKind::Object(ObjectKind::Tree),
-        3 => EntryKind::Object(ObjectKind::Blob),
-        4 => EntryKind::Object(ObjectKind::Tag),
-        6 => {
-            let mut distance = 0_u64;
-            loop {
-                let Some(&byte) = bytes.get(cursor) else {
-                    return Ok(None);
-                };
-                distance = distance
-                    .checked_mul(128)
-                    .and_then(|n| n.checked_add(u64::from(byte & 127)))
-                    .ok_or(Error::CorruptPack)?;
-                cursor += 1;
-                if byte & 128 == 0 {
-                    break;
-                }
-                distance = distance.checked_add(1).ok_or(Error::CorruptPack)?;
-            }
-            let base_offset = offset.checked_sub(distance).ok_or(Error::CorruptPack)?;
-            if distance == 0 || base_offset < 12 {
-                return Err(Error::CorruptPack);
-            }
-            EntryKind::OffsetDelta { base_offset }
-        }
-        7 => {
-            let Some(id) = bytes.get(cursor..cursor + format.id_length()) else {
-                return Ok(None);
-            };
-            EntryKind::ReferenceDelta {
-                base_id: ObjectId::from_bytes(format, id)?,
-            }
-        }
-        _ => return Err(Error::CorruptPack),
+fn entry_hash(entry: EntryHeader, format: ObjectFormat) -> Result<Option<Hash>> {
+    let EntryKind::Object(kind) = entry.kind else {
+        return Ok(None);
     };
-    Ok(Some(EntryHeader { offset, kind, size }))
+    let mut hash = format.hash();
+    let mut header = [0; 32];
+    hash.update(
+        ObjectInfo {
+            kind,
+            size: entry.size,
+        }
+        .header(&mut header)?,
+    );
+    Ok(Some(hash))
+}
+
+fn entry_header(bytes: &[u8], offset: u64, format: ObjectFormat) -> Result<Option<EntryHeader>> {
+    match parse_entry_header(bytes, offset, format) {
+        Ok((_, header)) => Ok(Some(header)),
+        Err(Error::BufferTooSmall) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]

@@ -9,12 +9,12 @@ pub use crc::crc32;
 #[cfg(feature = "read")]
 mod decode;
 #[cfg(feature = "read")]
-pub use decode::{DeltaLimits, Entry, EntryKind, Reader, ResolvedObject, apply_delta};
+pub use decode::{DeltaLimits, Entry, EntryHeader, EntryKind, Reader, ResolvedObject, apply_delta};
 
 #[cfg(feature = "read")]
 mod receive;
 #[cfg(feature = "read")]
-pub use receive::{DecodeLimits, DecodeProgress, DecodeStatus, Decoder, EntryHeader};
+pub use receive::{DecodeLimits, DecodeProgress, DecodeStatus, Decoder};
 
 #[cfg(feature = "read")]
 mod materialize;
