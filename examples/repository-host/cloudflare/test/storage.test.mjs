@@ -149,7 +149,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const after = await responseJson(await fetch(`${server.origin}/_test/${item.namespace}/state`, { headers: headers() }));
       assert.ok(after.usage.r2Gets > 0, "cold instance must read durable R2 data");
     }
-    const body = randomBytes(CHUNK_BYTES + 1024 * 1024);
+    const body = randomBytes(9 * 1024 * 1024);
     const value = object(0, 3, body);
     const enlarged = object(0, 3, Buffer.concat([body, Buffer.from("!")]));
     const size = (value) => { const bytes = []; do { const byte = value & 127; value = Math.floor(value / 128); bytes.push(byte | (value ? 128 : 0)); } while (value); return Buffer.from(bytes); };
@@ -170,7 +170,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     const rejected = await fetch(`${server.origin}/_test/${namespace}/intake`, { method: "POST", headers: headers(), body: chunked(corrupted, 65536), duplex: "half" });
     assert.equal(rejected.status, 400); await rejected.text();
     const shared = await responseJson(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
-    assert.equal(shared.stagedChunks, 2, "failed owner must release claims while keeping both chunks owned by a verified stage");
+    assert.equal(shared.stagedChunks, Math.ceil(packed.length / CHUNK_BYTES), "failed owner must release claims while keeping every chunk owned by a verified stage");
     assert.equal(shared.stagedObjects, 2, "failed intake metadata must be reclaimed");
     const retained = await responseJson(await fetch(`${server.origin}/_test/${namespace}/object/${result.stage}?node=12`, { headers: headers() }));
     assert.equal(retained.oid, value.id.toString("hex"), "shared first chunk must remain readable after failed intake cleanup");
@@ -183,7 +183,8 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     const reclaimed = await responseJson(await fetch(`${server.origin}/_test/${failedNamespace}/state`, { headers: headers() }));
     assert.deepEqual(reclaimed.stages, []);
     assert.equal(reclaimed.stagedChunks, 0); assert.equal(reclaimed.stagedObjects, 0);
-    assert.ok(reclaimed.usage.r2Deletes >= 4, "both encoded chunks and both private canonical chunks must be deleted");
+    const reclaimedChunks = Math.ceil(invalidPack.length / CHUNK_BYTES) + Math.ceil(body.length / CHUNK_BYTES) + Math.ceil(enlarged.body.length / CHUNK_BYTES);
+    assert.ok(reclaimed.usage.r2Deletes >= reclaimedChunks, "every encoded and temporary canonical chunk must be deleted");
   } catch (error) { error.message += `\n${server?.logs() ?? ""}`; throw error; }
   finally { await server?.stop(); await rm(persist, { recursive: true, force: true }); }
 });

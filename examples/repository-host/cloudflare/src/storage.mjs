@@ -1,7 +1,8 @@
 // Durable storage for opaque codec records and authenticated byte chunks.
 import { bucket } from "./r2-s3.mjs";
 import { hex } from "./codec.mjs";
-export const CHUNK_BYTES = 8 * 1024 * 1024;
+export const CHUNK_BYTES = 1024 * 1024;
+const MAX_STORED_CHUNK_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 65536;
 
 async function retryStorage(operation, usage) {
@@ -185,7 +186,7 @@ export class Store {
     const data = await retryStorage(async () => {
       this.usage.r2Gets++;
       const object = await this.blobs.get(chunk.key);
-      if (!object || object.size !== chunk.length || object.size > CHUNK_BYTES) throw new Error("missing or invalid stored chunk");
+      if (!object || object.size !== chunk.length || object.size > MAX_STORED_CHUNK_BYTES) throw new Error("missing or invalid stored chunk");
       return new Uint8Array(await object.arrayBuffer());
     }, this.usage);
     this.usage.r2ReadBytes += data.byteLength;

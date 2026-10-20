@@ -65,3 +65,6 @@ The push and cold-fetch reports also separate repository metadata on disk from
 opaque object storage and local R2 mock metadata. Reference source/clone copies
 are excluded. In standalone production, object storage resides in R2; only the
 repository metadata and runtime belong in the server's disk budget.
+New opaque chunks are 1 MiB, keeping more physical ranges in the fixed-size
+read cache when delta reconstruction jumps between bases. Existing chunks up to
+8 MiB remain readable; no stored pack or object offsets need migration.

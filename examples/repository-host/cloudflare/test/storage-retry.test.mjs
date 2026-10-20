@@ -66,6 +66,13 @@ test("storage retries do not mask invalid or corrupted chunk data", async () => 
   assert.equal(reads, 1); assert.equal(cache.get(chunk.key), undefined);
 });
 
+test("chunk reads preserve compatibility with earlier eight MiB storage extents", async () => {
+  const data = new Uint8Array(8 * 1024 * 1024).fill(3);
+  const storage = store({ async get() { return { size: data.length, async arrayBuffer() { return data.buffer; } }; } });
+  const chunk = { key: "legacy-chunk", length: data.length, sha: await sha256(data) };
+  assert.deepEqual(await storage.get(chunk, new ByteCache(16 * 1024 * 1024)), data);
+});
+
 
 test("signed S3 reads recover dropped connections, truncated bodies and 503 responses", { timeout: 30000 }, async () => {
   for (const getFailure of ["connection", "body", "status"]) {
