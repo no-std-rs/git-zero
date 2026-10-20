@@ -268,6 +268,21 @@ fn tree_order_and_framing_failures_are_terminal() {
 }
 
 #[test]
+fn null_tree_ids_are_invalid_even_for_external_gitlinks() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for mode in [b"100644".as_slice(), b"40000", b"120000", b"160000"] {
+            let body = tree(&[(mode, b"external", format.zero_id())]);
+            for chunk in [1, 7, body.len()] {
+                assert_eq!(
+                    scan(&body, ObjectKind::Tree, format, chunk, 16, LIMITS),
+                    Err(Error::InvalidObject)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn truncation_header_shape_and_independent_limits() {
     let format = ObjectFormat::Sha256;
     let target = id(format, 1);

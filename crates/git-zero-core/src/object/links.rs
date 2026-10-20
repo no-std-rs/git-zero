@@ -232,11 +232,15 @@ impl State {
                     self.id[self.id_len] = byte;
                     self.id_len += 1;
                     if self.id_len == self.format.id_length() {
+                        let id = ObjectId::from_bytes(self.format, &self.id[..self.id_len])?;
+                        if id.is_zero() {
+                            return Err(Error::InvalidObject);
+                        }
                         self.tree_entry(names)?;
                         return Ok(LinkProgress {
                             consumed,
                             status: LinkStatus::TreeEntry {
-                                id: ObjectId::from_bytes(self.format, &self.id[..self.id_len])?,
+                                id,
                                 mode: self.previous_mode,
                                 name: &names.previous[..self.previous_len],
                                 kind: tree_kind(self.previous_mode)?,
