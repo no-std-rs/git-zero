@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { CHUNK_BYTES } from "../src/storage.mjs";
 import { deltas, entry, object, pack, project, wire } from "./fixture.mjs";
 import { chunked, headers, start } from "./wrangler.mjs";
+import { startStandalone } from "./standalone.mjs";
 
 async function responseJson(response) {
   const text = await response.text();
@@ -28,12 +29,12 @@ async function canonical(server, namespace, result, row, expected) {
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), expected.body);
 }
 
-test("Wrangler R2/SQLite persists verified packs and rejects invalid graph publication", { timeout: 120000 }, async () => {
+for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} persists verified packs and reclaims failed quarantine`, { timeout: 120000 }, async () => {
   const persist = await mkdtemp(join(tmpdir(), "git-zero-own-worker-"));
   let server;
   const restart = [];
   try {
-    server = await start(persist);
+    server = await serve(persist);
     assert.equal((await fetch(`${server.origin}/_test/unauthorized/state`)).status, 401);
     assert.equal((await fetch(`${server.origin}/_services/register`, { method: "POST", headers: headers(), body: "{}" })).status, 404);
     for (const format of [0, 1]) {
@@ -71,7 +72,7 @@ test("Wrangler R2/SQLite persists verified packs and rejects invalid graph publi
     const pendingCleanup = await responseJson(await fetch(`${server.origin}/_test/${expiredNamespace}/state`, { headers: headers() }));
     assert.equal(pendingCleanup.stagedChunks, 1);
     const before = restart[0].result.epoch;
-    await server.stop(); server = await start(persist);
+    await server.stop(); server = await serve(persist);
     const recovered = await responseJson(await fetch(`${server.origin}/_test/${expiredNamespace}/state`, { headers: headers() }));
     assert.equal(recovered.stagedChunks, 0); assert.equal(recovered.stagedObjects, 0);
     assert.ok(recovered.usage.r2Deletes >= 1, "cold recovery must finish scheduled quarantine cleanup");

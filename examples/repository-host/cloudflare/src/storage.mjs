@@ -1,4 +1,5 @@
 // Durable storage for opaque codec records and authenticated byte chunks.
+import { bucket } from "./r2-s3.mjs";
 export const CHUNK_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 65536;
 
@@ -64,7 +65,7 @@ const SCHEMA = [
 
 export class Store {
   constructor(ctx, env, namespace) {
-    this.ctx = ctx; this.env = env; this.namespace = namespace;
+    this.ctx = ctx; this.env = env; this.namespace = namespace; this.blobs = bucket(env);
     this.usage = { sqlCalls: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2Puts: 0, r2Deletes: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
     this.sqlKnown = true;
     for (const statement of SCHEMA) this.exec(statement);
@@ -121,13 +122,13 @@ export class Store {
   }
   async put(key, data) {
     this.usage.r2Puts++; this.usage.r2WrittenBytes += data.byteLength;
-    await this.env.BLOBS.put(key, data);
+    await this.blobs.put(key, data);
   }
   async get(chunk, cache) {
     const hit = cache.get(chunk.key);
     if (hit) return hit;
     this.usage.r2Gets++;
-    const object = await this.env.BLOBS.get(chunk.key);
+    const object = await this.blobs.get(chunk.key);
     if (!object || object.size !== chunk.length || object.size > CHUNK_BYTES) throw new Error("missing or invalid stored chunk");
     const data = new Uint8Array(await object.arrayBuffer());
     this.usage.r2ReadBytes += data.byteLength;
@@ -140,7 +141,7 @@ export class Store {
       const rows = this.exec("SELECT object,seq,key FROM temp_chunks WHERE stage=? LIMIT 1000", stage);
       if (!rows.length) break;
       const batch = rows.map((row) => row.key);
-      this.usage.r2Deletes += batch.length; await this.env.BLOBS.delete(batch);
+      this.usage.r2Deletes += batch.length; await this.blobs.delete(batch);
       for (const row of rows) this.exec("DELETE FROM temp_chunks WHERE stage=? AND object=? AND seq=?", stage, row.object, row.seq);
     }
     this.exec("DELETE FROM temp_objects WHERE stage=?", stage);
@@ -159,7 +160,7 @@ export class Store {
           // Claims precede R2 puts. Delete the last owner's bytes before its
           // claim, so a crash/outage always leaves a durable retry record.
           if (!this.exec("SELECT 1 FROM stage_chunks WHERE key=? AND stage<>? LIMIT 1", row.key, stage).length) {
-            this.usage.r2Deletes++; await this.env.BLOBS.delete(row.key);
+            this.usage.r2Deletes++; await this.blobs.delete(row.key);
           }
           this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
         }

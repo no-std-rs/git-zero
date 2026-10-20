@@ -1,0 +1,7 @@
+# This hostname must reach the direct ingress, without Cloudflare's HTTP body
+# limit. Caddy terminates TLS and streams the HTTP request/response unchanged.
+git.example.com {
+    reverse_proxy 127.0.0.1:8787 {
+        flush_interval -1
+    }
+}

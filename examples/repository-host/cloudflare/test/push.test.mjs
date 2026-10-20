@@ -8,6 +8,7 @@ import { gzipSync } from "node:zlib";
 import { test } from "node:test";
 import { entry, object, packet, pack, project, wire } from "./fixture.mjs";
 import { headers, start, TOKEN } from "./wrangler.mjs";
+import { startStandalone } from "./standalone.mjs";
 
 async function git(directory, ...args) {
   const child = spawn("git", ["-c", "user.name=Worker test", "-c", "user.email=worker@example.test", "-c", "http.extraHeader=Authorization: Bearer " + TOKEN, ...args], {
@@ -26,11 +27,11 @@ function request(format, commands, atomic = true, packed = pack(format, [])) {
   return Buffer.concat([...commands.map((command, i) => packet(`${command.old} ${command.new} ${command.name}${i ? "" : `\0${caps}`}\n`)), Buffer.from("0000"), packed]);
 }
 
-test("ordinary Git pushes, clones and fetches interoperate with durable R2/SQLite", { timeout: 120000 }, async () => {
+for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`ordinary Git pushes, clones and fetches interoperate with ${runtime}`, { timeout: 120000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-push-"));
   let server;
   try {
-    server = await start(join(root, "storage"));
+    server = await serve(join(root, "storage"));
     for (const format of [0, 1]) {
       const namespace = `git-${format}-${randomUUID()}`, directory = join(root, namespace);
       await mkdir(directory);
@@ -134,7 +135,7 @@ test("ordinary Git pushes, clones and fetches interoperate with durable R2/SQLit
       assert.ok((await response.arrayBuffer()).byteLength > 0);
       assert.equal((await refs(server, namespace)).length, 2);
     }
-    await server.stop(); server = await start(join(root, "storage"));
+    await server.stop(); server = await serve(join(root, "storage"));
     for (const name of await readdir(root)) {
       if (!name.startsWith("git-")) continue;
       const directory = join(root, name), remote = `${server.origin}/${name}.git`;

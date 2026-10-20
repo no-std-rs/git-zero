@@ -121,6 +121,23 @@ ingress beyond Cloudflare request limits and measured hosting cost remain open;
 component pack-decoder measurements are not end-to-end hosting results. The
 default older example config is still a separate reference implementation.
 
+The same modules also run directly under the pinned workerd binary using
+`examples/repository-host/cloudflare/workerd.capnp`. This deployment candidate
+uses persistent SQLite on the host and signed R2 S3 requests for opaque chunks;
+it does not run a Git executable. The same real-Git round-trip suite passes
+against direct workerd, with an independent S3 signature verifier and byte store.
+Wrangler tests continue to exercise the native R2/SQLite bindings separately.
+
+Build with `npm ci && npm run build:streamed`, then set `HOST_TOKEN`,
+`R2_S3_URL` (the full bucket URL), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and
+an absolute `GIT_ZERO_STATE_DIR`. `npm run serve:standalone` starts workerd on
+loopback, with test routes disabled. A systemd unit and streaming TLS proxy
+example are provided in that directory. The state directory, namespace key in
+the config and R2 bucket together identify the durable repository; preserve them
+across restarts and backups. workerd's disk-backed Durable Object API is
+experimental, so this candidate pins the runtime through the lockfile and still
+requires Linux-scale and live-environment validation before shipping.
+
 ## Workspace
 
 | Location | Responsibility |
