@@ -217,16 +217,41 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const value = object(format, 3, "hello");
       response = await fetch(duplicateRemote, { method: "POST", headers: headers(), body: wire(format, pack(format, [entry(3, value.body)]), value.id) });
       assert.equal(response.status, 200); await response.arrayBuffer();
-      // A valid delta can reconstruct exactly its external base ID. Its stored
-      // physical base must survive publication and a new request-local cache.
+      // A valid identity delta adds a ref without another canonical object.
+      // Reclaim its pack while retaining the existing published base.
       response = await fetch(duplicateRemote, { method: "POST", headers: headers(), body: wire(format, pack(format, [entry(7, Buffer.from([5, 5, 0x90, 5]), value.id)]), value.id, "refs/tags/identity") });
       assert.equal(response.status, 200); await response.arrayBuffer();
       const duplicateState = await json(await fetch(`${server.origin}/_test/${duplicateNamespace}/state`, { headers: headers() }));
       assert.equal(duplicateState.objects, 1);
+      assert.equal(duplicateState.stages.length, 1, "a ref update with only existing IDs must not retain another pack");
+      assert.equal(duplicateState.stagedObjects, 1);
+      assert.equal((await refs(server, duplicateNamespace)).length, 2);
       const duplicateStage = duplicateState.stages.find((stage) => stage.phase === "published");
       const duplicateRead = await fetch(`${server.origin}/_test/${duplicateNamespace}/object/${duplicateStage.id}?node=12&data=1`, { headers: headers() });
       assert.equal(duplicateRead.status, 200);
       assert.equal(await duplicateRead.text(), "hello");
+      const copy = await fetch(duplicateRemote, { method: "POST", headers: headers(), body: wire(format, pack(format, [entry(3, value.body)]), value.id, "refs/tags/copy") });
+      assert.equal(copy.status, 200); await copy.arrayBuffer();
+      assert.equal((await refs(server, duplicateNamespace)).find((ref) => ref.name === "refs/tags/copy").oid, value.id.toString("hex"));
+      const copiedState = await json(await fetch(`${server.origin}/_test/${duplicateNamespace}/state`, { headers: headers() }));
+      assert.equal(copiedState.stages.length, 1);
+      assert.equal(copiedState.stagedChunks, duplicateState.stagedChunks, "shared published chunk ownership must survive duplicate-pack cleanup");
+      const identity = entry(7, Buffer.from([5, 5, 0x90, 5]), value.id);
+      assert.ok(identity.length < 128);
+      const changed = object(format, 3, "hello!");
+      const mixedPack = pack(format, [identity, entry(6, Buffer.from([5, 6, 0x90, 5, 1, 33]), Buffer.from([identity.length]))]);
+      const mixed = await fetch(duplicateRemote, { method: "POST", headers: headers(), body: wire(format, mixedPack, changed.id, "refs/tags/mixed") });
+      assert.equal(mixed.status, 200); await mixed.arrayBuffer();
+      assert.equal((await refs(server, duplicateNamespace)).find((ref) => ref.name === "refs/tags/mixed").oid, changed.id.toString("hex"));
+      const mixedState = await json(await fetch(`${server.origin}/_test/${duplicateNamespace}/state`, { headers: headers() }));
+      assert.equal(mixedState.objects, 2); assert.equal(mixedState.stages.length, 2);
+      const mixedStage = mixedState.stages.find((stage) => stage.id !== duplicateStage.id);
+      const mixedRead = await fetch(`${server.origin}/_test/${duplicateNamespace}/object/${mixedStage.id}?node=${12 + identity.length}&data=1`, { headers: headers() });
+      assert.equal(mixedRead.status, 200); assert.equal(await mixedRead.text(), "hello!");
+      const duplicateClone = join(root, `duplicate-clone-${format}`);
+      await git(root, "clone", "--mirror", `${server.origin}/${duplicateNamespace}.git`, duplicateClone);
+      await git(duplicateClone, "fsck", "--full", "--strict");
+      assert.equal(await git(duplicateClone, "cat-file", "blob", "refs/tags/mixed"), "hello!");
 
       const collision = [{ old: zero, new: second, name: "refs/heads/main/topic" }];
       response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, collision) });
