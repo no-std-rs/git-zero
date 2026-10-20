@@ -3,7 +3,9 @@ use super::{FRAME_BYTES, Frame, Shared, code, format, id_at, input, output, u32_
 use core::cell::UnsafeCell;
 use git_zero::{
     BlobFilter, Error, ObjectFormat, Result,
-    http::stored::{self, Acknowledgments, Command, ObjectRequest, Objects, Request},
+    http::stored::{
+        self, Acknowledgments, Command, ObjectRequest, Objects, Request, ShallowUpdates,
+    },
     io::{SliceWriter, Write},
 };
 
@@ -29,6 +31,7 @@ struct Upload {
     parsed: Option<Request<'static>>,
     objects: Option<Objects<'static>>,
     acknowledgments: Option<Acknowledgments>,
+    shallow_updates: Option<ShallowUpdates>,
 }
 
 #[unsafe(no_mangle)]
@@ -83,6 +86,7 @@ pub extern "C" fn host_upload_init(object_format: u32, version: u32) -> i32 {
                 parsed: None,
                 objects: None,
                 acknowledgments: None,
+                shallow_updates: None,
             });
         }
         Ok(0)
@@ -282,6 +286,50 @@ pub extern "C" fn host_upload_ack_start() -> i32 {
         acknowledgments.start(output)?;
         session.acknowledgments = Some(acknowledgments);
         Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_upload_shallow_init() -> i32 {
+    result((|| {
+        let session = session()?;
+        if session.shallow_updates.is_some() {
+            return Err(Error::InvalidRequest);
+        }
+        session.shallow_updates = Some(
+            session
+                .parsed
+                .as_ref()
+                .ok_or(Error::InvalidRequest)?
+                .shallow_updates()?,
+        );
+        Ok(0)
+    })())
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn host_upload_shallow_change(length: usize, unshallow: u32) -> i32 {
+    emit(|output| {
+        let session = session()?;
+        let bytes = input(length)?;
+        if unshallow > 1 || bytes.len() != session.format.id_length() {
+            return Err(Error::InvalidRequest);
+        }
+        let id = id_at(bytes, 0, session.format)?;
+        session
+            .shallow_updates
+            .as_mut()
+            .ok_or(Error::InvalidRequest)?
+            .change(id, unshallow != 0, output)
+    })
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn host_upload_shallow_finish() -> i32 {
+    emit(|output| {
+        session()?
+            .shallow_updates
+            .as_mut()
+            .ok_or(Error::InvalidRequest)?
+            .finish(output)
     })
 }
 #[unsafe(no_mangle)]

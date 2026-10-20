@@ -140,6 +140,9 @@ export class Codec {
   uploadAckStart() { return this.event("host_upload_ack_start", null).data; }
   uploadAckCommon(id) { return this.event("host_upload_ack_common", id).data; }
   uploadAckFinish() { return this.event("host_upload_ack_finish", null).data; }
+  uploadShallowInit() { this.invoke("host_upload_shallow_init"); }
+  uploadShallowChange(id, unshallow = false) { return this.event("host_upload_shallow_change", id, Number(unshallow)).data; }
+  uploadShallowFinish() { return this.event("host_upload_shallow_finish", null).data; }
   uploadCancel() { this.invoke("host_upload_cancel"); }
 
   packStart(count, band) {

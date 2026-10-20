@@ -717,3 +717,134 @@ fn external_ls_refs_matches_raw_prefixes_and_preserves_symbolic_attributes() {
             .any(|bytes| bytes == b" refs/tags/\xff symref-target:refs/heads/main peeled:")
     );
 }
+
+#[cfg(feature = "read")]
+fn shallow_body(format: ObjectFormat, version: u8, depth: bool, done: bool) -> Vec<u8> {
+    let mut output = Bytes(vec![]);
+    if version == 2 {
+        pktline::write(&mut output, b"command=fetch\n").unwrap();
+        pktline::write(&mut output, format.capability()).unwrap();
+        output.0.extend_from_slice(b"0001");
+    }
+    let suffix = if version == 2 {
+        String::new()
+    } else {
+        format!(
+            " shallow {}",
+            core::str::from_utf8(format.capability()).unwrap()
+        )
+    };
+    pktline::write(
+        &mut output,
+        format!("want {}{suffix}\n", id(format, 1)).as_bytes(),
+    )
+    .unwrap();
+    if depth {
+        pktline::write(&mut output, b"deepen 2\n").unwrap();
+    }
+    if version != 2 {
+        output.0.extend_from_slice(b"0000");
+    }
+    if done {
+        pktline::write(&mut output, b"done\n").unwrap();
+    }
+    if version == 2 {
+        output.0.extend_from_slice(b"0000");
+    }
+    output.0
+}
+
+#[cfg(feature = "read")]
+#[test]
+fn paged_shallow_updates_match_protocol_sections_without_allocations() {
+    use git_zero::http::stored::Request;
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for version in 0..=2 {
+            for done in [false, true] {
+                for count in 0..=2 {
+                    let body = shallow_body(format, version, true, done);
+                    let enabled = version != 2 || done;
+                    let mut expected = Bytes(vec![]);
+                    if enabled && count > 0 {
+                        if version == 2 {
+                            pktline::write(&mut expected, b"shallow-info\n").unwrap();
+                        }
+                        for index in 0..count {
+                            pktline::write(
+                                &mut expected,
+                                format!(
+                                    "{} {}\n",
+                                    if index == 0 { "shallow" } else { "unshallow" },
+                                    id(format, index + 1)
+                                )
+                                .as_bytes(),
+                            )
+                            .unwrap();
+                        }
+                    }
+                    if enabled && (version != 2 || count > 0) {
+                        expected
+                            .0
+                            .extend_from_slice(if version == 2 { b"0001" } else { b"0000" });
+                    }
+                    let mut storage = [0; 512];
+                    allocations::without_allocations(|| {
+                        let request = Request::parse(&body, format, version).unwrap();
+                        let mut updates = request.shallow_updates().unwrap();
+                        let mut output = SliceWriter::new(&mut storage);
+                        if enabled {
+                            for index in 0..count {
+                                updates
+                                    .change(id(format, index + 1), index != 0, &mut output)
+                                    .unwrap();
+                            }
+                        }
+                        updates.finish(&mut output).unwrap();
+                        assert_eq!(output.as_bytes(), expected.0);
+                        assert_eq!(updates.finish(&mut output), Err(Error::InvalidRequest));
+                    });
+                }
+                let body = shallow_body(format, version, false, done);
+                let request = Request::parse(&body, format, version).unwrap();
+                let mut output = SliceWriter::new(&mut []);
+                request
+                    .shallow_updates()
+                    .unwrap()
+                    .finish(&mut output)
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[cfg(feature = "read")]
+#[test]
+fn shallow_update_errors_are_sticky_and_never_finish_partial_sections() {
+    use git_zero::http::stored::Request;
+    for version in 0..=2 {
+        let format = ObjectFormat::Sha1;
+        let body = shallow_body(format, version, true, true);
+        let request = Request::parse(&body, format, version).unwrap();
+        for invalid in [format.zero_id(), id(ObjectFormat::Sha256, 1)] {
+            let mut updates = request.shallow_updates().unwrap();
+            let mut output = SliceWriter::new(&mut []);
+            assert_eq!(
+                updates.change(invalid, false, &mut output),
+                Err(Error::InvalidObjectId)
+            );
+            assert_eq!(updates.finish(&mut output), Err(Error::InvalidObjectId));
+        }
+        let mut updates = request.shallow_updates().unwrap();
+        let mut storage = [0; 3];
+        let mut output = SliceWriter::new(&mut storage);
+        assert_eq!(
+            updates.change(id(format, 1), false, &mut output),
+            Err(Error::BufferTooSmall)
+        );
+        assert_eq!(
+            updates.change(id(format, 1), false, &mut output),
+            Err(Error::BufferTooSmall)
+        );
+        assert_eq!(updates.finish(&mut output), Err(Error::BufferTooSmall));
+    }
+}

@@ -1,7 +1,7 @@
 //! Smart HTTP protocol over an external immutable object/ref catalog. Parsing
 //! never grants access: the host authorizes wants, checks common commit IDs,
 //! selects a closure and supplies authenticated pack representations separately.
-pub use crate::upload::Acknowledgments;
+pub use crate::upload::{Acknowledgments, ShallowUpdates};
 use crate::{route::Version, upload::UploadRequest, v2};
 use git_zero_core::{
     Error, FetchOptions, ObjectFormat, ObjectId, Result,
@@ -103,6 +103,12 @@ impl<'a> Request<'a> {
             return Err(Error::InvalidRequest);
         };
         Ok(Acknowledgments::new(request))
+    }
+    pub fn shallow_updates(&self) -> Result<ShallowUpdates> {
+        let Parsed::Fetch(request) = &self.parsed else {
+            return Err(Error::InvalidRequest);
+        };
+        Ok(ShallowUpdates::new(request, self.format))
     }
     pub fn reference(
         &self,

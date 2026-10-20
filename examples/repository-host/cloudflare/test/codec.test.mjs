@@ -10,6 +10,31 @@ const empty = new Uint8Array();
 const objectId = (format, kind, body) => createHash(format === 0 ? "sha1" : "sha256").update(`${kind} ${body.length}\0`).update(body).digest();
 const packet = (bytes) => { bytes = Buffer.from(bytes); return Buffer.concat([Buffer.from((bytes.length + 4).toString(16).padStart(4, "0")), bytes]); };
 
+test("paged shallow changes retain frozen controls and exact protocol framing", () => {
+  for (const format of [0, 1]) for (const version of [0, 1, 2]) for (const done of [false, true]) {
+    const codec = new Codec(module, format);
+    const wanted = Buffer.alloc(format ? 32 : 20, 1), previous = Buffer.alloc(wanted.length, 2);
+    const capability = `object-format=${format ? "sha256" : "sha1"}`;
+    const lines = version === 2 ? [packet("command=fetch\n"), packet(capability), Buffer.from("0001")] : [];
+    lines.push(packet(`want ${hex(wanted)}${version === 2 ? "" : ` shallow ${capability}`}\n`), packet(`shallow ${hex(previous)}\n`), packet("deepen 2\n"));
+    if (version !== 2) lines.push(Buffer.from("0000"));
+    if (done) lines.push(packet("done\n"));
+    if (version === 2) lines.push(Buffer.from("0000"));
+    const controls = Buffer.concat(lines);
+    codec.uploadInit(version);
+    for (let at = 0; at < controls.length; at += 7) codec.uploadAppend(controls.subarray(at, at + 7));
+    codec.uploadParse(); codec.uploadShallowInit();
+    const output = [], enabled = version !== 2 || done;
+    if (enabled) output.push(codec.uploadShallowChange(wanted), codec.uploadShallowChange(previous, true));
+    output.push(codec.uploadShallowFinish());
+    const expected = enabled ? Buffer.concat([...(version === 2 ? [packet("shallow-info\n")] : []), packet(`shallow ${hex(wanted)}\n`), packet(`unshallow ${hex(previous)}\n`), Buffer.from(version === 2 ? "0001" : "0000")]) : Buffer.alloc(0);
+    assert.deepEqual(Buffer.concat(output), expected);
+    assert.equal(codec.uploadNext().tag, 71); assert.equal(codec.uploadNext().tag, 73); assert.equal(codec.uploadNext().tag, 74);
+    assert.throws(() => codec.uploadShallowFinish(), CodecError);
+    assert.throws(() => codec.uploadNext(), CodecError);
+  }
+});
+
 function fixture(format) {
   const bodies = [Buffer.from("hello"), Buffer.from("hello!"), Buffer.from("hello!?")];
   const ids = bodies.map((body) => objectId(format, "blob", body));

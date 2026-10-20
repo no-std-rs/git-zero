@@ -221,27 +221,17 @@ impl<'a> UploadRequest<'a> {
     #[cfg(feature = "read")]
     pub fn shallow_info(
         &self,
+        format: ObjectFormat,
         objects: &[Option<git_zero_core::ValidationMetadata>],
         output: &mut impl Write,
     ) -> Result<()> {
-        if self.extensions.options.depth.is_none() || (self.v2 && !self.done) {
-            return Ok(());
+        let mut updates = ShallowUpdates::new(self, format);
+        if updates.enabled {
+            for (marker, id) in objects.iter().flatten().filter_map(shallow_change) {
+                updates.change(id, marker == b"unshallow ", output)?;
+            }
         }
-        let mut changes = objects
-            .iter()
-            .flatten()
-            .filter_map(shallow_change)
-            .peekable();
-        if self.v2 && changes.peek().is_none() {
-            return Ok(());
-        }
-        if self.v2 {
-            pktline::write(output, b"shallow-info\n")?;
-        }
-        for (marker, id) in changes {
-            pktline::write_parts(output, &[marker, &id.to_hex(), b"\n"])?;
-        }
-        output.write_all(if self.v2 { b"0001" } else { b"0000" })
+        updates.finish(output)
     }
 
     #[cfg(feature = "read")]
@@ -429,6 +419,78 @@ pub fn write_upload_error(error: Error, output: &mut impl Write) -> Result<()> {
         _ => b"invalid upload request",
     };
     pktline::write_parts(output, &[b"ERR ", message, b"\n"])
+}
+
+/// Stream host-computed shallow changes before acknowledgments/pack framing.
+/// The host must validate commit IDs and may only unshallow a client boundary.
+/// A v0/v1 depth probe ends with a flush even without changes; v2 emits a
+/// section only for changes in a final response. Errors are terminal.
+#[cfg(feature = "read")]
+pub struct ShallowUpdates {
+    format: ObjectFormat,
+    v2: bool,
+    enabled: bool,
+    started: bool,
+    finished: bool,
+    failure: Option<Error>,
+}
+#[cfg(feature = "read")]
+impl ShallowUpdates {
+    pub(crate) fn new(request: &UploadRequest<'_>, format: ObjectFormat) -> Self {
+        Self {
+            format,
+            v2: request.v2,
+            enabled: request.extensions.options.depth.is_some() && (!request.v2 || request.done),
+            started: false,
+            finished: false,
+            failure: None,
+        }
+    }
+    pub fn change(&mut self, id: ObjectId, unshallow: bool, output: &mut impl Write) -> Result<()> {
+        let result = (|| {
+            self.ready()?;
+            if self.finished || !self.enabled {
+                return Err(Error::InvalidRequest);
+            }
+            if id.is_zero() || id.format() != self.format {
+                return Err(Error::InvalidObjectId);
+            }
+            if !self.started && self.v2 {
+                pktline::write(output, b"shallow-info\n")?;
+            }
+            self.started = true;
+            let marker: &[u8] = if unshallow {
+                b"unshallow "
+            } else {
+                b"shallow "
+            };
+            pktline::write_parts(output, &[marker, id.to_hex().as_bytes(), b"\n"])
+        })();
+        self.record(result)
+    }
+    pub fn finish(&mut self, output: &mut impl Write) -> Result<()> {
+        let result = (|| {
+            self.ready()?;
+            if self.finished {
+                return Err(Error::InvalidRequest);
+            }
+            self.finished = true;
+            if self.enabled && (!self.v2 || self.started) {
+                output.write_all(if self.v2 { b"0001" } else { b"0000" })?;
+            }
+            Ok(())
+        })();
+        self.record(result)
+    }
+    fn ready(&self) -> Result<()> {
+        self.failure.map_or(Ok(()), Err)
+    }
+    fn record(&mut self, result: Result<()>) -> Result<()> {
+        if let Err(error) = result {
+            self.failure.get_or_insert(error);
+        }
+        result
+    }
 }
 
 /// Feed only host-verified common commit IDs. Sinks may change between calls.
