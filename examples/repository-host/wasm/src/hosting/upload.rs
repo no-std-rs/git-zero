@@ -257,6 +257,16 @@ pub extern "C" fn host_upload_flush() -> i32 {
     emit(|output| output.write_all(b"0000"))
 }
 
+/// Frame bytes from one already authenticated complete pack, including its
+/// original header/trailer, without hashing or reconstructing it again.
+#[unsafe(no_mangle)]
+pub extern "C" fn host_upload_pack_chunk(length: usize, band: u32) -> i32 {
+    emit(|output| {
+        let band = u8::try_from(band).map_err(|_| Error::InvalidRequest)?;
+        stored::pack_chunk(band, input(length)?, output)
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_ack_start() -> i32 {
     emit(|output| {

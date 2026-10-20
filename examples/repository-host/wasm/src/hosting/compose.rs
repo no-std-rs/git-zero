@@ -183,6 +183,37 @@ pub extern "C" fn host_pack_entry_finish() -> i32 {
         Ok(())
     })
 }
+
+/// Return the exact entry-region range of an authenticated source pack. The
+/// host has already checked source uniqueness and complete base coverage.
+#[unsafe(no_mangle)]
+pub extern "C" fn host_pack_segment_start(objects: u32, source_bytes: u64) -> i32 {
+    let result = (|| {
+        let session = session()?;
+        if session.plain.is_some() {
+            return Err(Error::InvalidRequest);
+        }
+        let length = source_bytes
+            .checked_sub(12 + session.format.id_length() as u64)
+            .ok_or(Error::CorruptPack)?;
+        session.pack.start_segment(objects, length)?;
+        let mut frame = Frame::new(output());
+        frame.wide(16, 12);
+        frame.wide(24, length);
+        Ok(frame.finish(75, 0, 0))
+    })();
+    match result {
+        Ok(length) => length,
+        Err(error) => {
+            host_pack_cancel();
+            code(error)
+        }
+    }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn host_pack_segment_finish() -> i32 {
+    emit(|_| session()?.pack.finish_segment())
+}
 #[unsafe(no_mangle)]
 pub extern "C" fn host_pack_finish() -> i32 {
     emit(|output| {

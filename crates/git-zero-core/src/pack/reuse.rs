@@ -32,6 +32,10 @@ struct Active {
     remaining: u64,
     crc: Crc32,
 }
+struct Segment {
+    objects: u32,
+    remaining: u64,
+}
 
 /// Assemble a version-2 pack without inflating/recompressing stored entries.
 /// All state is inline; each sink is supplied per call so a host can await
@@ -50,6 +54,7 @@ pub struct PackComposer {
     position: u64,
     hash: Hash,
     active: Option<Active>,
+    segment: Option<Segment>,
     checksum: Option<ObjectId>,
     failure: Option<Error>,
 }
@@ -77,6 +82,7 @@ impl PackComposer {
             position: 12,
             hash,
             active: None,
+            segment: None,
             checksum: None,
             failure: None,
         })
@@ -95,7 +101,35 @@ impl PackComposer {
     }
 
     pub fn write_compressed(&mut self, bytes: &[u8], output: &mut impl Write) -> Result<()> {
-        let result = self.copy(bytes, output);
+        let result = if self.segment.is_some() {
+            self.copy_segment(bytes, output)
+        } else {
+            self.copy(bytes, output)
+        };
+        self.record(result)
+    }
+
+    /// Copy one complete authenticated source pack's entry region, excluding
+    /// its 12-byte header and object-format trailer. Source entries stay
+    /// contiguous: every OFS distance is invariant under the segment's shift.
+    /// The host MUST prove unique IDs across all segments and include every
+    /// REF base (or explicitly permit a thin output). This never parses bytes.
+    pub fn start_segment(&mut self, objects: u32, bytes: u64) -> Result<()> {
+        let result = self.begin_segment(objects, bytes);
+        self.record(result)
+    }
+
+    pub fn finish_segment(&mut self) -> Result<()> {
+        let result = (|| {
+            self.ready()?;
+            let segment = self.segment.as_ref().ok_or(Error::InvalidRequest)?;
+            if segment.remaining != 0 {
+                return Err(Error::InvalidObject);
+            }
+            self.remaining -= segment.objects;
+            self.segment = None;
+            Ok(())
+        })();
         self.record(result)
     }
 
@@ -127,7 +161,11 @@ impl PackComposer {
 
     fn begin(&mut self, entry: CompressedEntry, output: &mut impl Write) -> Result<()> {
         self.ready()?;
-        if self.active.is_some() || self.remaining == 0 || self.checksum.is_some() {
+        if self.active.is_some()
+            || self.segment.is_some()
+            || self.remaining == 0
+            || self.checksum.is_some()
+        {
             return Err(Error::InvalidRequest);
         }
         if entry.id.format() != self.format {
@@ -204,12 +242,50 @@ impl PackComposer {
         Ok(entry)
     }
 
+    fn begin_segment(&mut self, objects: u32, bytes: u64) -> Result<()> {
+        self.ready()?;
+        if self.active.is_some()
+            || self.segment.is_some()
+            || self.checksum.is_some()
+            || objects > self.remaining
+            || (objects == 0) != (bytes == 0)
+        {
+            return Err(Error::InvalidRequest);
+        }
+        let end = self
+            .position
+            .checked_add(bytes)
+            .and_then(|end| end.checked_add(self.format.id_length() as u64))
+            .ok_or(Error::LimitExceeded)?;
+        if end > self.limit {
+            return Err(Error::LimitExceeded);
+        }
+        self.segment = Some(Segment {
+            objects,
+            remaining: bytes,
+        });
+        Ok(())
+    }
+
+    fn copy_segment(&mut self, bytes: &[u8], output: &mut impl Write) -> Result<()> {
+        self.ready()?;
+        let segment = self.segment.as_mut().ok_or(Error::InvalidRequest)?;
+        if bytes.len() as u64 > segment.remaining {
+            return Err(Error::InvalidObject);
+        }
+        output.write_all(bytes)?;
+        self.hash.update(bytes);
+        self.position += bytes.len() as u64;
+        segment.remaining -= bytes.len() as u64;
+        Ok(())
+    }
+
     fn close(&mut self, output: &mut impl Write) -> Result<ObjectId> {
         self.ready()?;
         if let Some(id) = self.checksum {
             return Ok(id);
         }
-        if self.remaining != 0 || self.active.is_some() {
+        if self.remaining != 0 || self.active.is_some() || self.segment.is_some() {
             return Err(Error::InvalidObject);
         }
         let id = self.hash.clone().finish();

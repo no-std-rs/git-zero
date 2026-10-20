@@ -117,11 +117,23 @@ stored-block zlib representation instead. This keeps a full pack independent of
 the client's existing bases. Real Git clones, fetches, checkouts and strict fsck
 pass through Wrangler for both formats and all three protocol versions.
 
+For a cold full fetch, publication records which packs contain only new,
+distinct object IDs. If these disjoint packs cover the complete published
+catalog, fetch copies their complete entry regions instead of selecting every
+object. Rust writes the combined count and checksum; shifting an entire region
+preserves its internal OFS distances, and catalog coverage proves that every
+REF base is included. A single covering pack streams unchanged. This path is
+available only without known haves or shallow/filter extensions. It can include
+extra published objects from the same repository: `HOST_TOKEN` grants access to
+that entire repository. Otherwise fetch uses the per-object selection above.
+
 The new storage path does not yet enable shallow/filtered fetch. It has not
-passed a full Linux push through Wrangler or a live deployment. Linux-scale metadata storage,
+passed a full Linux push through Wrangler. Linux-scale metadata storage,
 ingress beyond Cloudflare request limits and measured hosting cost remain open;
 component pack-decoder measurements are not end-to-end hosting results. The
 default older example config is still a separate reference implementation.
+Verification in this work is local only; no live Cloudflare deployment is
+requested or treated as a completion gate.
 
 The same modules also run directly under the pinned workerd binary using
 `examples/repository-host/cloudflare/workerd.capnp`. This deployment candidate

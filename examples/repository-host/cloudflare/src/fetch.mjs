@@ -1,4 +1,4 @@
-import { hex } from "./codec.mjs";
+import { hex, integer } from "./codec.mjs";
 import { bytes, PAGE_BYTES } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
 
@@ -86,7 +86,16 @@ export class FetchJob {
         if (this.store.published(id)?.kind === 1) this.store.exec("INSERT OR IGNORE INTO fetch_haves(oid) VALUES(?)", id);
       } else throw new Error("shallow fetch is not yet enabled");
     }
-    if (this.done) this.select();
+    if (this.done && !this.reusable()) this.select();
+  }
+  reusable() {
+    if (this.store.exec("SELECT 1 FROM fetch_haves LIMIT 1").length) return false;
+    const sources = this.store.exec("SELECT COUNT(*) AS count,COALESCE(SUM(expected),0) AS objects,COALESCE(SUM(bytes),0) AS bytes FROM stages WHERE phase='published' AND reusable=1 AND expected>0")[0];
+    const repository = this.store.exec("SELECT object_count FROM repository WHERE id=1")[0];
+    if (!sources.count || sources.objects !== repository.object_count) return false;
+    const length = sources.bytes - (sources.count - 1) * (12 + this.codec.idBytes);
+    if (!Number.isSafeInteger(length) || length > this.codec.limits.maxPackBytes || sources.objects > this.codec.limits.maxObjects) throw new Error("full pack exceeds resource limits");
+    this.rawSources = sources; return true;
   }
   walk(table, excludeCommon = false, snapshots = false) {
     for (;;) {
@@ -118,6 +127,7 @@ export class FetchJob {
     }
   }
   async *pack() {
+    if (this.rawSources) { yield* this.reusedPack(); return; }
     const count = this.store.exec("SELECT COUNT(*) AS count FROM fetch_selected")[0].count;
     yield this.codec.packStart(count, this.band);
     let afterStage = "", afterNode = -1;
@@ -151,6 +161,40 @@ export class FetchJob {
       }
     }
     yield this.codec.packFinish();
+  }
+  async *sourceRange(stage, start, length, passthrough) {
+    const end = start + length;
+    for (let offset = start; offset < end;) {
+      const chunk = await this.source.chunkAt({ stage }, offset);
+      const count = Math.min(PAGE_BYTES, chunk.length, end - offset);
+      if (!count) throw new Error("stored pack range made no progress");
+      const bytes = chunk.subarray(0, count);
+      yield passthrough ? this.codec.packChunk(bytes, this.band) : this.codec.packFeed(bytes);
+      offset += count;
+    }
+  }
+  async *reusedPack() {
+    // Each eligible segment contains only IDs new at its publication. Their
+    // disjoint union's size equals the complete catalog, proving base coverage.
+    // The authenticated owner can receive extra same-repository objects.
+    const single = this.rawSources.count === 1;
+    if (!single) yield this.codec.packStart(this.rawSources.objects, this.band);
+    let after = "";
+    for (;;) {
+      const rows = this.store.exec("SELECT id,expected,bytes FROM stages WHERE id>? AND phase='published' AND reusable=1 AND expected>0 ORDER BY id LIMIT 128", after);
+      if (!rows.length) break;
+      for (const row of rows) {
+        after = row.id;
+        if (single) yield* this.sourceRange(row.id, 0, row.bytes, true);
+        else {
+          const range = this.codec.packSegmentStart(row.expected, row.bytes);
+          yield* this.sourceRange(row.id, integer(range.a), integer(range.b), false);
+          yield this.codec.packSegmentFinish();
+        }
+      }
+    }
+    if (!single) yield this.codec.packFinish();
+    else if (this.band) yield this.codec.uploadFlush();
   }
   async *response() {
     try {

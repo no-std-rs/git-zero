@@ -33,7 +33,7 @@ export class ByteCache {
 const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS host_identity (id INTEGER PRIMARY KEY, namespace TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS repository (id INTEGER PRIMARY KEY, format INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0, object_count INTEGER NOT NULL DEFAULT 0, head BLOB NOT NULL)",
-  "CREATE TABLE IF NOT EXISTS stages (id TEXT PRIMARY KEY, format INTEGER NOT NULL, phase TEXT NOT NULL, retained INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, pack TEXT, bytes INTEGER NOT NULL DEFAULT 0, selected INTEGER NOT NULL DEFAULT 0, expected INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS stages (id TEXT PRIMARY KEY, format INTEGER NOT NULL, phase TEXT NOT NULL, retained INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, pack TEXT, bytes INTEGER NOT NULL DEFAULT 0, selected INTEGER NOT NULL DEFAULT 0, expected INTEGER NOT NULL DEFAULT 0, reusable INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_commands (stage TEXT NOT NULL, seq INTEGER NOT NULL, name BLOB NOT NULL, old_oid TEXT NOT NULL, new_oid TEXT NOT NULL, branch INTEGER NOT NULL, creation INTEGER NOT NULL, deletion INTEGER NOT NULL, PRIMARY KEY(stage,seq), UNIQUE(stage,name)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_options (stage TEXT NOT NULL, seq INTEGER NOT NULL, value BLOB NOT NULL, PRIMARY KEY(stage,seq)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_shallow (stage TEXT NOT NULL, oid TEXT NOT NULL, PRIMARY KEY(stage,oid)) WITHOUT ROWID",
@@ -70,6 +70,7 @@ export class Store {
     this.usage = { sqlCalls: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2Puts: 0, r2Deletes: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
     this.sqlKnown = true;
     for (const statement of SCHEMA) this.exec(statement);
+    if (!this.exec("PRAGMA table_info(stages)").some((column) => column.name === "reusable")) this.exec("ALTER TABLE stages ADD COLUMN reusable INTEGER NOT NULL DEFAULT 0");
     this.exec("INSERT OR IGNORE INTO host_identity(id,namespace) VALUES(1,?)", namespace);
     if (this.exec("SELECT namespace FROM host_identity WHERE id=1")[0].namespace !== namespace) throw new Error("stored repository identity differs");
   }

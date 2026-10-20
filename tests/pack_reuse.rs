@@ -243,6 +243,187 @@ fn invalid_metadata_and_partial_entries_fail_terminally() {
 struct Failing {
     remaining: usize,
 }
+
+#[test]
+fn whole_segments_preserve_shifted_ofs_and_forward_ref_bases_without_allocations() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let base = Object {
+            kind: ObjectKind::Blob,
+            data: b"hello",
+        };
+        let mut ofs_storage = [0; 128];
+        let mut ofs = SliceWriter::new(&mut ofs_storage);
+        ofs.write_all(&[0x35]).unwrap();
+        git_zero::zlib::write_parts(&mut ofs, &[base.data]).unwrap();
+        let distance = ofs.len() as u8;
+        ofs.write_all(&[0x66, distance]).unwrap();
+        git_zero::zlib::write_parts(&mut ofs, &[&[5, 6, 0x90, 5, 1, b'!']]).unwrap();
+        let ofs = ofs.finish();
+        let mut ref_storage = [0; 128];
+        let mut reference = SliceWriter::new(&mut ref_storage);
+        reference.write_all(&[0x76]).unwrap();
+        reference
+            .write_all(base.id_with_format(format).as_bytes())
+            .unwrap();
+        git_zero::zlib::write_parts(&mut reference, &[&[5, 6, 0x90, 5, 1, b'?']]).unwrap();
+        let reference = reference.finish();
+        for chunk in [1, 7, 128] {
+            let mut storage = [0; 512];
+            let length = allocations::without_allocations(|| {
+                let mut output = SliceWriter::new(&mut storage);
+                let mut composer = PackComposer::new(format, 4, 512, &mut output).unwrap();
+                composer.start_entry(entry(format), &mut output).unwrap();
+                composer.write_compressed(ZLIB, &mut output).unwrap();
+                composer.finish_entry().unwrap();
+                for (count, region) in [(1, reference), (2, ofs)] {
+                    composer.start_segment(count, region.len() as u64).unwrap();
+                    for bytes in region.chunks(chunk) {
+                        composer.write_compressed(bytes, &mut output).unwrap();
+                    }
+                    composer.finish_segment().unwrap();
+                }
+                composer.finish(&mut output).unwrap();
+                let mut reader = pack::Reader::new_with_format(output.as_bytes(), format).unwrap();
+                let mut window = [0; git_zero::zlib::WINDOW_SIZE];
+                let (mut empty, mut forward, mut body, mut instructions, mut target) =
+                    ([0; 64], [0; 64], [0; 64], [0; 64], [0; 64]);
+                let limits = git_zero::zlib::InflateLimits {
+                    max_output: 64,
+                    max_ratio: 64,
+                    ratio_slack: 64,
+                };
+                reader
+                    .read_entry(&mut empty, &mut window, limits)
+                    .unwrap()
+                    .unwrap();
+                let forward = reader
+                    .read_entry(&mut forward, &mut window, limits)
+                    .unwrap()
+                    .unwrap();
+                let base = reader
+                    .read_entry(&mut body, &mut window, limits)
+                    .unwrap()
+                    .unwrap();
+                let offset = base.offset();
+                let base = base.object().unwrap();
+                let delta = reader
+                    .read_entry(&mut instructions, &mut window, limits)
+                    .unwrap()
+                    .unwrap();
+                assert!(offset > 12);
+                assert_eq!(
+                    delta.kind(),
+                    pack::EntryKind::OffsetDelta {
+                        base_offset: offset
+                    }
+                );
+                let limits = pack::DeltaLimits {
+                    max_output: 64,
+                    max_instructions: 64,
+                    max_depth: 1,
+                };
+                assert_eq!(
+                    delta
+                        .resolve_delta(&base, &mut target, limits)
+                        .unwrap()
+                        .object()
+                        .data,
+                    b"hello!"
+                );
+                assert_eq!(
+                    forward
+                        .resolve_delta(&base, &mut target, limits)
+                        .unwrap()
+                        .object()
+                        .data,
+                    b"hello?"
+                );
+                reader.finish().unwrap();
+                output.len()
+            });
+            // An independent Git parser must accept the assembled checksum,
+            // shifted offsets and forward base ordering, in both hash formats.
+            let directory = std::env::temp_dir().join(format!(
+                "git-zero-segments-{}-{format:?}-{chunk}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&directory).unwrap();
+            let init = std::process::Command::new("git")
+                .args([
+                    "init",
+                    "--bare",
+                    &format!(
+                        "--object-format={}",
+                        if format == ObjectFormat::Sha1 {
+                            "sha1"
+                        } else {
+                            "sha256"
+                        }
+                    ),
+                ])
+                .arg(&directory)
+                .output()
+                .unwrap();
+            assert!(init.status.success(), "{init:?}");
+            let path = directory.join("segments.pack");
+            std::fs::write(&path, &storage[..length]).unwrap();
+            let indexed = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&directory)
+                .args(["index-pack", "--strict"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(indexed.status.success(), "{indexed:?}");
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+}
+
+#[test]
+fn segment_counts_lengths_budgets_and_sink_failures_are_terminal() {
+    for (count, bytes, limit, expected) in [
+        (2, 12, 128, Error::InvalidRequest),
+        (0, 12, 128, Error::InvalidRequest),
+        (1, 0, 128, Error::InvalidRequest),
+        (1, u64::MAX, u64::MAX, Error::LimitExceeded),
+        (1, 12, 43, Error::LimitExceeded),
+    ] {
+        let mut storage = [0; 128];
+        let mut output = SliceWriter::new(&mut storage);
+        let mut composer = PackComposer::new(ObjectFormat::Sha1, 1, limit, &mut output).unwrap();
+        assert_eq!(composer.start_segment(count, bytes), Err(expected));
+        assert_eq!(composer.finish(&mut output), Err(expected));
+        assert_eq!(output.len(), 12);
+    }
+    for mode in 0..5 {
+        let mut output = Failing {
+            remaining: if mode == 4 { 12 } else { 128 },
+        };
+        let mut composer = PackComposer::new(ObjectFormat::Sha1, 1, 128, &mut output).unwrap();
+        composer.start_segment(1, 12).unwrap();
+        let (result, expected) = match mode {
+            0 => (composer.finish_segment(), Error::InvalidObject),
+            1 => (
+                composer.write_compressed(&[0; 13], &mut output),
+                Error::InvalidObject,
+            ),
+            2 => (
+                composer.start_entry(entry(ObjectFormat::Sha1), &mut output),
+                Error::InvalidRequest,
+            ),
+            3 => (composer.start_segment(0, 0), Error::InvalidRequest),
+            _ => (
+                composer.write_compressed(&[0; 12], &mut output),
+                Error::Backend,
+            ),
+        };
+        assert_eq!(result, Err(expected));
+        assert_eq!(composer.finish_segment(), Err(expected));
+        assert_eq!(composer.finish(&mut output), Err(expected));
+        assert_eq!(composer.checksum(), None);
+    }
+}
 impl Write for Failing {
     fn write_all(&mut self, bytes: &[u8]) -> git_zero::Result<()> {
         if bytes.len() > self.remaining {

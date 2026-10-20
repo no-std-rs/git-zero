@@ -142,7 +142,13 @@ export class Codec {
   uploadAckFinish() { return this.event("host_upload_ack_finish", null).data; }
   uploadCancel() { this.invoke("host_upload_cancel"); }
 
-  packStart(count, band) { return this.event("host_pack_start", null, this.format, count, BigInt(this.limits.maxPackBytes), band).data; }
+  packStart(count, band) {
+    if (!Number.isInteger(count) || count < 0 || count > 0xffffffff) throw new RangeError("pack object count exceeds the wire field");
+    return this.event("host_pack_start", null, this.format, count, BigInt(this.limits.maxPackBytes), band).data;
+  }
+  packChunk(bytes, band) { return this.event("host_upload_pack_chunk", bytes, band).data; }
+  packSegmentStart(objects, bytes) { return this.event("host_pack_segment_start", null, objects, BigInt(bytes)); }
+  packSegmentFinish() { return this.event("host_pack_segment_finish", null).data; }
   packEntry(entry) {
     const f = fields(88); f.word(0, entry.kind); f.word(4, Number(entry.fallback ?? false));
     this.id(f, 8, entry.id); if (entry.base) this.id(f, 40, entry.base);

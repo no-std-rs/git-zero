@@ -47,7 +47,9 @@ export function publish(store, stage) {
         const branch = accepted.find((command) => command.branch && !command.deletion);
         if (branch) head = branch.name;
       }
-      store.exec("UPDATE stages SET phase='published' WHERE id=?", stage);
+      // Equality proves every physical entry has a new, distinct canonical ID.
+      // These segments can later form a complete pack without per-object I/O.
+      store.exec("UPDATE stages SET phase='published',reusable=? WHERE id=?", Number(added === pack.expected), stage);
       store.exec("UPDATE repository SET generation=generation+1,object_count=object_count+?,head=? WHERE id=1", added, head);
     }
     return outcomes.map(({ name, error }) => ({ name: bytes(name), error }));
