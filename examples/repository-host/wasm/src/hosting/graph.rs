@@ -35,7 +35,7 @@ pub extern "C" fn host_graph_init(length: usize) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_graph_feed(length: usize, end_of_input: u32) -> i32 {
     let result = feed(length, end_of_input);
-    finish(result, host_graph_cancel)
+    finish(result, || host_graph_cancel())
 }
 
 fn initialize(length: usize) -> git_zero::Result<i32> {

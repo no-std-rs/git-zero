@@ -34,7 +34,7 @@ pub extern "C" fn host_source_init(length: usize) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_source_step(length: usize, end_of_input: u32, capacity: usize) -> i32 {
     let result = step(length, end_of_input, capacity);
-    finish(result, host_source_cancel)
+    finish(result, || host_source_cancel())
 }
 
 /// Parse the bounded size-header prefix of a staged delta. Tag 50 carries

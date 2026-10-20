@@ -1,5 +1,5 @@
 //! Bounded smart HTTP receive advertisement and authoritative status encoding.
-use super::{FRAME_BYTES, Frame, Shared, capabilities, code, format, id_at, input, output, u32_at};
+use super::{Shared, capabilities, format, id_at, input, u32_at};
 use core::cell::UnsafeCell;
 use git_zero::{
     Error, ObjectFormat, Result,
@@ -13,22 +13,7 @@ static ADVERT: Shared<Option<(ObjectFormat, Advertisement<'static>)>> =
 static STATUS: Shared<Option<Status>> = Shared(UnsafeCell::new(None));
 
 fn emit(operation: impl FnOnce(&mut SliceWriter<'_>) -> Result<()>) -> i32 {
-    let bytes = output();
-    let result = {
-        let mut writer = SliceWriter::new(&mut bytes[FRAME_BYTES..]);
-        operation(&mut writer).map(|()| writer.as_bytes().len())
-    };
-    match result {
-        Ok(length) => Frame::new(bytes).finish(60, 0, length),
-        Err(error) => {
-            // SAFETY: Exclusive call; no scratch borrow survives the closure.
-            unsafe {
-                *ADVERT.0.get() = None;
-                *STATUS.0.get() = None;
-            }
-            code(error)
-        }
-    }
+    super::emit(operation, cancel)
 }
 
 #[unsafe(no_mangle)]
@@ -128,4 +113,12 @@ pub extern "C" fn host_status_finish() -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_progress(length: usize, flags: u32) -> i32 {
     emit(|output| write_progress(output, capabilities(flags)?, input(length)?))
+}
+
+fn cancel() {
+    // SAFETY: Exclusive call; the completed operation retains no scratch borrow.
+    unsafe {
+        *ADVERT.0.get() = None;
+        *STATUS.0.get() = None;
+    }
 }

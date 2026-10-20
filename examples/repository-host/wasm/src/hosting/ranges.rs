@@ -70,7 +70,7 @@ fn object(bytes: &[u8], format: ObjectFormat) -> Result<RangeObject> {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_range_describe(length: usize) -> i32 {
     let result = describe(length);
-    finish(result, host_range_cancel)
+    finish(result, || host_range_cancel())
 }
 
 fn render(mut frame: Frame<'_>, request: RangeRequest, consumed: usize, written: usize) -> i32 {
@@ -100,13 +100,13 @@ fn render(mut frame: Frame<'_>, request: RangeRequest, consumed: usize, written:
 #[unsafe(no_mangle)]
 pub extern "C" fn host_range_request() -> i32 {
     let result = request();
-    finish(result, host_range_cancel)
+    finish(result, || host_range_cancel())
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_range_feed(length: usize, capacity: usize) -> i32 {
     let result = feed(length, capacity);
-    finish(result, host_range_cancel)
+    finish(result, || host_range_cancel())
 }
 
 fn initialize(length: usize) -> Result<i32> {

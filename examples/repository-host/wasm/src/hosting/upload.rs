@@ -1,7 +1,5 @@
 //! Frozen bounded upload controls and paged external-catalog wire encoding.
-use super::{
-    FRAME_BYTES, Frame, Shared, code, finish, format, id_at, input, kind, output, u32_at, u64_at,
-};
+use super::{Frame, Shared, finish, format, id_at, input, kind, output, u32_at, u64_at};
 use core::cell::UnsafeCell;
 use git_zero::{
     BlobFilter, Error, HistoryPolicy, ObjectFormat, ObjectInfo, ObjectKind, Result,
@@ -44,21 +42,10 @@ fn session() -> Result<&'static mut Upload> {
     unsafe { (&mut *UPLOAD.0.get()).as_mut() }.ok_or(Error::InvalidRequest)
 }
 fn result(value: Result<usize>) -> i32 {
-    finish(value.map(|value| value as i32), host_upload_cancel)
+    finish(value.map(|value| value as i32), || host_upload_cancel())
 }
 fn emit(operation: impl FnOnce(&mut SliceWriter<'_>) -> Result<()>) -> i32 {
-    let bytes = output();
-    let value = {
-        let mut writer = SliceWriter::new(&mut bytes[FRAME_BYTES..]);
-        operation(&mut writer).map(|()| writer.as_bytes().len())
-    };
-    match value {
-        Ok(length) => Frame::new(bytes).finish(60, 0, length),
-        Err(error) => {
-            host_upload_cancel();
-            code(error)
-        }
-    }
+    super::emit(operation, || host_upload_cancel())
 }
 
 #[unsafe(no_mangle)]

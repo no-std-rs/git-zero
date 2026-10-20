@@ -216,7 +216,7 @@ impl<'a> Frame<'a> {
 }
 
 // Typed operations have returned all arena borrows before failure cleanup.
-pub(super) fn finish(result: Result<i32>, cancel: extern "C" fn()) -> i32 {
+pub(super) fn finish(result: Result<i32>, cancel: impl FnOnce()) -> i32 {
     match result {
         Ok(value) => value,
         Err(error) => {
@@ -224,4 +224,20 @@ pub(super) fn finish(result: Result<i32>, cancel: extern "C" fn()) -> i32 {
             code(error)
         }
     }
+}
+
+// Build the bounded payload before translating the result and releasing state.
+pub(super) fn emit(
+    operation: impl FnOnce(&mut git_zero::io::SliceWriter<'_>) -> Result<()>,
+    cancel: impl FnOnce(),
+) -> i32 {
+    let bytes = output();
+    let result = {
+        let mut writer = git_zero::io::SliceWriter::new(&mut bytes[FRAME_BYTES..]);
+        operation(&mut writer).map(|()| writer.as_bytes().len())
+    };
+    finish(
+        result.map(|length| Frame::new(bytes).finish(60, 0, length)),
+        cancel,
+    )
 }

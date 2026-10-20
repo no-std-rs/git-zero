@@ -1,5 +1,5 @@
 //! Authenticated compressed-entry reuse, with a bounded canonical fallback.
-use super::{FRAME_BYTES, Frame, Shared, code, format, id_at, input, kind, output, u32_at, u64_at};
+use super::{Frame, Shared, finish, format, id_at, input, kind, output, u32_at, u64_at};
 use core::cell::UnsafeCell;
 use git_zero::{
     Error, ObjectFormat, Result,
@@ -39,18 +39,7 @@ fn session() -> Result<&'static mut Compose> {
     unsafe { (&mut *COMPOSE.0.get()).as_mut() }.ok_or(Error::InvalidRequest)
 }
 fn emit(operation: impl FnOnce(&mut SliceWriter<'_>) -> Result<()>) -> i32 {
-    let bytes = output();
-    let value = {
-        let mut writer = SliceWriter::new(&mut bytes[FRAME_BYTES..]);
-        operation(&mut writer).map(|()| writer.as_bytes().len())
-    };
-    match value {
-        Ok(length) => Frame::new(bytes).finish(60, 0, length),
-        Err(error) => {
-            host_pack_cancel();
-            code(error)
-        }
-    }
+    super::emit(operation, || host_pack_cancel())
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn host_pack_cancel() {
@@ -62,31 +51,7 @@ pub extern "C" fn host_pack_cancel() {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_pack_start(object_format: u32, count: u32, limit: u64, band: u32) -> i32 {
     host_pack_cancel();
-    emit(|output| {
-        let format = format(object_format)?;
-        if band > 2 {
-            return Err(Error::InvalidRequest);
-        }
-        let pack = PackComposer::new(
-            format,
-            count,
-            limit,
-            &mut Band {
-                output,
-                band: band as u8,
-            },
-        )?;
-        // SAFETY: Exclusive initialization after dropping the previous state.
-        unsafe {
-            *COMPOSE.0.get() = Some(Compose {
-                format,
-                band: band as u8,
-                pack,
-                plain: None,
-            });
-        }
-        Ok(())
-    })
+    emit(|output| start(output, object_format, count, limit, band))
 }
 
 /// Entry frame: object kind@0, fallback mode@4, padded object/base IDs@8/40,
@@ -94,121 +59,23 @@ pub extern "C" fn host_pack_start(object_format: u32, count: u32, limit: u64, ba
 /// Fallback mode 1 uses canonical kind/size and computes its exact zlib length.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_pack_entry(length: usize) -> i32 {
-    emit(|output| {
-        let session = session()?;
-        if session.plain.is_some() {
-            return Err(Error::InvalidRequest);
-        }
-        let bytes = input(length)?;
-        if bytes.len() != 88 {
-            return Err(Error::InvalidRequest);
-        }
-        let mode = u32_at(bytes, 4)?;
-        if mode > 1 {
-            return Err(Error::InvalidRequest);
-        }
-        let wire_kind = u32_at(bytes, 0)?;
-        let size = u64_at(bytes, 72)?;
-        let kind = if wire_kind == 7 && mode == 0 {
-            CompressedKind::Delta {
-                base_id: id_at(bytes, 40, session.format)?,
-            }
-        } else {
-            CompressedKind::Object(kind(wire_kind)?)
-        };
-        let compressed_size = if mode == 1 {
-            StoredEncoder::encoded_size(size)?
-        } else {
-            u64_at(bytes, 80)?
-        };
-        let entry = CompressedEntry {
-            id: id_at(bytes, 8, session.format)?,
-            kind,
-            inflated_size: size,
-            compressed_size,
-        };
-        let mut output = Band {
-            output,
-            band: session.band,
-        };
-        session.pack.start_entry(entry, &mut output)?;
-        if mode == 1 {
-            session.plain = Some(StoredEncoder::new(
-                size,
-                &mut Compressed {
-                    pack: &mut session.pack,
-                    output: &mut output,
-                },
-            )?);
-        }
-        Ok(())
-    })
+    emit(|output| entry(output, length))
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn host_pack_feed(length: usize) -> i32 {
-    emit(|output| {
-        let session = session()?;
-        let bytes = input(length)?;
-        let mut output = Band {
-            output,
-            band: session.band,
-        };
-        if let Some(plain) = session.plain.as_mut() {
-            plain.write(
-                bytes,
-                &mut Compressed {
-                    pack: &mut session.pack,
-                    output: &mut output,
-                },
-            )
-        } else {
-            session.pack.write_compressed(bytes, &mut output)
-        }
-    })
+    emit(|output| feed(output, length))
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn host_pack_entry_finish() -> i32 {
-    emit(|output| {
-        let session = session()?;
-        if let Some(mut plain) = session.plain.take() {
-            plain.finish(&mut Compressed {
-                pack: &mut session.pack,
-                output: &mut Band {
-                    output,
-                    band: session.band,
-                },
-            })?;
-        }
-        session.pack.finish_entry()?;
-        Ok(())
-    })
+    emit(finish_entry)
 }
 
 /// Return the exact entry-region range of an authenticated source pack. The
 /// host has already checked source uniqueness and complete base coverage.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_pack_segment_start(objects: u32, source_bytes: u64) -> i32 {
-    let result = (|| {
-        let session = session()?;
-        if session.plain.is_some() {
-            return Err(Error::InvalidRequest);
-        }
-        let length = source_bytes
-            .checked_sub(12 + session.format.id_length() as u64)
-            .ok_or(Error::CorruptPack)?;
-        session.pack.start_segment(objects, length)?;
-        let mut frame = Frame::new(output());
-        frame.wide(16, 12);
-        frame.wide(24, length);
-        Ok(frame.finish(75, 0, 0))
-    })();
-    match result {
-        Ok(length) => length,
-        Err(error) => {
-            host_pack_cancel();
-            code(error)
-        }
-    }
+    let result = segment_start(objects, source_bytes);
+    finish(result, || host_pack_cancel())
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn host_pack_segment_finish() -> i32 {
@@ -216,19 +83,153 @@ pub extern "C" fn host_pack_segment_finish() -> i32 {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn host_pack_finish() -> i32 {
-    emit(|output| {
-        // SAFETY: Exclusive call consumes state so no duplicate trailer escapes.
-        let mut session = unsafe { (&mut *COMPOSE.0.get()).take() }.ok_or(Error::InvalidRequest)?;
-        if session.plain.is_some() {
-            return Err(Error::InvalidRequest);
-        }
-        session.pack.finish(&mut Band {
+    emit(finish_pack)
+}
+
+fn start(
+    output: &mut SliceWriter<'_>,
+    object_format: u32,
+    count: u32,
+    limit: u64,
+    band: u32,
+) -> Result<()> {
+    let format = format(object_format)?;
+    if band > 2 {
+        return Err(Error::InvalidRequest);
+    }
+    let pack = PackComposer::new(
+        format,
+        count,
+        limit,
+        &mut Band {
             output,
-            band: session.band,
-        })?;
-        if session.band != 0 {
-            output.write_all(b"0000")?;
+            band: band as u8,
+        },
+    )?;
+    // SAFETY: Exclusive initialization after dropping the previous state.
+    unsafe {
+        *COMPOSE.0.get() = Some(Compose {
+            format,
+            band: band as u8,
+            pack,
+            plain: None,
+        });
+    }
+    Ok(())
+}
+
+fn entry(output: &mut SliceWriter<'_>, length: usize) -> Result<()> {
+    let session = session()?;
+    if session.plain.is_some() {
+        return Err(Error::InvalidRequest);
+    }
+    let bytes = input(length)?;
+    if bytes.len() != 88 {
+        return Err(Error::InvalidRequest);
+    }
+    let mode = u32_at(bytes, 4)?;
+    if mode > 1 {
+        return Err(Error::InvalidRequest);
+    }
+    let wire_kind = u32_at(bytes, 0)?;
+    let size = u64_at(bytes, 72)?;
+    let kind = if wire_kind == 7 && mode == 0 {
+        CompressedKind::Delta {
+            base_id: id_at(bytes, 40, session.format)?,
         }
-        Ok(())
-    })
+    } else {
+        CompressedKind::Object(kind(wire_kind)?)
+    };
+    let compressed_size = if mode == 1 {
+        StoredEncoder::encoded_size(size)?
+    } else {
+        u64_at(bytes, 80)?
+    };
+    let entry = CompressedEntry {
+        id: id_at(bytes, 8, session.format)?,
+        kind,
+        inflated_size: size,
+        compressed_size,
+    };
+    let mut output = Band {
+        output,
+        band: session.band,
+    };
+    session.pack.start_entry(entry, &mut output)?;
+    if mode == 1 {
+        session.plain = Some(StoredEncoder::new(
+            size,
+            &mut Compressed {
+                pack: &mut session.pack,
+                output: &mut output,
+            },
+        )?);
+    }
+    Ok(())
+}
+
+fn feed(output: &mut SliceWriter<'_>, length: usize) -> Result<()> {
+    let session = session()?;
+    let bytes = input(length)?;
+    let mut output = Band {
+        output,
+        band: session.band,
+    };
+    if let Some(plain) = session.plain.as_mut() {
+        plain.write(
+            bytes,
+            &mut Compressed {
+                pack: &mut session.pack,
+                output: &mut output,
+            },
+        )
+    } else {
+        session.pack.write_compressed(bytes, &mut output)
+    }
+}
+
+fn finish_entry(output: &mut SliceWriter<'_>) -> Result<()> {
+    let session = session()?;
+    if let Some(mut plain) = session.plain.take() {
+        plain.finish(&mut Compressed {
+            pack: &mut session.pack,
+            output: &mut Band {
+                output,
+                band: session.band,
+            },
+        })?;
+    }
+    session.pack.finish_entry()?;
+    Ok(())
+}
+
+fn finish_pack(output: &mut SliceWriter<'_>) -> Result<()> {
+    // SAFETY: Exclusive call consumes state so no duplicate trailer escapes.
+    let mut session = unsafe { (&mut *COMPOSE.0.get()).take() }.ok_or(Error::InvalidRequest)?;
+    if session.plain.is_some() {
+        return Err(Error::InvalidRequest);
+    }
+    session.pack.finish(&mut Band {
+        output,
+        band: session.band,
+    })?;
+    if session.band != 0 {
+        output.write_all(b"0000")?;
+    }
+    Ok(())
+}
+
+fn segment_start(objects: u32, source_bytes: u64) -> Result<i32> {
+    let session = session()?;
+    if session.plain.is_some() {
+        return Err(Error::InvalidRequest);
+    }
+    let length = source_bytes
+        .checked_sub(12 + session.format.id_length() as u64)
+        .ok_or(Error::CorruptPack)?;
+    session.pack.start_segment(objects, length)?;
+    let mut frame = Frame::new(output());
+    frame.wide(16, 12);
+    frame.wide(24, length);
+    Ok(frame.finish(75, 0, 0))
 }
