@@ -15,10 +15,10 @@ export async function start(persist, { config = "wrangler.toml", cwd = fileURLTo
   const child = spawn(process.execPath, arguments_, { cwd, env: { ...process.env, X_LOCAL_OBSERVABILITY: String(observability), WRANGLER_SEND_METRICS: "false", WRANGLER_REGISTRY_PATH: resolve(persist, "registry"), NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
   let logs = "", exited = false;
   child.once("exit", () => { exited = true; });
-  const stop = async () => {
+  const stop = async (signal = "SIGTERM") => {
     if (exited) return;
     const exit = once(child, "exit");
-    try { if (process.platform === "win32") child.kill("SIGTERM"); else process.kill(-child.pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+    try { if (process.platform === "win32") child.kill(signal); else process.kill(-child.pid, signal); } catch (error) { if (error.code !== "ESRCH") throw error; }
     let timeout;
     await Promise.race([exit, new Promise((resolve) => { timeout = setTimeout(resolve, 5000); })]);
     clearTimeout(timeout);
@@ -39,7 +39,7 @@ export async function start(persist, { config = "wrangler.toml", cwd = fileURLTo
       child.once("error", (error) => { clearTimeout(timeout); reject(error); });
       child.once("exit", (code) => { clearTimeout(timeout); reject(new Error(`Wrangler exited (${code})\n${logs}`)); });
     });
-    return { origin, stop, logs: () => logs, runtimePid: child.pid };
+    return { origin, stop, crash: () => stop("SIGKILL"), logs: () => logs, runtimePid: child.pid };
   } catch (error) { await stop(); throw error; }
 }
 

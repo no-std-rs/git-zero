@@ -72,10 +72,10 @@ export async function startStandalone(persist, { format = 0, cwd = fileURLToPath
   ], { cwd, env: { ...process.env, HOST_TOKEN: TOKEN, TEST_MODE: "true", REPO_FORMAT: String(format), R2_S3_URL: storage.url, R2_ACCESS_KEY_ID: ACCESS, R2_SECRET_ACCESS_KEY: SECRET }, stdio: ["ignore", "pipe", "pipe"] });
   let logs = "", exited = false;
   child.once("exit", () => { exited = true; });
-  const stop = async () => {
+  const stop = async (signal = "SIGTERM") => {
     try {
       if (!exited) {
-        const done = once(child, "exit"); child.kill("SIGTERM");
+        const done = once(child, "exit"); child.kill(signal);
         const timer = setTimeout(() => child.kill("SIGKILL"), 5000);
         try { await done; } finally { clearTimeout(timer); }
       }
@@ -94,6 +94,6 @@ export async function startStandalone(persist, { format = 0, cwd = fileURLToPath
       child.once("error", (error) => { clearTimeout(timer); reject(error); });
       child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`workerd exited ${code}\n${logs}`)); });
     });
-    return { origin: `http://127.0.0.1:${port}`, stop, logs: () => logs, runtimePid: child.pid, storageFaults: storage.faults };
+    return { origin: `http://127.0.0.1:${port}`, stop, crash: () => stop("SIGKILL"), logs: () => logs, runtimePid: child.pid, storageFaults: storage.faults };
   } catch (error) { await stop(); throw error; }
 }

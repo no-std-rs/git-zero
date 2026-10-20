@@ -4,6 +4,7 @@ import { hex } from "./codec.mjs";
 export const CHUNK_BYTES = 1024 * 1024;
 const MAX_STORED_CHUNK_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 65536;
+export const FETCH_TABLES = ["fetch_wants", "fetch_haves", "fetch_shallow", "fetch_probe", "fetch_common", "fetch_selected"];
 
 async function retryStorage(operation, usage) {
   for (let attempt = 0; ; attempt++) {
@@ -232,6 +233,9 @@ export class Store {
     }
   }
   async recover() {
+    // Fetch frontiers belong to a single request. A crashed stream cannot run
+    // its finally block, and advertisements must not retain that old work.
+    for (const table of FETCH_TABLES) this.exec(`DELETE FROM ${table}`);
     // A new durable instance has no previous in-flight writer. Private decoded
     // stages can be abandoned; verified test fixtures and published packs stay.
     for (;;) {

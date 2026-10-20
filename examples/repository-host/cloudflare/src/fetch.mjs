@@ -1,5 +1,5 @@
 import { hex, integer } from "./codec.mjs";
-import { bytes, PAGE_BYTES } from "./storage.mjs";
+import { bytes, FETCH_TABLES, PAGE_BYTES } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
 
 const encode = (value) => new TextEncoder().encode(value);
@@ -14,7 +14,7 @@ export class FetchJob {
     this.source = new ObjectSource(store, codec, this.temporary, store.namespace);
     this.steps = 0; this.allCommitWants = true;
   }
-  reset() { for (const table of ["fetch_wants", "fetch_haves", "fetch_shallow", "fetch_probe", "fetch_common", "fetch_selected"]) this.store.exec(`DELETE FROM ${table}`); }
+  reset() { for (const table of FETCH_TABLES) this.store.exec(`DELETE FROM ${table}`); }
   tick() { if (++this.steps > this.codec.limits.maxObjects) throw new Error("fetch graph work budget exceeded"); }
   async *references(v2 = false) {
     this.codec.uploadInit(this.version);
