@@ -10,7 +10,7 @@ import { startStandalone } from "../test/standalone.mjs";
 
 const args = process.argv.slice(2);
 const options = Object.fromEntries(args.reduce((pairs, value, index) => { if (index % 2 === 0) pairs.push([value, args[index + 1]]); return pairs; }, []));
-if (args.length % 2 || !options["--source"] || !options["--work-dir"]) throw new Error("usage: node scripts/benchmark.mjs --source REPO --work-dir NEW_DIRECTORY [--revision HEAD] [--runtime wrangler|workerd]");
+if (args.length % 2 || !options["--source"] || !options["--work-dir"]) throw new Error("usage: node scripts/benchmark.mjs --source REPO --work-dir NEW_DIRECTORY [--revision HEAD] [--runtime wrangler|workerd] [--baseline-report MATCHING_SOURCE_REPORT]");
 const root = fileURLToPath(new URL("../", import.meta.url));
 const source = resolve(options["--source"]), work = resolve(options["--work-dir"]);
 const runtime = options["--runtime"] ?? "wrangler";
@@ -30,11 +30,11 @@ const commands = new Set();
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { interrupted = true; for (const child of commands) child.kill(signal); });
 const started = performance.now(), observed = new Map();
 
-async function command(binary, argv, cwd, allowFailure = false) {
+async function command(binary, argv, cwd, allowFailure = false, onStdout = null) {
   const child = spawn(binary, argv, { cwd, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", WRANGLER_SEND_METRICS: "false" }, stdio: ["ignore", "pipe", "pipe"] });
   commands.add(child);
   let stdout = "", stderr = "";
-  child.stdout.on("data", (bytes) => { stdout = (stdout + bytes).slice(-65536); });
+  child.stdout.on("data", (bytes) => { onStdout?.(bytes); stdout = (stdout + bytes).slice(-65536); });
   child.stderr.on("data", (bytes) => { stderr = (stderr + bytes).slice(-65536); recent = stderr.split(/[\r\n]/).filter(Boolean).at(-1) ?? ""; });
   const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
   commands.delete(child);
@@ -42,7 +42,7 @@ async function command(binary, argv, cwd, allowFailure = false) {
   if (code !== 0 && !allowFailure) throw new Error(`${binary} ${argv[0]} failed (${code})\n${stderr}`);
   return { code, stdout: stdout.trim(), stderr: stderr.trim() };
 }
-const git = (directory, argv, allowFailure = false) => command("git", ["-c", "user.name=Git zero benchmark", "-c", "user.email=benchmark@example.test", "-c", "pack.threads=1", "-c", "index.threads=1", "-c", "pack.windowMemory=64m", "-c", "http.extraHeader=Authorization: Bearer " + TOKEN, ...argv], directory, allowFailure);
+const git = (directory, argv, allowFailure = false, onStdout = null) => command("git", ["-c", "user.name=Git zero benchmark", "-c", "user.email=benchmark@example.test", "-c", "pack.threads=1", "-c", "index.threads=1", "-c", "pack.windowMemory=64m", "-c", "http.extraHeader=Authorization: Bearer " + TOKEN, ...argv], directory, allowFailure, onStdout);
 
 async function phaseRun(name, operation) {
   phase = name; recent = ""; const began = performance.now(); progress({ phase, event: "start" });
@@ -83,10 +83,31 @@ try {
   report.resources.sampleIntervalMs = 1000;
   progressTimer = setInterval(() => { progress({ phase, elapsedSeconds: (performance.now() - started) / 1000, recentClientProgress: recent, resources: report.resources }); save().catch(() => {}); }, 20000);
   const baseline = await phaseRun("source-strict-fsck", async () => {
+    if (options["--baseline-report"]) {
+      const previous = JSON.parse(await readFile(options["--baseline-report"], "utf8"));
+      assert.equal(previous.source, source); assert.equal(previous.revision, report.revision); assert.equal(previous.objectFormat, report.objectFormat);
+      const checked = previous.phases.find((item) => item.phase === "source-strict-fsck");
+      assert.equal(checked?.exitCode, 0, "only a successful source integrity check may be reused");
+      return { exitCode: checked.exitCode, diagnostics: checked.diagnostics, reusedFrom: resolve(options["--baseline-report"]), originalSeconds: checked.seconds };
+    }
     const result = await git(source, ["fsck", "--full", "--strict"], true);
     const diagnostics = result.stderr.split("\n").filter((line) => /^(warning|error) in /.test(line)).sort();
     assert.ok(result.code === 0 || (diagnostics.length > 0 && diagnostics.every((line) => line.includes(": badFilemode:"))), `source integrity check failed\n${result.stderr}`);
     return { exitCode: result.code, diagnostics };
+  });
+  await phaseRun("source-visible-diagnostics", async () => {
+    // fsck checks unreachable objects too. An ordinary push sends the selected
+    // commit closure; unrelated legacy tags/dangling objects are not cloned.
+    // Keep only a tiny set of diagnostic IDs while streaming the reference walk.
+    const ids = new Set(baseline.diagnostics.map((line) => / in \w+ ([0-9a-f]+):/.exec(line)[1]));
+    const reachable = new Set(); let pending = "";
+    if (ids.size) await git(source, ["rev-list", "--objects", "--no-object-names", report.revision], false, (bytes) => {
+      const lines = (pending + bytes).split("\n"); pending = lines.pop();
+      for (const id of lines) if (ids.has(id)) reachable.add(id);
+    });
+    baseline.allSourceDiagnostics = baseline.diagnostics;
+    baseline.diagnostics = baseline.diagnostics.filter((line) => reachable.has(/ in \w+ ([0-9a-f]+):/.exec(line)[1]));
+    return { reachableDiagnostics: baseline.diagnostics, unrelatedDiagnostics: baseline.allSourceDiagnostics.length - baseline.diagnostics.length };
   });
   const persist = join(work, "state");
   if (runtime === "wrangler") {

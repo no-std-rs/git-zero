@@ -151,6 +151,11 @@ times, application SQL/R2 counters, database size and local server process-tree
 CPU/RSS samples. These process samples include runtime/development services;
 they are not Cloudflare billing CPU. `--runtime workerd` measures direct workerd
 with the independently signed local S3 byte fixture instead.
+The diagnostic comparison streams the selected source closure, retaining only
+the diagnostic IDs; unreachable source tags/objects do not create false clone
+failures. `--baseline-report REPORT` can reuse a successful native source fsck
+from the same repository, revision and object format. Server push/clone/fetch
+still run against fresh storage, and the source visibility walk runs again.
 
 ## Workspace
 
