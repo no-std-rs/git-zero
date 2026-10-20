@@ -1,5 +1,6 @@
 //! Bounded targets shared by ordinary regression tests and libFuzzer.
 mod client_responses;
+mod delta;
 mod http_routing;
 mod loose_objects;
 mod pack_entries;

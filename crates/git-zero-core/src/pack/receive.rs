@@ -2,7 +2,7 @@
 //! until the pack trailer is verified. The host owns quarantine and publication.
 use super::{EntryHeader, EntryKind, crc::Crc32, decode::parse_entry_header};
 use crate::{
-    Error, ObjectFormat, ObjectId, ObjectInfo, Result,
+    Error, ObjectDigest, ObjectFormat, ObjectId, ObjectInfo, Result,
     object::Hash,
     zlib::{InflateLimits, InflateStatus, Inflater, WINDOW_SIZE},
 };
@@ -74,7 +74,7 @@ pub struct Decoder<'a> {
     remaining: u32,
     hash: Hash,
     crc: Crc32,
-    object_hash: Option<Hash>,
+    object_hash: Option<ObjectDigest>,
     failure: Option<Error>,
 }
 
@@ -241,7 +241,16 @@ impl<'a> Decoder<'a> {
             max_output: entry.size,
             ..self.limits.inflate
         });
-        self.object_hash = entry_hash(entry, self.format)?;
+        self.object_hash = match entry.kind {
+            EntryKind::Object(kind) => Some(ObjectDigest::new(
+                ObjectInfo {
+                    kind,
+                    size: entry.size,
+                },
+                self.format,
+            )),
+            _ => None,
+        };
         self.header_len = 0;
         self.phase = Phase::Body(entry);
         Ok(Some(DecodeStatus::EntryStart(entry)))
@@ -291,7 +300,8 @@ impl<'a> Decoder<'a> {
             return Err(Error::LimitExceeded);
         }
         if let Some(hash) = &mut self.object_hash {
-            hash.update(&output[..progress.written]);
+            hash.update(&output[..progress.written])
+                .map_err(|_| Error::CorruptPack)?;
         }
         let status = match progress.status {
             InflateStatus::NeedInput => DecodeStatus::NeedInput,
@@ -303,7 +313,12 @@ impl<'a> Decoder<'a> {
                 let event = DecodeStatus::EntryEnd {
                     end_offset: self.offset,
                     crc32: self.crc.value(),
-                    object_id: self.object_hash.take().map(Hash::finish),
+                    object_id: self
+                        .object_hash
+                        .take()
+                        .map(|hash| hash.finish())
+                        .transpose()
+                        .map_err(|_| Error::CorruptPack)?,
                 };
                 self.remaining -= 1;
                 self.next();
@@ -316,22 +331,6 @@ impl<'a> Decoder<'a> {
             status,
         })
     }
-}
-
-fn entry_hash(entry: EntryHeader, format: ObjectFormat) -> Result<Option<Hash>> {
-    let EntryKind::Object(kind) = entry.kind else {
-        return Ok(None);
-    };
-    let mut hash = format.hash();
-    let mut header = [0; 32];
-    hash.update(
-        ObjectInfo {
-            kind,
-            size: entry.size,
-        }
-        .header(&mut header)?,
-    );
-    Ok(Some(hash))
 }
 
 fn entry_header(bytes: &[u8], offset: u64, format: ObjectFormat) -> Result<Option<EntryHeader>> {

@@ -1,6 +1,6 @@
 //! Bounded object reads and resumable repository-format hashing. State is inline;
 //! callers own the body buffer and can retain state between individual steps.
-use crate::{Error, ObjectFormat, ObjectId, ObjectInfo, Repository, Result, object::Hash};
+use crate::{Error, ObjectDigest, ObjectFormat, ObjectId, ObjectInfo, Repository, Result};
 
 /// Stack scratch used by convenience pack/HTTP writers for streamed bodies.
 /// The `*_with_scratch` variants let callers choose another budget.
@@ -78,15 +78,13 @@ impl<'repo, R: Repository + ?Sized> ObjectReader<'repo, R> {
 /// gives the exact inline state budget for a target. IDs include kind and size.
 pub struct ObjectHasher<'repo, R: Repository + ?Sized> {
     reader: ObjectReader<'repo, R>,
-    hash: Hash,
+    hash: ObjectDigest,
 }
 
 impl<'repo, R: Repository + ?Sized> ObjectHasher<'repo, R> {
     pub fn new(repository: &'repo R, index: usize) -> Result<Self> {
         let reader = ObjectReader::new(repository, index)?;
-        let mut hash = repository.object_format().hash();
-        let mut header = [0; 32];
-        hash.update(reader.info().header(&mut header)?);
+        let hash = ObjectDigest::new(reader.info(), repository.object_format());
         Ok(Self { reader, hash })
     }
 
@@ -100,9 +98,13 @@ impl<'repo, R: Repository + ?Sized> ObjectHasher<'repo, R> {
     pub fn step(&mut self, scratch: &mut [u8]) -> Result<Option<ObjectId>> {
         if self.reader.remaining() != 0 {
             let length = self.reader.read(scratch)?;
-            self.hash.update(&scratch[..length]);
+            self.hash.update(&scratch[..length])?;
         }
-        Ok((self.reader.remaining() == 0).then(|| self.hash.clone().finish()))
+        if self.reader.remaining() == 0 {
+            Ok(Some(self.hash.finish()?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Hash the remaining body synchronously using only the supplied scratch.

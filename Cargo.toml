@@ -125,6 +125,10 @@ name = "pack_receive"
 required-features = ["read", "write"]
 
 [[test]]
+name = "delta_streaming"
+required-features = ["read"]
+
+[[test]]
 name = "receive"
 required-features = ["read", "server"]
 

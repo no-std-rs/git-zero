@@ -25,6 +25,7 @@ const DELTA: DeltaLimits = DeltaLimits {
 /// Repair pack hashes to reach entry decoding after mutations. Fixed buffers and
 /// budgets bound parser work; guards and cursor rollback catch failure mistakes.
 pub fn entries(data: &[u8]) {
+    super::delta::check(data);
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         entries_with_format(data, format);
     }

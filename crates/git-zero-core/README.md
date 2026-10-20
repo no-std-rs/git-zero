@@ -18,6 +18,14 @@ independent limits. Stage all output privately until the trailer and subsequent
 object/base/connectivity validation pass; this decoder alone is not a push
 validator. No Git executable, filesystem, allocator or runtime API is used.
 
+`pack::DeltaDecoder` parses inflated delta instructions across arbitrary chunks.
+It checks base/result sizes, source/target ranges, instruction count, chain depth
+and exact EOF. Copy events expose ranges for bounded asynchronous base reads;
+insert events borrow input fragments. It owns neither the base nor the output.
+Execute every event before resuming and use `ObjectDigest` to hash output chunks
+with the inherited kind and declared size. A completed delta authenticates its
+syntax; the host still verifies storage I/O, object identity and connectivity.
+
 `read` enables zlib inflation, pack/delta decoding and repository validation.
 `write` enables snapshots, pack/zlib encoding and pack caching. Both are enabled
 by default. Object IDs, borrowed objects, repositories, readers, packet lines and

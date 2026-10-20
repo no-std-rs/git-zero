@@ -134,6 +134,14 @@ malformed sizes/varints/instructions, exact/overrun capacities, output/CPU/depth
 budgets and cursor-preserving retries. Allocation tracking covers pack reading,
 hashing, CRC computation and delta resolution with fixed caller storage.
 
+`delta_streaming` checks fragmented instruction events, partial literals, sparse
+copy operands, default 65536-byte copies, 64-bit sizes, every truncation, exact
+EOF, sticky errors and independent size/instruction/depth budgets. The real Git
+pack-reader fixture also reconstructs every delta through the streamed parser
+at three fragment sizes and compares it with bodies checked by `cat-file`.
+Allocation tracking covers the fixed parser state and chunked `ObjectDigest`;
+its IDs are compared with independent canonical SHA-1/SHA-256 hashes.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are

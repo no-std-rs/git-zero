@@ -36,6 +36,8 @@ dynamic, empty, excessive-expansion and bad-checksum streams. Loose seeds cover
 all relevant envelope paths; pack seeds include plain entries, both delta kinds,
 standalone instructions and reserved types. `pack::validate` retains its original
 framing/SHA-1 behavior; `pack::Reader` also checks entry bodies and exact closure.
+The `entries` target additionally executes fragmented delta events against a
+fixed patterned base and compares acceptance and result bytes with `apply_delta`.
 
 Install the pinned CI tools and run a bounded campaign from the repository root:
 

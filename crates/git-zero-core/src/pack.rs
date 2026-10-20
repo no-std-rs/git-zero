@@ -12,6 +12,11 @@ mod decode;
 pub use decode::{DeltaLimits, Entry, EntryHeader, EntryKind, Reader, ResolvedObject, apply_delta};
 
 #[cfg(feature = "read")]
+mod delta;
+#[cfg(feature = "read")]
+pub use delta::{DeltaDecoder, DeltaProgress, DeltaStatus};
+
+#[cfg(feature = "read")]
 mod receive;
 #[cfg(feature = "read")]
 pub use receive::{DecodeLimits, DecodeProgress, DecodeStatus, Decoder};

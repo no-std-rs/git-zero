@@ -606,11 +606,39 @@ fn resolve_entry<'a>(
             EntryKind::ReferenceDelta { base_id } => object.id() == base_id,
             EntryKind::Object(_) => unreachable!(),
         })?;
-    Some(
-        entry
-            .resolve_delta(base, staging.take().unwrap(), DELTA)
-            .unwrap(),
-    )
+    let object = entry
+        .resolve_delta(base, staging.take().unwrap(), DELTA)
+        .unwrap();
+    verify_fragmented_delta(entry.data(), base, &object);
+    Some(object)
+}
+
+fn verify_fragmented_delta(bytes: &[u8], base: &ResolvedObject<'_>, expected: &ResolvedObject<'_>) {
+    use pack::{DeltaDecoder, DeltaStatus};
+    for chunk in [1, 7, bytes.len()] {
+        let mut decoder =
+            DeltaDecoder::new(base.object().data.len() as u64, base.delta_depth(), DELTA).unwrap();
+        let (mut offset, mut output) = (0, Vec::new());
+        loop {
+            let end = (offset + chunk).min(bytes.len());
+            let progress = decoder
+                .update(&bytes[offset..end], end == bytes.len())
+                .unwrap();
+            offset += progress.consumed;
+            match progress.status {
+                DeltaStatus::Copy { offset, length } => output.extend_from_slice(
+                    &base.object().data[offset as usize..(offset + length) as usize],
+                ),
+                DeltaStatus::Insert(bytes) => output.extend_from_slice(bytes),
+                DeltaStatus::Finished => break,
+                _ => {}
+            }
+        }
+        decoder.finish().unwrap();
+        assert_eq!(offset, bytes.len());
+        assert_eq!(decoder.depth(), expected.delta_depth());
+        assert_eq!(output, expected.object().data);
+    }
 }
 
 fn verify_git_object(

@@ -254,6 +254,49 @@ impl ObjectInfo {
     }
 }
 
+/// Canonical object hashing for chunked or asynchronous storage. Updates are
+/// all-or-nothing; a length mismatch never authenticates a partial object.
+#[derive(Clone)]
+pub struct ObjectDigest {
+    hash: Hash,
+    remaining: u64,
+}
+
+impl ObjectDigest {
+    pub fn new(info: ObjectInfo, format: ObjectFormat) -> Self {
+        let mut hash = format.hash();
+        let mut header = [0; 32];
+        hash.update(
+            info.header(&mut header)
+                .expect("object header fits in 32 bytes"),
+        );
+        Self {
+            hash,
+            remaining: info.size,
+        }
+    }
+
+    pub fn remaining(&self) -> u64 {
+        self.remaining
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) -> Result<()> {
+        if bytes.len() as u64 > self.remaining {
+            return Err(Error::InvalidObject);
+        }
+        self.hash.update(bytes);
+        self.remaining -= bytes.len() as u64;
+        Ok(())
+    }
+
+    pub fn finish(&self) -> Result<ObjectId> {
+        if self.remaining != 0 {
+            return Err(Error::InvalidObject);
+        }
+        Ok(self.hash.clone().finish())
+    }
+}
+
 impl<'a> Object<'a> {
     /// Validate already inflated loose bytes before exposing a borrowed body.
     /// Header syntax, exact body length and the expected ID's hash must all match.
@@ -293,14 +336,10 @@ impl<'a> Object<'a> {
     }
 
     pub fn id_with_format(&self, format: ObjectFormat) -> ObjectId {
-        // Largest header: "commit " + 20 decimal digits + NUL on a 64-bit target.
-        let mut storage = [0; 32];
-        let header = self
-            .header(&mut storage)
-            .expect("object header fits in 32 bytes");
-        let mut hash = format.hash();
-        hash.update(header);
-        hash.update(self.data);
-        hash.finish()
+        let mut digest = ObjectDigest::new(self.info(), format);
+        digest
+            .update(self.data)
+            .expect("slice length matches metadata");
+        digest.finish().expect("complete object body")
     }
 }
