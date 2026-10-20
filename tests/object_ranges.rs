@@ -3,7 +3,7 @@ mod allocations;
 use git_zero::{
     Error, Object, ObjectFormat, ObjectInfo, ObjectKind,
     pack::{
-        ObjectKey, ObjectRange, RangeFrame, RangeInput, RangeLimits, RangeObject,
+        ObjectKey, ObjectRange, RangeFrame, RangeInput, RangeLimits, RangeObject, RangeProgress,
         RangeRepresentation, RangeRequest, RangeResolver,
     },
 };
@@ -99,21 +99,14 @@ fn run(
     loop {
         steps += 1;
         assert!(steps < 100_000, "resolver failed to make bounded progress");
-        let request = match resolver.request() {
-            Ok(request) => request,
-            Err(error) => {
-                terminal(&mut resolver, error);
-                return Err(error);
-            }
-        };
+        let reply = resolver.request();
+        let request = checked(&mut resolver, reply)?;
         assert_eq!(resolver.request(), Ok(request));
         match request {
             RangeRequest::Describe(key) => {
                 let record = records.iter().find(|record| record.key == key).unwrap();
-                if let Err(error) = resolver.describe(record.object) {
-                    terminal(&mut resolver, error);
-                    return Err(error);
-                }
+                let result = resolver.describe(record.object);
+                checked(&mut resolver, result)?;
             }
             RangeRequest::Read {
                 object,
@@ -122,33 +115,15 @@ fn run(
                 length,
             } => {
                 let record = records.iter().find(|record| record.key == object).unwrap();
-                assert_eq!(
-                    kind,
-                    if matches!(record.object.representation, RangeRepresentation::Plain) {
-                        RangeInput::Plain
-                    } else {
-                        RangeInput::Delta
-                    }
-                );
                 assert!(length > 0 && length <= limits.max_read_bytes);
-                let offset = offset as usize;
-                let end = (offset + length.min(input_chunk)).min(record.bytes.len());
-                let bytes = &record.bytes[offset.min(end)..end];
-                let blocked = resolver.update(bytes, &mut []).unwrap();
-                assert_eq!(
-                    (blocked.consumed, blocked.written, blocked.request),
-                    (0, 0, RangeRequest::NeedOutput)
-                );
-                assert_eq!(resolver.request(), Ok(request));
-                let step = match resolver.update(bytes, &mut output[..output_chunk]) {
-                    Ok(step) => step,
-                    Err(error) => {
-                        terminal(&mut resolver, error);
-                        return Err(error);
-                    }
-                };
-                assert!(step.consumed <= bytes.len() && step.written <= output_chunk);
-                assert!(step.consumed != 0 || step.written != 0);
+                let step = record.feed(
+                    &mut resolver,
+                    kind,
+                    offset,
+                    length,
+                    input_chunk,
+                    &mut output[..output_chunk],
+                )?;
                 assert_eq!(output[64], 0xa5);
                 result.extend_from_slice(&output[..step.written]);
             }
@@ -166,6 +141,51 @@ fn run(
             RangeRequest::NeedOutput => panic!("request() has no output buffer to exhaust"),
         }
     }
+}
+
+// The provider fragments immutable bytes and checks backpressure independently
+// of the loop driving metadata requests and accumulating resolved output.
+impl Record<'_> {
+    fn feed(
+        &self,
+        resolver: &mut RangeResolver<'_>,
+        kind: RangeInput,
+        offset: u64,
+        length: usize,
+        input_chunk: usize,
+        output: &mut [u8],
+    ) -> git_zero::Result<RangeProgress> {
+        assert_eq!(
+            kind,
+            if matches!(self.object.representation, RangeRepresentation::Plain) {
+                RangeInput::Plain
+            } else {
+                RangeInput::Delta
+            }
+        );
+        let offset = offset as usize;
+        let end = (offset + length.min(input_chunk)).min(self.bytes.len());
+        let bytes = &self.bytes[offset.min(end)..end];
+        let request = resolver.request().unwrap();
+        let blocked = resolver.update(bytes, &mut []).unwrap();
+        assert_eq!(
+            (blocked.consumed, blocked.written, blocked.request),
+            (0, 0, RangeRequest::NeedOutput)
+        );
+        assert_eq!(resolver.request(), Ok(request));
+        let result = resolver.update(bytes, output);
+        let step = checked(resolver, result)?;
+        assert!(step.consumed <= bytes.len() && step.written <= output.len());
+        assert!(step.consumed != 0 || step.written != 0);
+        Ok(step)
+    }
+}
+
+fn checked<T>(
+    resolver: &mut RangeResolver<'_>,
+    result: git_zero::Result<T>,
+) -> git_zero::Result<T> {
+    result.inspect_err(|&error| terminal(resolver, error))
 }
 
 fn terminal(resolver: &mut RangeResolver<'_>, error: Error) {

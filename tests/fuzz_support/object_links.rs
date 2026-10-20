@@ -49,32 +49,8 @@ fn scan(
         offset += step.consumed;
         match step.status {
             LinkStatus::NeedInput => assert_eq!(offset, end),
-            LinkStatus::Link { id, kind, relation } => {
-                let relation = match relation {
-                    LinkRelation::RootTree => 0,
-                    LinkRelation::Parent => 1,
-                    LinkRelation::TagTarget => 2,
-                };
-                digest.update([0, kind as u8, relation]);
-                digest.update(id.as_bytes());
-            }
-            LinkStatus::TreeEntry {
-                id,
-                mode,
-                name,
-                kind,
-                canonical_mode,
-            } => {
-                assert!(name.len() <= 256);
-                digest.update([
-                    1,
-                    kind.map_or(0, |kind| kind as u8),
-                    u8::from(canonical_mode),
-                ]);
-                digest.update(id.as_bytes());
-                digest.update(mode.to_be_bytes());
-                digest.update((name.len() as u32).to_be_bytes());
-                digest.update(name);
+            event @ (LinkStatus::Link { .. } | LinkStatus::TreeEntry { .. }) => {
+                hash_link(&mut digest, event)
             }
             LinkStatus::Finished => {
                 assert_eq!(offset, bytes.len());
@@ -94,4 +70,37 @@ fn scan(
         assert_eq!(scanner.position(), offset as u64);
     }
     panic!("object links failed to make bounded progress")
+}
+
+fn hash_link(digest: &mut Sha1, event: LinkStatus<'_>) {
+    match event {
+        LinkStatus::Link { id, kind, relation } => {
+            let relation = match relation {
+                LinkRelation::RootTree => 0,
+                LinkRelation::Parent => 1,
+                LinkRelation::TagTarget => 2,
+            };
+            digest.update([0, kind as u8, relation]);
+            digest.update(id.as_bytes());
+        }
+        LinkStatus::TreeEntry {
+            id,
+            mode,
+            name,
+            kind,
+            canonical_mode,
+        } => {
+            assert!(name.len() <= 256);
+            digest.update([
+                1,
+                kind.map_or(0, |kind| kind as u8),
+                u8::from(canonical_mode),
+            ]);
+            digest.update(id.as_bytes());
+            digest.update(mode.to_be_bytes());
+            digest.update((name.len() as u32).to_be_bytes());
+            digest.update(name);
+        }
+        _ => unreachable!("only structural link events have digest records"),
+    }
 }
