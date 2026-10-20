@@ -11,7 +11,7 @@ export async function sha256(value) {
 }
 
 export class ByteCache {
-  constructor(limit) { this.limit = limit; this.size = 0; this.peak = 0; this.entries = new Map(); }
+  constructor(limit, maxEntries = 8192) { this.limit = limit; this.maxEntries = maxEntries; this.size = 0; this.peak = 0; this.entries = new Map(); }
   get(key) {
     const value = this.entries.get(key);
     if (value === undefined) return undefined;
@@ -19,10 +19,10 @@ export class ByteCache {
   }
   put(key, value) {
     if (!(value instanceof Uint8Array)) throw new TypeError("cache stores bytes");
-    if (value.byteLength > this.limit) return;
+    if (value.byteLength > this.limit || this.maxEntries === 0) return;
     const old = this.entries.get(key);
     if (old !== undefined) { this.entries.delete(key); this.size -= old.byteLength; }
-    while (this.size + value.byteLength > this.limit) {
+    while (this.size + value.byteLength > this.limit || this.entries.size >= this.maxEntries) {
       const first = this.entries.keys().next().value;
       this.size -= this.entries.get(first).byteLength; this.entries.delete(first);
     }
@@ -109,8 +109,7 @@ export class Store {
     }
   }
   statistics() {
-    return {
-      usage: { ...this.usage, sqlRowsRead: this.sqlKnown ? this.usage.sqlRowsRead : null, sqlRowsWritten: this.sqlKnown ? this.usage.sqlRowsWritten : null },
+    const result = {
       objects: this.exec("SELECT object_count FROM repository WHERE id=1")[0]?.object_count ?? 0,
       stagedObjects: this.exec("SELECT COUNT(*) AS count FROM stage_objects")[0].count,
       stagedChunks: this.exec("SELECT COUNT(*) AS count FROM stage_chunks")[0].count,
@@ -119,6 +118,8 @@ export class Store {
       databaseBytes: this.ctx.storage.sql.databaseSize ?? null,
       workerCpuMs: null,
     };
+    result.usage = { ...this.usage, sqlRowsRead: this.sqlKnown ? this.usage.sqlRowsRead : null, sqlRowsWritten: this.sqlKnown ? this.usage.sqlRowsWritten : null };
+    return result;
   }
   async put(key, data) {
     this.usage.r2Puts++; this.usage.r2WrittenBytes += data.byteLength;

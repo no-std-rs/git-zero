@@ -107,6 +107,8 @@ encoder serve both repository adapters and the external catalog. A fixed 4 MiB
 control arena keeps validated packet storage immutable while iterating wants and
 haves. Total Wasm linear memory is bounded at 6 MiB; object bodies remain outside
 that arena and the runtime caches remain bounded at 48 MiB.
+Each byte cache also has an independent 8,192-entry cap, so empty or tiny
+representations cannot exhaust memory through map metadata.
 
 Fetch selection uses SQLite queues, not repository-sized JS arrays. Compressed
 entries are copied in physical pack order; OFS deltas become REF deltas. When a
@@ -137,6 +139,18 @@ the config and R2 bucket together identify the durable repository; preserve them
 across restarts and backups. workerd's disk-backed Durable Object API is
 experimental, so this candidate pins the runtime through the lockfile and still
 requires Linux-scale and live-environment validation before shipping.
+
+For a reviewable scale run, use `node scripts/benchmark.mjs --source REPO
+--work-dir NEW_DIRECTORY` from the Cloudflare directory. The default runtime
+freezes the current bundle and starts actual Wrangler R2/SQLite, so later edits
+cannot change a running measurement. Ordinary Git pushes a complete source,
+clones it, pushes one new commit without changing the source branch, restarts
+the host and fetches the increment. Strict fsck diagnostics must match the
+source, preserving historical badFilemode warnings. The report records phase
+times, application SQL/R2 counters, database size and local server process-tree
+CPU/RSS samples. These process samples include runtime/development services;
+they are not Cloudflare billing CPU. `--runtime workerd` measures direct workerd
+with the independently signed local S3 byte fixture instead.
 
 ## Workspace
 

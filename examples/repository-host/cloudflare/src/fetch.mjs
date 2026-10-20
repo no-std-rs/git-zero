@@ -88,7 +88,7 @@ export class FetchJob {
     }
     if (this.done) this.select();
   }
-  walk(table, excludeCommon = false) {
+  walk(table, excludeCommon = false, snapshots = false) {
     for (;;) {
       const pending = this.store.exec(`SELECT oid FROM ${table} WHERE walked=0 ORDER BY oid LIMIT 128`);
       if (!pending.length) break;
@@ -96,13 +96,17 @@ export class FetchJob {
         const row = this.store.published(item.oid);
         if (!row) throw new Error("published closure is incomplete");
         this.store.exec(`UPDATE ${table} SET stage=?,node=?,walked=1 WHERE oid=?`, row.stage, row.node, row.oid);
-        this.store.exec(`INSERT OR IGNORE INTO ${table}(oid) SELECT e.dst FROM stage_edges e WHERE e.stage=? AND e.node=?${excludeCommon ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""}`, row.stage, row.node);
+        this.store.exec(`INSERT OR IGNORE INTO ${table}(oid) SELECT e.dst FROM stage_edges e WHERE e.stage=? AND e.node=?${snapshots ? " AND e.relation<>1" : ""}${excludeCommon ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""}`, row.stage, row.node);
       }
     }
   }
   select() {
     this.store.exec("INSERT OR IGNORE INTO fetch_common(oid) SELECT oid FROM fetch_haves");
-    this.walk("fetch_common");
+    // A have cuts wanted commit traversal. Its snapshot also proves trees and
+    // blobs already present, without walking every historical parent merely
+    // to send a small increment. Unlisted older common history may be resent;
+    // this is a valid full pack and never assumes an absent object is present.
+    this.walk("fetch_common", false, true);
     this.store.exec("INSERT OR IGNORE INTO fetch_selected(oid) SELECT w.oid FROM fetch_wants w WHERE NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=w.oid)");
     this.walk("fetch_selected", true);
     if (this.includeTags) {

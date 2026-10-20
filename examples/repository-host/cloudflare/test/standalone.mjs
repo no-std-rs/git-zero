@@ -79,6 +79,6 @@ export async function startStandalone(persist) {
       child.once("error", (error) => { clearTimeout(timer); reject(error); });
       child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`workerd exited ${code}\n${logs}`)); });
     });
-    return { origin: `http://127.0.0.1:${port}`, stop, logs: () => logs };
+    return { origin: `http://127.0.0.1:${port}`, stop, logs: () => logs, runtimePid: child.pid };
   } catch (error) { await stop(); throw error; }
 }

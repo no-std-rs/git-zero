@@ -5,10 +5,10 @@ import { fileURLToPath } from "node:url";
 export const TOKEN = "git-zero-local-storage-test";
 const root = new URL("../", import.meta.url);
 
-export async function start(persist) {
+export async function start(persist, { config = "wrangler.streamed.toml" } = {}) {
   const child = spawn(process.execPath, [
     fileURLToPath(new URL("node_modules/wrangler/bin/wrangler.js", root)), "dev",
-    "--config", "wrangler.streamed.toml", "--local", "--ip", "127.0.0.1", "--port", "0", "--inspector-port", "0",
+    "--config", config, "--local", "--ip", "127.0.0.1", "--port", "0", "--inspector-port", "0",
     "--persist-to", persist, "--var", `HOST_TOKEN:${TOKEN}`, "--var", "TEST_MODE:true", "--show-interactive-dev-session=false",
   ], { cwd: fileURLToPath(root), env: { ...process.env, WRANGLER_SEND_METRICS: "false", NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
   let logs = "", exited = false;
@@ -37,7 +37,7 @@ export async function start(persist) {
       child.once("error", (error) => { clearTimeout(timeout); reject(error); });
       child.once("exit", (code) => { clearTimeout(timeout); reject(new Error(`Wrangler exited (${code})\n${logs}`)); });
     });
-    return { origin, stop, logs: () => logs };
+    return { origin, stop, logs: () => logs, runtimePid: child.pid };
   } catch (error) { await stop(); throw error; }
 }
 

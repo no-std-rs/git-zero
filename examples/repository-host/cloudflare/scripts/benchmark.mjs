@@ -1,0 +1,145 @@
+// Ordinary Git is the reference client only. The server is the own Wasm host
+// with actual local Wrangler R2/SQLite, or direct workerd with the S3 fixture.
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { headers, start, TOKEN } from "../test/wrangler.mjs";
+import { startStandalone } from "../test/standalone.mjs";
+
+const args = process.argv.slice(2);
+const options = Object.fromEntries(args.reduce((pairs, value, index) => { if (index % 2 === 0) pairs.push([value, args[index + 1]]); return pairs; }, []));
+if (args.length % 2 || !options["--source"] || !options["--work-dir"]) throw new Error("usage: node scripts/benchmark.mjs --source REPO --work-dir NEW_DIRECTORY [--revision HEAD] [--runtime wrangler|workerd]");
+const root = fileURLToPath(new URL("../", import.meta.url));
+const source = resolve(options["--source"]), work = resolve(options["--work-dir"]);
+const runtime = options["--runtime"] ?? "wrangler";
+if (!["wrangler", "workerd"].includes(runtime)) throw new Error("unknown runtime");
+await mkdir(work); // Existing evidence is never overwritten.
+const report = { status: "running", runtime, source, revision: null, codecCommit: null, phases: [], resources: { processTreePeakRssKiB: 0, observedProcessTreeCpuSeconds: 0, scope: "local server process tree; includes development/runtime/storage infrastructure, not Cloudflare Worker billing CPU" } };
+let saving = Promise.resolve();
+const save = () => {
+  const snapshot = `${JSON.stringify(report, null, 2)}\n`;
+  saving = saving.then(async () => { await writeFile(join(work, "report.pending"), snapshot); await rename(join(work, "report.pending"), join(work, "report.json")); });
+  return saving;
+};
+const progress = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+let server, phase = "prepare", recent = "", sampling = false;
+let interrupted = false;
+const commands = new Set();
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { interrupted = true; for (const child of commands) child.kill(signal); });
+const started = performance.now(), observed = new Map();
+
+async function command(binary, argv, cwd, allowFailure = false) {
+  const child = spawn(binary, argv, { cwd, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", WRANGLER_SEND_METRICS: "false" }, stdio: ["ignore", "pipe", "pipe"] });
+  commands.add(child);
+  let stdout = "", stderr = "";
+  child.stdout.on("data", (bytes) => { stdout = (stdout + bytes).slice(-65536); });
+  child.stderr.on("data", (bytes) => { stderr = (stderr + bytes).slice(-65536); recent = stderr.split(/[\r\n]/).filter(Boolean).at(-1) ?? ""; });
+  const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  commands.delete(child);
+  if (interrupted) throw new Error("benchmark interrupted");
+  if (code !== 0 && !allowFailure) throw new Error(`${binary} ${argv[0]} failed (${code})\n${stderr}`);
+  return { code, stdout: stdout.trim(), stderr: stderr.trim() };
+}
+const git = (directory, argv, allowFailure = false) => command("git", ["-c", "user.name=Git zero benchmark", "-c", "user.email=benchmark@example.test", "-c", "pack.threads=1", "-c", "index.threads=1", "-c", "pack.windowMemory=64m", "-c", "http.extraHeader=Authorization: Bearer " + TOKEN, ...argv], directory, allowFailure);
+
+async function phaseRun(name, operation) {
+  phase = name; recent = ""; const began = performance.now(); progress({ phase, event: "start" });
+  const result = await operation();
+  report.phases.push({ phase: name, seconds: (performance.now() - began) / 1000, ...result });
+  await save(); progress({ phase, event: "complete", seconds: report.phases.at(-1).seconds });
+  return result;
+}
+async function resources() {
+  if (sampling || !server?.runtimePid) return;
+  sampling = true;
+  try {
+    const pending = [server.runtimePid], seen = new Set(); let rss = 0;
+    while (pending.length) {
+      const pid = pending.pop(); if (seen.has(pid)) continue; seen.add(pid);
+      try {
+        const [status, stat, children] = await Promise.all([
+          readFile(`/proc/${pid}/status`, "utf8"), readFile(`/proc/${pid}/stat`, "utf8"), readFile(`/proc/${pid}/task/${pid}/children`, "utf8"),
+        ]);
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+        const ticks = Number(fields[11]) + Number(fields[12]), identity = `${pid}:${fields[19]}`;
+        observed.set(identity, ticks); rss += Number(/^VmRSS:\s+(\d+)/m.exec(status)?.[1] ?? 0);
+        pending.push(...children.trim().split(/\s+/).filter(Boolean).map(Number));
+      } catch (error) { if (!["ENOENT", "ESRCH", "EACCES"].includes(error.code)) throw error; }
+    }
+    report.resources.processTreePeakRssKiB = Math.max(report.resources.processTreePeakRssKiB, rss);
+    report.resources.observedProcessTreeCpuSeconds = [...observed.values()].reduce((a, b) => a + b, 0) / report.resources.clockTicksPerSecond;
+  } finally { sampling = false; }
+}
+let sampleTimer, progressTimer;
+try {
+  report.codecCommit = (await git(fileURLToPath(new URL("../../../../", import.meta.url)), ["rev-parse", "HEAD"])).stdout;
+  report.workingTreeClean = (await git(fileURLToPath(new URL("../../../../", import.meta.url)), ["status", "--porcelain"])).stdout.length === 0;
+  report.revision = (await git(source, ["rev-parse", options["--revision"] ?? "HEAD"])).stdout;
+  report.objectFormat = (await git(source, ["rev-parse", "--show-object-format"])).stdout;
+  assert.equal((await git(source, ["rev-parse", "--is-shallow-repository"])).stdout, "false", "the scale proof requires a complete source repository");
+  report.resources.clockTicksPerSecond = Number((await command("getconf", ["CLK_TCK"], root)).stdout);
+  report.resources.sampleIntervalMs = 1000;
+  progressTimer = setInterval(() => { progress({ phase, elapsedSeconds: (performance.now() - started) / 1000, recentClientProgress: recent, resources: report.resources }); save().catch(() => {}); }, 20000);
+  const baseline = await phaseRun("source-strict-fsck", async () => {
+    const result = await git(source, ["fsck", "--full", "--strict"], true);
+    const diagnostics = result.stderr.split("\n").filter((line) => /^(warning|error) in /.test(line)).sort();
+    assert.ok(result.code === 0 || (diagnostics.length > 0 && diagnostics.every((line) => line.includes(": badFilemode:"))), `source integrity check failed\n${result.stderr}`);
+    return { exitCode: result.code, diagnostics };
+  });
+  const persist = join(work, "state");
+  if (runtime === "wrangler") {
+    const bundle = join(work, "frozen");
+    await command(process.execPath, [join(root, "node_modules/wrangler/bin/wrangler.js"), "deploy", "--config", "wrangler.streamed.toml", "--dry-run", "--outdir", bundle], root);
+    const config = join(bundle, "wrangler.toml");
+    await writeFile(config, `name = "git-zero-own-scale-proof"\nmain = "streamed.js"\ncompatibility_date = "2026-10-06"\nsend_metrics = false\n[vars]\nREPO_FORMAT = "${report.objectFormat === "sha256" ? 1 : 0}"\n[[r2_buckets]]\nbinding = "BLOBS"\nbucket_name = "git-zero-repository-data"\nremote = false\n[[durable_objects.bindings]]\nname = "REPOSITORIES"\nclass_name = "OwnRepository"\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["OwnRepository"]\n`);
+    server = await start(persist, { config });
+  } else server = await startStandalone(persist);
+  report.origin = server.origin; await save();
+  const repo = `${server.origin}/kernel.git`;
+  sampleTimer = setInterval(() => { resources().catch((error) => { report.resourceError = error.message; }); }, 1000);
+  await phaseRun("push", async () => {
+    await git(source, ["-c", "protocol.version=2", "push", "--progress", "--atomic", repo, `${report.revision}:refs/heads/master`]);
+    const response = await fetch(`${server.origin}/_test/kernel/state`, { headers: headers() }); assert.equal(response.status, 200);
+    return { state: await response.json() };
+  });
+  const clone = join(work, "clone.git");
+  await phaseRun("clone", async () => {
+    await git(work, ["-c", "protocol.version=2", "clone", "--mirror", "--progress", repo, clone]);
+    assert.equal((await git(clone, ["rev-parse", "HEAD"])).stdout, report.revision);
+    return {};
+  });
+  await phaseRun("incremental-push", async () => {
+    const tree = (await git(source, ["rev-parse", `${report.revision}^{tree}`])).stdout;
+    report.incrementalRevision = (await git(source, ["commit-tree", tree, "-p", report.revision, "-m", "git-zero incremental hosting verification"])).stdout;
+    // The reference fixture's branch is unchanged; only a new unreachable
+    // test commit is written by the ordinary Git client.
+    await git(source, ["push", "--progress", "--atomic", repo, `${report.incrementalRevision}:refs/heads/master`]);
+    return { revision: report.incrementalRevision };
+  });
+  await phaseRun("cold-fetch", async () => {
+    await server.stop();
+    server = runtime === "wrangler" ? await start(persist, { config: join(work, "frozen/wrangler.toml") }) : await startStandalone(persist);
+    // Keep the ordinary client remote, then fetch from the restarted endpoint.
+    await git(clone, ["remote", "set-url", "origin", `${server.origin}/kernel.git`]);
+    await git(clone, ["fetch", "--progress", "origin"]);
+    assert.equal((await git(clone, ["rev-parse", "HEAD"])).stdout, report.incrementalRevision);
+    const response = await fetch(`${server.origin}/_test/kernel/state`, { headers: headers() }); assert.equal(response.status, 200);
+    return { state: await response.json() };
+  });
+  await phaseRun("clone-strict-fsck", async () => {
+    const result = await git(clone, ["fsck", "--full", "--strict"], true);
+    const diagnostics = result.stderr.split("\n").filter((line) => /^(warning|error) in /.test(line)).sort();
+    assert.equal(result.code, baseline.exitCode); assert.deepEqual(diagnostics, baseline.diagnostics);
+    return { exitCode: result.code, diagnostics, matchesSource: true };
+  });
+  report.status = "complete";
+} catch (error) {
+  report.status = "failed"; report.failure = { phase, message: error.message, runtimeLogs: server?.logs() ?? "" };
+  process.exitCode = 1;
+} finally {
+  clearInterval(sampleTimer); clearInterval(progressTimer); await resources();
+  await server?.stop(); report.seconds = (performance.now() - started) / 1000; await save();
+  progress({ status: report.status, report: join(work, "report.json"), failure: report.failure?.message });
+}
