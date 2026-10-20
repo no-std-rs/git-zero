@@ -19,7 +19,8 @@ duplicate entries and truncated object IDs.
 | `graph` | Mode byte, short-read byte, object record | Even mode mutates a tree; odd mode mutates a commit. Other objects and IDs are rebuilt to reach structural validation. Borrowed/streamed outcomes must match with three metadata/index slots, 64-byte read and 128-byte parse scratch. Short reads range from 1 to 64 bytes. |
 | `inflation` | Raw zlib bytes | Whole/fragmented outcomes, emitted bytes and terminal positions must match. One 32 KiB history window, two 4 KiB staged outputs and 258-byte guarded scratch; 4096/257-byte output budgets with 64/1 expansion ratios. Old history cannot affect a new stream, trailing bytes stay unconsumed, errors stay terminal and each call makes bounded progress. |
 | `loose` | Inflated loose bytes | Actual SHA-1 reaches header/length checks; successful bodies must reserialize to the input and reject a wrong ID. |
-| `entries` | Pack/delta bytes | Repaired pack SHA-1 reaches entry parsing; one 32 KiB window, guarded 1 KiB entry/result buffers, a fixed 256-byte base, 128 delta instructions and depth 2. Cursor rollback, count/closure, offsets, IDs, CRCs and range limits are exercised. |
+| `entries` | Pack/delta bytes | Repaired SHA-1/SHA-256 checksums reach entry parsing. Complete and fragmented readers must agree on bodies, headers, offsets, IDs, CRCs and rejection. Two 32 KiB windows, guarded 1 KiB entry/result buffers, 17-byte streamed output, a fixed 256-byte base, 128 delta instructions and depth 2 bound the work. |
+| `receive` | Raw receive-pack control bytes | SHA-1/SHA-256 commands, capability selection, options, shallow boundaries and terminal errors. A guarded 1 KiB packet buffer, eight commands/options/boundaries, 4 KiB control budget and guarded 512-byte report output bound the work. |
 
 Routing also runs validated selection and pull responses with shallow/filter
 seeds, checking boundary packets, graph budgets and cancellation.
@@ -46,7 +47,7 @@ cargo +nightly-2026-08-09 fuzz run packets /tmp/git-zero-fuzz/packets fuzz/corpu
   -runs=5000 -max_len=4096 -timeout=5 -rss_limit_mb=512
 ```
 
-Repeat for `responses`, `routing`, `graph`, `inflation`, `loose` and `entries`, with separate writable output
+Repeat for `responses`, `routing`, `graph`, `inflation`, `loose`, `entries` and `receive`, with separate writable output
 corpus directories. libFuzzer writes new inputs into the first directory;
 the checked-in seed directories stay unchanged. For longer local campaigns,
 replace `-runs=5000` with `-max_total_time=600`. CI smoke runs are regression

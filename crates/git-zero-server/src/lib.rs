@@ -12,6 +12,7 @@ use git_zero_core::{
 mod fetch;
 mod policy;
 pub use policy::{WantOptions, WantPolicy};
+pub mod receive;
 mod route;
 pub mod stream;
 mod upload;

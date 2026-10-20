@@ -443,17 +443,21 @@ impl<R: Repository + ?Sized> Repository for IndexedRepository<'_, '_, R> {
 /// Validate a fully qualified ref name that fits a smart advertisement.
 /// The default branch additionally needs to fit `MAX_HEAD_REF_LENGTH`.
 pub fn validate_ref_name(name: &str) -> crate::Result<()> {
+    validate_ref_name_bytes(name.as_bytes())
+}
+
+/// Validate a raw fully qualified ref name, including non-UTF-8 Git names.
+pub fn validate_ref_name_bytes(name: &[u8]) -> crate::Result<()> {
     if name.len() > MAX_REF_NAME_LENGTH
-        || !name.starts_with("refs/")
-        || name.ends_with('.')
-        || name.contains("..")
-        || name.contains("@{")
-        || name.bytes().any(|byte| {
+        || !name.starts_with(b"refs/")
+        || name.ends_with(b".")
+        || name.windows(2).any(|pair| matches!(pair, b".." | b"@{"))
+        || name.iter().any(|&byte| {
             byte <= b' ' || matches!(byte, 127 | b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\')
         })
         || name
-            .split('/')
-            .any(|part| part.is_empty() || part.starts_with('.') || part.ends_with(".lock"))
+            .split(|&byte| byte == b'/')
+            .any(|part| part.is_empty() || part.starts_with(b".") || part.ends_with(b".lock"))
     {
         return Err(crate::Error::InvalidReference);
     }

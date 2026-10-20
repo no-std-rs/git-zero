@@ -846,9 +846,9 @@ Wasm compilation/linking succeeds without supplying any global allocator.
 
 ## Parser fuzzing
 
-`cargo test -p git-zero --test fuzz --locked` embeds and replays the 32 independently
-authored binary seeds, every prefix truncation, six byte substitutions at every position,
-and reproducible xorshift inputs against seven shared targets.
+`cargo test -p git-zero --test fuzz --locked` embeds and replays the binary seeds,
+every prefix truncation, six byte substitutions at every position,
+and reproducible xorshift inputs against eight shared targets.
 `cargo test -p git-zero --test core --locked` also checks non-hex packet prefixes
 at every position and the maximum packet-length boundary.
 The same target functions back a separate cargo-fuzz workspace; core dependencies
@@ -864,6 +864,13 @@ records reach parsing, and compare borrowed versus short-read providers using
 the same bounded scratch. Inflation checks resumable state and output/ratio
 limits; loose/pack targets validate envelopes, entries and bounded delta
 instructions. Pack-index file parsing remains roadmap work.
+
+Receive control fuzzing covers fragmented command/option packets, negotiated
+capabilities, independent budgets, raw ref names and terminal errors. Reports
+exercise sideband packet boundaries and guarded output. `cargo test --test receive`
+also exchanges pushes with ordinary Git over localhost HTTP, including SHA-1,
+SHA-256, atomic requests, push options and chunked uploads. That fixture tests the
+wire protocol and a known pack; it is not a persistent repository host.
 
 ## Git's existing HTTP tests
 

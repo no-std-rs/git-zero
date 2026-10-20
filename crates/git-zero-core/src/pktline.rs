@@ -32,22 +32,29 @@ pub enum Packet<'a> {
     Flush,
 }
 
+/// Decode one complete four-byte pkt-line prefix without requiring its body.
+/// Zero denotes a flush; reserved control values 1 through 3 are rejected.
+pub fn length(prefix: &[u8]) -> Result<usize> {
+    if prefix.len() != 4 || !prefix.iter().all(u8::is_ascii_hexdigit) {
+        return Err(Error::InvalidPacket);
+    }
+    let prefix = core::str::from_utf8(prefix).map_err(|_| Error::InvalidPacket)?;
+    let length = usize::from_str_radix(prefix, 16).map_err(|_| Error::InvalidPacket)?;
+    if length != 0 && !(4..=MAX_LENGTH).contains(&length) {
+        return Err(Error::InvalidPacket);
+    }
+    Ok(length)
+}
+
 pub fn read<'a>(input: &mut &'a [u8]) -> Result<Option<Packet<'a>>> {
     if input.is_empty() {
         return Ok(None);
     }
     let prefix = input.get(..4).ok_or(Error::InvalidPacket)?;
-    if !prefix.iter().all(u8::is_ascii_hexdigit) {
-        return Err(Error::InvalidPacket);
-    }
-    let prefix = core::str::from_utf8(prefix).map_err(|_| Error::InvalidPacket)?;
-    let length = usize::from_str_radix(prefix, 16).map_err(|_| Error::InvalidPacket)?;
+    let length = length(prefix)?;
     if length == 0 {
         *input = &input[4..];
         return Ok(Some(Packet::Flush));
-    }
-    if !(4..=MAX_LENGTH).contains(&length) {
-        return Err(Error::InvalidPacket);
     }
     let bytes = input.get(4..length).ok_or(Error::InvalidPacket)?;
     *input = &input[length..];
