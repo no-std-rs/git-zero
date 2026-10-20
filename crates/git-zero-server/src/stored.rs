@@ -23,6 +23,10 @@ pub enum ObjectRequest {
     Shallow(ObjectId),
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Allocation-free requests keep the bounded ref-prefix index inline"
+)]
 enum Parsed<'a> {
     Noop,
     Refs(v2::Refs<'a>),

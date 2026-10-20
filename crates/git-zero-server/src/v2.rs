@@ -119,7 +119,8 @@ fn arguments(mut bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
 }
 
 pub(crate) struct Refs<'a> {
-    args: &'a [u8],
+    prefixes: [&'a [u8]; 256],
+    prefix_count: usize,
     symrefs: bool,
     peel: bool,
     unborn: bool,
@@ -142,7 +143,8 @@ fn attribute<'a>(marker: &'a [u8], value: Option<&'a [u8]>) -> [&'a [u8]; 2] {
 impl<'a> Refs<'a> {
     pub fn parse(args: &'a [u8]) -> Result<Self> {
         let mut refs = Self {
-            args,
+            prefixes: [b""; 256],
+            prefix_count: 0,
             symrefs: false,
             peel: false,
             unborn: false,
@@ -152,7 +154,9 @@ impl<'a> Refs<'a> {
                 b"symrefs" => refs.symrefs = true,
                 b"peel" => refs.peel = true,
                 b"unborn" => refs.unborn = true,
-                _ if arg.starts_with(b"ref-prefix ") && !arg.contains(&0) => {}
+                _ if arg.starts_with(b"ref-prefix ") && !arg.contains(&0) => {
+                    refs.prefix(&arg[b"ref-prefix ".len()..])?;
+                }
                 _ => return Err(Error::Unsupported),
             }
         }
@@ -160,10 +164,32 @@ impl<'a> Refs<'a> {
     }
 
     fn matches(&self, name: &[u8]) -> bool {
-        let mut prefixes = arguments(self.args)
-            .filter_map(|arg| arg.strip_prefix(b"ref-prefix "))
-            .peekable();
-        prefixes.peek().is_none() || prefixes.any(|prefix| name.starts_with(prefix))
+        let prefixes = &self.prefixes[..self.prefix_count];
+        let end = prefixes.partition_point(|prefix| *prefix <= name);
+        prefixes.is_empty() || (end > 0 && name.starts_with(prefixes[end - 1]))
+    }
+
+    // Keep disjoint prefixes in byte order. Duplicate and contained arguments
+    // consume no slots, and each catalog reference needs one binary lookup.
+    fn prefix(&mut self, prefix: &'a [u8]) -> Result<()> {
+        let index = match self.prefixes[..self.prefix_count].binary_search(&prefix) {
+            Ok(_) => return Ok(()),
+            Err(index) => index,
+        };
+        if index > 0 && prefix.starts_with(self.prefixes[index - 1]) {
+            return Ok(());
+        }
+        let end = index
+            + self.prefixes[index..self.prefix_count]
+                .partition_point(|existing| existing.starts_with(prefix));
+        let retained = self.prefix_count - (end - index);
+        if retained == self.prefixes.len() {
+            return Err(Error::LimitExceeded);
+        }
+        self.prefixes.copy_within(end..self.prefix_count, index + 1);
+        self.prefixes[index] = prefix;
+        self.prefix_count = retained + 1;
+        Ok(())
     }
 
     pub(crate) fn write_ref(

@@ -719,6 +719,91 @@ fn external_ls_refs_matches_raw_prefixes_and_preserves_symbolic_attributes() {
 }
 
 #[cfg(feature = "read")]
+#[test]
+fn external_ref_prefix_index_preserves_unions_and_bounds_disjoint_prefixes() {
+    use git_zero::http::stored::Request;
+    fn body(prefixes: &[&[u8]]) -> Vec<u8> {
+        let mut output = Bytes(vec![]);
+        pktline::write(&mut output, b"command=ls-refs\n").unwrap();
+        output.0.extend_from_slice(b"0001");
+        for prefix in prefixes {
+            pktline::write_parts(&mut output, &[b"ref-prefix ", prefix]).unwrap();
+        }
+        output.0.extend_from_slice(b"0000");
+        output.0
+    }
+    let id = id(ObjectFormat::Sha1, 1);
+    let names: &[&[u8]] = &[
+        b"HEAD",
+        b"refs/heads/main",
+        b"refs/heads/master",
+        b"refs/tags/v1",
+        b"refs/tags/\xff",
+        b"refs/other",
+        b"refs/heads",
+    ];
+    for prefixes in [
+        vec![],
+        vec![
+            b"refs/heads/main".as_slice(),
+            b"refs/heads/",
+            b"refs/tags/\xff",
+            b"refs/heads/",
+        ],
+        vec![b"refs/tags/".as_slice(), b"refs/heads/master"],
+        vec![b"refs/tags/".as_slice(), b"", b"refs/heads/main"],
+        vec![b"refs/heads/".as_slice(); 4097],
+    ] {
+        let body = body(&prefixes);
+        let mut storage = [0; 512];
+        allocations::without_allocations(|| {
+            let request = Request::parse(&body, ObjectFormat::Sha1, 2).unwrap();
+            for name in names {
+                let mut output = SliceWriter::new(&mut storage);
+                request
+                    .reference(Some(id), name, None, None, &mut output)
+                    .unwrap();
+                let expected =
+                    prefixes.is_empty() || prefixes.iter().any(|prefix| name.starts_with(prefix));
+                assert_eq!(!output.as_bytes().is_empty(), expected, "{name:?}");
+            }
+        });
+    }
+    let prefixes: Vec<_> = (0..257)
+        .map(|i| format!("refs/heads/{i:04}/").into_bytes())
+        .collect();
+    let prefixes: Vec<_> = prefixes.iter().map(Vec::as_slice).collect();
+    let indexed = body(&prefixes[..256]);
+    let mut storage = [0; 512];
+    allocations::without_allocations(|| {
+        let request = Request::parse(&indexed, ObjectFormat::Sha1, 2).unwrap();
+        for name in [
+            b"refs/heads/0000/topic".as_slice(),
+            b"refs/heads/0127/topic",
+            b"refs/heads/0255/topic",
+            b"refs/heads/0256/topic",
+            b"refs/heads/0000",
+        ] {
+            let mut output = SliceWriter::new(&mut storage);
+            request
+                .reference(Some(id), name, None, None, &mut output)
+                .unwrap();
+            assert_eq!(
+                !output.as_bytes().is_empty(),
+                prefixes[..256]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix)),
+                "{name:?}"
+            );
+        }
+    });
+    assert!(matches!(
+        Request::parse(&body(&prefixes), ObjectFormat::Sha1, 2),
+        Err(Error::LimitExceeded)
+    ));
+}
+
+#[cfg(feature = "read")]
 fn shallow_body(format: ObjectFormat, version: u8, depth: bool, done: bool) -> Vec<u8> {
     let mut output = Bytes(vec![]);
     if version == 2 {

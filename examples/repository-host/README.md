@@ -42,6 +42,10 @@ tags, concurrent stale updates and durable recovery. Depth-limited clones,
 relative deepening, unshallowing, `blob:none`/`blob:limit` filters, and ordinary
 lazy checkout work in both formats and all three protocol versions. Time-based
 and exclusion-based deepening and tree/sparse/combine filters remain unsupported.
+Protocol v2 ref selection indexes up to 256 disjoint byte prefixes; duplicate
+and contained prefixes reuse slots. Response readers have a 60-second idle
+deadline, reset whenever output is pulled, so stalled clients release repository
+scratch after cleanup without imposing a total transfer deadline.
 Full Linux end-to-end validation is running; component
 decoder measurements do not establish a complete hosting result.
 
