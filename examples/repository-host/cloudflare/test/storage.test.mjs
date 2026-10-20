@@ -66,7 +66,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     for (const at of [0, 511, 1024]) await canonical(server, batchNamespace, batchResult, batchRows[at], batches[at]);
     const queueNamespace = `validation-queue-${randomUUID()}`;
     const prefix = Array.from({ length: 4097 }, (_, i) => object(0, 3, `completed prefix ${i}`));
-    const base = prefix[0];
+    const base = prefix.at(-1);
     const pending = Array.from({ length: 1025 }, (_, i) => {
       const suffix = Buffer.from(` suffix ${i}`);
       const tag = object(0, 4, `object ${base.id.toString("hex")}\ntype blob\ntag pending-${i}\n\nqueued\n`);

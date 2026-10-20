@@ -126,7 +126,7 @@ export class Store {
   }
   node(stage, node) { return this.exec("SELECT * FROM stage_objects WHERE stage=? AND node=?", stage, node)[0]; }
   object(stage, oid) {
-    return this.exec("SELECT * FROM stage_objects WHERE stage=? AND oid=? AND verified=1 LIMIT 1", stage, oid)[0]
+    return this.exec("SELECT * FROM stage_objects INDEXED BY stage_object_ids WHERE stage=? AND oid=? AND verified=1 LIMIT 1", stage, oid)[0]
       ?? this.published(oid);
   }
   published(oid) {
