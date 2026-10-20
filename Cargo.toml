@@ -133,6 +133,14 @@ name = "delta_streaming"
 required-features = ["read"]
 
 [[test]]
+name = "object_ranges"
+required-features = ["read"]
+
+[[test]]
+name = "entry_ranges"
+required-features = ["read", "write"]
+
+[[test]]
 name = "index_lookup"
 required-features = ["read", "write"]
 

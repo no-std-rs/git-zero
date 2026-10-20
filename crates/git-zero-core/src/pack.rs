@@ -27,9 +27,22 @@ mod delta;
 pub use delta::{DeltaDecoder, DeltaProgress, DeltaStatus};
 
 #[cfg(feature = "read")]
+mod range;
+#[cfg(feature = "read")]
+pub use range::{
+    ObjectKey, ObjectRange, RangeFrame, RangeInput, RangeLimits, RangeObject, RangeProgress,
+    RangeRepresentation, RangeRequest, RangeResolver,
+};
+
+#[cfg(feature = "read")]
 mod receive;
 #[cfg(feature = "read")]
 pub use receive::{DecodeLimits, DecodeProgress, DecodeStatus, Decoder, EntryDecoder};
+
+#[cfg(feature = "read")]
+mod entry_range;
+#[cfg(feature = "read")]
+pub use entry_range::{ByteRange, EntryRangeDecoder, EntryRangeProgress, EntryRangeStatus};
 
 #[cfg(feature = "read")]
 mod materialize;

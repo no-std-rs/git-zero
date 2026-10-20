@@ -168,6 +168,17 @@ objects are compared with complete structural views; the graph fuzz target also
 compares full/fragmented scanner events and terminal failures. Complete target
 and duplicate-name validation belongs to the host's persistent graph index.
 
+`object_ranges` reconstructs nested deltas and every subrange in both formats,
+including staged objects, 64-bit logical ranges, zero-length results, bounded
+caller frame stacks, output backpressure, malformed metadata/instructions and
+independent work/output/depth budgets. `entry_ranges` supplies inflated plain or
+delta-instruction ranges from fragmented packed input with guarded scratch and
+allocation tracking. The Git pack fixture combines both APIs to reconstruct
+every complete object and partial range directly from the compressed OFS/REF
+packs; bodies and canonical IDs match the independently Git-verified objects.
+The entries fuzz target also compares full range reconstruction with apply_delta
+and verifies clipped entry-range bytes against the complete pack reader.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are

@@ -1,5 +1,7 @@
 #[path = "common/allocations.rs"]
 mod allocations;
+#[path = "common/packed_ranges.rs"]
+mod packed_ranges;
 
 use git_zero::{
     Error, Object, ObjectId, ObjectKind,
@@ -544,6 +546,7 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
         }
         assert!(progress, "fixture has a missing or cyclic delta base");
     }
+    packed_ranges::verify(&bytes, &entries, &resolved);
     let (mut deltas, mut kinds) = (0, [false; 4]);
     let (mut requests, mut decoded) = (Vec::new(), Vec::new());
     for (entry, object) in entries.iter().zip(&resolved) {

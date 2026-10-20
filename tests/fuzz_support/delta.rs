@@ -31,6 +31,7 @@ pub fn check(bytes: &[u8]) {
     );
     let mut actual = [0xa5; 1025];
     let streamed = execute(&base, bytes, &mut actual[..1024]);
+    super::ranges::check(&base, bytes, result.as_ref().map(|object| object.data));
     match result {
         Ok(object) => {
             assert_eq!(streamed, Ok(object.data.len()));

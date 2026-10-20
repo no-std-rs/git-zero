@@ -40,6 +40,10 @@ The `entries` target additionally executes fragmented delta events against a
 fixed patterned base and compares acceptance and result bytes with `apply_delta`.
 The `graph` target compares full/fragmented `object::LinkDecoder` event digests
 and errors, with guarded 512-byte name scratch and a 128-link budget.
+The `entries` target additionally reconstructs delta results through external
+range-read effects (two fixed frame slots, guarded 17-byte output and a bounded
+work budget) and compares them with `apply_delta`. Inflated entry subranges are
+also checked through guarded 13-byte read/17-byte output scratch.
 
 Install the pinned CI tools and run a bounded campaign from the repository root:
 

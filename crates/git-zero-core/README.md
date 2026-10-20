@@ -54,6 +54,21 @@ noncanonical. The host authenticates objects, checks target existence/kinds and
 all duplicate tree names, and enforces reachability and ref-update policy.
 Scanner completion alone is not proof of a valid repository graph.
 
+`pack::RangeResolver` reconstructs complete objects or partial canonical ranges
+through explicit metadata/read requests. It follows nested deltas using caller
+`RangeFrame` slots, with independent output, representation-work, instruction,
+read-size and depth limits. Storage failures can be retried before supplying a
+reply. For new staged objects, request `ObjectRange::All`, hash every output
+fragment and complete pack/graph validation before publication. Existing bases
+must already have authenticated metadata and canonical identities.
+
+`pack::EntryRangeDecoder` supplies representation ranges from authenticated
+compressed entries using one 32 KiB window and caller read scratch. It skips the
+inflated prefix, preserves pending output under backpressure, and stops at the
+requested boundary. Partial completion does not validate the unread entry tail.
+Hosts can await bounded source reads and cache inflated pages/ranges to avoid
+repeated prefix inflation; neither API retains complete objects or an index.
+
 `read` enables zlib inflation, pack/delta decoding and repository validation.
 `write` enables snapshots, pack/zlib encoding and pack caching. Both are enabled
 by default. Object IDs, borrowed objects, repositories, readers, packet lines and

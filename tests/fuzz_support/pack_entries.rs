@@ -237,6 +237,7 @@ impl<'input, 'window> Fragmented<'input, 'window> {
 }
 
 fn check_object(entry: &Entry<'_>, bytes: &[u8], base: &ResolvedObject<'_>, output: &mut [u8]) {
+    super::entry_ranges::check(entry, bytes, base.id().format());
     assert!(entry.data().len() <= OUTPUT);
     assert_eq!(
         entry.crc32(),

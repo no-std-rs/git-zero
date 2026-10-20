@@ -1,11 +1,13 @@
 //! Bounded targets shared by ordinary regression tests and libFuzzer.
 mod client_responses;
 mod delta;
+mod entry_ranges;
 mod http_routing;
 mod loose_objects;
 mod object_links;
 mod pack_entries;
 mod packet_lines;
+mod ranges;
 mod receive;
 mod repository_graph;
 mod zlib_inflation;
