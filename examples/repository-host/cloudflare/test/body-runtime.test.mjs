@@ -19,18 +19,23 @@ async function entered(directory, namespace) {
       if (!database.prepare("SELECT 1 FROM sqlite_master WHERE name='host_identity'").get()) continue;
       if (database.prepare("SELECT namespace FROM host_identity WHERE id=1").get()?.namespace === namespace) return true;
     } catch (error) {
-      if (error.errcode !== 5 && error.errcode !== 6) throw error;
+      // SQLite's low byte is the primary code; WAL recovery can return the
+      // extended SQLITE_BUSY_RECOVERY (261) while this read-only probe starts.
+      const primary = error.errcode & 255;
+      if (primary !== 5 && primary !== 6) throw error;
     } finally { database.close(); }
   }
   return false;
 }
 
-async function waitForHandler(directory, namespace) {
+async function waitForHandler(directory, namespace, transport, server) {
   for (let attempt = 0; attempt < 300; attempt++) {
+    if (transport.error) throw transport.error;
+    assert.equal(transport.status, null, `partial POST returned before entering ${namespace}\n${server.logs()}`);
     if (await entered(directory, namespace)) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  assert.fail("partial POST never entered its repository handler");
+  assert.fail(`partial POST never entered ${namespace}\n${server.logs()}`);
 }
 
 for (const [runtime, serve] of [["Wrangler R2/SQLite", (persist) => start(persist, { frozen: true })], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} releases queues held by idle request bodies`, { timeout: 120000 }, async () => {
@@ -40,10 +45,11 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", (persist) => start(persis
     server = await serve(directory);
     await Promise.all(["git-receive-pack", "git-upload-pack"].map(async (service) => {
       const namespace = `body-${service}-${randomUUID()}`;
-      const client = request(`${server.origin}/${namespace}.git/${service}`, { method: "POST", headers: { ...headers(), "content-type": `application/x-${service}-request` } }, (response) => response.resume());
-      clients.push(client); client.on("error", () => {});
+      const transport = { error: null, status: null };
+      const client = request(`${server.origin}/${namespace}.git/${service}`, { method: "POST", headers: { ...headers(), "content-type": `application/x-${service}-request` } }, (response) => { transport.status = response.statusCode; response.resume(); });
+      clients.push(client); client.on("error", (error) => { transport.error = error; });
       client.write("000"); // Deliberately leave both the pkt-line and HTTP body open.
-      await waitForHandler(directory, namespace);
+      await waitForHandler(directory, namespace, transport, server);
       const waiting = Date.now();
       let completed = false;
       const queued = fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers(), signal: AbortSignal.timeout(75000) }).then(async (response) => {
