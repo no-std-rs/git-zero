@@ -39,7 +39,20 @@ export function integer(value) {
   return number;
 }
 
-export function hex(bytes) { return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""); }
+const HEX_DIGITS = new TextEncoder().encode("0123456789abcdef");
+const HEX_SCRATCH = new Uint8Array(64);
+const HEX_DECODER = new TextDecoder();
+
+export function hex(bytes) {
+  const length = bytes.length * 2;
+  // Calls are synchronous; IDs and checksums fit the reusable buffer.
+  const encoded = length <= HEX_SCRATCH.length ? HEX_SCRATCH : new Uint8Array(length);
+  for (let i = 0; i < bytes.length; i++) {
+    encoded[i * 2] = HEX_DIGITS[bytes[i] >> 4];
+    encoded[i * 2 + 1] = HEX_DIGITS[bytes[i] & 15];
+  }
+  return HEX_DECODER.decode(encoded.subarray(0, length));
+}
 
 export class Codec {
   constructor(module, format = 0, limits = {}) {

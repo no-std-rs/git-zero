@@ -19,6 +19,7 @@ export class ObjectSource {
     this.chunks = new ByteCache(16 * 1024 * 1024);
     this.reader = null;
     this.temporary = new Map();
+    this.names = []; this.edges = [];
     this.queries = 0; this.storageReads = 0; this.historicalModes = 0;
   }
 
@@ -196,7 +197,7 @@ export class ObjectSource {
   async process(row, scan = true) {
     this.queries++;
     this.namesStaged = false;
-    this.names = []; this.edges = [];
+    this.names.length = 0; this.edges.length = 0;
     // Keys identify physical immutable representations within one query. An
     // identity delta may have the same canonical ID as its external base;
     // resolving by ID again would accidentally choose the delta itself.

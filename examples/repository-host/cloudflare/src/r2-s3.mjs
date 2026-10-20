@@ -1,9 +1,9 @@
 // Opaque storage adapter for the same Wasm host running directly in workerd.
 // Cloudflare deployments continue to use their native R2 binding. S3 requests
 // use AWS Signature V4; Git bytes and object metadata are never interpreted here.
+import { hex } from "./codec.mjs";
 const encode = (value) => new TextEncoder().encode(value);
-const hex = (bytes) => Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
-const hash = async (bytes) => hex(await crypto.subtle.digest("SHA-256", bytes));
+const hash = async (bytes) => hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
 const hmac = async (key, value) => {
   const imported = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return new Uint8Array(await crypto.subtle.sign("HMAC", imported, encode(value)));

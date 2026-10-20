@@ -1,5 +1,6 @@
 // Durable storage for opaque codec records and authenticated byte chunks.
 import { bucket } from "./r2-s3.mjs";
+import { hex } from "./codec.mjs";
 export const CHUNK_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 65536;
 
@@ -7,7 +8,7 @@ export function blob(bytes) { return bytes.slice().buffer; }
 export function bytes(value) { return value instanceof Uint8Array ? value : new Uint8Array(value); }
 export async function sha256(value) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", value));
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return hex(digest);
 }
 
 export class ByteCache {
