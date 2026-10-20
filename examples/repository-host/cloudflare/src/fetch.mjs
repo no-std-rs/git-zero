@@ -14,17 +14,6 @@ export class FetchJob {
     this.source = new ObjectSource(store, codec, this.temporary, store.namespace);
   }
   reset() { for (const table of ["fetch_wants", "fetch_haves", "fetch_common", "fetch_selected"]) this.store.exec(`DELETE FROM ${table}`); }
-  peeled(oid) {
-    let row = this.store.published(oid);
-    for (let depth = 0; row?.kind === 4; depth++) {
-      if (depth >= this.codec.limits.maxDepth) throw new Error("tag peeling budget exceeded");
-      const edge = this.store.exec("SELECT dst FROM stage_edges WHERE stage=? AND node=? AND relation=2 LIMIT 1", row.stage, row.node)[0];
-      if (!edge) throw new Error("stored tag has no target");
-      row = this.store.published(edge.dst);
-    }
-    if (!row) throw new Error("tag target is absent");
-    return row.oid === oid ? undefined : fromHex(row.oid);
-  }
   async *references(v2 = false) {
     this.codec.uploadInit(this.version);
     yield* this.refRows(v2);
@@ -38,7 +27,7 @@ export class FetchJob {
       if (head) first = false;
     }
     for (const row of this.store.references()) {
-      yield this.codec.uploadRef({ id: fromHex(row.oid), name: row.name, peeled: this.peeled(row.oid) }, { first, v2 });
+      yield this.codec.uploadRef({ id: fromHex(row.oid), name: row.name, peeled: row.peeled ? fromHex(row.peeled) : undefined }, { first, v2 });
       first = false;
     }
     if (!v2 && first) yield this.codec.uploadRef({ name: new Uint8Array(), target: bytes(state.head) }, { first: true });
@@ -71,15 +60,10 @@ export class FetchJob {
       const event = this.codec.uploadNext(); if (event.tag === 74) break;
       const id = hex(event.id);
       if (event.tag === 71) {
-        const advertised = this.store.exec("SELECT 1 FROM refs WHERE oid=? LIMIT 1", id).length;
-        // v2 tag wants normally use the tag tip; peeled IDs are also advertised.
-        let allowed = advertised;
-        if (!allowed) {
-          for (const ref of this.store.references()) {
-            const peeled = this.peeled(ref.oid);
-            if (peeled && hex(peeled) === id) { allowed = true; break; }
-          }
-        }
+        if (this.store.exec("SELECT 1 FROM fetch_wants WHERE oid=?", id).length) continue;
+        // Both direct and peeled tips are indexed and updated in the same ref
+        // transaction. Repeated wants do not traverse the reference catalog.
+        const allowed = this.store.exec("SELECT 1 FROM refs WHERE oid=? OR peeled=? LIMIT 1", id, id).length;
         if (!allowed || !this.store.published(id)) throw new Error("want is not advertised");
         this.store.exec("INSERT OR IGNORE INTO fetch_wants(oid) VALUES(?)", id);
       } else if (event.tag === 72) {
@@ -120,8 +104,7 @@ export class FetchJob {
     this.walk("fetch_selected", true);
     if (this.includeTags) {
       for (const ref of this.store.references()) {
-        const peeled = this.peeled(ref.oid);
-        if (peeled && this.store.exec("SELECT 1 FROM fetch_selected WHERE oid=?", hex(peeled)).length) this.store.exec("INSERT OR IGNORE INTO fetch_selected(oid) VALUES(?)", ref.oid);
+        if (ref.peeled && this.store.exec("SELECT 1 FROM fetch_selected WHERE oid=?", ref.peeled).length) this.store.exec("INSERT OR IGNORE INTO fetch_selected(oid) VALUES(?)", ref.oid);
       }
       this.walk("fetch_selected", true);
     }

@@ -73,6 +73,18 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       }
       await git(directory, "tag", "--annotate", "annotated", "--message", "tag target");
       await git(directory, "push", remote, "refs/tags/annotated");
+      await git(directory, "tag", "--annotate", "peeled-only", first, "--message", "older target without a direct ref");
+      await git(directory, "push", remote, "refs/tags/peeled-only");
+      const beforeWants = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
+      const repeated = 1024;
+      const peeledControl = Buffer.concat([packet(`want ${first} side-band-64k object-format=${format ? "sha256" : "sha1"}\n`), ...Array.from({ length: repeated - 1 }, () => packet(`want ${first}\n`)), Buffer.from("0000"), packet("done\n")]);
+      const peeledResponse = await fetch(`${remote}/git-upload-pack`, { method: "POST", headers: { ...headers(), "content-type": "application/x-git-upload-pack-request" }, body: peeledControl });
+      assert.equal(peeledResponse.status, 200); await peeledResponse.arrayBuffer();
+      const afterWants = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
+      assert.ok(afterWants.usage.sqlCalls - beforeWants.usage.sqlCalls < repeated + 100, "duplicate peeled wants must use indexed authorization, without rescanning refs");
+      await git(directory, "push", remote, ":refs/tags/peeled-only");
+      const revoked = await fetch(`${remote}/git-upload-pack`, { method: "POST", headers: { ...headers(), "content-type": "application/x-git-upload-pack-request" }, body: peeledControl });
+      assert.equal(revoked.status, 400, "deleting the only advertising tag must revoke its peeled want"); await revoked.arrayBuffer();
       for (const version of [0, 1, 2]) {
         const listing = await git(root, "-c", `protocol.version=${version}`, "ls-remote", remote, "refs/tags/annotated*");
         assert.ok(listing.includes(`${second}\trefs/tags/annotated^{}`), `protocol ${version} must advertise peeled tag IDs`);

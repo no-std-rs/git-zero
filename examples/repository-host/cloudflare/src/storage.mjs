@@ -52,7 +52,7 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS temp_chunks (stage TEXT NOT NULL, object TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,object,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS temp_chunk_offsets ON temp_chunks(stage,object,start)",
   "CREATE TABLE IF NOT EXISTS temp_objects (stage TEXT NOT NULL, object TEXT NOT NULL, oid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(stage,object)) WITHOUT ROWID",
-  "CREATE TABLE IF NOT EXISTS refs (name BLOB PRIMARY KEY, oid TEXT NOT NULL) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS refs (name BLOB PRIMARY KEY, oid TEXT NOT NULL, peeled TEXT) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS proposed_refs (name BLOB PRIMARY KEY, seq INTEGER) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS fetch_wants (oid TEXT PRIMARY KEY) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS fetch_haves (oid TEXT PRIMARY KEY) WITHOUT ROWID",
@@ -71,6 +71,12 @@ export class Store {
     this.sqlKnown = true;
     for (const statement of SCHEMA) this.exec(statement);
     if (!this.exec("PRAGMA table_info(stages)").some((column) => column.name === "reusable")) this.exec("ALTER TABLE stages ADD COLUMN reusable INTEGER NOT NULL DEFAULT 0");
+    if (!this.exec("PRAGMA table_info(refs)").some((column) => column.name === "peeled")) this.ctx.storage.transactionSync(() => {
+      this.exec("ALTER TABLE refs ADD COLUMN peeled TEXT");
+      for (const ref of this.references()) this.exec("UPDATE refs SET peeled=? WHERE name=?", this.peeled(ref.oid), blob(ref.name));
+    });
+    this.exec("CREATE INDEX IF NOT EXISTS refs_oid ON refs(oid)");
+    this.exec("CREATE INDEX IF NOT EXISTS refs_peeled ON refs(peeled)");
     this.exec("INSERT OR IGNORE INTO host_identity(id,namespace) VALUES(1,?)", namespace);
     if (this.exec("SELECT namespace FROM host_identity WHERE id=1")[0].namespace !== namespace) throw new Error("stored repository identity differs");
   }
@@ -102,10 +108,22 @@ export class Store {
   published(oid) {
     return this.exec("SELECT o.* FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE o.oid=? AND s.phase='published' AND o.verified=1 ORDER BY o.depth,o.stage LIMIT 1", oid)[0];
   }
+  peeled(oid, stage = null) {
+    const find = (id) => stage ? this.object(stage, id) : this.published(id);
+    let row = find(oid);
+    for (let depth = 0; row?.kind === 4; depth++) {
+      if (depth >= 128) throw new Error("tag peeling budget exceeded");
+      const edge = this.exec("SELECT dst FROM stage_edges WHERE stage=? AND node=? AND relation=2 LIMIT 1", row.stage, row.node)[0];
+      if (!edge) throw new Error("stored tag has no target");
+      row = find(edge.dst);
+    }
+    if (!row) throw new Error("tag target is absent");
+    return row.oid === oid ? null : row.oid;
+  }
   *references() {
     let after = new Uint8Array();
     for (;;) {
-      const rows = this.exec("SELECT name,oid FROM refs WHERE name>? ORDER BY name LIMIT 128", blob(after));
+      const rows = this.exec("SELECT name,oid,peeled FROM refs WHERE name>? ORDER BY name LIMIT 128", blob(after));
       if (!rows.length) return;
       for (const row of rows) { after = bytes(row.name); yield { ...row, name: after }; }
     }

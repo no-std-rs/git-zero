@@ -40,7 +40,7 @@ export async function publish(store, stage) {
       const added = store.exec("SELECT COUNT(*) AS count FROM (SELECT o.oid FROM stage_objects o WHERE o.stage=? AND NOT EXISTS(SELECT 1 FROM stage_objects p JOIN stages s ON s.id=p.stage WHERE p.oid=o.oid AND s.phase='published') GROUP BY o.oid)", stage)[0].count;
       for (const command of accepted) {
         if (command.deletion) store.exec("DELETE FROM refs WHERE name=?", command.name);
-        else store.exec("INSERT INTO refs(name,oid) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET oid=excluded.oid", command.name, command.new_oid);
+        else store.exec("INSERT INTO refs(name,oid,peeled) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET oid=excluded.oid,peeled=excluded.peeled", command.name, command.new_oid, store.peeled(command.new_oid, stage));
       }
       const state = store.exec("SELECT head FROM repository WHERE id=1")[0];
       let head = state.head;
