@@ -88,6 +88,10 @@ impl<'a> Request<'a> {
             _ => Ok(()),
         }
     }
+    /// Whether the client permits offset delta entries in the response pack.
+    pub fn ofs_delta(&self) -> bool {
+        matches!(&self.parsed, Parsed::Fetch(request) if request.ofs_delta())
+    }
     pub fn include_tags(&self) -> bool {
         matches!(&self.parsed, Parsed::Fetch(request) if request.include_tags())
     }

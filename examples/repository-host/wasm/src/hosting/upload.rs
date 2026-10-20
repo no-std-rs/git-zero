@@ -143,6 +143,7 @@ pub extern "C" fn host_upload_parse() -> i32 {
         flags |= u32::from(parsed.band()) << 8;
         flags |= u32::from(parsed.done()) << 16;
         flags |= u32::from(parsed.include_tags()) << 17;
+        flags |= u32::from(parsed.ofs_delta()) << 21;
         if let Some(options) = parsed.options() {
             frame.wide(16, u64::from(options.depth.unwrap_or(0)));
             flags |= u32::from(options.deepen_relative) << 18;

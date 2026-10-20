@@ -3,7 +3,7 @@ use crate::{Error, Object, ObjectFormat, ObjectId, ObjectInfo, Result};
 /// V0 upload capabilities, including their leading separator. Shared with the
 /// server so repository ref-name limits include the complete advertisement.
 pub const UPLOAD_CAPABILITIES: &[u8] =
-    b" multi_ack multi_ack_detailed side-band side-band-64k no-progress shallow deepen-relative filter";
+    b" multi_ack multi_ack_detailed side-band side-band-64k no-progress shallow deepen-relative filter ofs-delta";
 
 /// Maximum SHA-1 ref name size that fits a smart HTTP advertisement.
 pub const MAX_REF_NAME_LENGTH: usize = crate::pktline::MAX_LENGTH - 4 - 40 - b" \n".len();

@@ -273,6 +273,7 @@ impl<'a> Refs<'a> {
 pub(crate) struct Fetch {
     pub done: bool,
     pub include_tags: bool,
+    pub ofs_delta: bool,
 }
 
 impl Fetch {
@@ -285,6 +286,7 @@ impl Fetch {
         let mut fetch = Self {
             done: false,
             include_tags: false,
+            ofs_delta: false,
         };
         let mut wanted = false;
         for arg in arguments(args) {
@@ -301,8 +303,9 @@ impl Fetch {
                 (b"deepen-relative", None) if !extensions.options.deepen_relative => {
                     extensions.options.deepen_relative = true;
                 }
-                // Full, non-delta packs also satisfy thin-pack/ofs-delta requests.
-                (b"thin-pack" | b"ofs-delta" | b"no-progress", None) => {}
+                (b"ofs-delta", None) => fetch.ofs_delta = true,
+                // Full packs also satisfy thin-pack requests.
+                (b"thin-pack" | b"no-progress", None) => {}
                 _ => extensions.argument(arg, format)?,
             }
         }

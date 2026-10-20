@@ -15,7 +15,7 @@ export class Intake {
     this.source = new ObjectSource(store, codec, stage, { ownedBuffers: true });
     this.writer = null; this.inPack = false; this.pack = null;
     this.commands = 0; this.options = 0; this.objects = 0; this.expected = 0;
-    this.pendingObjects = [];
+    this.pendingObjects = []; this.hasOfs = false;
     this.current = null; this.lastEnd = 12; this.eof = false;
   }
   flushObjects() {
@@ -47,6 +47,7 @@ export class Intake {
         this.expected = integer(event.a); break;
       case 8: {
         const node = integer(event.a), size = integer(event.b), kind = event.flags;
+        this.hasOfs ||= kind === 6;
         this.current = { node, size, kind, written: 0, body: size <= REPRESENTATION_LIMIT ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
         this.objects++; break;
       }
@@ -87,7 +88,7 @@ export class Intake {
     const bytes = this.writer ? await this.writer.finish() : 0;
     if (this.writer && (!this.pack || bytes !== this.lastEnd + this.codec.idBytes)) throw new Error("stored pack extent differs");
     this.writer = null;
-    this.store.exec("UPDATE stages SET phase='decoded',pack=?,bytes=?,selected=?,expected=? WHERE id=?", this.pack, bytes, this.codec.receiveCapabilities(), this.expected, this.stage);
+    this.store.exec("UPDATE stages SET phase='decoded',pack=?,bytes=?,selected=?,expected=?,has_ofs=? WHERE id=?", this.pack, bytes, this.codec.receiveCapabilities(), this.expected, Number(this.hasOfs), this.stage);
     return bytes;
   }
 

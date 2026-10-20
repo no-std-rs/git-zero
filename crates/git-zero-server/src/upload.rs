@@ -25,6 +25,7 @@ const CAPABILITY_FLAGS: &[(&[u8], u16)] = &[
     (b"shallow", 64),
     (b"filter", 128),
     (b"deepen-relative", 256),
+    (b"ofs-delta", 512),
 ];
 
 fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u16> {
@@ -187,7 +188,7 @@ impl<'a> UploadRequest<'a> {
             let fetch = crate::v2::Fetch::parse(command.args, format, want, &mut extensions)?;
             return Ok(Self {
                 done: fetch.done,
-                capabilities: Capabilities::default(),
+                capabilities: Capabilities(u16::from(fetch.ofs_delta) * 512),
                 haves: command.args,
                 v2: true,
                 #[cfg(feature = "read")]
@@ -209,6 +210,11 @@ impl<'a> UploadRequest<'a> {
             #[cfg(feature = "read")]
             include_tags: false,
         })
+    }
+
+    #[cfg(feature = "read")]
+    pub fn ofs_delta(&self) -> bool {
+        self.capabilities.0 & 512 != 0
     }
 
     pub fn require_complete(&self) -> Result<()> {

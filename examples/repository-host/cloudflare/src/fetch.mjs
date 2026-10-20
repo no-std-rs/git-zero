@@ -58,6 +58,7 @@ export class FetchJob {
     this.command = parsed.flags & 255; this.band = (parsed.flags >> 8) & 255;
     this.done = !!(parsed.flags & (1 << 16));
     this.includeTags = !!(parsed.flags & (1 << 17));
+    this.ofsDelta = !!(parsed.flags & (1 << 21));
     if (this.command !== 2) return;
     for (;;) {
       const event = this.codec.uploadNext(); if (event.tag === 74) break;
@@ -87,6 +88,7 @@ export class FetchJob {
   reusable() {
     if (!(this.history & 4) || !this.allCommitWants) return false;
     if (this.store.exec("SELECT 1 FROM fetch_haves LIMIT 1").length) return false;
+    if (!this.ofsDelta && this.store.exec("SELECT 1 FROM stages WHERE phase='published' AND reusable=1 AND expected>0 AND has_ofs<>0 LIMIT 1").length) return false;
     const sources = this.store.exec("SELECT COUNT(*) AS count,COALESCE(SUM(expected),0) AS objects,COALESCE(SUM(bytes),0) AS bytes FROM stages WHERE phase='published' AND reusable=1 AND expected>0")[0];
     const repository = this.store.exec("SELECT object_count FROM repository WHERE id=1")[0];
     if (!sources.count || sources.objects !== repository.object_count) return false;

@@ -334,3 +334,19 @@ test("compressed fetch controls enforce transport and decoded byte budgets", asy
   const real = new Codec(module, 0, { maxControlBytes: 64 });
   await assert.rejects(new FetchJob(store, real, 0).decode(request(gzipSync(Buffer.alloc(65, 97)))), CodecError);
 });
+
+
+test("offset delta permission survives the bounded upload ABI", () => {
+  for (const format of [0, 1]) for (const version of [0, 1, 2]) for (const ofs of [false, true]) {
+    const codec = new Codec(module, format), id = Buffer.alloc(format ? 32 : 20, 1).toString("hex");
+    const capability = `object-format=${format ? "sha256" : "sha1"}`;
+    const lines = version === 2 ? [packet("command=fetch\n"), packet(capability), Buffer.from("0001")] : [];
+    lines.push(packet(`want ${id}${version === 2 ? "" : ` ${capability}${ofs ? " ofs-delta" : ""}`}\n`));
+    if (version === 2 && ofs) lines.push(packet("ofs-delta\n"));
+    if (version !== 2) lines.push(Buffer.from("0000"));
+    lines.push(packet("done\n")); if (version === 2) lines.push(Buffer.from("0000"));
+    codec.uploadInit(version); codec.uploadAppend(Buffer.concat(lines));
+    assert.equal(!!(codec.uploadParse().flags & (1 << 21)), ofs);
+    codec.uploadCancel();
+  }
+});
