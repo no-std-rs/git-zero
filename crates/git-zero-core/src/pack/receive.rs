@@ -273,6 +273,8 @@ impl<'a> Decoder<'a> {
         output: &mut [u8],
         entry: EntryHeader,
     ) -> Result<DecodeProgress> {
+        let allowance = (self.limits.max_pack_bytes - self.offset).min(input.len() as u64) as usize;
+        let input = &input[..allowance];
         let progress = self
             .inflater
             .update(input, output, false)
@@ -284,6 +286,10 @@ impl<'a> Decoder<'a> {
                 }
             })?;
         self.account(&input[..progress.consumed], true)?;
+        if progress.status == InflateStatus::NeedInput && self.offset == self.limits.max_pack_bytes
+        {
+            return Err(Error::LimitExceeded);
+        }
         if let Some(hash) = &mut self.object_hash {
             hash.update(&output[..progress.written]);
         }
@@ -339,6 +345,40 @@ fn entry_header(bytes: &[u8], offset: u64, format: ObjectFormat) -> Result<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_budget_bounds_inflater_work_on_empty_nonfinal_blocks() {
+        let mut window = [0; WINDOW_SIZE];
+        let limits = DecodeLimits {
+            max_pack_bytes: 16,
+            max_objects: 1,
+            inflate: InflateLimits {
+                max_output: 0,
+                max_ratio: 1,
+                ratio_slack: 0,
+            },
+        };
+        let mut decoder = Decoder::new(ObjectFormat::Sha1, &mut window, limits);
+        decoder
+            .update(b"PACK\0\0\0\x02\0\0\0\x01", &mut [], false)
+            .unwrap();
+        decoder.update(&[0x30], &mut [], false).unwrap();
+        let mut body = [0; 511];
+        body[..2].copy_from_slice(&[0x78, 0x01]);
+        for block in body[2..502].chunks_exact_mut(5) {
+            block.copy_from_slice(&[0, 0, 0, 255, 255]);
+        }
+        body[502..].copy_from_slice(&[1, 0, 0, 255, 255, 0, 0, 0, 1]);
+        assert_eq!(
+            decoder.update(&body, &mut [], false),
+            Err(Error::LimitExceeded)
+        );
+        assert!(decoder.inflater.total_input() <= 3);
+        assert_eq!(
+            decoder.update(&[], &mut [], true),
+            Err(Error::LimitExceeded)
+        );
+    }
 
     #[test]
     fn entry_sizes_and_delta_offsets_are_not_limited_to_32_bits() {
