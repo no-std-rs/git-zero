@@ -50,6 +50,20 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     }
     const emptyState = await responseJson(await fetch(`${server.origin}/_test/${emptyNamespace}/state`, { headers: headers() }));
     assert.equal(emptyState.stages.length, 0, "empty receives must not accumulate durable stage records");
+    const batchNamespace = `batch-intake-${randomUUID()}`;
+    const batches = Array.from({ length: 1025 }, (_, i) => object(0, 3, `bounded batch ${i}`));
+    const batchPack = pack(0, batches.map((item) => entry(3, item.body)));
+    const batchResult = await upload(server, batchNamespace, { wire: wire(0, batchPack, batches.at(-1).id) }, 0);
+    assert.equal(batchResult.objects, batches.length);
+    assert.ok(batchResult.usage.sqlCalls < batches.length / 2 + 100, `intake must batch complete records: ${batchResult.usage.sqlCalls} SQL calls`);
+    const batchRows = []; let after = -1;
+    for (;;) {
+      const page = await responseJson(await fetch(`${server.origin}/_test/${batchNamespace}/stage/${batchResult.stage}?after=${after}`, { headers: headers() }));
+      if (!page.objects.length) break;
+      batchRows.push(...page.objects); after = page.objects.at(-1).node;
+    }
+    assert.equal(batchRows.length, batches.length, "the last partial batch must be flushed");
+    for (const at of [0, 511, 1024]) await canonical(server, batchNamespace, batchResult, batchRows[at], batches[at]);
     for (const format of [0, 1]) {
       for (const forward of [false, true]) {
         const namespace = `delta-${format}-${forward}-${randomUUID()}`;

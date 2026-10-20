@@ -4,6 +4,9 @@ import { ObjectSource } from "./source.mjs";
 
 const EMPTY = new Uint8Array();
 const REPRESENTATION_LIMIT = 1024 * 1024;
+// Four complete records use 60 bindings, below the SQLite binding limit.
+const OBJECT_COLUMNS = "stage,node,wire_kind,packed_size,compressed_offset,wire_base_offset,wire_base_id,kind,size,depth,end_offset,crc,oid,verified,scanned";
+const OBJECT_VALUES = "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
 export class Intake {
   constructor(store, codec, stage) {
@@ -11,7 +14,13 @@ export class Intake {
     this.source = new ObjectSource(store, codec, stage, store.namespace);
     this.writer = null; this.inPack = false; this.pack = null;
     this.commands = 0; this.options = 0; this.objects = 0; this.expected = 0;
+    this.pendingObjects = [];
     this.current = null; this.lastEnd = 12; this.eof = false;
+  }
+  flushObjects() {
+    if (!this.pendingObjects.length) return;
+    this.store.exec(`INSERT INTO stage_objects(${OBJECT_COLUMNS}) VALUES${Array(this.pendingObjects.length).fill(OBJECT_VALUES).join(",")}`, ...this.pendingObjects.flat());
+    this.pendingObjects.length = 0;
   }
   async event(event, input) {
     if (this.inPack && event.consumed) await this.writer.write(input.subarray(0, event.consumed));
@@ -37,17 +46,17 @@ export class Intake {
         this.expected = integer(event.a); break;
       case 8: {
         const node = integer(event.a), size = integer(event.b), kind = event.flags;
-        this.current = { node, size, kind, written: 0, body: size <= REPRESENTATION_LIMIT ? new Uint8Array(size) : null };
-        this.store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,wire_base_offset,wire_base_id,kind,size,depth) VALUES(?,?,?,?,?,?,?,?,?,?)", stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null);
+        this.current = { node, size, kind, written: 0, body: size <= REPRESENTATION_LIMIT ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
         this.objects++; break;
       }
       case 10: {
         const current = this.current;
         if (!current || current.written !== current.size || !!event.flags !== (current.kind < 5)) throw new Error("staged entry metadata differs");
         this.lastEnd = integer(event.a);
-        this.store.exec("UPDATE stage_objects SET end_offset=?,crc=?,oid=?,verified=?,scanned=? WHERE stage=? AND node=?", this.lastEnd, integer(event.b), event.flags ? hex(event.id) : null, event.flags ? 1 : 0, event.flags & 2 ? 1 : 0, stage, current.node);
+        this.pendingObjects.push([...current.fields, this.lastEnd, integer(event.b), event.flags ? hex(event.id) : null, event.flags ? 1 : 0, event.flags & 2 ? 1 : 0]);
+        if (this.pendingObjects.length === 4) this.flushObjects();
         if (current.body) {
-          this.source.seed(this.store.node(stage, current.node), current.body);
+          this.source.seed({ stage, node: current.node, packed_size: current.size }, current.body);
           if (event.flags & 2) this.source.canonical.put(hex(event.id), current.body);
         }
         this.current = null; break;
@@ -81,6 +90,7 @@ export class Intake {
     }
     for (let attempts = 0; !this.eof && attempts < 128; attempts++) await this.event(this.codec.receiveStep(EMPTY, true), EMPTY);
     if (!this.eof || this.current || this.objects !== this.expected) throw new Error("intake did not close exactly");
+    this.flushObjects();
     const bytes = this.writer ? await this.writer.finish() : 0;
     if (this.writer && (!this.pack || bytes !== this.lastEnd + this.codec.idBytes)) throw new Error("stored pack extent differs");
     this.writer = null;
@@ -137,6 +147,7 @@ export class Intake {
         wasmMemoryBytes: this.codec.memory.byteLength,
       };
     } catch (error) {
+      console.error(JSON.stringify({ event: "receive-rejected", stage: this.stage, phase: this.inPack ? "pack" : this.eof ? "validation" : "controls", objects: this.objects, expected: this.expected, lastEnd: this.lastEnd, queries: this.source.queries, error: String(error.message ?? error), codecError: error.code ?? null }));
       error.commands = this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", this.stage);
       error.selected = this.store.exec("SELECT selected FROM stages WHERE id=?", this.stage)[0]?.selected ?? 0;
       await this.store.abandon(this.stage);
