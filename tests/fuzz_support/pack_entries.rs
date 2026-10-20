@@ -70,42 +70,55 @@ fn entries_with_format(data: &[u8], format: ObjectFormat) {
     let mut window = [0; WINDOW_SIZE];
     let mut inflated = [0; OUTPUT + 1];
     for _ in 0..=MAX_INPUT {
-        inflated.fill(0xa5);
-        let before = reader.position();
-        let size = reader.next_entry_size();
-        assert_eq!(reader.position(), before);
-        let entry = match reader.read_entry(&mut inflated[..OUTPUT], &mut window, INFLATE) {
-            Ok(Some(entry)) => entry,
-            Ok(None) => {
-                assert_eq!(size.unwrap(), None);
-                reader.finish().unwrap();
-                assert_eq!(stream.drain().unwrap(), reader.pack_id());
-                return;
-            }
-            Err(error) => {
-                if let Err(header_error) = size {
-                    assert_eq!(header_error, error);
-                }
-                assert_eq!(reader.position(), before);
-                assert!(matches!(
-                    error,
-                    Error::CorruptPack | Error::BufferTooSmall | Error::LimitExceeded
-                ));
-                assert_eq!(inflated[OUTPUT], 0xa5);
-                assert!(stream.drain().is_err());
-                return;
-            }
+        let Some(entry) = read_entry(&mut reader, &mut inflated, &mut window, &mut stream) else {
+            return;
         };
-        assert_eq!(size.unwrap(), Some(entry.data().len() as u64));
-        assert_eq!(entry.offset(), before);
-        assert!(entry.end_offset() > before);
-        assert_eq!(entry.end_offset(), reader.position());
         stream.compare(&entry);
         check_object(&entry, bytes, &base, &mut output[..OUTPUT]);
         assert_eq!(inflated[OUTPUT], 0xa5);
         assert_eq!(output[OUTPUT], 0xa5);
     }
     panic!("pack entries failed to make bounded cursor progress");
+}
+
+fn read_entry<'out>(
+    reader: &mut Reader<'_>,
+    inflated: &'out mut [u8; OUTPUT + 1],
+    window: &mut [u8; WINDOW_SIZE],
+    stream: &mut Fragmented<'_, '_>,
+) -> Option<Entry<'out>> {
+    inflated.fill(0xa5);
+    let (output, guard) = inflated.split_at_mut(OUTPUT);
+    let before = reader.position();
+    let size = reader.next_entry_size();
+    assert_eq!(reader.position(), before);
+    let entry = match reader.read_entry(output, window, INFLATE) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => {
+            assert_eq!(size.unwrap(), None);
+            reader.finish().unwrap();
+            assert_eq!(stream.drain().unwrap(), reader.pack_id());
+            return None;
+        }
+        Err(error) => {
+            if let Err(header_error) = size {
+                assert_eq!(header_error, error);
+            }
+            assert_eq!(reader.position(), before);
+            assert!(matches!(
+                error,
+                Error::CorruptPack | Error::BufferTooSmall | Error::LimitExceeded
+            ));
+            assert_eq!(guard[0], 0xa5);
+            assert!(stream.drain().is_err());
+            return None;
+        }
+    };
+    assert_eq!(size.unwrap(), Some(entry.data().len() as u64));
+    assert_eq!(entry.offset(), before);
+    assert!(entry.end_offset() > before);
+    assert_eq!(entry.end_offset(), reader.position());
+    Some(entry)
 }
 
 struct Fragmented<'input, 'window> {
