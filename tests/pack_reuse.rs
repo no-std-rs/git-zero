@@ -274,114 +274,131 @@ fn whole_segments_preserve_shifted_ofs_and_forward_ref_bases_without_allocations
         for chunk in [1, 7, 128] {
             let mut storage = [0; 512];
             let length = allocations::without_allocations(|| {
-                let mut output = SliceWriter::new(&mut storage);
-                let mut composer = PackComposer::new(format, 4, 512, &mut output).unwrap();
-                composer.start_entry(entry(format), &mut output).unwrap();
-                composer.write_compressed(ZLIB, &mut output).unwrap();
-                composer.finish_entry().unwrap();
-                for (count, region) in [(1, reference), (2, ofs)] {
-                    composer.start_segment(count, region.len() as u64).unwrap();
-                    for bytes in region.chunks(chunk) {
-                        composer.write_compressed(bytes, &mut output).unwrap();
-                    }
-                    composer.finish_segment().unwrap();
-                }
-                composer.finish(&mut output).unwrap();
-                let mut reader = pack::Reader::new_with_format(output.as_bytes(), format).unwrap();
-                let mut window = [0; git_zero::zlib::WINDOW_SIZE];
-                let (mut empty, mut forward, mut body, mut instructions, mut target) =
-                    ([0; 64], [0; 64], [0; 64], [0; 64], [0; 64]);
-                let limits = git_zero::zlib::InflateLimits {
-                    max_output: 64,
-                    max_ratio: 64,
-                    ratio_slack: 64,
-                };
-                reader
-                    .read_entry(&mut empty, &mut window, limits)
-                    .unwrap()
-                    .unwrap();
-                let forward = reader
-                    .read_entry(&mut forward, &mut window, limits)
-                    .unwrap()
-                    .unwrap();
-                let base = reader
-                    .read_entry(&mut body, &mut window, limits)
-                    .unwrap()
-                    .unwrap();
-                let offset = base.offset();
-                let base = base.object().unwrap();
-                let delta = reader
-                    .read_entry(&mut instructions, &mut window, limits)
-                    .unwrap()
-                    .unwrap();
-                assert!(offset > 12);
-                assert_eq!(
-                    delta.kind(),
-                    pack::EntryKind::OffsetDelta {
-                        base_offset: offset
-                    }
-                );
-                let limits = pack::DeltaLimits {
-                    max_output: 64,
-                    max_instructions: 64,
-                    max_depth: 1,
-                };
-                assert_eq!(
-                    delta
-                        .resolve_delta(&base, &mut target, limits)
-                        .unwrap()
-                        .object()
-                        .data,
-                    b"hello!"
-                );
-                assert_eq!(
-                    forward
-                        .resolve_delta(&base, &mut target, limits)
-                        .unwrap()
-                        .object()
-                        .data,
-                    b"hello?"
-                );
-                reader.finish().unwrap();
-                output.len()
+                compose_segments(format, &[(1, reference), (2, ofs)], chunk, &mut storage)
             });
-            // An independent Git parser must accept the assembled checksum,
-            // shifted offsets and forward base ordering, in both hash formats.
-            let directory = std::env::temp_dir().join(format!(
-                "git-zero-segments-{}-{format:?}-{chunk}",
-                std::process::id()
-            ));
-            std::fs::create_dir_all(&directory).unwrap();
-            let init = std::process::Command::new("git")
-                .args([
-                    "init",
-                    "--bare",
-                    &format!(
-                        "--object-format={}",
-                        if format == ObjectFormat::Sha1 {
-                            "sha1"
-                        } else {
-                            "sha256"
-                        }
-                    ),
-                ])
-                .arg(&directory)
-                .output()
-                .unwrap();
-            assert!(init.status.success(), "{init:?}");
-            let path = directory.join("segments.pack");
-            std::fs::write(&path, &storage[..length]).unwrap();
-            let indexed = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&directory)
-                .args(["index-pack", "--strict"])
-                .arg(&path)
-                .output()
-                .unwrap();
-            assert!(indexed.status.success(), "{indexed:?}");
-            std::fs::remove_dir_all(directory).unwrap();
+            check_git_segment_index(&storage[..length], format, chunk);
         }
     }
+}
+
+fn compose_segments(
+    format: ObjectFormat,
+    regions: &[(u32, &[u8])],
+    chunk: usize,
+    storage: &mut [u8],
+) -> usize {
+    let mut output = SliceWriter::new(storage);
+    let mut composer = PackComposer::new(format, 4, 512, &mut output).unwrap();
+    composer.start_entry(entry(format), &mut output).unwrap();
+    composer.write_compressed(ZLIB, &mut output).unwrap();
+    composer.finish_entry().unwrap();
+    for (count, region) in regions.iter().copied() {
+        composer.start_segment(count, region.len() as u64).unwrap();
+        for bytes in region.chunks(chunk) {
+            composer.write_compressed(bytes, &mut output).unwrap();
+        }
+        composer.finish_segment().unwrap();
+    }
+    composer.finish(&mut output).unwrap();
+    check_segment_deltas(output.as_bytes(), format);
+    output.len()
+}
+
+fn check_segment_deltas(bytes: &[u8], format: ObjectFormat) {
+    let mut reader = pack::Reader::new_with_format(bytes, format).unwrap();
+    let mut window = [0; git_zero::zlib::WINDOW_SIZE];
+    let (mut empty, mut forward, mut body, mut instructions, mut target) =
+        ([0; 64], [0; 64], [0; 64], [0; 64], [0; 64]);
+    let limits = git_zero::zlib::InflateLimits {
+        max_output: 64,
+        max_ratio: 64,
+        ratio_slack: 64,
+    };
+    reader
+        .read_entry(&mut empty, &mut window, limits)
+        .unwrap()
+        .unwrap();
+    let forward = reader
+        .read_entry(&mut forward, &mut window, limits)
+        .unwrap()
+        .unwrap();
+    let base = reader
+        .read_entry(&mut body, &mut window, limits)
+        .unwrap()
+        .unwrap();
+    let offset = base.offset();
+    let base = base.object().unwrap();
+    let delta = reader
+        .read_entry(&mut instructions, &mut window, limits)
+        .unwrap()
+        .unwrap();
+    assert!(offset > 12);
+    assert_eq!(
+        delta.kind(),
+        pack::EntryKind::OffsetDelta {
+            base_offset: offset
+        }
+    );
+    let limits = pack::DeltaLimits {
+        max_output: 64,
+        max_instructions: 64,
+        max_depth: 1,
+    };
+    assert_eq!(
+        delta
+            .resolve_delta(&base, &mut target, limits)
+            .unwrap()
+            .object()
+            .data,
+        b"hello!"
+    );
+    assert_eq!(
+        forward
+            .resolve_delta(&base, &mut target, limits)
+            .unwrap()
+            .object()
+            .data,
+        b"hello?"
+    );
+    reader.finish().unwrap();
+}
+
+fn check_git_segment_index(bytes: &[u8], format: ObjectFormat, chunk: usize) {
+    // An independent Git parser must accept the assembled checksum,
+    // shifted offsets and forward base ordering, in both hash formats.
+    let directory = std::env::temp_dir().join(format!(
+        "git-zero-segments-{}-{format:?}-{chunk}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let init = std::process::Command::new("git")
+        .args([
+            "init",
+            "--bare",
+            &format!(
+                "--object-format={}",
+                if format == ObjectFormat::Sha1 {
+                    "sha1"
+                } else {
+                    "sha256"
+                }
+            ),
+        ])
+        .arg(&directory)
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{init:?}");
+    let path = directory.join("segments.pack");
+    std::fs::write(&path, bytes).unwrap();
+    let indexed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&directory)
+        .args(["index-pack", "--strict"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(indexed.status.success(), "{indexed:?}");
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

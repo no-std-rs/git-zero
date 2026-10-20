@@ -762,47 +762,7 @@ fn paged_shallow_updates_match_protocol_sections_without_allocations() {
         for version in 0..=2 {
             for done in [false, true] {
                 for count in 0..=2 {
-                    let body = shallow_body(format, version, true, done);
-                    let enabled = version != 2 || done;
-                    let mut expected = Bytes(vec![]);
-                    if enabled && count > 0 {
-                        if version == 2 {
-                            pktline::write(&mut expected, b"shallow-info\n").unwrap();
-                        }
-                        for index in 0..count {
-                            pktline::write(
-                                &mut expected,
-                                format!(
-                                    "{} {}\n",
-                                    if index == 0 { "shallow" } else { "unshallow" },
-                                    id(format, index + 1)
-                                )
-                                .as_bytes(),
-                            )
-                            .unwrap();
-                        }
-                    }
-                    if enabled && (version != 2 || count > 0) {
-                        expected
-                            .0
-                            .extend_from_slice(if version == 2 { b"0001" } else { b"0000" });
-                    }
-                    let mut storage = [0; 512];
-                    allocations::without_allocations(|| {
-                        let request = Request::parse(&body, format, version).unwrap();
-                        let mut updates = request.shallow_updates().unwrap();
-                        let mut output = SliceWriter::new(&mut storage);
-                        if enabled {
-                            for index in 0..count {
-                                updates
-                                    .change(id(format, index + 1), index != 0, &mut output)
-                                    .unwrap();
-                            }
-                        }
-                        updates.finish(&mut output).unwrap();
-                        assert_eq!(output.as_bytes(), expected.0);
-                        assert_eq!(updates.finish(&mut output), Err(Error::InvalidRequest));
-                    });
+                    check_shallow_updates(format, version, done, count);
                 }
                 let body = shallow_body(format, version, false, done);
                 let request = Request::parse(&body, format, version).unwrap();
@@ -815,6 +775,55 @@ fn paged_shallow_updates_match_protocol_sections_without_allocations() {
             }
         }
     }
+}
+
+#[cfg(feature = "read")]
+fn shallow_response(format: ObjectFormat, version: u8, enabled: bool, count: u8) -> Vec<u8> {
+    let mut expected = Bytes(vec![]);
+    if !enabled {
+        return expected.0;
+    }
+    if version == 2 && count > 0 {
+        pktline::write(&mut expected, b"shallow-info\n").unwrap();
+    }
+    for index in 0..count {
+        let marker = if index == 0 { "shallow" } else { "unshallow" };
+        pktline::write(
+            &mut expected,
+            format!("{marker} {}\n", id(format, index + 1)).as_bytes(),
+        )
+        .unwrap();
+    }
+    if version != 2 || count > 0 {
+        expected
+            .0
+            .extend_from_slice(if version == 2 { b"0001" } else { b"0000" });
+    }
+    expected.0
+}
+
+#[cfg(feature = "read")]
+fn check_shallow_updates(format: ObjectFormat, version: u8, done: bool, count: u8) {
+    use git_zero::http::stored::Request;
+    let body = shallow_body(format, version, true, done);
+    let enabled = version != 2 || done;
+    let expected = shallow_response(format, version, enabled, count);
+    let mut storage = [0; 512];
+    allocations::without_allocations(|| {
+        let request = Request::parse(&body, format, version).unwrap();
+        let mut updates = request.shallow_updates().unwrap();
+        let mut output = SliceWriter::new(&mut storage);
+        if enabled {
+            for index in 0..count {
+                updates
+                    .change(id(format, index + 1), index != 0, &mut output)
+                    .unwrap();
+            }
+        }
+        updates.finish(&mut output).unwrap();
+        assert_eq!(output.as_bytes(), expected);
+        assert_eq!(updates.finish(&mut output), Err(Error::InvalidRequest));
+    });
 }
 
 #[cfg(feature = "read")]
