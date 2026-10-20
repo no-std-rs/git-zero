@@ -45,8 +45,11 @@ export class Intake {
         const current = this.current;
         if (!current || current.written !== current.size || !!event.flags !== (current.kind < 5)) throw new Error("staged entry metadata differs");
         this.lastEnd = integer(event.a);
-        this.store.exec("UPDATE stage_objects SET end_offset=?,crc=?,oid=?,verified=? WHERE stage=? AND node=?", this.lastEnd, integer(event.b), event.flags ? hex(event.id) : null, event.flags ? 1 : 0, stage, current.node);
-        if (current.body) this.source.seed(this.store.node(stage, current.node), current.body);
+        this.store.exec("UPDATE stage_objects SET end_offset=?,crc=?,oid=?,verified=?,scanned=? WHERE stage=? AND node=?", this.lastEnd, integer(event.b), event.flags ? hex(event.id) : null, event.flags ? 1 : 0, event.flags & 2 ? 1 : 0, stage, current.node);
+        if (current.body) {
+          this.source.seed(this.store.node(stage, current.node), current.body);
+          if (event.flags & 2) this.source.canonical.put(hex(event.id), current.body);
+        }
         this.current = null; break;
       }
       case 11:

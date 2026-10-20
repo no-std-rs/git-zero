@@ -42,7 +42,10 @@ function receive(codec, fixture, chunk) {
       entries.push(current);
     }
     if ((event.tag === 9 || event.tag === 10) && event.data.length) current.body.push(Buffer.from(event.data));
-    if (event.tag === 10) { current.end = integer(event.a); current.id = event.flags ? event.id : null; }
+    if (event.tag === 10) {
+      current.end = integer(event.a); current.id = event.flags ? event.id : null;
+      assert.equal(!!(event.flags & 2), current.kind === 3, "only authenticated plain blob entries can bypass structural scanning");
+    }
     if (event.tag === 11) assert.equal(hex(event.id), hex(fixture.checksum));
     if (event.tag === 12) {
       assert.equal(offset, fixture.wire.length);

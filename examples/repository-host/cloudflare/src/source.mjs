@@ -156,6 +156,7 @@ export class ObjectSource {
       consumed += event.consumed;
       if (scan && event.tag === 31) this.store.exec("INSERT OR IGNORE INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,?)", this.stage, row.node, hex(event.id), event.flags, integer(event.a));
       if (scan && event.tag === 32) {
+        this.namesStaged = true;
         const kind = event.flags & 255;
         // A database uniqueness constraint checks aliases even when they are
         // separated in Git's tree order. Raw names are bound as exact BLOBs.
@@ -173,6 +174,7 @@ export class ObjectSource {
 
   async process(row, scan = true) {
     this.queries++;
+    this.namesStaged = false;
     // Keys identify physical immutable representations within one query. An
     // identity delta may have the same canonical ID as its external base;
     // resolving by ID again would accidentally choose the delta itself.
@@ -210,7 +212,13 @@ export class ObjectSource {
       this.store.exec("INSERT OR REPLACE INTO temp_objects(stage,object,oid,size) VALUES(?,?,?,?)", this.stage, rowKey(row), digest, row.size);
       this.rememberTemporary(rowKey(row), { oid: digest, size: row.size });
     }
-    if (scan) this.store.exec("UPDATE stage_objects SET oid=?,verified=1,scanned=1 WHERE stage=? AND node=?", digest, this.stage, row.node);
+    if (scan) {
+      this.store.exec("UPDATE stage_objects SET oid=?,verified=1,scanned=1 WHERE stage=? AND node=?", digest, this.stage, row.node);
+      // Names prove uniqueness within this one authenticated tree. Fetch uses
+      // immutable tree bytes and typed edges; these scratch rows are redundant
+      // after the full canonical digest and scanner have both succeeded.
+      if (this.namesStaged) this.store.exec("DELETE FROM stage_names WHERE stage=? AND node=?", this.stage, row.node);
+    }
     if (captured) this.canonical.put(digest, captured);
     return digest;
   }

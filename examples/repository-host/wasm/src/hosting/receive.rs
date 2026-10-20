@@ -3,7 +3,7 @@ use super::{
 };
 use core::cell::UnsafeCell;
 use git_zero::{
-    Error, ObjectFormat, Result,
+    Error, ObjectFormat, ObjectKind, Result,
     http::receive::{Capabilities, ControlDecoder, ControlEvent, Limits},
     pack::{DecodeLimits, DecodeStatus, Decoder, EntryKind},
     zlib::{InflateLimits, WINDOW_SIZE},
@@ -29,6 +29,7 @@ struct Receive {
     phase: Phase,
     selected: Capabilities,
     commands: u32,
+    blob: bool,
 }
 
 /// Init frame (72 bytes): format u32@0; control-byte limit u64@8;
@@ -80,6 +81,7 @@ fn initialize(length: usize) -> Result<()> {
             phase: Phase::Controls,
             selected: Capabilities::default(),
             commands: 0,
+            blob: false,
         });
     }
     Ok(())
@@ -240,6 +242,7 @@ impl Receive {
                 7
             }
             DecodeStatus::EntryStart(header) => {
+                self.blob = matches!(header.kind, EntryKind::Object(ObjectKind::Blob));
                 frame.wide(16, header.offset);
                 frame.wide(24, header.size);
                 frame.wide(32, decoder.position());
@@ -266,7 +269,9 @@ impl Receive {
                 frame.word(24, crc32);
                 if let Some(id) = object_id {
                     frame.id(0, id);
-                    frame.word(12, 1);
+                    // A verified plain blob has no links to scan. This remains
+                    // provisional until the complete pack and transport EOF.
+                    frame.word(12, 1 | (u32::from(self.blob) << 1));
                 }
                 10
             }

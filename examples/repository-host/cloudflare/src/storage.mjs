@@ -114,6 +114,7 @@ export class Store {
       objects: this.exec("SELECT object_count FROM repository WHERE id=1")[0]?.object_count ?? 0,
       stagedObjects: this.exec("SELECT COUNT(*) AS count FROM stage_objects")[0].count,
       stagedChunks: this.exec("SELECT COUNT(*) AS count FROM stage_chunks")[0].count,
+      treeNameScratchRows: this.exec("SELECT COUNT(*) AS count FROM stage_names")[0].count,
       quarantineRows: STAGE_METADATA.reduce((count, table) => count + this.exec(`SELECT COUNT(*) AS count FROM ${table} d JOIN stages s ON s.id=d.stage WHERE s.phase='failed'`)[0].count, 0),
       refs: this.exec("SELECT COUNT(*) AS count FROM refs")[0].count,
       stages: this.exec("SELECT id,format,phase,bytes,expected FROM stages ORDER BY created DESC LIMIT 64"),

@@ -45,6 +45,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
         assert.equal(result.quarantine, true);
         assert.equal(result.refsUpdated, 0);
         assert.equal(result.objects, 3);
+        assert.equal(result.queries, 2, "plain blob bytes authenticated by intake need no second reconstruction");
         assert.equal(result.packBytes, fixture.pack.length);
         assert.ok(result.wasmMemoryBytes <= 6 * 1024 * 1024);
         assert.ok(result.usage.r2Puts > 0);
@@ -57,6 +58,8 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const fixture = project(format);
       const result = await upload(server, namespace, fixture, format);
       for (const expected of fixture.objects) await canonical(server, namespace, result, await rowFor(server, namespace, result, expected.id), expected);
+      const scanned = await responseJson(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
+      assert.equal(scanned.treeNameScratchRows, 0, "validated tree names must not duplicate immutable tree bodies in durable storage");
       for (const [label, invalid] of [["missing", project(format, true)], ["alias", project(format, false, true)]]) {
         const name = `${label}-${format}-${randomUUID()}`;
         const response = await fetch(`${server.origin}/_test/${name}/intake`, { method: "POST", headers: headers(format), body: invalid.wire });
@@ -91,8 +94,12 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     }
     const body = randomBytes(CHUNK_BYTES + 1024 * 1024);
     const value = object(0, 3, body);
-    const packed = pack(0, [entry(3, value.body)]);
-    const fixture = { pack: packed, wire: wire(0, packed, value.id) };
+    const enlarged = object(0, 3, Buffer.concat([body, Buffer.from("!")]));
+    const size = (value) => { const bytes = []; do { const byte = value & 127; value = Math.floor(value / 128); bytes.push(byte | (value ? 128 : 0)); } while (value); return Buffer.from(bytes); };
+    const instructions = Buffer.concat([size(body.length), size(body.length + 1), Buffer.from([0xf0, body.length & 255, (body.length >> 8) & 255, body.length >> 16, 1, 33])]);
+    const plainEntry = entry(3, value.body), deltaEntry = entry(7, instructions, value.id);
+    const packed = pack(0, [plainEntry, deltaEntry]);
+    const fixture = { pack: packed, wire: wire(0, packed, enlarged.id) };
     const namespace = `chunked-${randomUUID()}`;
     const result = await responseJson(await fetch(`${server.origin}/_test/${namespace}/intake`, { method: "POST", headers: headers(), body: chunked(fixture.wire, 65536), duplex: "half" }));
     assert.equal(result.packBytes, packed.length);
@@ -107,13 +114,13 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     assert.equal(rejected.status, 400); await rejected.text();
     const shared = await responseJson(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
     assert.equal(shared.stagedChunks, 2, "failed owner must release claims while keeping both chunks owned by a verified stage");
-    assert.equal(shared.stagedObjects, 1, "failed intake metadata must be reclaimed");
+    assert.equal(shared.stagedObjects, 2, "failed intake metadata must be reclaimed");
     const retained = await responseJson(await fetch(`${server.origin}/_test/${namespace}/object/${result.stage}?node=12`, { headers: headers() }));
     assert.equal(retained.oid, value.id.toString("hex"), "shared first chunk must remain readable after failed intake cleanup");
 
     const failedNamespace = `reclaim-${randomUUID()}`;
-    const invalidCommit = object(0, 1, `tree ${"0".repeat(40)}\n\nmissing target\n`);
-    const invalidPack = pack(0, [entry(3, value.body), entry(1, invalidCommit.body)]);
+    const invalidCommit = object(0, 1, `tree ${"1".repeat(40)}\n\nmissing target\n`);
+    const invalidPack = pack(0, [plainEntry, deltaEntry, entry(1, invalidCommit.body)]);
     const invalid = await fetch(`${server.origin}/_test/${failedNamespace}/intake`, { method: "POST", headers: headers(), body: chunked(wire(0, invalidPack, invalidCommit.id), 65536), duplex: "half" });
     assert.equal(invalid.status, 400); await invalid.text();
     const reclaimed = await responseJson(await fetch(`${server.origin}/_test/${failedNamespace}/state`, { headers: headers() }));

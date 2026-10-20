@@ -140,6 +140,12 @@ across restarts and backups. workerd's disk-backed Durable Object API is
 experimental, so this candidate pins the runtime through the lockfile and still
 requires Linux-scale and live-environment validation before shipping.
 
+Plain blobs need no second reconstruction after the intake decoder has hashed
+their complete bodies; they have no structural links. Small authenticated blob
+bodies also warm the bounded base cache directly. Tree-name uniqueness rows
+are scratch for one tree and are removed only after its full scanner and
+canonical digest succeed; typed graph edges remain available to fetch planning.
+
 For a reviewable scale run, use `node scripts/benchmark.mjs --source REPO
 --work-dir NEW_DIRECTORY` from the Cloudflare directory. The default runtime
 freezes the current bundle and starts actual Wrangler R2/SQLite, so later edits
