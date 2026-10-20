@@ -1,0 +1,59 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { request } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { test } from "node:test";
+import { startStandalone } from "./standalone.mjs";
+import { headers, start } from "./wrangler.mjs";
+
+async function entered(directory, namespace) {
+  for (const file of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, file.name);
+    if (file.isDirectory()) { if (await entered(path, namespace)) return true; continue; }
+    if (!file.name.endsWith(".sqlite")) continue;
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      if (!database.prepare("SELECT 1 FROM sqlite_master WHERE name='host_identity'").get()) continue;
+      if (database.prepare("SELECT namespace FROM host_identity WHERE id=1").get()?.namespace === namespace) return true;
+    } catch (error) {
+      if (error.errcode !== 5 && error.errcode !== 6) throw error;
+    } finally { database.close(); }
+  }
+  return false;
+}
+
+async function waitForHandler(directory, namespace) {
+  for (let attempt = 0; attempt < 300; attempt++) {
+    if (await entered(directory, namespace)) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail("partial POST never entered its repository handler");
+}
+
+for (const [runtime, serve] of [["Wrangler R2/SQLite", (persist) => start(persist, { frozen: true })], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} releases queues held by idle request bodies`, { timeout: 120000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "git-zero-idle-body-"));
+  const clients = []; let server;
+  try {
+    server = await serve(directory);
+    await Promise.all(["git-receive-pack", "git-upload-pack"].map(async (service) => {
+      const namespace = `body-${service}-${randomUUID()}`;
+      const client = request(`${server.origin}/${namespace}.git/${service}`, { method: "POST", headers: { ...headers(), "content-type": `application/x-${service}-request` } }, (response) => response.resume());
+      clients.push(client); client.on("error", () => {});
+      client.write("000"); // Deliberately leave both the pkt-line and HTTP body open.
+      await waitForHandler(directory, namespace);
+      const waiting = Date.now();
+      let completed = false;
+      const queued = fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers(), signal: AbortSignal.timeout(75000) }).then(async (response) => {
+        assert.equal(response.status, 200); const state = await response.json(); completed = true; return state;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(completed, false, "the open POST must actually hold the repository queue");
+      const state = await queued;
+      assert.ok(Date.now() - waiting >= 55000, "the configured input deadline, rather than a worker reload, must release the queue");
+      assert.equal(state.refs, 0); assert.equal(state.objects, 0); assert.deepEqual(state.stages, []);
+    }));
+  } finally { for (const client of clients) client.destroy(); await server?.stop(); await rm(directory, { recursive: true, force: true }); }
+});

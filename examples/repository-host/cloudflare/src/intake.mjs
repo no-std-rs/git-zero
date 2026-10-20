@@ -1,6 +1,7 @@
 import { hex, integer } from "./codec.mjs";
 import { ChunkWriter, blob } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
+import { requestBody } from "./body.mjs";
 
 const EMPTY = new Uint8Array();
 const REPRESENTATION_LIMIT = 1024 * 1024;
@@ -71,22 +72,14 @@ export class Intake {
 
   async decode(request) {
     this.codec.receiveInit();
-    const reader = request.body?.getReader();
-    if (reader) {
-      try {
-        for (;;) {
-          const item = await reader.read();
-          if (item.done) break;
-          let offset = 0;
-          while (offset < item.value.length) {
-            const input = item.value.subarray(offset, Math.min(offset + 65536, item.value.length));
-            const event = this.codec.receiveStep(input, false);
-            await this.event(event, input); offset += event.consumed;
-            if (event.consumed === 0 && event.written === 0 && event.tag === 1) throw new Error("input decoder made no progress");
-          }
-        }
-      } catch (error) { await reader.cancel().catch(() => {}); throw error; }
-      finally { reader.releaseLock(); }
+    for await (const bytes of requestBody(request.body)) {
+      let offset = 0;
+      while (offset < bytes.length) {
+        const input = bytes.subarray(offset, Math.min(offset + 65536, bytes.length));
+        const event = this.codec.receiveStep(input, false);
+        await this.event(event, input); offset += event.consumed;
+        if (event.consumed === 0 && event.written === 0 && event.tag === 1) throw new Error("input decoder made no progress");
+      }
     }
     for (let attempts = 0; !this.eof && attempts < 128; attempts++) await this.event(this.codec.receiveStep(EMPTY, true), EMPTY);
     if (!this.eof || this.current || this.objects !== this.expected) throw new Error("intake did not close exactly");

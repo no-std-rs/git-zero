@@ -15,6 +15,7 @@ const config :Workerd.Config = (
         (name = "src/publication.mjs", esModule = embed "src/publication.mjs"),
         (name = "src/fetch.mjs", esModule = embed "src/fetch.mjs"),
         (name = "src/response.mjs", esModule = embed "src/response.mjs"),
+        (name = "src/body.mjs", esModule = embed "src/body.mjs"),
         (name = "build/git_zero_host_wasm.wasm", wasm = embed "build/git_zero_host_wasm.wasm"),
       ],
       compatibilityDate = "2026-10-06",

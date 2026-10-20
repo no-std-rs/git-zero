@@ -1,6 +1,7 @@
 import { hex, integer } from "./codec.mjs";
 import { bytes, FETCH_TABLES, PAGE_BYTES } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
+import { requestBody } from "./body.mjs";
 
 const encode = (value) => new TextEncoder().encode(value);
 const fromHex = (value) => Uint8Array.from(value.match(/../g), (pair) => Number.parseInt(pair, 16));
@@ -50,15 +51,8 @@ export class FetchJob {
         },
       })).pipeThrough(new DecompressionStream("gzip"));
     }
-    const reader = stream?.getReader();
-    if (reader) {
-      try {
-        for (;;) {
-          const item = await reader.read(); if (item.done) break;
-          for (let offset = 0; offset < item.value.length; offset += PAGE_BYTES) this.codec.uploadAppend(item.value.subarray(offset, offset + PAGE_BYTES));
-        }
-      } catch (error) { await reader.cancel().catch(() => {}); throw error; }
-      finally { reader.releaseLock(); }
+    for await (const bytes of requestBody(stream)) {
+      for (let offset = 0; offset < bytes.length; offset += PAGE_BYTES) this.codec.uploadAppend(bytes.subarray(offset, offset + PAGE_BYTES));
     }
     const parsed = this.codec.uploadParse();
     this.command = parsed.flags & 255; this.band = (parsed.flags >> 8) & 255;
