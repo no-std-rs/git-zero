@@ -129,6 +129,10 @@ name = "delta_streaming"
 required-features = ["read"]
 
 [[test]]
+name = "index_lookup"
+required-features = ["read", "write"]
+
+[[test]]
 name = "receive"
 required-features = ["read", "server"]
 

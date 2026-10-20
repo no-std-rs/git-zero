@@ -142,6 +142,12 @@ at three fragment sizes and compares it with bodies checked by `cat-file`.
 Allocation tracking covers the fixed parser state and chunked `ObjectDigest`;
 its IDs are compared with independent canonical SHA-1/SHA-256 hashes.
 
+`index_lookup` checks every ID and missing neighbor in SHA-1/SHA-256 indexes,
+mixed direct/64-bit offsets, malformed ranges and sticky failures, empty indexes,
+and logical index offsets above 4 GiB without allocating the index. Lookup state
+is allocation tracked; the real Git pack fixture checks every Git-produced index
+entry through the same resumable range interface.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are

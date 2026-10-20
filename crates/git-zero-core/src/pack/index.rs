@@ -1,25 +1,6 @@
 //! Version-2 pack indexes built from caller-owned entry metadata.
-use super::{LooseEncoder, crc::Crc32, encode};
+use super::{IndexEntry, LooseEncoder, crc::Crc32, encode};
 use crate::{Error, ObjectId, Repository, Result, io::Write, object::Hash};
-
-/// Metadata for one complete encoded pack entry. Offsets include the pack header;
-/// CRCs cover its type/length header and complete zlib stream. An index's entries
-/// must be unique and sorted by ID. Fields do not authenticate a foreign pack.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct IndexEntry {
-    pub id: ObjectId,
-    pub offset: u64,
-    pub crc32: u32,
-}
-
-impl IndexEntry {
-    /// Initial value for caller-owned metadata arrays; overwritten during encoding.
-    pub const EMPTY: Self = Self {
-        id: ObjectId::Sha1([0; 20]),
-        offset: 0,
-        crc32: 0,
-    };
-}
 
 /// Stream a stored-block pack and a version-2 index without buffering either.
 /// `order` selects unique object indices or `None` selects the whole repository.

@@ -26,6 +26,13 @@ Execute every event before resuming and use `ObjectDigest` to hash output chunks
 with the inherited kind and declared size. A completed delta authenticates its
 syntax; the host still verifies storage I/O, object identity and connectivity.
 
+`pack::IndexHeader` retains only a version-2 index's 1032-byte header/fanout.
+Its independent `IndexLookup` states request exact ranges for binary search,
+CRCs and direct/64-bit offsets, without loading the complete index. Hosts can
+await reads and cache larger immutable storage pages. Authenticate index bytes,
+ordering and their pack relationship before using this lookup API; parsing a
+header alone does not establish integrity or trustworthy absence.
+
 `read` enables zlib inflation, pack/delta decoding and repository validation.
 `write` enables snapshots, pack/zlib encoding and pack caching. Both are enabled
 by default. Object IDs, borrowed objects, repositories, readers, packet lines and

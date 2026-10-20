@@ -6,6 +6,16 @@ mod crc;
 #[cfg(any(feature = "read", feature = "write"))]
 pub use crc::crc32;
 
+#[cfg(any(feature = "read", feature = "write"))]
+mod index_entry;
+#[cfg(any(feature = "read", feature = "write"))]
+pub use index_entry::IndexEntry;
+
+#[cfg(feature = "read")]
+mod index_lookup;
+#[cfg(feature = "read")]
+pub use index_lookup::{IndexHeader, IndexLookup, IndexRange, LookupStatus};
+
 #[cfg(feature = "read")]
 mod decode;
 #[cfg(feature = "read")]
@@ -31,7 +41,7 @@ pub use materialize::{
 #[cfg(feature = "write")]
 mod index;
 #[cfg(feature = "write")]
-pub use index::{IndexEntry, write_index, write_indexed_with_scratch};
+pub use index::{write_index, write_indexed_with_scratch};
 
 #[cfg(feature = "write")]
 mod encode;

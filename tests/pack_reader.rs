@@ -515,6 +515,7 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
     );
     let index = std::fs::read(&index_path).unwrap();
     let rows = index_rows(&index);
+    verify_index_ranges(&index, bytes.len() as u64, &rows);
     let count = rows.len();
     let mut window = [0; WINDOW_SIZE];
     let mut buffers: Vec<_> = (0..count).map(|_| vec![0; CAPACITY]).collect();
@@ -567,6 +568,40 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
     assert_eq!(kinds, [true; 4], "commit/tree/blob/tag coverage");
     // One independent Git process validates every body and its batch envelope.
     assert_eq!(decoded, git(directory, &["cat-file", "--batch"], &requests));
+}
+
+fn verify_index_ranges(index: &[u8], pack_bytes: u64, rows: &[(ObjectId, u32, u64)]) {
+    use pack::{IndexHeader, LookupStatus};
+    let header = IndexHeader::parse(
+        git_zero::ObjectFormat::Sha1,
+        &index[..1032],
+        index.len() as u64,
+        pack_bytes,
+    )
+    .unwrap();
+    assert_eq!(header.object_count() as usize, rows.len());
+    for (row, &(id, crc32, offset)) in rows.iter().enumerate() {
+        let mut lookup = header.lookup(id).unwrap();
+        loop {
+            match lookup.status().unwrap() {
+                LookupStatus::Read(range) => {
+                    lookup
+                        .update(&index[range.offset as usize..range.offset as usize + range.length])
+                        .unwrap();
+                }
+                result => {
+                    assert_eq!(
+                        result,
+                        LookupStatus::Found {
+                            row: row as u32,
+                            entry: pack::IndexEntry { id, offset, crc32 }
+                        }
+                    );
+                    break;
+                }
+            }
+        }
+    }
 }
 
 fn index_rows(index: &[u8]) -> Vec<(ObjectId, u32, u64)> {
