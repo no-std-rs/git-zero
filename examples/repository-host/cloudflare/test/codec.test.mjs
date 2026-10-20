@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { deflateSync } from "node:zlib";
+import { deflateSync, gzipSync } from "node:zlib";
 import { Codec, CodecError, hex, integer } from "../src/codec.mjs";
+
+import { FetchJob } from "../src/fetch.mjs";
 
 const module = await WebAssembly.compile(await readFile(new URL("../build/git_zero_host_wasm.wasm", import.meta.url)));
 const empty = new Uint8Array();
@@ -256,4 +258,19 @@ test("malformed intake is terminal and a fresh session clears old scratch", () =
   codec.stage(new Uint8Array(1));
   assert.equal(codec.exports.host_range_init(1), -3);
   assert.throws(() => codec.rangeRequest(), (error) => error.code === -3);
+});
+
+
+test("compressed fetch controls enforce transport and decoded byte budgets", async () => {
+  let parsed = false;
+  const codec = { limits: { maxControlBytes: 64 }, uploadInit() {}, uploadAppend() {}, uploadParse() { parsed = true; return { flags: 0 }; } };
+  const store = { namespace: "gzip-budget", exec() { return []; } };
+  const request = (body) => new Request("http://example.test/repo.git/git-upload-pack", { method: "POST", headers: { "content-encoding": "gzip" }, body });
+  const emptyBlocks = Buffer.concat([Buffer.from("1f8b0800000000000003", "hex"), ...Array.from({ length: 20 }, () => Buffer.from([0, 0, 0, 255, 255])), Buffer.from([1, 0, 0, 255, 255]), Buffer.alloc(8)]);
+  await assert.rejects(new FetchJob(store, codec, 0).decode(request(emptyBlocks)), /compressed fetch controls exceed byte limit/);
+  assert.equal(parsed, false, "oversized compressed input must fail before parsing");
+  await new FetchJob(store, codec, 0).decode(request(gzipSync(Buffer.from("0000"))));
+  assert.equal(parsed, true);
+  const real = new Codec(module, 0, { maxControlBytes: 64 });
+  await assert.rejects(new FetchJob(store, real, 0).decode(request(gzipSync(Buffer.alloc(65, 97)))), CodecError);
 });

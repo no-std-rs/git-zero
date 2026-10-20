@@ -100,6 +100,7 @@ export class Store {
     return rows;
   }
   initialize(format) {
+    if (format !== 0 && format !== 1) throw new RangeError("unsupported object format");
     const current = this.exec("SELECT * FROM repository WHERE id=1")[0];
     if (current && current.format !== format) throw new Error("repository object format differs");
     if (!current) this.exec("INSERT INTO repository(id,format,generation,head) VALUES(1,?,0,?)", format, blob(new TextEncoder().encode("refs/heads/main")));

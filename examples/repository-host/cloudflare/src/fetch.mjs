@@ -41,7 +41,14 @@ export class FetchJob {
     const coding = request.headers.get("content-encoding");
     if (coding && coding !== "identity") {
       if (coding !== "gzip" || !stream) throw new Error("unsupported HTTP content coding");
-      stream = stream.pipeThrough(new DecompressionStream("gzip"));
+      let encoded = 0;
+      stream = stream.pipeThrough(new TransformStream({
+        transform: (chunk, controller) => {
+          encoded += chunk.byteLength;
+          if (encoded > this.codec.limits.maxControlBytes) throw new Error("compressed fetch controls exceed byte limit");
+          controller.enqueue(chunk);
+        },
+      })).pipeThrough(new DecompressionStream("gzip"));
     }
     const reader = stream?.getReader();
     if (reader) {

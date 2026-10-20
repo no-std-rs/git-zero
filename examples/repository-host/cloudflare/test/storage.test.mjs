@@ -37,6 +37,12 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     server = await serve(persist);
     assert.equal((await fetch(`${server.origin}/_test/unauthorized/state`)).status, 401);
     assert.equal((await fetch(`${server.origin}/_services/register`, { method: "POST", headers: headers(), body: "{}" })).status, 404);
+    const invalidNamespace = `invalid-format-${randomUUID()}`;
+    const invalidFormat = await fetch(`${server.origin}/_test/${invalidNamespace}/initialize`, { method: "POST", headers: { ...headers(), "x-test-format": "2" } });
+    assert.equal(invalidFormat.status, 400); await invalidFormat.arrayBuffer();
+    await responseJson(await fetch(`${server.origin}/_test/${invalidNamespace}/initialize`, { method: "POST", headers: headers(1) }));
+    const corrected = await responseJson(await fetch(`${server.origin}/_test/${invalidNamespace}/state`, { headers: headers() }));
+    assert.equal(corrected.stages.length, 0);
     const emptyNamespace = `empty-receive-${randomUUID()}`;
     for (let attempt = 0; attempt < 70; attempt++) {
       const response = await fetch(`${server.origin}/${emptyNamespace}.git/git-receive-pack`, { method: "POST", headers: headers(), body: "0000" });
