@@ -47,6 +47,11 @@ and contained prefixes reuse slots. Request bodies have a 60-second input idle
 deadline that excludes chunk processing. Response readers have a 60-second idle
 deadline, reset whenever output is pulled, so stalled clients release repository
 scratch after cleanup without imposing a total transfer deadline.
+The npm lockfile pins a runtime containing Cloudflare's
+[RPC stream EOF accounting fix](https://github.com/cloudflare/workerd/commit/0edfb056c6fafb04a584cf23297b3de91bfcac7a).
+Use `npm ci` to install that exact runtime; older builds can fail or truncate
+compressed responses received over RPC.
+
 Full Linux end-to-end validation is running; component
 decoder measurements do not establish a complete hosting result.
 
