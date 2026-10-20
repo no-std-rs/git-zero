@@ -6,9 +6,9 @@ use git_zero_core::{Error, ObjectFormat, Result, io::Write};
 mod advertisement;
 mod control;
 mod report;
-pub use advertisement::write_advertisement;
+pub use advertisement::{Advertisement, write_advertisement};
 pub use control::{Command, ControlDecoder, ControlEvent, ControlProgress, Limits};
-pub use report::{Report, write_progress};
+pub use report::{Report, Status, write_progress};
 
 const FLAGS: &[(&[u8], u16)] = &[
     (b"report-status", 1),

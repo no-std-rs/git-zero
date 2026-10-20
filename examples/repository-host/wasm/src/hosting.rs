@@ -11,6 +11,7 @@ mod graph;
 mod ranges;
 mod receive;
 mod source;
+mod wire;
 
 pub(super) const INPUT_BYTES: usize = 65536;
 pub(super) const OUTPUT_BYTES: usize = 131072;

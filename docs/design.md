@@ -76,6 +76,30 @@ async snapshot persistence, but no complete-pack KV/R2 cache integration or
 deployed performance measurements. Server parity is still incomplete; further
 client and receive-pack work follows its completion gate.
 
+The separate repository-host prototype now has an own-codec receive path at
+`examples/repository-host/cloudflare/wrangler.streamed.toml`. Its Rust Wasm
+module has fixed memory and no allocator/imports. Runtime glue streams incoming
+packs into 8 MiB authenticated R2 chunks and records private object metadata in
+SQLite. Rust resolves delta ranges, hashes canonical objects and scans typed
+graph links before a SQLite transaction publishes refs. The catalog stays in
+place when published; refs and stage visibility change atomically. No Git
+executable or external codec service participates in this path.
+
+From that Cloudflare directory, `npm ci` and `npm run test:streamed` build the
+Wasm module and run actual Wrangler R2/SQLite tests. Tests include ordinary Git
+push clients in SHA-1/SHA-256, thin incremental packs, protocol preference 0/1/2,
+atomic updates, push options, deletion, HTTP chunking, concurrent stale updates,
+invalid graphs and cold restarts. The config defaults to `TEST_MODE=false`;
+private fixture endpoints require both test mode and authentication. Public
+receive requests use `/<repository>.git/info/refs?service=git-receive-pack` and
+`/<repository>.git/git-receive-pack`, with `HOST_TOKEN` supplied as a secret.
+
+This receive prototype does not yet serve clone/fetch. It has not passed a full
+Linux push through Wrangler or a live deployment. Linux-scale metadata storage,
+ingress beyond Cloudflare request limits and measured hosting cost remain open;
+component pack-decoder measurements are not end-to-end hosting results. The
+default older example config is still a separate reference implementation.
+
 ## Workspace
 
 | Location | Responsibility |

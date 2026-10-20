@@ -20,13 +20,22 @@ export class ObjectSource {
     this.queries = 0; this.storageReads = 0; this.historicalModes = 0;
   }
 
-  key(row) { return row.stage ? { staged: row.node } : { id: Uint8Array.from(row.oid.match(/../g), (pair) => Number.parseInt(pair, 16)) }; }
+  key(row) {
+    const physical = rowKey(row);
+    let index = this.queryKeys.get(physical);
+    if (index === undefined) {
+      if (this.queryRows.length > this.codec.limits.maxDepth) throw new Error("query metadata budget exceeded");
+      index = this.queryRows.length; this.queryRows.push(row); this.queryKeys.set(physical, index);
+    }
+    return { staged: index };
+  }
   lookup(key) {
-    const row = key.staged !== undefined ? this.store.node(this.stage, integer(key.staged)) : this.store.object(this.stage, hex(key.id));
+    const row = key.staged !== undefined ? this.queryRows[integer(key.staged)] : undefined;
     if (!row || !row.verified || row.kind === null || row.size === null) throw new Error("canonical base is absent or unverified");
     return row;
   }
   base(row) {
+    if (row.base_stage && row.base_node !== null) return this.store.node(row.base_stage, row.base_node);
     if (row.base_node !== null && row.base_node !== undefined && row.stage) return this.store.node(row.stage, row.base_node);
     if (row.base_oid) return this.store.object(this.stage, row.base_oid);
     if (row.wire_base_offset !== null && row.wire_base_offset !== undefined) return this.store.node(row.stage, row.wire_base_offset);
@@ -164,8 +173,13 @@ export class ObjectSource {
 
   async process(row, scan = true) {
     this.queries++;
+    // Keys identify physical immutable representations within one query. An
+    // identity delta may have the same canonical ID as its external base;
+    // resolving by ID again would accidentally choose the delta itself.
+    this.queryKeys = new Map(); this.queryRows = [];
+    const rootKey = this.key(row);
     const descriptor = this.descriptor(row);
-    this.codec.rangeInit(this.key(row)); this.codec.graphInit(info(row));
+    this.codec.rangeInit(rootKey); this.codec.graphInit(info(row));
     const captured = row.size <= CANONICAL_ENTRY_BYTES ? new Uint8Array(row.size) : null;
     const temporary = captured === null ? new ChunkWriter(this.store, this.stage, rowKey(row)) : null;
     let written = 0, digest;
@@ -173,10 +187,10 @@ export class ObjectSource {
       const request = this.codec.rangeRequest();
       if (request.tag === 20) {
         // The root may be quarantined; every descended base must be verified.
-        const current = request.key.staged !== undefined && integer(request.key.staged) === row.node && row.stage === this.stage ? row : this.lookup(request.key);
+        const current = request.key.staged !== undefined && integer(request.key.staged) === rootKey.staged ? row : this.lookup(request.key);
         this.codec.rangeDescribe(current === row ? descriptor : this.descriptor(current));
       } else if (request.tag === 21) {
-        const root = request.key.staged !== undefined && integer(request.key.staged) === row.node && row.stage === this.stage;
+        const root = request.key.staged !== undefined && integer(request.key.staged) === rootKey.staged;
         const offset = integer(request.a), length = integer(request.b);
         const input = root ? await this.readRow(row, request.flags, offset, length) : await this.read(request.key, request.flags, offset, length);
         const event = this.codec.rangeFeed(input);

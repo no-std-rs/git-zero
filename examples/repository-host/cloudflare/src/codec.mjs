@@ -105,6 +105,21 @@ export class Codec {
   receiveCapabilities() { return this.invoke("host_receive_capabilities"); }
   receiveCancel() { this.invoke("host_receive_cancel"); }
 
+  advertStart() { return this.event("host_advert_start", null, this.format, this.limits.capabilities).data; }
+  advertRef(id, name) {
+    const f = fields(32 + name.length); this.id(f, 0, id); f.bytes.set(name, 32);
+    return this.event("host_advert_ref", f.bytes).data;
+  }
+  advertFinish() { return this.event("host_advert_finish", null).data; }
+  statusStart(selected, reason = new Uint8Array()) { return this.event("host_status_start", reason, selected).data; }
+  statusRef(name, reason = new Uint8Array()) {
+    const f = fields(4 + name.length + reason.length); f.word(0, name.length);
+    f.bytes.set(name, 4); f.bytes.set(reason, 4 + name.length);
+    return this.event("host_status_ref", f.bytes).data;
+  }
+  statusFinish() { return this.event("host_status_finish", null).data; }
+  progress(selected, message) { return this.event("host_progress", message, selected).data; }
+
   rangeInit(key, range = null) {
     const f = fields(104), l = this.limits;
     f.word(0, this.format); this.key(f, 4, 8, 16, key);

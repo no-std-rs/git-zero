@@ -30,15 +30,16 @@ export class ByteCache {
 }
 
 const SCHEMA = [
-  "CREATE TABLE IF NOT EXISTS repository (id INTEGER PRIMARY KEY, format INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0, head BLOB NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS repository (id INTEGER PRIMARY KEY, format INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0, object_count INTEGER NOT NULL DEFAULT 0, head BLOB NOT NULL)",
   "CREATE TABLE IF NOT EXISTS stages (id TEXT PRIMARY KEY, format INTEGER NOT NULL, phase TEXT NOT NULL, created INTEGER NOT NULL, pack TEXT, bytes INTEGER NOT NULL DEFAULT 0, selected INTEGER NOT NULL DEFAULT 0, expected INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
-  "CREATE TABLE IF NOT EXISTS stage_commands (stage TEXT NOT NULL, seq INTEGER NOT NULL, name BLOB NOT NULL, old_oid TEXT NOT NULL, new_oid TEXT NOT NULL, branch INTEGER NOT NULL, PRIMARY KEY(stage,seq), UNIQUE(stage,name)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS stage_commands (stage TEXT NOT NULL, seq INTEGER NOT NULL, name BLOB NOT NULL, old_oid TEXT NOT NULL, new_oid TEXT NOT NULL, branch INTEGER NOT NULL, creation INTEGER NOT NULL, deletion INTEGER NOT NULL, PRIMARY KEY(stage,seq), UNIQUE(stage,name)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_options (stage TEXT NOT NULL, seq INTEGER NOT NULL, value BLOB NOT NULL, PRIMARY KEY(stage,seq)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_shallow (stage TEXT NOT NULL, oid TEXT NOT NULL, PRIMARY KEY(stage,oid)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS stage_chunks (stage TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS stage_chunk_offsets ON stage_chunks(stage,start)",
-  "CREATE TABLE IF NOT EXISTS stage_objects (stage TEXT NOT NULL, node INTEGER NOT NULL, wire_kind INTEGER NOT NULL, packed_size INTEGER NOT NULL, compressed_offset INTEGER NOT NULL, end_offset INTEGER, crc INTEGER, wire_base_offset INTEGER, wire_base_id TEXT, oid TEXT, kind INTEGER, size INTEGER, depth INTEGER, base_node INTEGER, base_oid TEXT, verified INTEGER NOT NULL DEFAULT 0, scanned INTEGER NOT NULL DEFAULT 0, ready INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(stage,node)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS stage_objects (stage TEXT NOT NULL, node INTEGER NOT NULL, wire_kind INTEGER NOT NULL, packed_size INTEGER NOT NULL, compressed_offset INTEGER NOT NULL, end_offset INTEGER, crc INTEGER, wire_base_offset INTEGER, wire_base_id TEXT, oid TEXT, kind INTEGER, size INTEGER, depth INTEGER, base_stage TEXT, base_node INTEGER, base_oid TEXT, verified INTEGER NOT NULL DEFAULT 0, scanned INTEGER NOT NULL DEFAULT 0, ready INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(stage,node)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS stage_object_ids ON stage_objects(stage,oid)",
+  "CREATE INDEX IF NOT EXISTS published_object_ids ON stage_objects(oid,stage)",
   "CREATE INDEX IF NOT EXISTS stage_object_work ON stage_objects(stage,verified,scanned,node)",
   "CREATE INDEX IF NOT EXISTS stage_ready_work ON stage_objects(stage,verified,ready,node)",
   "CREATE INDEX IF NOT EXISTS stage_offset_dependencies ON stage_objects(stage,wire_base_offset,verified)",
@@ -48,13 +49,8 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS temp_chunks (stage TEXT NOT NULL, object TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,object,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS temp_chunk_offsets ON temp_chunks(stage,object,start)",
   "CREATE TABLE IF NOT EXISTS temp_objects (stage TEXT NOT NULL, object TEXT NOT NULL, oid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(stage,object)) WITHOUT ROWID",
-  "CREATE TABLE IF NOT EXISTS objects (oid TEXT PRIMARY KEY, kind INTEGER NOT NULL, size INTEGER NOT NULL, depth INTEGER NOT NULL, pack TEXT NOT NULL, offset INTEGER NOT NULL, end_offset INTEGER NOT NULL, compressed_offset INTEGER NOT NULL, wire_kind INTEGER NOT NULL, packed_size INTEGER NOT NULL, base_oid TEXT) WITHOUT ROWID",
-  "CREATE TABLE IF NOT EXISTS packs (id TEXT PRIMARY KEY, bytes INTEGER NOT NULL, format INTEGER NOT NULL) WITHOUT ROWID",
-  "CREATE TABLE IF NOT EXISTS chunks (pack TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(pack,seq)) WITHOUT ROWID",
-  "CREATE INDEX IF NOT EXISTS chunk_offsets ON chunks(pack,start)",
   "CREATE TABLE IF NOT EXISTS refs (name BLOB PRIMARY KEY, oid TEXT NOT NULL) WITHOUT ROWID",
-  "CREATE TABLE IF NOT EXISTS edges (oid TEXT NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, relation INTEGER NOT NULL, PRIMARY KEY(oid,relation,dst)) WITHOUT ROWID",
-  "CREATE TABLE IF NOT EXISTS tree_names (oid TEXT NOT NULL, name BLOB NOT NULL, mode INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, PRIMARY KEY(oid,name)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS proposed_refs (name BLOB PRIMARY KEY, seq INTEGER) WITHOUT ROWID",
 ];
 
 export class Store {
@@ -87,12 +83,15 @@ export class Store {
   node(stage, node) { return this.exec("SELECT * FROM stage_objects WHERE stage=? AND node=?", stage, node)[0]; }
   object(stage, oid) {
     return this.exec("SELECT * FROM stage_objects WHERE stage=? AND oid=? AND verified=1 LIMIT 1", stage, oid)[0]
-      ?? this.exec("SELECT *,NULL AS stage,offset AS node,1 AS verified,1 AS scanned FROM objects WHERE oid=?", oid)[0];
+      ?? this.published(oid);
+  }
+  published(oid) {
+    return this.exec("SELECT o.* FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE o.oid=? AND s.phase='published' AND o.verified=1 LIMIT 1", oid)[0];
   }
   statistics() {
     return {
       usage: { ...this.usage, sqlRowsRead: this.sqlKnown ? this.usage.sqlRowsRead : null, sqlRowsWritten: this.sqlKnown ? this.usage.sqlRowsWritten : null },
-      objects: this.exec("SELECT COUNT(*) AS count FROM objects")[0].count,
+      objects: this.exec("SELECT object_count FROM repository WHERE id=1")[0]?.object_count ?? 0,
       stagedObjects: this.exec("SELECT COUNT(*) AS count FROM stage_objects")[0].count,
       refs: this.exec("SELECT COUNT(*) AS count FROM refs")[0].count,
       stages: this.exec("SELECT id,format,phase,bytes,expected FROM stages ORDER BY created DESC LIMIT 64"),

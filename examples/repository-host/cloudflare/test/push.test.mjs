@@ -1,0 +1,118 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { entry, object, packet, pack, project, wire } from "./fixture.mjs";
+import { headers, start, TOKEN } from "./wrangler.mjs";
+
+async function git(directory, ...args) {
+  const child = spawn("git", ["-c", "user.name=Worker test", "-c", "user.email=worker@example.test", "-c", "http.extraHeader=Authorization: Bearer " + TOKEN, ...args], {
+    cwd: directory, timeout: 30000, killSignal: "SIGKILL", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
+  });
+  let stdout = "", stderr = "";
+  child.stdout.on("data", (bytes) => { stdout += bytes; }); child.stderr.on("data", (bytes) => { stderr += bytes; });
+  const status = await new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  assert.equal(status, 0, `${args.join(" ")}\n${stdout}\n${stderr}`);
+  return stdout.trim();
+}
+async function json(response) { const text = await response.text(); assert.equal(response.status, 200, text); return JSON.parse(text); }
+async function refs(server, namespace) { return (await json(await fetch(`${server.origin}/_test/${namespace}/refs`, { headers: headers() }))).refs.map((ref) => ({ name: Buffer.from(ref.name).toString(), oid: ref.oid })); }
+function request(format, commands, atomic = true, packed = pack(format, [])) {
+  const caps = `report-status-v2 object-format=${format ? "sha256" : "sha1"}${atomic ? " atomic" : ""}`;
+  return Buffer.concat([...commands.map((command, i) => packet(`${command.old} ${command.new} ${command.name}${i ? "" : `\0${caps}`}\n`)), Buffer.from("0000"), packed]);
+}
+
+test("ordinary Git pushes publish durable refs, thin updates, options and deletions", { timeout: 120000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "git-zero-push-"));
+  let server;
+  try {
+    server = await start(join(root, "storage"));
+    for (const format of [0, 1]) {
+      const namespace = `git-${format}-${randomUUID()}`, directory = join(root, namespace);
+      await mkdir(directory);
+      const remote = `${server.origin}/${namespace}.git`;
+      await json(await fetch(`${server.origin}/_test/${namespace}/initialize`, { method: "POST", headers: headers(format) }));
+      await git(directory, "init", "--initial-branch=main", `--object-format=${format ? "sha256" : "sha1"}`);
+      const body = Array.from({ length: 4000 }, (_, i) => `line ${i}: immutable shared content for delta reconstruction\n`).join("");
+      await writeFile(join(directory, "file"), body);
+      await git(directory, "add", "file"); await git(directory, "commit", "-m", "initial");
+      const first = await git(directory, "rev-parse", "HEAD");
+      await git(directory, "-c", "protocol.version=0", "push", "--atomic", "--push-option=ci.skip", remote, "main");
+      assert.deepEqual(await refs(server, namespace), [{ name: "refs/heads/main", oid: first }]);
+      await writeFile(join(directory, "file"), body.replace("line 2000:", "changed line 2000:"));
+      await git(directory, "commit", "-am", "incremental");
+      const second = await git(directory, "rev-parse", "HEAD");
+      await git(directory, "-c", "protocol.version=2", "-c", "http.postBuffer=1", "push", "--atomic", remote, "main");
+      assert.deepEqual(await refs(server, namespace), [{ name: "refs/heads/main", oid: second }]);
+      const state = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
+      const stage = state.stages.find((stage) => stage.phase === "published");
+      const staged = await json(await fetch(`${server.origin}/_test/${namespace}/stage/${stage.id}`, { headers: headers() }));
+      const thin = staged.objects.find((row) => row.wire_kind === 7 && row.base_stage !== stage.id && row.base_oid);
+      assert.ok(thin, "incremental Git push must exercise an external published delta base");
+      const reconstructed = await fetch(`${server.origin}/_test/${namespace}/object/${stage.id}?node=${thin.node}&data=1`, { headers: headers() });
+      assert.equal(reconstructed.status, 200);
+      assert.equal(Buffer.from(await reconstructed.arrayBuffer()).toString(), body.replace("line 2000:", "changed line 2000:"));
+      await git(directory, "-c", "protocol.version=1", "push", "--atomic", remote, "main:refs/heads/topic", "main:refs/tags/release");
+      assert.equal((await refs(server, namespace)).length, 3);
+      await git(directory, "push", remote, ":refs/heads/topic", ":refs/tags/release");
+      assert.deepEqual(await refs(server, namespace), [{ name: "refs/heads/main", oid: second }]);
+
+      const zero = "0".repeat(first.length);
+      const commands = [{ old: first, new: second, name: "refs/heads/main" }, { old: zero, new: second, name: "refs/heads/accepted" }];
+      let response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, commands) });
+      assert.match(await response.text(), /ng refs\/heads\/accepted atomic push failed/);
+      assert.equal((await refs(server, namespace)).length, 1);
+      response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, commands, false) });
+      assert.match(await response.text(), /ok refs\/heads\/accepted/);
+      assert.equal((await refs(server, namespace)).length, 2);
+
+      const duplicateNamespace = `identity-${format}-${randomUUID()}`;
+      await json(await fetch(`${server.origin}/_test/${duplicateNamespace}/initialize`, { method: "POST", headers: headers(format) }));
+      const duplicateRemote = `${server.origin}/${duplicateNamespace}.git/git-receive-pack`;
+      const value = object(format, 3, "hello");
+      response = await fetch(duplicateRemote, { method: "POST", headers: headers(), body: wire(format, pack(format, [entry(3, value.body)]), value.id) });
+      assert.equal(response.status, 200); await response.arrayBuffer();
+      // A valid delta can reconstruct exactly its external base ID. Its stored
+      // physical base must survive publication and a new request-local cache.
+      response = await fetch(duplicateRemote, { method: "POST", headers: headers(), body: wire(format, pack(format, [entry(7, Buffer.from([5, 5, 0x90, 5]), value.id)]), value.id, "refs/tags/identity") });
+      assert.equal(response.status, 200); await response.arrayBuffer();
+      const duplicateState = await json(await fetch(`${server.origin}/_test/${duplicateNamespace}/state`, { headers: headers() }));
+      assert.equal(duplicateState.objects, 1);
+      const duplicateStage = duplicateState.stages.find((stage) => stage.phase === "published");
+      const duplicateRead = await fetch(`${server.origin}/_test/${duplicateNamespace}/object/${duplicateStage.id}?node=12&data=1`, { headers: headers() });
+      assert.equal(duplicateRead.status, 200);
+      assert.equal(await duplicateRead.text(), "hello");
+
+      const collision = [{ old: zero, new: second, name: "refs/heads/main/topic" }];
+      response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, collision) });
+      assert.match(await response.text(), /ref name conflicts/);
+      const races = await Promise.all([0, 1].map(() => fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: second, new: first, name: "refs/heads/main" }]) }).then((response) => response.text())));
+      assert.equal(races.filter((response) => response.includes("ok refs/heads/main")).length, 1);
+      assert.equal(races.filter((response) => response.includes("stale ref")).length, 1);
+      await git(directory, "push", remote, "main");
+
+      // A failed branch-kind check must not publish a valid staged blob.
+      const blob = await git(directory, "rev-parse", "HEAD:file");
+      response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: blob, name: "refs/heads/not-a-commit" }]) });
+      assert.match(await response.text(), /branch target is not a commit/);
+      const invalid = project(format, true);
+      response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: invalid.wire });
+      assert.equal(response.status, 200);
+      assert.ok((await response.arrayBuffer()).byteLength > 0);
+      assert.equal((await refs(server, namespace)).length, 2);
+    }
+    await server.stop(); server = await start(join(root, "storage"));
+    for (const name of await readdir(root)) {
+      if (!name.startsWith("git-")) continue;
+      const directory = join(root, name), remote = `${server.origin}/${name}.git`;
+      const head = await git(directory, "rev-parse", "HEAD");
+      assert.equal((await refs(server, name)).find((ref) => ref.name === "refs/heads/main").oid, head);
+      await git(directory, "push", remote, "main:refs/heads/after-restart");
+      assert.equal((await refs(server, name)).length, 3);
+    }
+  } catch (error) { error.message += `\n${server?.logs() ?? ""}`; throw error; }
+  finally { await server?.stop(); await rm(root, { recursive: true, force: true }); }
+});

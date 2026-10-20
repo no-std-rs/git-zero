@@ -25,11 +25,12 @@ export class Intake {
       case 2:
         this.store.exec("INSERT OR IGNORE INTO stage_shallow(stage,oid) VALUES(?,?)", stage, hex(event.id)); break;
       case 3:
-        this.store.exec("INSERT INTO stage_commands(stage,seq,name,old_oid,new_oid,branch) VALUES(?,?,?,?,?,?)", stage, this.commands++, blob(event.data), hex(event.id), hex(event.other), event.flags); break;
+        this.store.exec("INSERT INTO stage_commands(stage,seq,name,old_oid,new_oid,branch,creation,deletion) VALUES(?,?,?,?,?,?,?,?)", stage, this.commands++, blob(event.data), hex(event.id), hex(event.other), event.flags & 1, (event.flags >> 1) & 1, (event.flags >> 2) & 1); break;
       case 5:
         this.store.exec("INSERT INTO stage_options(stage,seq,value) VALUES(?,?,?)", stage, this.options++, blob(event.data)); break;
       case 6:
         this.inPack = !!event.flags;
+        this.store.exec("UPDATE stages SET selected=? WHERE id=?", this.codec.receiveCapabilities(), stage);
         if (this.inPack) this.writer = new ChunkWriter(this.store, stage);
         break;
       case 7:
@@ -92,14 +93,14 @@ export class Intake {
       if (!rows.length) break;
       for (const row of rows) await this.source.process(row, true);
     }
-    this.store.exec("UPDATE stage_objects AS e SET ready=1 WHERE e.stage=? AND e.verified=0 AND ((e.wire_base_offset IS NOT NULL AND EXISTS(SELECT 1 FROM stage_objects b WHERE b.stage=e.stage AND b.node=e.wire_base_offset AND b.verified=1)) OR (e.wire_base_id IS NOT NULL AND (EXISTS(SELECT 1 FROM stage_objects b WHERE b.stage=e.stage AND b.oid=e.wire_base_id AND b.verified=1) OR EXISTS(SELECT 1 FROM objects b WHERE b.oid=e.wire_base_id))))", this.stage);
+    this.store.exec("UPDATE stage_objects AS e SET ready=1 WHERE e.stage=? AND e.verified=0 AND ((e.wire_base_offset IS NOT NULL AND EXISTS(SELECT 1 FROM stage_objects b WHERE b.stage=e.stage AND b.node=e.wire_base_offset AND b.verified=1)) OR (e.wire_base_id IS NOT NULL AND (EXISTS(SELECT 1 FROM stage_objects b WHERE b.stage=e.stage AND b.oid=e.wire_base_id AND b.verified=1) OR EXISTS(SELECT 1 FROM stage_objects b JOIN stages p ON p.id=b.stage WHERE b.oid=e.wire_base_id AND p.phase='published'))))", this.stage);
     for (;;) {
       const rows = this.store.exec("SELECT * FROM stage_objects WHERE stage=? AND verified=0 AND ready=1 ORDER BY node LIMIT 128", this.stage);
       if (!rows.length) break;
       for (const row of rows) await this.delta(row);
     }
     if (this.store.exec("SELECT node FROM stage_objects WHERE stage=? AND (verified=0 OR scanned=0) LIMIT 1", this.stage).length) throw new Error("unresolved or cyclic delta base");
-    const missing = this.store.exec("SELECT e.dst,e.kind FROM stage_edges e WHERE e.stage=? AND NOT EXISTS(SELECT 1 FROM stage_objects t WHERE t.stage=e.stage AND t.oid=e.dst AND t.verified=1 AND t.kind=e.kind) AND NOT EXISTS(SELECT 1 FROM objects t WHERE t.oid=e.dst AND t.kind=e.kind) LIMIT 1", this.stage)[0];
+    const missing = this.store.exec("SELECT e.dst,e.kind FROM stage_edges e WHERE e.stage=? AND NOT EXISTS(SELECT 1 FROM stage_objects t WHERE t.stage=e.stage AND t.oid=e.dst AND t.verified=1 AND t.kind=e.kind) AND NOT EXISTS(SELECT 1 FROM stage_objects t JOIN stages p ON p.id=t.stage WHERE t.oid=e.dst AND t.kind=e.kind AND p.phase='published') LIMIT 1", this.stage)[0];
     if (missing) throw new Error("object link target is missing or has the wrong kind");
     this.store.exec("UPDATE stages SET phase='verified' WHERE id=?", this.stage);
   }
@@ -110,8 +111,8 @@ export class Intake {
     const prefix = await this.source.representation(row, 0, Math.min(32, row.packed_size));
     const header = this.codec.deltaHeader(prefix, { size: base.size, depth: base.depth });
     row.kind = base.kind; row.size = integer(header.b); row.depth = integer(header.c);
-    row.base_node = base.stage === this.stage ? base.node : null; row.base_oid = base.oid;
-    this.store.exec("UPDATE stage_objects SET kind=?,size=?,depth=?,base_node=?,base_oid=? WHERE stage=? AND node=?", row.kind, row.size, row.depth, row.base_node, row.base_oid, this.stage, row.node);
+    row.base_stage = base.stage; row.base_node = base.node; row.base_oid = base.oid;
+    this.store.exec("UPDATE stage_objects SET kind=?,size=?,depth=?,base_stage=?,base_node=?,base_oid=? WHERE stage=? AND node=?", row.kind, row.size, row.depth, row.base_stage, row.base_node, row.base_oid, this.stage, row.node);
     await this.source.warm(base);
     const id = await this.source.process(row, true);
     // Indexed dependency updates avoid repeatedly scanning all unresolved

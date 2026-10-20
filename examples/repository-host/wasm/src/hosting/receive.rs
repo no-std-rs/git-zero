@@ -181,7 +181,12 @@ impl Receive {
             ControlEvent::Command(command) => {
                 frame.id(0, command.old);
                 frame.id(1, command.new);
-                frame.word(12, u32::from(command.name.starts_with(b"refs/heads/")));
+                frame.word(
+                    12,
+                    u32::from(command.name.starts_with(b"refs/heads/"))
+                        | (u32::from(command.old.is_zero()) << 1)
+                        | (u32::from(command.new.is_zero()) << 2),
+                );
                 frame.data(command.name)?;
                 self.commands += 1;
                 (3, command.name.len())

@@ -520,3 +520,85 @@ fn control_intake_and_reports_allocate_nothing() {
         report.finish().unwrap();
     });
 }
+
+#[test]
+fn detached_encoders_preserve_wire_bytes_across_fresh_sinks_and_reject_bad_state() {
+    use receive::{Advertisement, Status};
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for populated in [false, true] {
+            let refs = [
+                (id(format, 1), b"refs/heads/a".as_slice()),
+                (id(format, 2), b"refs/tags/\xff".as_slice()),
+            ];
+            let refs = if populated { &refs[..] } else { &refs[..0] };
+            let mut expected = Bytes(vec![]);
+            receive::write_advertisement(
+                format,
+                capabilities(),
+                refs.iter().copied(),
+                &mut expected,
+            )
+            .unwrap();
+            let mut name = [0; 128];
+            let mut advert = Advertisement::new(format, capabilities(), &mut name);
+            let mut actual = Bytes(vec![]);
+            let mut piece = [0; 512];
+            let mut writer = SliceWriter::new(&mut piece);
+            allocations::without_allocations(|| advert.start(&mut writer).unwrap());
+            actual.0.extend_from_slice(writer.as_bytes());
+            for &(id, name) in refs {
+                let mut writer = SliceWriter::new(&mut piece);
+                allocations::without_allocations(|| {
+                    advert.reference(id, name, &mut writer).unwrap()
+                });
+                actual.0.extend_from_slice(writer.as_bytes());
+            }
+            let mut writer = SliceWriter::new(&mut piece);
+            advert.finish(&mut writer).unwrap();
+            actual.0.extend_from_slice(writer.as_bytes());
+            assert_eq!(actual.0, expected.0);
+            assert_eq!(
+                advert.finish(&mut Bytes(vec![])),
+                Err(Error::InvalidRequest)
+            );
+        }
+    }
+    for selected in [
+        Capabilities::default(),
+        Capabilities::REPORT_STATUS,
+        capabilities(),
+    ] {
+        let mut expected = Bytes(vec![]);
+        let mut report = Report::new(&mut expected, selected, Err(b"invalid pack")).unwrap();
+        report
+            .reference(b"refs/heads/a", Err(b"unpacker error"))
+            .unwrap();
+        report.finish().unwrap();
+        let mut encoder = Status::new(selected);
+        assert_eq!(
+            encoder.finish(&mut Bytes(vec![])),
+            Err(Error::InvalidRequest)
+        );
+        let mut one = [0; 512];
+        let mut two = [0; 512];
+        let mut three = [0; 512];
+        let mut a = SliceWriter::new(&mut one);
+        let mut b = SliceWriter::new(&mut two);
+        let mut c = SliceWriter::new(&mut three);
+        allocations::without_allocations(|| {
+            encoder.unpack(Err(b"invalid pack"), &mut a).unwrap();
+            encoder
+                .reference(b"refs/heads/a", Err(b"unpacker error"), &mut b)
+                .unwrap();
+            encoder.finish(&mut c).unwrap();
+        });
+        assert_eq!(
+            [a.as_bytes(), b.as_bytes(), c.as_bytes()].concat(),
+            expected.0
+        );
+        assert_eq!(
+            encoder.reference(b"refs/heads/a", Ok(()), &mut Bytes(vec![])),
+            Err(Error::InvalidRequest)
+        );
+    }
+}
