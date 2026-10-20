@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { CHUNK_BYTES } from "../src/storage.mjs";
-import { deltas, entry, object, pack, project, wire } from "./fixture.mjs";
+import { deltas, entry, object, pack, packet, project, wire } from "./fixture.mjs";
 import { chunked, headers, start } from "./wrangler.mjs";
 import { startStandalone } from "./standalone.mjs";
 
@@ -71,11 +71,16 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     await responseJson(await fetch(`${server.origin}/_test/${expiredNamespace}/stage/${expired.stage}/expire`, { method: "POST", headers: headers() }));
     const pendingCleanup = await responseJson(await fetch(`${server.origin}/_test/${expiredNamespace}/state`, { headers: headers() }));
     assert.equal(pendingCleanup.stagedChunks, 1);
+    const shallowNamespace = `shallow-only-${randomUUID()}`;
+    const shallow = await upload(server, shallowNamespace, { wire: Buffer.concat([packet(`shallow ${project(0).root.id.toString("hex")}\n`), Buffer.from("0000")]) }, 0);
+    await responseJson(await fetch(`${server.origin}/_test/${shallowNamespace}/stage/${shallow.stage}/expire`, { method: "POST", headers: headers() }));
     const before = restart[0].result.epoch;
     await server.stop(); server = await serve(persist);
     const recovered = await responseJson(await fetch(`${server.origin}/_test/${expiredNamespace}/state`, { headers: headers() }));
     assert.equal(recovered.stagedChunks, 0); assert.equal(recovered.stagedObjects, 0);
     assert.ok(recovered.usage.r2Deletes >= 1, "cold recovery must finish scheduled quarantine cleanup");
+    const shallowRecovered = await responseJson(await fetch(`${server.origin}/_test/${shallowNamespace}/state`, { headers: headers() }));
+    assert.equal(shallowRecovered.quarantineRows, 0, "shallow-only quarantine must be reclaimed after cold recovery");
     for (const item of restart) {
       const state = await responseJson(await fetch(`${server.origin}/_test/${item.namespace}/state`, { headers: headers() }));
       assert.notEqual(state.epoch, before);

@@ -62,6 +62,7 @@ const SCHEMA = [
   "CREATE INDEX IF NOT EXISTS fetch_selected_work ON fetch_selected(walked,oid)",
   "CREATE INDEX IF NOT EXISTS fetch_selected_physical ON fetch_selected(stage,node)",
 ];
+const STAGE_METADATA = ["stage_objects", "stage_edges", "stage_names", "stage_commands", "stage_options", "stage_shallow"];
 
 export class Store {
   constructor(ctx, env, namespace) {
@@ -113,6 +114,7 @@ export class Store {
       objects: this.exec("SELECT object_count FROM repository WHERE id=1")[0]?.object_count ?? 0,
       stagedObjects: this.exec("SELECT COUNT(*) AS count FROM stage_objects")[0].count,
       stagedChunks: this.exec("SELECT COUNT(*) AS count FROM stage_chunks")[0].count,
+      quarantineRows: STAGE_METADATA.reduce((count, table) => count + this.exec(`SELECT COUNT(*) AS count FROM ${table} d JOIN stages s ON s.id=d.stage WHERE s.phase='failed'`)[0].count, 0),
       refs: this.exec("SELECT COUNT(*) AS count FROM refs")[0].count,
       stages: this.exec("SELECT id,format,phase,bytes,expected FROM stages ORDER BY created DESC LIMIT 64"),
       databaseBytes: this.ctx.storage.sql.databaseSize ?? null,
@@ -166,7 +168,7 @@ export class Store {
           this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
         }
       }
-      for (const table of ["stage_objects", "stage_edges", "stage_names", "stage_commands", "stage_options", "stage_shallow"]) this.exec(`DELETE FROM ${table} WHERE stage=?`, stage);
+      for (const table of STAGE_METADATA) this.exec(`DELETE FROM ${table} WHERE stage=?`, stage);
     } catch (error) {
       await this.ctx.storage.setAlarm(Date.now() + 60000);
       throw error;
@@ -183,7 +185,8 @@ export class Store {
     this.exec("DELETE FROM temp_objects");
     this.exec("UPDATE stages SET phase='failed' WHERE phase IN ('receiving','decoded') OR (phase='verified' AND retained=0)");
     for (;;) {
-      const pending = this.exec("SELECT s.id FROM stages s WHERE s.phase='failed' AND (EXISTS(SELECT 1 FROM stage_chunks c WHERE c.stage=s.id) OR EXISTS(SELECT 1 FROM stage_objects o WHERE o.stage=s.id) OR EXISTS(SELECT 1 FROM temp_chunks t WHERE t.stage=s.id) OR EXISTS(SELECT 1 FROM stage_commands c WHERE c.stage=s.id)) LIMIT 1")[0];
+      const owned = [...STAGE_METADATA, "stage_chunks", "temp_chunks", "temp_objects"].map((table) => `EXISTS(SELECT 1 FROM ${table} data WHERE data.stage=s.id)`).join(" OR ");
+      const pending = this.exec(`SELECT s.id FROM stages s WHERE s.phase='failed' AND (${owned}) LIMIT 1`)[0];
       if (!pending) return;
       await this.abandon(pending.id);
     }
