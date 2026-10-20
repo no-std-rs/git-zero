@@ -2,8 +2,8 @@
 use core::cmp::Ordering;
 
 use crate::{
-    BlobFilter, Error, FetchOptions, Head, Object, ObjectFormat, ObjectHasher, ObjectId,
-    ObjectInfo, ObjectKind, ObjectReader, Repository, Result,
+    BlobFilter, Error, FetchOptions, Head, HistoryPolicy as History, Object, ObjectFormat,
+    ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader, Repository, Result,
     names::{cmp_tree_names, validate_name},
     repository::validate_refs,
 };
@@ -38,13 +38,6 @@ impl ValidationMetadata {
     pub fn is_unshallow(&self) -> bool {
         self.reached && self.client_shallow && !self.shallow
     }
-}
-
-#[derive(Clone, Copy, Default)]
-struct History {
-    limit: Option<u32>,
-    client: bool,
-    distance: bool,
 }
 
 /// Traversal budget and annotated-tag policy for a selected fetch pack.
@@ -344,7 +337,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         }
         // A relative request from a full client is an ordinary incremental
         // fetch. Its depth cannot expose missing history behind a boundary.
-        let deepening = fetch.depth.is_some() && (!fetch.deepen_relative || has_shallow);
+        let deepening = fetch.deepens_history(has_shallow);
         for id in common {
             let id = id?;
             let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
@@ -370,21 +363,16 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             object.excluded = object.reached;
             object.reset_walk();
         }
-        let depth = match fetch.depth.filter(|_| deepening) {
-            Some(depth) if fetch.deepen_relative => self.relative_depth(
+        let nearest = match fetch.depth.filter(|_| deepening) {
+            Some(_) if fetch.deepen_relative => self.nearest_boundary_depth(
                 roots,
                 work,
                 (read_scratch, parse_scratch),
                 &mut remaining,
-                depth,
             )?,
-            depth => depth,
+            _ => None,
         };
-        let history = History {
-            limit: depth,
-            client: fetch.depth.is_none(),
-            distance: false,
-        };
+        let history = fetch.history(has_shallow, nearest)?;
         self.walk_wants(
             roots,
             work,
@@ -415,27 +403,16 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         Ok(&selected[..length])
     }
 
-    fn relative_depth(
+    fn nearest_boundary_depth(
         &self,
         roots: &[ObjectId],
         work: &mut [Option<ValidationMetadata>],
         scratch: (&mut [u8], &mut [u8]),
         remaining: &mut u64,
-        depth: u32,
     ) -> Result<Option<u32>> {
         // Git 2.55 measures the nearest client boundary from the wants.
         // Unrelated shallow branches cannot influence or extend this cut.
-        self.walk_wants(
-            roots,
-            work,
-            scratch,
-            remaining,
-            History {
-                limit: None,
-                client: true,
-                distance: true,
-            },
-        )?;
+        self.walk_wants(roots, work, scratch, remaining, History::boundary_probe())?;
         // Git 2.55 get_shallow_commits returns no new boundaries when none
         // match. Unlike Git 2.54, this leaves wanted history complete.
         let limit = work
@@ -443,9 +420,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             .flatten()
             .filter(|object| object.reached && object.client_shallow)
             .map(|object| object.depth)
-            .min()
-            .map(|boundary| boundary.checked_add(depth).ok_or(Error::LimitExceeded))
-            .transpose()?;
+            .min();
         for slot in work.iter_mut() {
             slot.as_mut().expect("validated metadata").reset_walk();
         }
@@ -493,16 +468,13 @@ fn filter_blobs(
     roots: &[ObjectId],
     filter: BlobFilter,
 ) {
-    let limit = match filter {
-        BlobFilter::All => return,
-        BlobFilter::None => 0,
-        BlobFilter::Limit(limit) => limit,
-    };
+    if matches!(filter, BlobFilter::All) {
+        return;
+    }
     for slot in objects {
         let object = slot.as_mut().expect("validated metadata");
         if object.info.kind == ObjectKind::Blob
-            && !roots.contains(&object.id)
-            && object.info.size >= limit
+            && !filter.includes(object.info, roots.contains(&object.id))
         {
             object.reached = false;
         }
@@ -621,18 +593,13 @@ fn walk(
         let object = *metadata(objects, index);
         match object.info.kind {
             ObjectKind::Commit => {
-                let stop = history.limit.is_some_and(|limit| object.depth >= limit)
-                    || (history.client && object.client_shallow);
+                let stop = !history.follows_parents(object.depth, object.client_shallow);
                 validate_commit(
                     &mut body,
                     parse_scratch,
                     objects,
                     by_id,
-                    (!stop).then_some(if history.limit.is_some() || history.distance {
-                        object.depth.saturating_add(1)
-                    } else {
-                        1
-                    }),
+                    (!stop).then_some(history.parent_depth(object.depth)),
                 )?;
                 objects[index]
                     .as_mut()

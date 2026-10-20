@@ -125,6 +125,14 @@ export class Codec {
   uploadAppend(bytes) { this.stage(bytes); this.invoke("host_upload_append", bytes.length); }
   uploadParse() { return this.event("host_upload_parse", null); }
   uploadNext() { return this.event("host_upload_next", null); }
+  uploadHistory(hasBoundaries, nearest = 0) {
+    const f = fields(8); f.word(0, Number(hasBoundaries)); f.word(4, nearest);
+    return this.event("host_upload_history_init", f.bytes);
+  }
+  uploadSelect(info, depth, { clientBoundary = false, wanted = false, probe = false } = {}) {
+    const f = fields(20); f.word(0, info.kind); f.word(4, Number(clientBoundary) | (Number(wanted) << 1)); f.wide(8, info.size); f.word(16, depth);
+    return this.event("host_upload_select", f.bytes, Number(probe));
+  }
   uploadAdvert(version, selection = false) { return this.event("host_upload_advert", null, this.format, version, Number(selection)).data; }
   uploadRef(ref, { v2 = false, first = false, selection = false } = {}) {
     const name = ref.name, target = ref.target ?? new Uint8Array();

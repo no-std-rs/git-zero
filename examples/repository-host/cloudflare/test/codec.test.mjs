@@ -35,6 +35,47 @@ test("paged shallow changes retain frozen controls and exact protocol framing", 
   }
 });
 
+test("external frontier decisions use Rust history and blob-filter rules", () => {
+  for (const format of [0, 1]) for (const version of [0, 1, 2]) {
+    const codec = new Codec(module, format), wanted = Buffer.alloc(format ? 32 : 20, 1);
+    const capability = `object-format=${format ? "sha256" : "sha1"}`;
+    const prepare = (relative = false, filtered = true, depth = 2) => {
+      const lines = version === 2 ? [packet("command=fetch\n"), packet(capability), Buffer.from("0001")] : [];
+      lines.push(packet(`want ${hex(wanted)}${version === 2 ? "" : ` shallow filter${relative ? " deepen-relative" : ""} ${capability}`}\n`));
+      if (depth !== null) lines.push(packet(`deepen ${depth}\n`));
+      if (relative && version === 2) lines.push(packet("deepen-relative\n"));
+      if (filtered) lines.push(packet("filter blob:limit=8\n"));
+      if (version !== 2) lines.push(Buffer.from("0000"));
+      lines.push(packet("done\n")); if (version === 2) lines.push(Buffer.from("0000"));
+      codec.uploadInit(version); codec.uploadAppend(Buffer.concat(lines)); codec.uploadParse();
+    };
+    const commit = { kind: 1, size: 100 };
+    prepare();
+    assert.equal(codec.uploadHistory(true).flags, 1);
+    assert.equal(codec.uploadSelect(commit, 1).flags, 3);
+    assert.equal(codec.uploadSelect(commit, 2).flags, 5);
+    assert.equal(codec.uploadSelect(commit, 1, { clientBoundary: true }).flags, 11);
+    assert.equal(codec.uploadSelect({ kind: 3, size: 7 }, 1).flags & 1, 1);
+    assert.equal(codec.uploadSelect({ kind: 3, size: 8 }, 1).flags & 1, 0);
+    assert.equal(codec.uploadSelect({ kind: 3, size: 8 }, 1, { wanted: true }).flags & 1, 1);
+    assert.equal(codec.uploadSelect({ kind: 2, size: 100 }, 1).flags & 1, 1);
+    prepare(true, false);
+    assert.equal(codec.uploadHistory(true).flags, 3);
+    const boundary = codec.uploadSelect(commit, 3, { clientBoundary: true, probe: true });
+    assert.equal(boundary.flags, 5); assert.equal(boundary.a, 4n);
+    codec.uploadHistory(true, 3);
+    assert.equal(codec.uploadSelect(commit, 4).flags, 3);
+    assert.equal(codec.uploadSelect(commit, 5).flags, 5);
+    assert.equal(codec.uploadHistory(false).flags, 0);
+    assert.equal(codec.uploadSelect(commit, 99).a, 1n);
+    assert.throws(() => codec.uploadSelect(commit, 0), CodecError);
+    assert.throws(() => codec.uploadNext(), CodecError);
+    prepare(false, false, null);
+    assert.equal(codec.uploadHistory(false).flags, 4);
+    assert.equal(codec.uploadSelect({ kind: 3, size: 100 }, 1).flags & 1, 1);
+  }
+});
+
 function fixture(format) {
   const bodies = [Buffer.from("hello"), Buffer.from("hello!"), Buffer.from("hello!?")];
   const ids = bodies.map((body) => objectId(format, "blob", body));

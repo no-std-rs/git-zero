@@ -1,8 +1,8 @@
 //! Frozen bounded upload controls and paged external-catalog wire encoding.
-use super::{FRAME_BYTES, Frame, Shared, code, format, id_at, input, output, u32_at};
+use super::{FRAME_BYTES, Frame, Shared, code, format, id_at, input, kind, output, u32_at, u64_at};
 use core::cell::UnsafeCell;
 use git_zero::{
-    BlobFilter, Error, ObjectFormat, Result,
+    BlobFilter, Error, HistoryPolicy, ObjectFormat, ObjectInfo, ObjectKind, Result,
     http::stored::{
         self, Acknowledgments, Command, ObjectRequest, Objects, Request, ShallowUpdates,
     },
@@ -32,6 +32,8 @@ struct Upload {
     objects: Option<Objects<'static>>,
     acknowledgments: Option<Acknowledgments>,
     shallow_updates: Option<ShallowUpdates>,
+    history: Option<HistoryPolicy>,
+    boundary_probe: bool,
 }
 
 #[unsafe(no_mangle)]
@@ -87,6 +89,8 @@ pub extern "C" fn host_upload_init(object_format: u32, version: u32) -> i32 {
                 objects: None,
                 acknowledgments: None,
                 shallow_updates: None,
+                history: None,
+                boundary_probe: false,
             });
         }
         Ok(0)
@@ -185,6 +189,92 @@ pub extern "C" fn host_upload_next() -> i32 {
             None => 74,
         };
         Ok(frame.finish(tag, 0, 0) as usize)
+    })();
+    result(value)
+}
+
+/// Input: has-client-boundaries u32@0, nearest boundary distance u32@4
+/// (zero means absent). Flags: deepening=1, distance probe needed=2,
+/// complete-pack reuse permitted by the request=4.
+#[unsafe(no_mangle)]
+pub extern "C" fn host_upload_history_init(length: usize) -> i32 {
+    let value = (|| {
+        let bytes = input(length)?;
+        if bytes.len() != 8 || u32_at(bytes, 0)? > 1 {
+            return Err(Error::InvalidRequest);
+        }
+        let has_boundaries = u32_at(bytes, 0)? != 0;
+        let nearest = u32_at(bytes, 4)?;
+        let session = session()?;
+        let options = session
+            .parsed
+            .as_ref()
+            .and_then(Request::options)
+            .ok_or(Error::InvalidRequest)?;
+        session.history = Some(options.history(has_boundaries, (nearest != 0).then_some(nearest))?);
+        let deepening = options.deepens_history(has_boundaries);
+        session.boundary_probe = deepening && options.deepen_relative;
+        let reuse =
+            options.depth.is_none() && matches!(options.filter, BlobFilter::All) && !has_boundaries;
+        let mut frame = Frame::new(output());
+        frame.word(
+            12,
+            u32::from(deepening)
+                | (u32::from(session.boundary_probe) << 1)
+                | (u32::from(reuse) << 2),
+        );
+        Ok(frame.finish(77, 0, 0) as usize)
+    })();
+    result(value)
+}
+
+/// Input: kind u32@0, flags u32@4 (client boundary=1, explicit want=2),
+/// size u64@8, shortest commit distance u32@16. Flags: include=1,
+/// follow parents=2, shallow=4, unshallow=8; next parent distance u64@16.
+#[unsafe(no_mangle)]
+pub extern "C" fn host_upload_select(length: usize, probe: u32) -> i32 {
+    let value = (|| {
+        let bytes = input(length)?;
+        if bytes.len() != 20 || probe > 1 {
+            return Err(Error::InvalidRequest);
+        }
+        let flags = u32_at(bytes, 4)?;
+        let depth = u32_at(bytes, 16)?;
+        if flags > 3 || depth == 0 {
+            return Err(Error::InvalidRequest);
+        }
+        let info = ObjectInfo {
+            kind: kind(u32_at(bytes, 0)?)?,
+            size: u64_at(bytes, 8)?,
+        };
+        let session = session()?;
+        let history = session.history.ok_or(Error::InvalidRequest)?;
+        if probe != 0 && !session.boundary_probe {
+            return Err(Error::InvalidRequest);
+        }
+        let history = if probe != 0 {
+            HistoryPolicy::boundary_probe()
+        } else {
+            history
+        };
+        let options = session
+            .parsed
+            .as_ref()
+            .and_then(Request::options)
+            .ok_or(Error::InvalidRequest)?;
+        let boundary = flags & 1 != 0;
+        let stop = info.kind == ObjectKind::Commit && !history.follows_parents(depth, boundary);
+        let include = options.filter.includes(info, flags & 2 != 0);
+        let mut frame = Frame::new(output());
+        frame.word(
+            12,
+            u32::from(include)
+                | (u32::from(!stop) << 1)
+                | (u32::from(stop) << 2)
+                | (u32::from(info.kind == ObjectKind::Commit && boundary && !stop) << 3),
+        );
+        frame.wide(16, u64::from(history.parent_depth(depth)));
+        Ok(frame.finish(76, 0, 0) as usize)
     })();
     result(value)
 }

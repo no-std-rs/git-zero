@@ -62,4 +62,4 @@ pub enum Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 mod fetch;
-pub use fetch::{BlobFilter, FetchOptions};
+pub use fetch::{BlobFilter, FetchOptions, HistoryPolicy};
