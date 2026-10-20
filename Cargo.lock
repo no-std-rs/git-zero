@@ -308,6 +308,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-zero-host-wasm"
+version = "0.1.0"
+dependencies = [
+ "git-zero",
+]
+
+[[package]]
 name = "git-zero-kernel-codec"
 version = "0.1.0"
 dependencies = [

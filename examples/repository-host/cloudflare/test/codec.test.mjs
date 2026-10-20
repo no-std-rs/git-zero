@@ -1,0 +1,190 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { test } from "node:test";
+import { deflateSync } from "node:zlib";
+import { Codec, CodecError, hex, integer } from "../src/codec.mjs";
+
+const module = await WebAssembly.compile(await readFile(new URL("../build/git_zero_host_wasm.wasm", import.meta.url)));
+const empty = new Uint8Array();
+const objectId = (format, kind, body) => createHash(format === 0 ? "sha1" : "sha256").update(`${kind} ${body.length}\0`).update(body).digest();
+const packet = (bytes) => { bytes = Buffer.from(bytes); return Buffer.concat([Buffer.from((bytes.length + 4).toString(16).padStart(4, "0")), bytes]); };
+
+function fixture(format) {
+  const bodies = [Buffer.from("hello"), Buffer.from("hello!"), Buffer.from("hello!?")];
+  const ids = bodies.map((body) => objectId(format, "blob", body));
+  const plain = Buffer.concat([Buffer.from([0x35]), deflateSync(bodies[0])]);
+  assert.ok(plain.length < 128);
+  const middle = Buffer.concat([Buffer.from([0x66, plain.length]), deflateSync(Buffer.from([5, 6, 0x90, 5, 1, 33]))]);
+  const last = Buffer.concat([Buffer.from([0x76]), ids[1], deflateSync(Buffer.from([6, 7, 0x90, 6, 1, 63]))]);
+  const body = Buffer.concat([Buffer.from("5041434b0000000200000003", "hex"), plain, middle, last]);
+  const checksum = createHash(format === 0 ? "sha1" : "sha256").update(body).digest();
+  const pack = Buffer.concat([body, checksum]);
+  const caps = `report-status-v2 delete-refs ofs-delta atomic push-options side-band-64k quiet object-format=${format === 0 ? "sha1" : "sha256"}`;
+  const command = Buffer.concat([Buffer.from(`${"0".repeat(ids[2].length * 2)} ${hex(ids[2])} refs/tags/value\0${caps}\n`)]);
+  const wire = Buffer.concat([packet(command), Buffer.from("0000"), packet("ci.skip"), packet(""), Buffer.from("0000"), pack]);
+  return { bodies, ids, pack, checksum, wire };
+}
+
+function receive(codec, fixture, chunk) {
+  codec.receiveInit();
+  let offset = 0, current;
+  const entries = [], commands = [], options = [];
+  for (let step = 0; step < fixture.wire.length * 4 + 100; step++) {
+    const end = Math.min(offset + chunk, fixture.wire.length);
+    const event = codec.receiveStep(fixture.wire.subarray(offset, end), end === fixture.wire.length);
+    assert.ok(event.consumed <= end - offset);
+    offset += event.consumed;
+    if (event.tag === 3) commands.push(event);
+    if (event.tag === 5) options.push(Buffer.from(event.data));
+    if (event.tag === 8) {
+      current = { offset: integer(event.a), size: integer(event.b), compressedOffset: integer(event.c), kind: event.flags, baseOffset: integer(event.d), baseId: event.id, body: [] };
+      entries.push(current);
+    }
+    if ((event.tag === 9 || event.tag === 10) && event.data.length) current.body.push(Buffer.from(event.data));
+    if (event.tag === 10) { current.end = integer(event.a); current.id = event.flags ? event.id : null; }
+    if (event.tag === 11) assert.equal(hex(event.id), hex(fixture.checksum));
+    if (event.tag === 12) {
+      assert.equal(offset, fixture.wire.length);
+      assert.equal(codec.receiveCapabilities(), 254);
+      assert.equal(commands.length, 1);
+      assert.equal(Buffer.from(commands[0].data).toString(), "refs/tags/value");
+      assert.equal(hex(commands[0].other), hex(fixture.ids[2]));
+      assert.deepEqual(options.map((value) => value.toString()), ["ci.skip", ""]);
+      return entries;
+    }
+  }
+  assert.fail("receive session made no bounded progress");
+}
+
+function source(codec, pack, entry, range) {
+  codec.sourceInit({ offset: entry.offset, maxBytes: entry.end - entry.offset }, range);
+  let offset = entry.offset;
+  const parts = [];
+  for (let step = 0; step < pack.length * 8 + 100; step++) {
+    const end = Math.min(offset + 3, entry.end);
+    const event = codec.sourceStep(pack.subarray(offset, end), end === entry.end, 7);
+    offset += event.consumed;
+    if (event.data.length) parts.push(Buffer.from(event.data));
+    if (event.tag === 41) {
+      const result = Buffer.concat(parts);
+      assert.equal(result.length, Number(range.length));
+      return result;
+    }
+  }
+  assert.fail("source session made no bounded progress");
+}
+
+function graph(codec, bytes, eof) {
+  let offset = 0;
+  const events = [];
+  for (let step = 0; step < bytes.length + 100; step++) {
+    const event = codec.graphFeed(bytes.subarray(offset), eof);
+    offset += event.consumed;
+    if (event.tag === 31 || event.tag === 32) events.push(event);
+    if (event.tag === 33) { assert.equal(offset, bytes.length); return { events, id: event.id }; }
+    if (event.tag === 30 && offset === bytes.length && !eof) return { events };
+  }
+  assert.fail("graph session made no bounded progress");
+}
+
+test("hosting Wasm has fixed memory, no imports and no allocator", () => {
+  assert.deepEqual(WebAssembly.Module.imports(module), []);
+  assert.ok(!WebAssembly.Module.exports(module).some(({ name }) => /alloc|free/.test(name)));
+  const codec = new Codec(module);
+  assert.ok(codec.memory.byteLength <= 32 * 65536, "hosting state exceeds its 2 MiB linear-memory budget");
+});
+
+test("streamed receive validates compressed plain/OFS/REF intake in both formats", () => {
+  for (const format of [0, 1]) {
+    const input = fixture(format);
+    for (const chunk of [1, 7, 65536]) {
+      const codec = new Codec(module, format, { capabilities: 255 });
+      const memory = codec.memory;
+      const entries = receive(codec, input, chunk);
+      assert.deepEqual(entries.map((entry) => entry.kind), [3, 6, 7]);
+      assert.equal(hex(entries[0].id), hex(input.ids[0]));
+      assert.equal(entries[1].baseOffset, entries[0].offset);
+      assert.equal(hex(entries[2].baseId), hex(input.ids[1]));
+      assert.deepEqual(Buffer.concat(entries[0].body), input.bodies[0]);
+      assert.equal(codec.exports.memory.buffer, memory);
+      assert.equal(codec.receiveStep(empty, true).tag, 12);
+    }
+  }
+});
+
+test("storage effects reconstruct and hash canonical objects through separate packed-range sessions", () => {
+  for (const format of [0, 1]) {
+    const input = fixture(format), codec = new Codec(module, format, { capabilities: 255 });
+    const entries = receive(codec, input, 5);
+    const records = entries.map((entry, index) => ({ entry, info: { kind: 3, size: input.bodies[index].length } }));
+    for (let index = 1; index < records.length; index++) {
+      const base = records[index - 1];
+      const prefix = source(codec, input.pack, entries[index], { offset: 0, length: Math.min(32, entries[index].size) });
+      const header = codec.deltaHeader(prefix, { ...base.info, depth: index - 1 });
+      assert.equal(header.tag, 50);
+      assert.equal(header.b, BigInt(records[index].info.size));
+      records[index].base = { key: { staged: base.entry.offset }, info: base.info, depth: index - 1 };
+      records[index].instructionsSize = entries[index].size;
+    }
+    const root = records[2];
+    codec.rangeInit({ staged: root.entry.offset });
+    codec.graphInit(root.info);
+    const parts = [];
+    let digest;
+    for (let steps = 0; steps < 10000; steps++) {
+      const request = codec.rangeRequest();
+      if (request.tag === 20) {
+        codec.rangeDescribe(records.find((record) => BigInt(record.entry.offset) === request.key.staged));
+      } else if (request.tag === 21) {
+        const record = records.find((record) => BigInt(record.entry.offset) === request.key.staged);
+        const data = source(codec, input.pack, record.entry, { offset: request.a, length: request.b });
+        const event = codec.rangeFeed(data, 3);
+        parts.push(Buffer.from(event.data));
+        const scanned = graph(codec, event.data, event.tag === 22);
+        digest ??= scanned.id;
+      } else if (request.tag === 22) {
+        digest ??= graph(codec, empty, true).id;
+        break;
+      } else assert.fail(`unexpected range event ${request.tag}`);
+    }
+    assert.deepEqual(Buffer.concat(parts), input.bodies[2]);
+    assert.equal(hex(digest), hex(input.ids[2]));
+  }
+});
+
+test("graph events retain tree names, historical modes and typed commit parents", () => {
+  for (const format of [0, 1]) {
+    const codec = new Codec(module, format);
+    const target = objectId(format, "blob", Buffer.from("body"));
+    const body = Buffer.concat([Buffer.from("100664 "), Buffer.from([0xff]), Buffer.from([0]), target]);
+    codec.graphInit({ kind: 2, size: body.length });
+    const result = graph(codec, body, true);
+    assert.equal(result.events.length, 1);
+    assert.equal(result.events[0].tag, 32);
+    assert.equal(result.events[0].flags, 3);
+    assert.equal(result.events[0].a, BigInt(0o100664));
+    assert.deepEqual(Buffer.from(result.events[0].data), Buffer.from([0xff]));
+    assert.equal(hex(result.id), hex(objectId(format, "tree", body)));
+    const commit = Buffer.from(`tree ${hex(result.id)}\nparent ${hex(target)}\nauthor A\ncommitter A\n\nmessage`);
+    codec.graphInit({ kind: 1, size: commit.length });
+    const links = graph(codec, commit, true);
+    assert.deepEqual(links.events.map((event) => [event.tag, event.flags, event.a]), [[31, 2, 0n], [31, 1, 1n]]);
+    assert.equal(hex(links.id), hex(objectId(format, "commit", commit)));
+  }
+});
+
+test("malformed intake is terminal and a fresh session clears old scratch", () => {
+  const codec = new Codec(module, 0, { capabilities: 255 });
+  const input = fixture(0);
+  const corrupt = { ...input, wire: Buffer.from(input.wire) };
+  corrupt.wire[corrupt.wire.length - 1] ^= 1;
+  assert.throws(() => receive(codec, corrupt, 17), (error) => error instanceof CodecError && error.code === -4);
+  assert.throws(() => codec.receiveStep(empty, true), (error) => error.code === -4);
+  assert.equal(receive(codec, input, 17).length, 3);
+  codec.receiveCancel();
+  assert.throws(() => codec.receiveStep(empty, true), (error) => error.code === -3);
+  codec.stage(new Uint8Array(1));
+  assert.equal(codec.exports.host_range_init(1), -3);
+  assert.throws(() => codec.rangeRequest(), (error) => error.code === -3);
+});

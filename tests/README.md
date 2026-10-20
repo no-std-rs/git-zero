@@ -179,6 +179,15 @@ packs; bodies and canonical IDs match the independently Git-verified objects.
 The entries fuzz target also compares full range reconstruction with apply_delta
 and verifies clipped entry-range bytes against the complete pack reader.
 
+The separate hosting Wasm module is built with `npm run test:streamed` in
+`examples/repository-host/cloudflare`. Its Node tests drive fragmented receive
+controls and compressed plain/OFS/REF intake in both formats, then reconstruct
+and canonically hash results through the raw metadata/source/range/graph ABI.
+They also check typed links, binary names, historical modes, terminal intake
+failure, fresh-session scratch reuse, no host imports/allocator and a fixed 2 MiB
+linear-memory ceiling. The read-only demo keeps its existing independent budget.
+These ABI tests do not yet prove durable publication or a deployed Git host.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are

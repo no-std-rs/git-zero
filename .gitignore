@@ -2,6 +2,7 @@
 node_modules/
 .wrangler/
 examples/cloudflare-worker/build/
+examples/repository-host/cloudflare/build/
 .dev.vars*
 .env*
 *.log

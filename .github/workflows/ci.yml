@@ -324,4 +324,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: cargo clippy -p git-zero-worker-wasm --target wasm32-unknown-unknown --release --locked -- -D warnings
+      - run: npm ci
+        working-directory: examples/repository-host/cloudflare
+      - run: npm run test:streamed
+        working-directory: examples/repository-host/cloudflare
+      - run: cargo clippy -p git-zero-host-wasm --target wasm32-unknown-unknown --release --locked -- -D warnings
       - run: npx wrangler deploy --dry-run --outdir /tmp/git-zero-worker-bundle

@@ -272,6 +272,38 @@ fn independent_work_output_instruction_depth_and_frame_limits() {
 }
 
 #[test]
+fn verified_canonical_cache_views_remove_encoded_base_recursion() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let mut records = fixture(format);
+        // A verified canonical cache exposes the resolved base as a plain
+        // representation. Keep this view fixed during the query and derive
+        // the parent's base depth from it, rather than its original pack depth.
+        records[1].object.representation = RangeRepresentation::Plain;
+        records[1].bytes = b"hello!";
+        if let RangeRepresentation::Delta { base_depth, .. } = &mut records[2].object.representation
+        {
+            *base_depth = 0;
+        }
+        assert_eq!(
+            run(
+                &records,
+                format,
+                ObjectRange::All,
+                RangeLimits {
+                    max_depth: 1,
+                    ..LIMITS
+                },
+                2,
+                64,
+                64
+            )
+            .unwrap(),
+            b"?hello!?"
+        );
+    }
+}
+
+#[test]
 fn malformed_metadata_cycles_sizes_and_instructions_are_rejected() {
     let format = ObjectFormat::Sha1;
     let source = fixture(format);

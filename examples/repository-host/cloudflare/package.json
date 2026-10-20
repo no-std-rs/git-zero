@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local --ip 127.0.0.1 --show-interactive-dev-session=false"
+    "dev": "wrangler dev --local --ip 127.0.0.1 --show-interactive-dev-session=false",
+    "build:streamed": "node scripts/build.mjs",
+    "test:streamed": "npm run build:streamed && node --test test/*.test.mjs"
   },
   "devDependencies": {
     "wrangler": "4.149.0"
