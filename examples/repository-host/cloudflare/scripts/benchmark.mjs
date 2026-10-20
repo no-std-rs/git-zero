@@ -2,7 +2,7 @@
 // with actual local Wrangler R2/SQLite, or direct workerd with the S3 fixture.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { headers, start, TOKEN } from "../test/wrangler.mjs";
@@ -74,6 +74,23 @@ async function resources() {
   } finally { sampling = false; }
 }
 let sampleTimer, progressTimer;
+async function durableFootprint(directory) {
+  const groups = Object.fromEntries(["repositoryMetadata", "objectStorage", "storageFixtureMetadata", "other"].map((name) => [name, { files: 0, bytes: 0, allocatedBytes: 0 }]));
+  async function visit(relative = "") {
+    for (const entry of await readdir(join(directory, relative), { withFileTypes: true })) {
+      const path = join(relative, entry.name);
+      if (entry.isDirectory()) { await visit(path); continue; }
+      if (!entry.isFile()) continue;
+      const group = runtime === "workerd"
+        ? (path.startsWith("r2/") ? "objectStorage" : path.startsWith("sqlite/") ? "repositoryMetadata" : "other")
+        : path.includes("/r2/") ? (path.includes("/blobs/") ? "objectStorage" : "storageFixtureMetadata") : path.includes("/do/") ? "repositoryMetadata" : "other";
+      const metadata = await stat(join(directory, path));
+      groups[group].files++; groups[group].bytes += metadata.size; groups[group].allocatedBytes += metadata.blocks * 512;
+    }
+  }
+  await visit();
+  return { groups, scope: "Local durable state only, excluding the source, reference clone and runtime bundle. objectStorage is remote R2 in production; storageFixtureMetadata belongs to the local R2 mock. bytes are logical file sizes; allocatedBytes are local filesystem blocks, including WAL files." };
+}
 try {
   report.codecCommit = (await git(fileURLToPath(new URL("../../../../", import.meta.url)), ["rev-parse", "HEAD"])).stdout;
   report.workingTreeClean = (await git(fileURLToPath(new URL("../../../../", import.meta.url)), ["status", "--porcelain"])).stdout.length === 0;
@@ -134,7 +151,7 @@ try {
   await phaseRun("push", async () => {
     await git(source, ["-c", "protocol.version=2", "push", "--progress", "--atomic", repo, `${report.revision}:refs/heads/master`]);
     const response = await fetch(`${server.origin}/_test/kernel/state`, { headers: headers() }); assert.equal(response.status, 200);
-    return { state: await response.json() };
+    return { state: await response.json(), durableFootprint: await durableFootprint(persist) };
   });
   const clone = join(work, "clone.git");
   await phaseRun("clone", async () => {
@@ -158,7 +175,7 @@ try {
     await git(clone, ["fetch", "--progress", "origin"]);
     assert.equal((await git(clone, ["rev-parse", "HEAD"])).stdout, report.incrementalRevision);
     const response = await fetch(`${server.origin}/_test/kernel/state`, { headers: headers() }); assert.equal(response.status, 200);
-    return { state: await response.json() };
+    return { state: await response.json(), durableFootprint: await durableFootprint(persist) };
   });
   await phaseRun("clone-strict-fsck", async () => {
     const result = await git(clone, ["fsck", "--full", "--strict"], true);

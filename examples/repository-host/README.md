@@ -61,3 +61,7 @@ Verification for this task is local only. No live deployment, credential change
 or infrastructure purchase is needed. Full runtime resource usage and hosting
 costs are measured by `cloudflare/scripts/benchmark.mjs`; the 6 MiB Wasm and
 48 MiB byte-cache bounds do not describe the entire runtime process.
+The push and cold-fetch reports also separate repository metadata on disk from
+opaque object storage and local R2 mock metadata. Reference source/clone copies
+are excluded. In standalone production, object storage resides in R2; only the
+repository metadata and runtime belong in the server's disk budget.

@@ -41,6 +41,11 @@ for (const [runtime, format] of [["wrangler", "sha1"], ["workerd", "sha256"]]) t
       assert.ok(diagnostics.reachableDiagnostics[0].includes(`${tree}: badFilemode:`));
       assert.equal(report.phases.at(-1).matchesSource, true);
       assert.equal(report.phases[0].phase, "freeze-runtime");
+      for (const phase of ["push", "cold-fetch"]) {
+        const footprint = report.phases.find((item) => item.phase === phase).durableFootprint;
+        assert.ok(footprint.groups.repositoryMetadata.bytes > 0, "actual SQLite metadata must be measured");
+        assert.ok(footprint.groups.objectStorage.bytes > 0, "opaque R2 bytes must be measured separately from local metadata");
+      }
       if (previous) assert.equal(report.phases.find((phase) => phase.phase === "source-strict-fsck").reusedFrom, previous);
       previous = join(work, "report.json");
     }
