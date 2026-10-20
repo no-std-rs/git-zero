@@ -248,6 +248,9 @@ fn command(
     let new = object_id(&line[width + 1..width * 2 + 1], format)?;
     let name = &line[width * 2 + 2..];
     validate_ref_name_bytes(name)?;
+    if !new.is_zero() {
+        super::advertisement::validate_first_name(format, offered, name)?;
+    }
     Ok((Command { old, new, name }, selected))
 }
 

@@ -406,6 +406,45 @@ fn smart_advertisements_preserve_raw_refs_and_validate_order_and_format() {
     }
 }
 
+#[test]
+fn receive_creation_names_must_fit_the_future_first_advertisement() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let mut long = b"refs/heads/".to_vec();
+        long.resize(65_375, b'a');
+        git_zero::repository::validate_ref_name_bytes(&long).unwrap();
+        let first = command(
+            format.zero_id(),
+            id(format, 1),
+            b"refs/heads/z",
+            Some(format.capability()),
+        );
+        let late = command(format.zero_id(), id(format, 2), &long, None);
+        let bytes = packets(&[&first, &late]);
+        assert!(matches!(
+            read_control(&bytes, format, capabilities(), LIMITS, 4096),
+            Err(Error::InvalidReference)
+        ));
+        // The actual offered set determines the bound: a smaller advertisement
+        // can safely support this name, and deletions never publish a name.
+        read_control(&bytes, format, Capabilities::default(), LIMITS, 4096).unwrap();
+        let first = command(
+            id(format, 1),
+            format.zero_id(),
+            b"refs/heads/z",
+            Some(format.capability()),
+        );
+        let late = command(id(format, 2), format.zero_id(), &long, None);
+        read_control(
+            &packets(&[&first, &late]),
+            format,
+            capabilities(),
+            LIMITS,
+            4096,
+        )
+        .unwrap();
+    }
+}
+
 fn demultiplex(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut wire = bytes;
     let mut result = (vec![], vec![]);

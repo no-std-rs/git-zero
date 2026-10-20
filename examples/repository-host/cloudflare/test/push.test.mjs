@@ -100,6 +100,12 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       assert.match(await response.text(), /ok refs\/heads\/accepted/);
       assert.equal((await refs(server, namespace)).length, 2);
 
+      const overlong = "refs/heads/" + "a".repeat(65375 - "refs/heads/".length);
+      response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: second, name: "refs/heads/z-guard" }, { old: zero, new: second, name: overlong }]) });
+      assert.equal(response.status, 400); await response.text();
+      assert.equal((await refs(server, namespace)).length, 2, "an unadvertisable late ref must not publish any command");
+      await git(directory, "push", remote, "main");
+
       const duplicateNamespace = `identity-${format}-${randomUUID()}`;
       await json(await fetch(`${server.origin}/_test/${duplicateNamespace}/initialize`, { method: "POST", headers: headers(format) }));
       const duplicateRemote = `${server.origin}/${duplicateNamespace}.git/git-receive-pack`;

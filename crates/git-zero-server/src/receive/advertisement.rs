@@ -122,6 +122,28 @@ fn first(
     )
 }
 
+pub(super) fn validate_first_name(
+    format: ObjectFormat,
+    capabilities: Capabilities,
+    name: &[u8],
+) -> Result<()> {
+    // Reuse the actual encoder's packet budget. A created ref may sort first
+    // later, even when its incoming command did not carry any capabilities.
+    struct Discard;
+    impl Write for Discard {
+        fn write_all(&mut self, _: &[u8]) -> Result<()> {
+            Ok(())
+        }
+    }
+    first(format, capabilities, format.zero_id(), name, &mut Discard).map_err(|error| {
+        if error == Error::InvalidPacket {
+            Error::InvalidReference
+        } else {
+            error
+        }
+    })
+}
+
 fn finish(
     format: ObjectFormat,
     capabilities: Capabilities,
