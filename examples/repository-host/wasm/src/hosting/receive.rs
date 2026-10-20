@@ -3,7 +3,7 @@ use super::{
 };
 use core::cell::UnsafeCell;
 use git_zero::{
-    Error, ObjectFormat, ObjectKind, Result,
+    Error, ObjectFormat, ObjectId, ObjectKind, Result,
     http::{
         receive::{Capabilities, ControlDecoder, ControlEvent, Limits},
         stored,
@@ -134,11 +134,7 @@ pub extern "C" fn host_receive_step(length: usize, end_of_input: u32) -> i32 {
                 .as_mut()
                 .ok_or(Error::InvalidRequest)?
         };
-        let result = session.step(bytes, end_of_input != 0, Frame::new(output()));
-        if let Err(error) = result {
-            session.phase = Phase::Failed(error);
-        }
-        result
+        session.step(bytes, end_of_input != 0, Frame::new(output()))
     });
     match result {
         Ok(length) => length,
@@ -192,54 +188,12 @@ impl Receive {
                 (2, 0)
             }
             ControlEvent::Command(command) => {
-                let features = stored::Features {
-                    selection: true,
-                    reachable_wants: true,
-                };
-                if !command.new.is_zero() {
-                    stored::reference(
-                        self.format,
-                        Some(command.new),
-                        command.name,
-                        true,
-                        None,
-                        features,
-                        &mut Discard,
-                    )
-                    .map_err(|error| {
-                        if error == Error::InvalidPacket {
-                            Error::InvalidReference
-                        } else {
-                            error
-                        }
-                    })?;
-                }
-                if command.name.starts_with(b"refs/heads/") && !command.new.is_zero() {
-                    // Full upload capabilities have a smaller symbolic-HEAD
-                    // budget than receive. The unborn carrier is the largest
-                    // projection and must still fit after the last ref delete.
-                    stored::reference(
-                        self.format,
-                        None,
-                        b"",
-                        true,
-                        Some(command.name),
-                        features,
-                        &mut Discard,
-                    )
-                    .map_err(|error| {
-                        if error == Error::InvalidPacket {
-                            Error::InvalidReference
-                        } else {
-                            error
-                        }
-                    })?;
-                }
+                let branch = validate_name(self.format, command.new, command.name)?;
                 frame.id(0, command.old);
                 frame.id(1, command.new);
                 frame.word(
                     12,
-                    u32::from(command.name.starts_with(b"refs/heads/"))
+                    u32::from(branch)
                         | (u32::from(command.old.is_zero()) << 1)
                         | (u32::from(command.new.is_zero()) << 2),
                 );
@@ -337,4 +291,36 @@ impl Receive {
         };
         Ok(frame.finish(tag, progress.consumed, progress.written))
     }
+}
+
+// A new target must fit both its own first advertisement and the unborn HEAD
+// projection that may remain after subsequent ref deletions.
+fn validate_name(format: ObjectFormat, new: ObjectId, name: &[u8]) -> Result<bool> {
+    let branch = name.starts_with(b"refs/heads/");
+    if new.is_zero() {
+        return Ok(branch);
+    }
+    let project = |id, name, symbolic| {
+        stored::reference(
+            format,
+            id,
+            name,
+            true,
+            symbolic,
+            stored::Features {
+                selection: true,
+                reachable_wants: true,
+            },
+            &mut Discard,
+        )
+        .map_err(|error| match error {
+            Error::InvalidPacket => Error::InvalidReference,
+            other => other,
+        })
+    };
+    project(Some(new), name, None)?;
+    if branch {
+        project(None, b"", Some(name))?;
+    }
+    Ok(branch)
 }
