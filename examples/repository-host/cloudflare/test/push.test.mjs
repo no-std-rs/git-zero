@@ -24,7 +24,7 @@ async function json(response) { const text = await response.text(); assert.equal
 async function refs(server, namespace) { return (await json(await fetch(`${server.origin}/_test/${namespace}/refs`, { headers: headers() }))).refs.map((ref) => ({ name: Buffer.from(ref.name).toString(), oid: ref.oid })); }
 function request(format, commands, atomic = true, packed = pack(format, [])) {
   const caps = `report-status-v2 object-format=${format ? "sha256" : "sha1"}${atomic ? " atomic" : ""}`;
-  return Buffer.concat([...commands.map((command, i) => packet(`${command.old} ${command.new} ${command.name}${i ? "" : `\0${caps}`}\n`)), Buffer.from("0000"), packed]);
+  return Buffer.concat([...commands.map((command, i) => packet(Buffer.concat([Buffer.from(`${command.old} ${command.new} `), Buffer.from(command.name), Buffer.from(`${i ? "" : `\0${caps}`}\n`)]))), Buffer.from("0000"), packed]);
 }
 
 for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`ordinary Git pushes, clones and fetches interoperate with ${runtime}`, { timeout: 120000 }, async () => {
@@ -252,6 +252,33 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       await git(root, "clone", "--mirror", `${server.origin}/${duplicateNamespace}.git`, duplicateClone);
       await git(duplicateClone, "fsck", "--full", "--strict");
       assert.equal(await git(duplicateClone, "cat-file", "blob", "refs/tags/mixed"), "hello!");
+
+      const manyNamespace = `many-refs-${format}-${randomUUID()}`, manyRemote = `${server.origin}/${manyNamespace}.git/git-receive-pack`;
+      await json(await fetch(`${server.origin}/_test/${manyNamespace}/initialize`, { method: "POST", headers: headers(format) }));
+      const manyFixture = project(format);
+      const seedRefs = await fetch(manyRemote, { method: "POST", headers: headers(), body: manyFixture.wire });
+      assert.equal(seedRefs.status, 200); await seedRefs.arrayBuffer();
+      const beforeMany = await json(await fetch(`${server.origin}/_test/${manyNamespace}/state`, { headers: headers() }));
+      const manyCommands = Array.from({ length: 16384 }, (_, i) => ({ old: zero, new: manyFixture.root.id.toString("hex"), name: `refs/tags/batch-${String(i).padStart(5, "0")}` }));
+      const manyResponse = await fetch(manyRemote, { method: "POST", headers: headers(), body: request(format, manyCommands) });
+      assert.equal(manyResponse.status, 200); const manyReport = await manyResponse.text();
+      assert.equal((manyReport.match(/ok refs\/tags\/batch-/g) ?? []).length, manyCommands.length);
+      const afterMany = await json(await fetch(`${server.origin}/_test/${manyNamespace}/state`, { headers: headers() }));
+      assert.equal(afterMany.refs, manyCommands.length + 1);
+      const refReads = afterMany.usage.sqlRowsRead - beforeMany.usage.sqlRowsRead;
+      assert.ok(refReads < manyCommands.length * 100, `batched ref conflict checks must use indexed prefixes: ${refReads} rows read`);
+      const rawPrefix = Buffer.concat([Buffer.from("refs/tags/raw-"), Buffer.from([255])]);
+      const rawChild = Buffer.concat([rawPrefix, Buffer.from("/nested")]);
+      const rawSibling = Buffer.concat([rawPrefix, Buffer.from(".before")]);
+      const manyTarget = manyFixture.root.id.toString("hex");
+      const rawCreate = await fetch(manyRemote, { method: "POST", headers: headers(), body: request(format, [rawPrefix, rawSibling].map((name) => ({ old: zero, new: manyTarget, name }))) });
+      assert.equal(rawCreate.status, 200); assert.ok(!(await rawCreate.text()).includes("ng "));
+      const hiddenAncestor = await fetch(manyRemote, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: manyTarget, name: rawChild }]) });
+      assert.match(await hiddenAncestor.text(), /ref name conflicts/, "a lexicographically intervening sibling must not mask the ancestor");
+      const replaceParent = await fetch(manyRemote, { method: "POST", headers: headers(), body: request(format, [{ old: manyTarget, new: zero, name: rawPrefix }, { old: zero, new: manyTarget, name: rawChild }]) });
+      assert.equal(replaceParent.status, 200); assert.ok(!(await replaceParent.text()).includes("ng "), "planned deletions must be removed before checking descendants");
+      const descendant = await fetch(manyRemote, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: manyTarget, name: rawPrefix }]) });
+      assert.match(await descendant.text(), /ref name conflicts/, "binary descendant ranges must reject recreating the ancestor");
 
       const collision = [{ old: zero, new: second, name: "refs/heads/main/topic" }];
       response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, collision) });

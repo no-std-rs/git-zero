@@ -1,4 +1,15 @@
-import { bytes } from "./storage.mjs";
+import { blob, bytes } from "./storage.mjs";
+
+function conflicts(store, value) {
+  const name = bytes(value);
+  for (let end = 0; end < name.length; end++) {
+    if (name[end] === 47 && store.exec("SELECT 1 FROM proposed_refs WHERE name=?", blob(name.subarray(0, end))).length) return true;
+  }
+  const lower = new Uint8Array(name.length + 1); lower.set(name); lower[name.length] = 47;
+  const upper = lower.slice(); upper[name.length] = 48;
+  // BLOB order keeps every raw-byte descendant in [name+'/', name+'0').
+  return store.exec("SELECT 1 FROM proposed_refs WHERE name>=? AND name<? LIMIT 1", lower.buffer, upper.buffer).length > 0;
+}
 
 // Storage visibility is one SQLite transaction. Objects keep their immutable
 // physical stage/offset keys; publication never copies the object/edge catalog.
@@ -25,8 +36,7 @@ export async function publish(store, stage) {
     for (const command of outcomes) if (!command.error && command.deletion) store.exec("DELETE FROM proposed_refs WHERE name=?", command.name);
     for (const command of outcomes) {
       if (command.error || command.deletion) continue;
-      const conflict = store.exec("SELECT name FROM proposed_refs WHERE name<>? AND ((length(name)<length(?) AND substr(?,1,length(name))=name AND substr(?,length(name)+1,1)=x'2f') OR (length(name)>length(?) AND substr(name,1,length(?))=? AND substr(name,length(?)+1,1)=x'2f')) LIMIT 1", command.name, command.name, command.name, command.name, command.name, command.name, command.name, command.name)[0];
-      if (conflict) command.error = "ref name conflicts";
+      if (conflicts(store, command.name)) command.error = "ref name conflicts";
       else store.exec("INSERT OR REPLACE INTO proposed_refs(name,seq) VALUES(?,?)", command.name, command.seq);
     }
     store.exec("DELETE FROM proposed_refs");
