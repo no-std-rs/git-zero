@@ -1,10 +1,24 @@
-import { blob, bytes } from "./storage.mjs";
+import { bytes } from "./storage.mjs";
+
+function ancestors(store, name, ends) {
+  // Bind the raw name once; SQLite slices BLOB bytes, including non-UTF-8 refs.
+  return store.exec("SELECT 1 FROM proposed_refs WHERE name IN (SELECT substr(?,1,value) FROM json_each(?)) LIMIT 1", name, JSON.stringify(ends)).length > 0;
+}
 
 function conflicts(store, value) {
   const name = bytes(value);
+  const ends = [];
   for (let end = 0; end < name.length; end++) {
-    if (name[end] === 47 && store.exec("SELECT 1 FROM proposed_refs WHERE name=?", blob(name.subarray(0, end))).length) return true;
+    if (name[end] !== 47) continue;
+    ends.push(end);
+    // Bound both the number of indexed lookups and temporary prefix bytes per
+    // statement without copying every growing prefix through the host binding.
+    if (ends.length === 64) {
+      if (ancestors(store, value, ends)) return true;
+      ends.length = 0;
+    }
   }
+  if (ends.length && ancestors(store, value, ends)) return true;
   const lower = new Uint8Array(name.length + 1); lower.set(name); lower[name.length] = 47;
   const upper = lower.slice(); upper[name.length] = 48;
   // BLOB order keeps every raw-byte descendant in [name+'/', name+'0').
@@ -60,7 +74,12 @@ export async function publish(store, stage) {
       }
       // Equality proves every physical entry has a new, distinct canonical ID.
       // These segments can later form a complete pack without per-object I/O.
-      if (added) store.exec("UPDATE stages SET phase='published',reusable=? WHERE id=?", Number(added === pack.expected), stage);
+      if (added) {
+        store.exec("UPDATE stages SET phase='published',reusable=? WHERE id=?", Number(added === pack.expected), stage);
+        // Ref outcomes already own their names. These controls describe this
+        // request, while objects and graph edges remain the published catalog.
+        for (const table of ["stage_commands", "stage_options", "stage_shallow"]) store.exec(`DELETE FROM ${table} WHERE stage=?`, stage);
+      }
       store.exec("UPDATE repository SET generation=generation+1,object_count=object_count+?,head=? WHERE id=1", added, head);
     }
     return outcomes.map(({ name, error }) => ({ name: bytes(name), error }));

@@ -13,8 +13,8 @@ const UUID = /^[0-9a-f-]{36}$/;
 const json = (body, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 const encode = (value) => new TextEncoder().encode(value);
 const fromHex = (value) => Uint8Array.from(value.match(/../g), (pair) => Number.parseInt(pair, 16));
-// Advertise only host-backed receive features. Push options are retained in
-// durable staging metadata; this host has no application hooks that consume them.
+// Advertise only host-backed receive features. Push options are staged until
+// publication; this host has no application hooks that consume them.
 const RECEIVE_CAPABILITIES = 255;
 
 function authorized(request, env) {

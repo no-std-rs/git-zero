@@ -267,6 +267,15 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       assert.equal(afterMany.refs, manyCommands.length + 1);
       const refReads = afterMany.usage.sqlRowsRead - beforeMany.usage.sqlRowsRead;
       assert.ok(refReads < manyCommands.length * 100, `batched ref conflict checks must use indexed prefixes: ${refReads} rows read`);
+      const deepName = `refs/tags/${"x/".repeat(4096)}tip`;
+      const deepResponse = await fetch(manyRemote, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: manyFixture.root.id.toString("hex"), name: deepName }]) });
+      assert.equal(deepResponse.status, 200); assert.ok(!(await deepResponse.text()).includes("ng "));
+      const afterDeep = await json(await fetch(`${server.origin}/_test/${manyNamespace}/state`, { headers: headers() }));
+      assert.equal(afterDeep.epoch, afterMany.epoch);
+      const deepCalls = afterDeep.usage.sqlCalls - afterMany.usage.sqlCalls;
+      assert.ok(deepCalls < 200, `deep ref must batch ancestor lookups: ${deepCalls} SQL calls`);
+      const listedDeep = await git(root, "ls-remote", `${server.origin}/${manyNamespace}.git`, deepName);
+      assert.equal(listedDeep, `${manyFixture.root.id.toString("hex")}\t${deepName}`);
       const rawPrefix = Buffer.concat([Buffer.from("refs/tags/raw-"), Buffer.from([255])]);
       const rawChild = Buffer.concat([rawPrefix, Buffer.from("/nested")]);
       const rawSibling = Buffer.concat([rawPrefix, Buffer.from(".before")]);
