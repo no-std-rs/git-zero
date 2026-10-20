@@ -153,10 +153,11 @@ export class Store {
     } catch (error) { await this.ctx.storage.setAlarm(Date.now() + 60000); throw error; }
   }
   async abandon(stage) {
-    const current = this.exec("SELECT phase FROM stages WHERE id=?", stage)[0];
-    if (!current || current.phase === "published") throw new Error("cannot abandon published or absent storage");
-    this.exec("UPDATE stages SET phase='failed' WHERE id=?", stage);
     try {
+    const current = this.exec("SELECT phase FROM stages WHERE id=?", stage)[0];
+    if (!current) return;
+    if (current.phase === "published") throw new Error("cannot abandon published storage");
+    this.exec("UPDATE stages SET phase='failed' WHERE id=?", stage);
       await this.clearTemporary(stage);
       for (;;) {
         const rows = this.exec("SELECT seq,key FROM stage_chunks WHERE stage=? LIMIT 128", stage);
@@ -171,6 +172,7 @@ export class Store {
         }
       }
       for (const table of STAGE_METADATA) this.exec(`DELETE FROM ${table} WHERE stage=?`, stage);
+      this.exec("DELETE FROM stages WHERE id=? AND phase='failed'", stage);
     } catch (error) {
       await this.ctx.storage.setAlarm(Date.now() + 60000);
       throw error;
@@ -187,8 +189,7 @@ export class Store {
     this.exec("DELETE FROM temp_objects");
     this.exec("UPDATE stages SET phase='failed' WHERE phase IN ('receiving','decoded') OR (phase='verified' AND retained=0)");
     for (;;) {
-      const owned = [...STAGE_METADATA, "stage_chunks", "temp_chunks", "temp_objects"].map((table) => `EXISTS(SELECT 1 FROM ${table} data WHERE data.stage=s.id)`).join(" OR ");
-      const pending = this.exec(`SELECT s.id FROM stages s WHERE s.phase='failed' AND (${owned}) LIMIT 1`)[0];
+      const pending = this.exec("SELECT id FROM stages WHERE phase='failed' LIMIT 1")[0];
       if (!pending) return;
       await this.abandon(pending.id);
     }

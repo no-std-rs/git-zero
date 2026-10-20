@@ -2,8 +2,9 @@ import { bytes } from "./storage.mjs";
 
 // Storage visibility is one SQLite transaction. Objects keep their immutable
 // physical stage/offset keys; publication never copies the object/edge catalog.
-export function publish(store, stage) {
-  return store.ctx.storage.transactionSync(() => {
+export async function publish(store, stage) {
+  try {
+    return store.ctx.storage.transactionSync(() => {
     const pack = store.exec("SELECT * FROM stages WHERE id=? AND phase='verified'", stage)[0];
     if (!pack) throw new Error("stage is not ready for publication");
     const commands = store.exec("SELECT * FROM stage_commands WHERE stage=? ORDER BY seq", stage);
@@ -53,5 +54,12 @@ export function publish(store, stage) {
       store.exec("UPDATE repository SET generation=generation+1,object_count=object_count+?,head=? WHERE id=1", added, head);
     }
     return outcomes.map(({ name, error }) => ({ name: bytes(name), error }));
-  });
+    });
+  } catch (error) {
+    // transactionSync rolls back before throwing. Reclaim the still-private
+    // pack now; abandon retains ownership records and schedules retries if
+    // storage cleanup itself fails.
+    await store.abandon(stage);
+    throw error;
+  }
 }

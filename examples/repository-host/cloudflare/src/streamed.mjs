@@ -96,16 +96,16 @@ export class OwnRepository {
     try {
       await new Intake(this.store, codec, stage).run(request);
     } catch (error) {
-      const selected = this.store.exec("SELECT selected FROM stages WHERE id=?", stage)[0].selected;
+      const selected = error.selected ?? 0;
       if (!selected) return json({ error: "invalid receive request" }, 400);
       const names = error.commands ?? this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", stage);
       await this.store.abandon(stage);
       const outcomes = names.map((row) => ({ ...row, error: "unpacker error" }));
       return this.stream(this.report(codec, selected, outcomes, true), "application/x-git-receive-pack-result");
     }
-    const outcomes = publish(this.store, stage);
+    const outcomes = await publish(this.store, stage);
     const selected = this.store.exec("SELECT selected FROM stages WHERE id=?", stage)[0].selected;
-    if (outcomes.length && outcomes.every((outcome) => outcome.error)) await this.store.abandon(stage);
+    if (outcomes.every((outcome) => outcome.error)) await this.store.abandon(stage);
     return this.stream(this.report(codec, selected, outcomes, false), "application/x-git-receive-pack-result");
   }
   async *uploadAdvertisement(codec, version) {

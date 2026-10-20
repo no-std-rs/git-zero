@@ -37,6 +37,13 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     server = await serve(persist);
     assert.equal((await fetch(`${server.origin}/_test/unauthorized/state`)).status, 401);
     assert.equal((await fetch(`${server.origin}/_services/register`, { method: "POST", headers: headers(), body: "{}" })).status, 404);
+    const emptyNamespace = `empty-receive-${randomUUID()}`;
+    for (let attempt = 0; attempt < 70; attempt++) {
+      const response = await fetch(`${server.origin}/${emptyNamespace}.git/git-receive-pack`, { method: "POST", headers: headers(), body: "0000" });
+      assert.equal(response.status, 200); await response.arrayBuffer();
+    }
+    const emptyState = await responseJson(await fetch(`${server.origin}/_test/${emptyNamespace}/state`, { headers: headers() }));
+    assert.equal(emptyState.stages.length, 0, "empty receives must not accumulate durable stage records");
     for (const format of [0, 1]) {
       for (const forward of [false, true]) {
         const namespace = `delta-${format}-${forward}-${randomUUID()}`;
@@ -67,7 +74,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
         assert.equal(response.status, 400, await response.text());
         const state = await responseJson(await fetch(`${server.origin}/_test/${name}/state`, { headers: headers() }));
         assert.equal(state.refs, 0); assert.equal(state.objects, 0);
-        assert.equal(state.stages[0].phase, "failed");
+        assert.deepEqual(state.stages, [], "failed stages disappear only after their owned bytes and metadata are reclaimed");
       }
     }
     const expiredNamespace = `expired-${randomUUID()}`;
@@ -85,6 +92,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     assert.ok(recovered.usage.r2Deletes >= 1, "cold recovery must finish scheduled quarantine cleanup");
     const shallowRecovered = await responseJson(await fetch(`${server.origin}/_test/${shallowNamespace}/state`, { headers: headers() }));
     assert.equal(shallowRecovered.quarantineRows, 0, "shallow-only quarantine must be reclaimed after cold recovery");
+    assert.deepEqual(shallowRecovered.stages, []);
     for (const item of restart) {
       const state = await responseJson(await fetch(`${server.origin}/_test/${item.namespace}/state`, { headers: headers() }));
       assert.notEqual(state.epoch, before);
@@ -125,7 +133,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     const invalid = await fetch(`${server.origin}/_test/${failedNamespace}/intake`, { method: "POST", headers: headers(), body: chunked(wire(0, invalidPack, invalidCommit.id), 65536), duplex: "half" });
     assert.equal(invalid.status, 400); await invalid.text();
     const reclaimed = await responseJson(await fetch(`${server.origin}/_test/${failedNamespace}/state`, { headers: headers() }));
-    assert.equal(reclaimed.stages[0].phase, "failed");
+    assert.deepEqual(reclaimed.stages, []);
     assert.equal(reclaimed.stagedChunks, 0); assert.equal(reclaimed.stagedObjects, 0);
     assert.ok(reclaimed.usage.r2Deletes >= 4, "both encoded chunks and both private canonical chunks must be deleted");
   } catch (error) { error.message += `\n${server?.logs() ?? ""}`; throw error; }

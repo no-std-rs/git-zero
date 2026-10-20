@@ -138,6 +138,7 @@ export class Intake {
       };
     } catch (error) {
       error.commands = this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", this.stage);
+      error.selected = this.store.exec("SELECT selected FROM stages WHERE id=?", this.stage)[0]?.selected ?? 0;
       await this.store.abandon(this.stage);
       throw error;
     } finally {
