@@ -75,6 +75,7 @@ export class FetchJob {
         if (this.store.exec("SELECT 1 FROM fetch_haves WHERE oid=?", id).length) continue;
         if (this.store.published(id)?.kind === 1) this.store.exec("INSERT OR IGNORE INTO fetch_haves(oid) VALUES(?)", id);
       } else if (event.tag === 73) {
+        if (this.store.exec("SELECT 1 FROM fetch_shallow WHERE oid=?", id).length) continue;
         if (this.store.published(id)?.kind !== 1) throw new Error("shallow ID is not a published commit");
         this.store.exec("INSERT OR IGNORE INTO fetch_shallow(oid) VALUES(?)", id);
       } else throw new Error("unknown upload control event");
