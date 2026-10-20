@@ -44,6 +44,34 @@ test("canonical capture scans whole pages across tiny delta copies", async () =>
   }
 });
 
+test("duplicate commit haves consult the published catalog once", async () => {
+  for (const format of [0, 1]) for (const version of [0, 1, 2]) {
+    const codec = new Codec(module, format), wanted = Buffer.alloc(codec.idBytes, 1), have = Buffer.alloc(codec.idBytes, 2);
+    const sets = new Map(), lookups = [];
+    const store = {
+      published(id) { lookups.push(id); return { oid: id, kind: 1 }; },
+      exec(sql, id) {
+        const table = /(?:FROM|INTO) (fetch_\w+)/.exec(sql)?.[1];
+        assert.ok(table, sql);
+        const values = sets.get(table) ?? new Set(); sets.set(table, values);
+        if (sql.startsWith("DELETE")) { values.clear(); return []; }
+        if (sql.startsWith("SELECT 1")) return (id === undefined ? values.size > 0 : values.has(id)) ? [{}] : [];
+        if (sql.startsWith("INSERT OR IGNORE")) { values.add(id); return []; }
+        assert.fail(sql);
+      },
+    };
+    const capability = `object-format=${format ? "sha256" : "sha1"}`;
+    const lines = version === 2 ? [packet("command=fetch\n"), packet(capability), Buffer.from("0001")] : [];
+    lines.push(packet(`want ${hex(wanted)}${version === 2 ? "" : ` multi_ack_detailed ${capability}`}\n`));
+    if (version !== 2) lines.push(Buffer.from("0000"));
+    for (let repeat = 0; repeat < 1025; repeat++) lines.push(packet(`have ${hex(have)}\n`));
+    lines.push(Buffer.from("0000"));
+    await new FetchJob(store, codec, version).decode(new Request("http://fixture/repo.git/git-upload-pack", { method: "POST", body: Buffer.concat(lines) }));
+    assert.deepEqual(lookups, [hex(wanted), hex(have)]);
+    assert.deepEqual([...sets.get("fetch_haves")], [hex(have)]);
+  }
+});
+
 test("paged shallow changes retain frozen controls and exact protocol framing", () => {
   for (const format of [0, 1]) for (const version of [0, 1, 2]) for (const done of [false, true]) {
     const codec = new Codec(module, format);

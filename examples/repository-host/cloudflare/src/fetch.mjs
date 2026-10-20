@@ -77,6 +77,7 @@ export class FetchJob {
         if (object.kind !== 1) this.allCommitWants = false;
         this.store.exec("INSERT OR IGNORE INTO fetch_wants(oid) VALUES(?)", id);
       } else if (event.tag === 72) {
+        if (this.store.exec("SELECT 1 FROM fetch_haves WHERE oid=?", id).length) continue;
         if (this.store.published(id)?.kind === 1) this.store.exec("INSERT OR IGNORE INTO fetch_haves(oid) VALUES(?)", id);
       } else if (event.tag === 73) {
         if (this.store.published(id)?.kind !== 1) throw new Error("shallow ID is not a published commit");
