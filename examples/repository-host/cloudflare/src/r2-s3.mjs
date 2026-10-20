@@ -37,7 +37,12 @@ export class R2S3Bucket {
       "x-amz-date": time, "x-amz-content-sha256": digest,
       authorization: `AWS4-HMAC-SHA256 Credential=${this.accessKey}/${scope}, SignedHeaders=${signed}, Signature=${signature}`,
     } });
-    if (!response.ok && !(method === "GET" && response.status === 404)) { await response.body?.cancel(); throw new Error(`R2 S3 ${method} failed (${response.status})`); }
+    if (!response.ok && !(method === "GET" && response.status === 404)) {
+      await response.body?.cancel();
+      const error = new Error(`R2 S3 ${method} failed (${response.status})`);
+      error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+      throw error;
+    }
     return response;
   }
   async put(key, data) { const response = await this.request("PUT", key, data); await response.body?.cancel(); }

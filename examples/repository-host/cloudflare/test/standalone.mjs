@@ -15,8 +15,9 @@ const root = new URL("../", import.meta.url);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const hmac = (key, bytes) => createHmac("sha256", key).update(bytes).digest();
 
-async function s3(directory) {
+async function s3(directory, getFailure) {
   await mkdir(directory, { recursive: true });
+  const faults = { injected: 0 };
   const server = createServer(async (request, response) => {
     try {
       const parts = []; let length = 0;
@@ -39,18 +40,31 @@ async function s3(directory) {
       } else if (request.method === "DELETE") {
         await rm(path, { force: true }); response.writeHead(204); response.end();
       } else if (request.method === "GET") {
-        try { const value = await readFile(path); response.writeHead(200, { "Content-Length": value.length }); response.end(value); }
+        try {
+          const value = await readFile(path);
+          if (getFailure && faults.injected === 0) {
+            faults.injected++;
+            if (getFailure === "status") { response.writeHead(503); response.end(); return; }
+            if (getFailure === "body") {
+              response.writeHead(200, { "Content-Length": value.length });
+              response.write(value.subarray(0, Math.floor(value.length / 2)));
+              response.flushHeaders(); setImmediate(() => response.destroy()); return;
+            }
+            request.socket.destroy(); return;
+          }
+          response.writeHead(200, { "Content-Length": value.length }); response.end(value);
+        }
         catch (error) { if (error.code !== "ENOENT") throw error; response.writeHead(404); response.end(); }
       } else { response.writeHead(405); response.end(); }
     } catch (error) { response.writeHead(403); response.end(String(error.message)); }
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
-  return { url: `http://127.0.0.1:${server.address().port}/bucket`, stop: async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
+  return { faults, url: `http://127.0.0.1:${server.address().port}/bucket`, stop: async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 
-export async function startStandalone(persist, { format = 0, cwd = fileURLToPath(root) } = {}) {
+export async function startStandalone(persist, { format = 0, cwd = fileURLToPath(root), getFailure } = {}) {
   const state = join(persist, "sqlite"); await mkdir(state, { recursive: true });
-  const storage = await s3(join(persist, "r2"));
+  const storage = await s3(join(persist, "r2"), getFailure);
   const child = spawn(fileURLToPath(new URL("node_modules/workerd/bin/workerd", root)), [
     "serve", "workerd.capnp", "--experimental", "--directory-path", `state=${state}`,
     "--socket-addr", "http=127.0.0.1:0", "--control-fd", "1",
@@ -79,6 +93,6 @@ export async function startStandalone(persist, { format = 0, cwd = fileURLToPath
       child.once("error", (error) => { clearTimeout(timer); reject(error); });
       child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`workerd exited ${code}\n${logs}`)); });
     });
-    return { origin: `http://127.0.0.1:${port}`, stop, logs: () => logs, runtimePid: child.pid };
+    return { origin: `http://127.0.0.1:${port}`, stop, logs: () => logs, runtimePid: child.pid, storageFaults: storage.faults };
   } catch (error) { await stop(); throw error; }
 }
