@@ -15,9 +15,9 @@ const root = new URL("../", import.meta.url);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const hmac = (key, bytes) => createHmac("sha256", key).update(bytes).digest();
 
-async function s3(directory, getFailure) {
+async function s3(directory, getFailure, deleteFailures) {
   await mkdir(directory, { recursive: true });
-  const faults = { injected: 0 };
+  const faults = { injected: 0, deleteFailures: 0 };
   const server = createServer(async (request, response) => {
     try {
       const parts = []; let length = 0;
@@ -38,6 +38,7 @@ async function s3(directory, getFailure) {
         const temporary = `${path}.pending`; await writeFile(temporary, body); await rename(temporary, path);
         response.writeHead(200); response.end();
       } else if (request.method === "DELETE") {
+        if (faults.deleteFailures < deleteFailures) { faults.deleteFailures++; response.writeHead(503); response.end(); return; }
         await rm(path, { force: true }); response.writeHead(204); response.end();
       } else if (request.method === "GET") {
         try {
@@ -62,9 +63,9 @@ async function s3(directory, getFailure) {
   return { faults, url: `http://127.0.0.1:${server.address().port}/bucket`, stop: async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 
-export async function startStandalone(persist, { format = 0, cwd = fileURLToPath(root), getFailure } = {}) {
+export async function startStandalone(persist, { format = 0, cwd = fileURLToPath(root), getFailure, deleteFailures = 0 } = {}) {
   const state = join(persist, "sqlite"); await mkdir(state, { recursive: true });
-  const storage = await s3(join(persist, "r2"), getFailure);
+  const storage = await s3(join(persist, "r2"), getFailure, deleteFailures);
   const child = spawn(fileURLToPath(new URL("node_modules/workerd/bin/workerd", root)), [
     "serve", "workerd.capnp", "--experimental", "--directory-path", `state=${state}`,
     "--socket-addr", "http=127.0.0.1:0", "--control-fd", "1",

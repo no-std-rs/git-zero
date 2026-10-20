@@ -105,7 +105,14 @@ export class OwnRepository {
     }
     const outcomes = await publish(this.store, stage);
     const publication = this.store.exec("SELECT selected,phase FROM stages WHERE id=?", stage)[0];
-    if (publication.phase !== "published") await this.store.abandon(stage);
+    if (publication.phase !== "published") {
+      try { await this.store.abandon(stage); }
+      catch (error) {
+        // Ref outcomes are already durable. Abandon keeps the failed stage's
+        // ownership records and schedules recovery; cleanup cannot undo them.
+        console.error(JSON.stringify({ event: "cleanup-deferred", stage, error: String(error.message ?? error) }));
+      }
+    }
     return this.stream(this.report(codec, publication.selected, outcomes, false), "application/x-git-receive-pack-result");
   }
   async *uploadAdvertisement(codec, version) {
