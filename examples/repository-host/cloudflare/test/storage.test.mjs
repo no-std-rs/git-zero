@@ -116,7 +116,10 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const scanned = await responseJson(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
       assert.equal(scanned.treeNameScratchRows, 0, "validated tree names must not duplicate immutable tree bodies in durable storage");
       const nullLink = object(format, 2, Buffer.concat([Buffer.from("160000 external\0"), Buffer.alloc(format ? 32 : 20)]));
-      for (const [label, invalid] of [["missing", project(format, true)], ["alias", project(format, false, true)], ["null-gitlink", { wire: wire(format, pack(format, [entry(2, nullLink.body)]), nullLink.id) }]]) {
+      const target = object(format, 3, "one target cannot have two kinds");
+      const mixed = object(format, 2, Buffer.concat([Buffer.from("100644 a\0"), target.id, Buffer.from("40000 b\0"), target.id]));
+      const mixedKinds = { wire: wire(format, pack(format, [entry(3, target.body), entry(2, mixed.body)]), mixed.id) };
+      for (const [label, invalid] of [["missing", project(format, true)], ["alias", project(format, false, true)], ["null-gitlink", { wire: wire(format, pack(format, [entry(2, nullLink.body)]), nullLink.id) }], ["mixed-kinds", mixedKinds]]) {
         const name = `${label}-${format}-${randomUUID()}`;
         const response = await fetch(`${server.origin}/_test/${name}/intake`, { method: "POST", headers: headers(format), body: invalid.wire });
         assert.equal(response.status, 400, await response.text());

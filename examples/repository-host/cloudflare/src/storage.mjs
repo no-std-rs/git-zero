@@ -63,6 +63,9 @@ const SCHEMA = [
   "CREATE INDEX IF NOT EXISTS stage_offset_dependencies ON stage_objects(stage,wire_base_offset) WHERE verified=0 AND wire_base_offset IS NOT NULL",
   "CREATE INDEX IF NOT EXISTS stage_id_dependencies ON stage_objects(stage,wire_base_id) WHERE verified=0 AND wire_base_id IS NOT NULL",
   "CREATE TABLE IF NOT EXISTS stage_edges (stage TEXT NOT NULL, node INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, relation INTEGER NOT NULL, PRIMARY KEY(stage,node,relation,dst)) WITHOUT ROWID",
+  // One immutable target cannot satisfy two expected kinds. Check conflicts
+  // before OR IGNORE can discard them; this also protects existing schemas.
+  "CREATE TRIGGER IF NOT EXISTS stage_edge_kind BEFORE INSERT ON stage_edges WHEN EXISTS(SELECT 1 FROM stage_edges WHERE stage=NEW.stage AND node=NEW.node AND relation=NEW.relation AND dst=NEW.dst AND kind<>NEW.kind) BEGIN SELECT RAISE(ABORT,'conflicting graph target kinds'); END",
   "CREATE TABLE IF NOT EXISTS stage_names (stage TEXT NOT NULL, node INTEGER NOT NULL, name BLOB NOT NULL, mode INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, PRIMARY KEY(stage,node,name)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS temp_chunks (stage TEXT NOT NULL, object TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,object,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS temp_chunk_offsets ON temp_chunks(stage,object,start)",
