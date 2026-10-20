@@ -30,6 +30,12 @@ struct Upload {
     boundary_probe: bool,
 }
 
+impl Upload {
+    fn request(&self) -> Result<&Request<'static>> {
+        self.parsed.as_ref().ok_or(Error::InvalidRequest)
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_cancel() {
     // SAFETY: Exclusive call releases all CONTROL borrows before reinitializing.
@@ -92,13 +98,7 @@ pub extern "C" fn host_upload_select(length: usize, probe: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_advert(object_format: u32, version: u32, selection: u32) -> i32 {
-    emit(|output| {
-        let version = u8::try_from(version).map_err(|_| Error::InvalidRequest)?;
-        if selection > 1 {
-            return Err(Error::InvalidRequest);
-        }
-        stored::advertise(format(object_format)?, version, selection != 0, output)
-    })
+    emit(|output| advertise(output, object_format, version, selection))
 }
 
 /// Header: padded ID@0, peeled ID@32, flags@64 (ID/peeled present),
@@ -111,59 +111,7 @@ pub extern "C" fn host_upload_ref(
     selection: u32,
     reachable: u32,
 ) -> i32 {
-    emit(|output| {
-        let session = session()?;
-        if v2 > 1 || first > 1 || selection > 1 || reachable > 1 {
-            return Err(Error::InvalidRequest);
-        }
-        let bytes = input(length)?;
-        let flags = u32_at(bytes, 64)?;
-        if flags > 3 {
-            return Err(Error::InvalidRequest);
-        }
-        let end = 80usize
-            .checked_add(u32_at(bytes, 68)? as usize)
-            .ok_or(Error::InvalidRequest)?;
-        let target_end = end
-            .checked_add(u32_at(bytes, 72)? as usize)
-            .ok_or(Error::InvalidRequest)?;
-        if bytes.len() != target_end {
-            return Err(Error::InvalidRequest);
-        }
-        let name = bytes.get(80..end).ok_or(Error::InvalidRequest)?;
-        let target = bytes.get(end..target_end).ok_or(Error::InvalidRequest)?;
-        let target = (!target.is_empty()).then_some(target);
-        let id = (flags & 1 != 0)
-            .then(|| id_at(bytes, 0, session.format))
-            .transpose()?;
-        let peeled = (flags & 2 != 0)
-            .then(|| id_at(bytes, 32, session.format))
-            .transpose()?;
-        if v2 != 0 {
-            session
-                .parsed
-                .as_ref()
-                .ok_or(Error::InvalidRequest)?
-                .reference(id, name, target, peeled, output)
-        } else {
-            stored::reference(
-                session.format,
-                id,
-                name,
-                first != 0,
-                target,
-                stored::Features {
-                    selection: selection != 0,
-                    reachable_wants: reachable != 0,
-                },
-                output,
-            )?;
-            if let Some(peeled) = peeled {
-                stored::peeled_reference(session.format, peeled, name, output)?;
-            }
-            Ok(())
-        }
-    })
+    emit(|output| reference(output, length, v2, first, selection, reachable))
 }
 
 #[unsafe(no_mangle)]
@@ -183,54 +131,16 @@ pub extern "C" fn host_upload_pack_chunk(length: usize, band: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_ack_start() -> i32 {
-    emit(|output| {
-        let session = session()?;
-        if session.acknowledgments.is_some() {
-            return Err(Error::InvalidRequest);
-        }
-        let mut acknowledgments = session
-            .parsed
-            .as_ref()
-            .ok_or(Error::InvalidRequest)?
-            .acknowledgments()?;
-        acknowledgments.start(output)?;
-        session.acknowledgments = Some(acknowledgments);
-        Ok(())
-    })
+    emit(ack_start)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_shallow_init() -> i32 {
-    result((|| {
-        let session = session()?;
-        if session.shallow_updates.is_some() {
-            return Err(Error::InvalidRequest);
-        }
-        session.shallow_updates = Some(
-            session
-                .parsed
-                .as_ref()
-                .ok_or(Error::InvalidRequest)?
-                .shallow_updates()?,
-        );
-        Ok(0)
-    })())
+    result(shallow_init())
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_shallow_change(length: usize, unshallow: u32) -> i32 {
-    emit(|output| {
-        let session = session()?;
-        let bytes = input(length)?;
-        if unshallow > 1 || bytes.len() != session.format.id_length() {
-            return Err(Error::InvalidRequest);
-        }
-        let id = id_at(bytes, 0, session.format)?;
-        session
-            .shallow_updates
-            .as_mut()
-            .ok_or(Error::InvalidRequest)?
-            .change(id, unshallow != 0, output)
-    })
+    emit(|output| shallow_change(output, length, unshallow))
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_shallow_finish() -> i32 {
@@ -244,19 +154,7 @@ pub extern "C" fn host_upload_shallow_finish() -> i32 {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_ack_common(length: usize) -> i32 {
-    emit(|output| {
-        let session = session()?;
-        let bytes = input(length)?;
-        if bytes.len() != session.format.id_length() {
-            return Err(Error::InvalidRequest);
-        }
-        let id = id_at(bytes, 0, session.format)?;
-        session
-            .acknowledgments
-            .as_mut()
-            .ok_or(Error::InvalidRequest)?
-            .common(id, output)
-    })
+    emit(|output| ack_common(output, length))
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_ack_finish() -> i32 {
@@ -267,6 +165,126 @@ pub extern "C" fn host_upload_ack_finish() -> i32 {
             .ok_or(Error::InvalidRequest)?
             .finish(output)
     })
+}
+
+fn advertise(
+    output: &mut SliceWriter<'_>,
+    object_format: u32,
+    version: u32,
+    selection: u32,
+) -> Result<()> {
+    let version = u8::try_from(version).map_err(|_| Error::InvalidRequest)?;
+    if selection > 1 {
+        return Err(Error::InvalidRequest);
+    }
+    stored::advertise(format(object_format)?, version, selection != 0, output)
+}
+
+fn reference(
+    output: &mut SliceWriter<'_>,
+    length: usize,
+    v2: u32,
+    first: u32,
+    selection: u32,
+    reachable: u32,
+) -> Result<()> {
+    let session = session()?;
+    if v2 > 1 || first > 1 || selection > 1 || reachable > 1 {
+        return Err(Error::InvalidRequest);
+    }
+    let bytes = input(length)?;
+    let flags = u32_at(bytes, 64)?;
+    if flags > 3 {
+        return Err(Error::InvalidRequest);
+    }
+    let end = 80usize
+        .checked_add(u32_at(bytes, 68)? as usize)
+        .ok_or(Error::InvalidRequest)?;
+    let target_end = end
+        .checked_add(u32_at(bytes, 72)? as usize)
+        .ok_or(Error::InvalidRequest)?;
+    if bytes.len() != target_end {
+        return Err(Error::InvalidRequest);
+    }
+    let name = bytes.get(80..end).ok_or(Error::InvalidRequest)?;
+    let target = bytes.get(end..target_end).ok_or(Error::InvalidRequest)?;
+    let target = (!target.is_empty()).then_some(target);
+    let id = (flags & 1 != 0)
+        .then(|| id_at(bytes, 0, session.format))
+        .transpose()?;
+    let peeled = (flags & 2 != 0)
+        .then(|| id_at(bytes, 32, session.format))
+        .transpose()?;
+    if v2 != 0 {
+        session
+            .request()?
+            .reference(id, name, target, peeled, output)
+    } else {
+        stored::reference(
+            session.format,
+            id,
+            name,
+            first != 0,
+            target,
+            stored::Features {
+                selection: selection != 0,
+                reachable_wants: reachable != 0,
+            },
+            output,
+        )?;
+        if let Some(peeled) = peeled {
+            stored::peeled_reference(session.format, peeled, name, output)?;
+        }
+        Ok(())
+    }
+}
+
+fn ack_start(output: &mut SliceWriter<'_>) -> Result<()> {
+    let session = session()?;
+    if session.acknowledgments.is_some() {
+        return Err(Error::InvalidRequest);
+    }
+    let mut acknowledgments = session.request()?.acknowledgments()?;
+    acknowledgments.start(output)?;
+    session.acknowledgments = Some(acknowledgments);
+    Ok(())
+}
+
+fn shallow_change(output: &mut SliceWriter<'_>, length: usize, unshallow: u32) -> Result<()> {
+    let session = session()?;
+    let bytes = input(length)?;
+    if unshallow > 1 || bytes.len() != session.format.id_length() {
+        return Err(Error::InvalidRequest);
+    }
+    let id = id_at(bytes, 0, session.format)?;
+    session
+        .shallow_updates
+        .as_mut()
+        .ok_or(Error::InvalidRequest)?
+        .change(id, unshallow != 0, output)
+}
+
+fn ack_common(output: &mut SliceWriter<'_>, length: usize) -> Result<()> {
+    let session = session()?;
+    let bytes = input(length)?;
+    if bytes.len() != session.format.id_length() {
+        return Err(Error::InvalidRequest);
+    }
+    let id = id_at(bytes, 0, session.format)?;
+    session
+        .acknowledgments
+        .as_mut()
+        .ok_or(Error::InvalidRequest)?
+        .common(id, output)
+}
+
+fn shallow_init() -> Result<usize> {
+    let session = session()?;
+    if session.shallow_updates.is_some() {
+        return Err(Error::InvalidRequest);
+    }
+    session.shallow_updates = Some(session.request()?.shallow_updates()?);
+    Ok(0)
 }
 
 fn version(length: usize, present: u32) -> Result<usize> {
@@ -370,22 +388,13 @@ fn history(length: usize) -> Result<usize> {
     let has_boundaries = u32_at(bytes, 0)? != 0;
     let nearest = u32_at(bytes, 4)?;
     let session = session()?;
-    let options = session
-        .parsed
-        .as_ref()
-        .and_then(Request::options)
-        .ok_or(Error::InvalidRequest)?;
+    let options = session.request()?.options().ok_or(Error::InvalidRequest)?;
     session.history = Some(options.history(has_boundaries, (nearest != 0).then_some(nearest))?);
     let deepening = options.deepens_history(has_boundaries);
     session.boundary_probe = deepening && options.deepen_relative;
     let reuse =
         options.depth.is_none() && matches!(options.filter, BlobFilter::All) && !has_boundaries;
-    let announces = session
-        .parsed
-        .as_ref()
-        .ok_or(Error::InvalidRequest)?
-        .shallow_updates()?
-        .is_enabled();
+    let announces = session.request()?.shallow_updates()?.is_enabled();
     let mut frame = Frame::new(output());
     frame.word(
         12,
@@ -421,11 +430,7 @@ fn select(length: usize, probe: u32) -> Result<usize> {
     } else {
         history
     };
-    let options = session
-        .parsed
-        .as_ref()
-        .and_then(Request::options)
-        .ok_or(Error::InvalidRequest)?;
+    let options = session.request()?.options().ok_or(Error::InvalidRequest)?;
     let boundary = flags & 1 != 0;
     let stop = info.kind == ObjectKind::Commit && !history.follows_parents(depth, boundary);
     let include = options.filter.includes(info, flags & 2 != 0);
