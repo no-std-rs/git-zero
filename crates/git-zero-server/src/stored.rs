@@ -201,6 +201,15 @@ pub fn advertise(
     Ok(())
 }
 
+/// Optional wire features supported and authorized by an external catalog host.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Features {
+    pub selection: bool,
+    /// The host grants retrieval of every visible reachable object, including
+    /// blobs omitted by a partial clone. Authorization remains host-owned.
+    pub reachable_wants: bool,
+}
+
 /// v0/v1 ref projection. The host supplies a stable sorted projection, HEAD
 /// first when resolved; `first` carries capabilities once. None is the empty
 /// repository carrier. Symbolic HEAD targets are raw validated ref bytes.
@@ -210,7 +219,7 @@ pub fn reference(
     name: &[u8],
     first: bool,
     head: Option<&[u8]>,
-    selection: bool,
+    features: Features,
     output: &mut impl Write,
 ) -> Result<()> {
     if name != b"HEAD" && id.is_some() {
@@ -243,7 +252,12 @@ pub fn reference(
                 name,
                 b"\0",
                 format.capability(),
-                crate::upload::capabilities(selection),
+                crate::upload::capabilities(features.selection),
+                if features.reachable_wants {
+                    crate::policy::REACHABLE
+                } else {
+                    b""
+                },
                 symref,
                 target,
                 b"\n",

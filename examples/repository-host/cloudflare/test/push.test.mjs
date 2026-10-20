@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -41,7 +41,8 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       await git(directory, "init", "--initial-branch=main", `--object-format=${format ? "sha256" : "sha1"}`);
       const body = Array.from({ length: 4000 }, (_, i) => `line ${i}: immutable shared content for delta reconstruction\n`).join("");
       await writeFile(join(directory, "file"), body);
-      await git(directory, "add", "file"); await git(directory, "commit", "-m", "initial");
+      await writeFile(join(directory, "small"), "small payload\n");
+      await git(directory, "add", "file", "small"); await git(directory, "commit", "-m", "initial");
       const first = await git(directory, "rev-parse", "HEAD");
       await git(directory, "-c", "protocol.version=0", "push", "--atomic", "--push-option=ci.skip", remote, "main");
       assert.deepEqual(await refs(server, namespace), [{ name: "refs/heads/main", oid: first }]);
@@ -71,6 +72,34 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
         await git(clone.directory, "merge", "--ff-only", "origin/main");
         await git(clone.directory, "fsck", "--full", "--strict");
       }
+      for (const version of [0, 1, 2]) {
+        const protocol = ["-c", `protocol.version=${version}`];
+        const shallow = join(root, `shallow-${format}-${version}`);
+        await git(root, ...protocol, "clone", "--depth=1", "--no-tags", remote, shallow);
+        assert.equal(await git(shallow, "rev-list", "--count", "HEAD"), "1");
+        assert.equal(await git(shallow, "rev-parse", "--is-shallow-repository"), "true");
+        await git(shallow, ...protocol, "fetch", "--deepen=1", "origin");
+        assert.equal(await git(shallow, "rev-list", "--count", "HEAD"), "2");
+        await git(shallow, ...protocol, "fetch", "--unshallow", "origin");
+        assert.equal(await git(shallow, "rev-parse", "--is-shallow-repository"), "false");
+        await git(shallow, "fsck", "--full", "--strict");
+        for (const [label, filter, depth, blobs] of [["none", "blob:none", false, 0], ["limit", "blob:limit=1024", false, 1], ["combined", "blob:none", true, 0]]) {
+          const partial = join(root, `partial-${label}-${format}-${version}`);
+          await git(root, ...protocol, "clone", `--filter=${filter}`, "--no-checkout", "--no-tags", ...(depth ? ["--depth=1"] : []), remote, partial);
+          const kinds = (await git(partial, "cat-file", "--batch-all-objects", "--batch-check=%(objecttype)")).split("\n");
+          assert.equal(kinds.filter((kind) => kind === "blob").length, blobs, `${label} must omit the requested blobs before checkout`);
+          await git(partial, ...protocol, "checkout", "--detach", "HEAD");
+          assert.equal(await readFile(join(partial, "file"), "utf8"), body.replace("line 2000:", "changed line 2000:"));
+          assert.equal(await readFile(join(partial, "small"), "utf8"), "small payload\n");
+          if (depth) {
+            await git(partial, ...protocol, "fetch", "--deepen=1", "origin");
+            assert.equal(await git(partial, "rev-list", "--count", "HEAD"), "2");
+            await git(partial, ...protocol, "checkout", "--detach", "HEAD~1");
+            assert.equal(await readFile(join(partial, "file"), "utf8"), body);
+          }
+          await git(partial, "fsck", "--full", "--strict");
+        }
+      }
       await git(directory, "tag", "--annotate", "annotated", "--message", "tag target");
       await git(directory, "push", remote, "refs/tags/annotated");
       await git(directory, "tag", "--annotate", "peeled-only", first, "--message", "older target without a direct ref");
@@ -81,10 +110,15 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const peeledResponse = await fetch(`${remote}/git-upload-pack`, { method: "POST", headers: { ...headers(), "content-type": "application/x-git-upload-pack-request" }, body: peeledControl });
       assert.equal(peeledResponse.status, 200); await peeledResponse.arrayBuffer();
       const afterWants = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
+      assert.equal(afterWants.epoch, beforeWants.epoch, "query counters must belong to the same durable instance");
       assert.ok(afterWants.usage.sqlCalls - beforeWants.usage.sqlCalls < repeated + 100, "duplicate peeled wants must use indexed authorization, without rescanning refs");
       await git(directory, "push", remote, ":refs/tags/peeled-only");
-      const revoked = await fetch(`${remote}/git-upload-pack`, { method: "POST", headers: { ...headers(), "content-type": "application/x-git-upload-pack-request" }, body: peeledControl });
-      assert.equal(revoked.status, 400, "deleting the only advertising tag must revoke its peeled want"); await revoked.arrayBuffer();
+      assert.equal(await git(root, "ls-remote", remote, "refs/tags/peeled-only*"), "");
+      const privateBlob = object(format, 3, `private quarantine ${randomUUID()}`);
+      await json(await fetch(`${server.origin}/_test/${namespace}/intake`, { method: "POST", headers: headers(format), body: wire(format, pack(format, [entry(3, privateBlob.body)]), privateBlob.id) }));
+      const privateControl = Buffer.concat([packet(`want ${privateBlob.id.toString("hex")} side-band-64k object-format=${format ? "sha256" : "sha1"}\n`), Buffer.from("0000"), packet("done\n")]);
+      const rejectedPrivate = await fetch(`${remote}/git-upload-pack`, { method: "POST", headers: { ...headers(), "content-type": "application/x-git-upload-pack-request" }, body: privateControl });
+      assert.equal(rejectedPrivate.status, 400, "published-object grants must not include a retained quarantine"); await rejectedPrivate.arrayBuffer();
       for (const version of [0, 1, 2]) {
         const listing = await git(root, "-c", `protocol.version=${version}`, "ls-remote", remote, "refs/tags/annotated*");
         assert.ok(listing.includes(`${second}\trefs/tags/annotated^{}`), `protocol ${version} must advertise peeled tag IDs`);
@@ -113,14 +147,47 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       }
       assert.ok(refPacket);
       const headNamespace = `head-limit-${format}-${randomUUID()}`, headRemote = `${server.origin}/${headNamespace}.git`;
-      const headName = "refs/heads/" + "a".repeat(65520 - refPacket + "refs/heads/main".length - "refs/heads/".length);
       const fixture = project(format);
       await json(await fetch(`${server.origin}/_test/${headNamespace}/initialize`, { method: "POST", headers: headers(format) }));
+      const emptyAdvert = Buffer.from(await (await fetch(`${headRemote}/info/refs?service=git-upload-pack`, { headers: headers() })).arrayBuffer());
+      let emptyPacket;
+      for (let at = 0; at < emptyAdvert.length;) {
+        const length = Number.parseInt(emptyAdvert.subarray(at, at + 4).toString(), 16);
+        if (length > 4 && emptyAdvert.subarray(at + 4, at + length).includes(Buffer.from(" capabilities^{}\0"))) emptyPacket = length;
+        at += Math.max(4, length);
+      }
+      assert.ok(emptyPacket);
+      const limit = Math.min(65520 - refPacket, 65520 - emptyPacket) + "refs/heads/main".length;
+      const headName = "refs/heads/" + "a".repeat(limit - "refs/heads/".length);
       const headResponse = await fetch(`${headRemote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: fixture.root.id.toString("hex"), name: "refs/tags/carrier" }, { old: zero, new: fixture.root.id.toString("hex"), name: headName }], true, fixture.pack) });
       assert.equal(headResponse.status, 200); assert.ok((await headResponse.text()).includes(`ok ${headName}`));
-      // The largest receive-compatible branch becomes symbolic HEAD. Ordinary
-      // discovery must fit too, with exactly the host-backed upload capabilities.
+      // The largest branch fitting all current projections becomes HEAD.
       for (const version of [0, 1, 2]) assert.ok((await git(root, "-c", `protocol.version=${version}`, "ls-remote", "--symref", headRemote, "HEAD")).includes(`ref: ${headName}\tHEAD`));
+      const beyondHead = await fetch(`${headRemote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: fixture.root.id.toString("hex"), name: headName + "b" }]) });
+      assert.equal(beyondHead.status, 400); await beyondHead.arrayBuffer();
+      const deleteHead = await fetch(`${headRemote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, ["refs/tags/carrier", headName].map((name) => ({ old: fixture.root.id.toString("hex"), new: zero, name })), true, Buffer.alloc(0)) });
+      assert.equal(deleteHead.status, 200);
+      const deletion = await deleteHead.text(); assert.ok(deletion.includes(`ok ${headName}`)); assert.ok(deletion.includes("ok refs/tags/carrier"));
+      assert.deepEqual(await refs(server, headNamespace), []);
+      for (const version of [0, 1, 2]) await git(root, "-c", `protocol.version=${version}`, "ls-remote", headRemote);
+      const carrier = "refs/tags/carrier", target = fixture.root.id.toString("hex");
+      const createCarrier = await fetch(`${headRemote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: target, name: carrier }]) });
+      assert.equal(createCarrier.status, 200); assert.match(await createCarrier.text(), /ok refs\/tags\/carrier/);
+      const tagAdvert = Buffer.from(await (await fetch(`${headRemote}/info/refs?service=git-upload-pack`, { headers: headers() })).arrayBuffer());
+      let tagPacket;
+      for (let at = 0; at < tagAdvert.length;) {
+        const length = Number.parseInt(tagAdvert.subarray(at, at + 4).toString(), 16);
+        if (length > 4 && tagAdvert.subarray(at + 4, at + length).includes(Buffer.from(` ${carrier}\0`))) tagPacket = length;
+        at += Math.max(4, length);
+      }
+      assert.ok(tagPacket);
+      const tagLimit = Math.min(65520 - tagPacket + carrier.length, 65520 - refPacket + "refs/heads/main".length);
+      const tagName = "refs/tags/" + "a".repeat(tagLimit - "refs/tags/".length);
+      const createTag = await fetch(`${headRemote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: target, name: tagName }]) });
+      assert.equal(createTag.status, 200); await createTag.arrayBuffer();
+      const beyondTag = await fetch(`${headRemote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: target, name: tagName + "b" }]) });
+      assert.equal(beyondTag.status, 400); await beyondTag.arrayBuffer();
+      for (const version of [0, 1, 2]) await git(root, "-c", `protocol.version=${version}`, "ls-remote", headRemote);
 
       const beforeRefOnly = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
       for (let attempt = 0; attempt < 16; attempt++) {

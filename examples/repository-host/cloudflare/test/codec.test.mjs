@@ -51,7 +51,7 @@ test("external frontier decisions use Rust history and blob-filter rules", () =>
     };
     const commit = { kind: 1, size: 100 };
     prepare();
-    assert.equal(codec.uploadHistory(true).flags, 1);
+    assert.equal(codec.uploadHistory(true).flags, 9);
     assert.equal(codec.uploadSelect(commit, 1).flags, 3);
     assert.equal(codec.uploadSelect(commit, 2).flags, 5);
     assert.equal(codec.uploadSelect(commit, 1, { clientBoundary: true }).flags, 11);
@@ -60,13 +60,13 @@ test("external frontier decisions use Rust history and blob-filter rules", () =>
     assert.equal(codec.uploadSelect({ kind: 3, size: 8 }, 1, { wanted: true }).flags & 1, 1);
     assert.equal(codec.uploadSelect({ kind: 2, size: 100 }, 1).flags & 1, 1);
     prepare(true, false);
-    assert.equal(codec.uploadHistory(true).flags, 3);
+    assert.equal(codec.uploadHistory(true).flags, 11);
     const boundary = codec.uploadSelect(commit, 3, { clientBoundary: true, probe: true });
     assert.equal(boundary.flags, 5); assert.equal(boundary.a, 4n);
     codec.uploadHistory(true, 3);
     assert.equal(codec.uploadSelect(commit, 4).flags, 3);
     assert.equal(codec.uploadSelect(commit, 5).flags, 5);
-    assert.equal(codec.uploadHistory(false).flags, 0);
+    assert.equal(codec.uploadHistory(false).flags, 8);
     assert.equal(codec.uploadSelect(commit, 99).a, 1n);
     assert.throws(() => codec.uploadSelect(commit, 0), CodecError);
     assert.throws(() => codec.uploadNext(), CodecError);

@@ -109,7 +109,7 @@ export class OwnRepository {
     return this.stream(this.report(codec, publication.selected, outcomes, false), "application/x-git-receive-pack-result");
   }
   async *uploadAdvertisement(codec, version) {
-    yield codec.uploadAdvert(version);
+    yield codec.uploadAdvert(version, true);
     if (version !== 2) yield* new FetchJob(this.store, codec, version).references();
   }
   async handle(request) {

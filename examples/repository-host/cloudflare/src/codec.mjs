@@ -134,7 +134,7 @@ export class Codec {
     return this.event("host_upload_select", f.bytes, Number(probe));
   }
   uploadAdvert(version, selection = false) { return this.event("host_upload_advert", null, this.format, version, Number(selection)).data; }
-  uploadRef(ref, { v2 = false, first = false, selection = false } = {}) {
+  uploadRef(ref, { v2 = false, first = false, selection = false, reachable = false } = {}) {
     const name = ref.name, target = ref.target ?? new Uint8Array();
     const f = fields(80 + name.length + target.length);
     f.word(64, (ref.id ? 1 : 0) | (ref.peeled ? 2 : 0));
@@ -142,7 +142,7 @@ export class Codec {
     if (ref.peeled) this.id(f, 32, ref.peeled);
     f.word(68, name.length); f.word(72, target.length); f.bytes.set(name, 80); f.bytes.set(target, 80 + name.length);
     // IDs are staged at padded ABI slots 0/32, distinct from frame event slots.
-    return this.event("host_upload_ref", f.bytes, Number(v2), Number(first), Number(selection)).data;
+    return this.event("host_upload_ref", f.bytes, Number(v2), Number(first), Number(selection), Number(reachable)).data;
   }
   uploadFlush() { return this.event("host_upload_flush", null).data; }
   uploadAckStart() { return this.event("host_upload_ack_start", null).data; }

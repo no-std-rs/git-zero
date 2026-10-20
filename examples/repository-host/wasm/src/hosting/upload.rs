@@ -195,7 +195,7 @@ pub extern "C" fn host_upload_next() -> i32 {
 
 /// Input: has-client-boundaries u32@0, nearest boundary distance u32@4
 /// (zero means absent). Flags: deepening=1, distance probe needed=2,
-/// complete-pack reuse permitted by the request=4.
+/// complete-pack reuse permitted by the request=4, boundary announcements=8.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_history_init(length: usize) -> i32 {
     let value = (|| {
@@ -216,12 +216,19 @@ pub extern "C" fn host_upload_history_init(length: usize) -> i32 {
         session.boundary_probe = deepening && options.deepen_relative;
         let reuse =
             options.depth.is_none() && matches!(options.filter, BlobFilter::All) && !has_boundaries;
+        let announces = session
+            .parsed
+            .as_ref()
+            .ok_or(Error::InvalidRequest)?
+            .shallow_updates()?
+            .is_enabled();
         let mut frame = Frame::new(output());
         frame.word(
             12,
             u32::from(deepening)
                 | (u32::from(session.boundary_probe) << 1)
-                | (u32::from(reuse) << 2),
+                | (u32::from(reuse) << 2)
+                | (u32::from(announces) << 3),
         );
         Ok(frame.finish(77, 0, 0) as usize)
     })();
@@ -293,10 +300,16 @@ pub extern "C" fn host_upload_advert(object_format: u32, version: u32, selection
 /// Header: padded ID@0, peeled ID@32, flags@64 (ID/peeled present),
 /// name/target lengths u32@68/72, raw name and symbolic target at 80.
 #[unsafe(no_mangle)]
-pub extern "C" fn host_upload_ref(length: usize, v2: u32, first: u32, selection: u32) -> i32 {
+pub extern "C" fn host_upload_ref(
+    length: usize,
+    v2: u32,
+    first: u32,
+    selection: u32,
+    reachable: u32,
+) -> i32 {
     emit(|output| {
         let session = session()?;
-        if v2 > 1 || first > 1 || selection > 1 {
+        if v2 > 1 || first > 1 || selection > 1 || reachable > 1 {
             return Err(Error::InvalidRequest);
         }
         let bytes = input(length)?;
@@ -335,7 +348,10 @@ pub extern "C" fn host_upload_ref(length: usize, v2: u32, first: u32, selection:
                 name,
                 first != 0,
                 target,
-                selection != 0,
+                stored::Features {
+                    selection: selection != 0,
+                    reachable_wants: reachable != 0,
+                },
                 output,
             )?;
             if let Some(peeled) = peeled {

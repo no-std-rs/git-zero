@@ -26,15 +26,19 @@ git -c http.extraHeader='Authorization: Bearer local-development-token' \
   clone http://127.0.0.1:8787/demo.git
 ```
 
-`HOST_TOKEN` grants access to every namespace on this host. Basic authentication
+`HOST_TOKEN` grants each namespace's complete published catalog, including
+objects from earlier ref generations. Basic authentication
 also accepts it as the password. Store a deployed token as a secret. For a new
 SHA-256 repository, start with `--var REPO_FORMAT:1`; an existing repository's
 format is fixed. Preserve the local Wrangler state across restarts.
 
 The current suite covers SHA-1/SHA-256 push, clone and fetch using Git protocol
 preferences 0/1/2, atomic updates, push options, deletes, thin pushes, annotated
-tags, concurrent stale updates and durable recovery. Shallow and filtered fetch
-are still in progress. Full Linux end-to-end validation is running; component
+tags, concurrent stale updates and durable recovery. Depth-limited clones,
+relative deepening, unshallowing, `blob:none`/`blob:limit` filters, and ordinary
+lazy checkout work in both formats and all three protocol versions. Time-based
+and exclusion-based deepening and tree/sparse/combine filters remain unsupported.
+Full Linux end-to-end validation is running; component
 decoder measurements do not establish a complete hosting result.
 
 For large ordinary HTTP pushes, the same modules run directly under pinned
@@ -45,6 +49,9 @@ Set `HOST_TOKEN`, `R2_S3_URL` (full bucket URL), `R2_ACCESS_KEY_ID`,
 `R2_SECRET_ACCESS_KEY`, and an absolute `GIT_ZERO_STATE_DIR`, then run
 `npm run serve:standalone`. This runtime uses workerd's experimental disk-backed
 Durable Object API. Its local tests use an independent S3 signature verifier.
+Cloudflare's [request limits](https://developers.cloudflare.com/workers/platform/limits/)
+apply to streamed HTTP bodies too; the direct runtime provides the large-push
+ingress option with the same Git implementation and R2 storage API.
 
 Verification for this task is local only. No live deployment, credential change
 or infrastructure purchase is needed. Full runtime resource usage and hosting

@@ -127,8 +127,23 @@ available only without known haves or shallow/filter extensions. It can include
 extra published objects from the same repository: `HOST_TOKEN` grants access to
 that entire repository. Otherwise fetch uses the per-object selection above.
 
-The new storage path does not yet enable shallow/filtered fetch. It has not
-passed a full Linux push through Wrangler. Linux-scale metadata storage,
+The storage path supports depth-limited clone, relative deepening, unshallowing,
+and `blob:none`/`blob:limit` filters. Rust shares history and blob decisions with
+the existing in-memory selector; SQLite stores the work frontier, shortest
+commit distances and shallow changes. Depth requests resend their bounded
+closure so shallow haves cannot hide requested history. Filtered objects do not
+qualify as compressed delta bases in the outgoing pack. Explicit blob wants
+remain included, supporting ordinary partial-clone checkout.
+
+`HOST_TOKEN` grants the namespace's whole published catalog. The host advertises
+reachable-object retrieval for v0/v1 clients and authorizes wants through the
+published OID index; private quarantines stay outside that index's visibility.
+Receive preflights every created ref against full upload capabilities, and
+branches against the larger unborn symbolic-HEAD carrier as well. This includes
+discovery after deletion of the last branch. Tests exercise exact packet limits
+with the negotiated capability set, including long tag-only catalogs.
+
+The host has not passed a full Linux push through Wrangler. Linux-scale metadata storage,
 ingress beyond Cloudflare request limits and measured hosting cost remain open;
 component pack-decoder measurements are not end-to-end hosting results. The
 former native Git gateway and its local service-registration API are retired.

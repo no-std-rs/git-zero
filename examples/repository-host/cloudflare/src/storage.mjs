@@ -56,10 +56,12 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS proposed_refs (name BLOB PRIMARY KEY, seq INTEGER) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS fetch_wants (oid TEXT PRIMARY KEY) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS fetch_haves (oid TEXT PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS fetch_shallow (oid TEXT PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS fetch_probe (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0, depth INTEGER NOT NULL DEFAULT 1, stage TEXT, node INTEGER) WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS fetch_probe_depth ON fetch_probe(depth,oid) WHERE walked=0",
   "CREATE TABLE IF NOT EXISTS fetch_common (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0, stage TEXT, node INTEGER) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS fetch_common_work ON fetch_common(walked,oid)",
-  "CREATE TABLE IF NOT EXISTS fetch_selected (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0, stage TEXT, node INTEGER) WITHOUT ROWID",
-  "CREATE INDEX IF NOT EXISTS fetch_selected_work ON fetch_selected(walked,oid)",
+  "CREATE TABLE IF NOT EXISTS fetch_selected (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0, stage TEXT, node INTEGER, depth INTEGER NOT NULL DEFAULT 1, included INTEGER NOT NULL DEFAULT 1, shallow INTEGER NOT NULL DEFAULT 0, unshallow INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS fetch_selected_physical ON fetch_selected(stage,node)",
 ];
 const STAGE_METADATA = ["stage_objects", "stage_edges", "stage_names", "stage_commands", "stage_options", "stage_shallow"];
@@ -77,6 +79,14 @@ export class Store {
     });
     this.exec("CREATE INDEX IF NOT EXISTS refs_oid ON refs(oid)");
     this.exec("CREATE INDEX IF NOT EXISTS refs_peeled ON refs(peeled)");
+    const frontier = this.exec("PRAGMA table_info(fetch_selected)");
+    this.ctx.storage.transactionSync(() => {
+      for (const [name, value] of [["depth", 1], ["included", 1], ["shallow", 0], ["unshallow", 0]]) {
+        if (!frontier.some((column) => column.name === name)) this.exec(`ALTER TABLE fetch_selected ADD COLUMN ${name} INTEGER NOT NULL DEFAULT ${value}`);
+      }
+      this.exec("DROP INDEX IF EXISTS fetch_selected_work");
+      this.exec("CREATE INDEX IF NOT EXISTS fetch_selected_depth ON fetch_selected(depth,oid) WHERE walked=0");
+    });
     this.exec("INSERT OR IGNORE INTO host_identity(id,namespace) VALUES(1,?)", namespace);
     if (this.exec("SELECT namespace FROM host_identity WHERE id=1")[0].namespace !== namespace) throw new Error("stored repository identity differs");
   }

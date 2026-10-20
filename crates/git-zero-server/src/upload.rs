@@ -446,6 +446,10 @@ impl ShallowUpdates {
             failure: None,
         }
     }
+    /// Whether this protocol round carries depth-boundary announcements.
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
     pub fn change(&mut self, id: ObjectId, unshallow: bool, output: &mut impl Write) -> Result<()> {
         let result = (|| {
             self.ready()?;

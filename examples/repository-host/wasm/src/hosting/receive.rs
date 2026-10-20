@@ -4,7 +4,11 @@ use super::{
 use core::cell::UnsafeCell;
 use git_zero::{
     Error, ObjectFormat, ObjectKind, Result,
-    http::receive::{Capabilities, ControlDecoder, ControlEvent, Limits},
+    http::{
+        receive::{Capabilities, ControlDecoder, ControlEvent, Limits},
+        stored,
+    },
+    io::Write,
     pack::{DecodeLimits, DecodeStatus, Decoder, EntryKind},
     zlib::{InflateLimits, WINDOW_SIZE},
 };
@@ -12,6 +16,13 @@ use git_zero::{
 static PACKET: Shared<[u8; 65520]> = Shared(UnsafeCell::new([0; 65520]));
 static WINDOW: Shared<[u8; WINDOW_SIZE]> = Shared(UnsafeCell::new([0; WINDOW_SIZE]));
 static RECEIVE: Shared<Option<Receive>> = Shared(UnsafeCell::new(None));
+
+struct Discard;
+impl Write for Discard {
+    fn write_all(&mut self, _: &[u8]) -> Result<()> {
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Phase {
@@ -181,6 +192,49 @@ impl Receive {
                 (2, 0)
             }
             ControlEvent::Command(command) => {
+                let features = stored::Features {
+                    selection: true,
+                    reachable_wants: true,
+                };
+                if !command.new.is_zero() {
+                    stored::reference(
+                        self.format,
+                        Some(command.new),
+                        command.name,
+                        true,
+                        None,
+                        features,
+                        &mut Discard,
+                    )
+                    .map_err(|error| {
+                        if error == Error::InvalidPacket {
+                            Error::InvalidReference
+                        } else {
+                            error
+                        }
+                    })?;
+                }
+                if command.name.starts_with(b"refs/heads/") && !command.new.is_zero() {
+                    // Full upload capabilities have a smaller symbolic-HEAD
+                    // budget than receive. The unborn carrier is the largest
+                    // projection and must still fit after the last ref delete.
+                    stored::reference(
+                        self.format,
+                        None,
+                        b"",
+                        true,
+                        Some(command.name),
+                        features,
+                        &mut Discard,
+                    )
+                    .map_err(|error| {
+                        if error == Error::InvalidPacket {
+                            Error::InvalidReference
+                        } else {
+                            error
+                        }
+                    })?;
+                }
                 frame.id(0, command.old);
                 frame.id(1, command.new);
                 frame.word(
