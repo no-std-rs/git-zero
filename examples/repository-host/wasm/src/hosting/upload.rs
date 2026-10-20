@@ -1,5 +1,7 @@
 //! Frozen bounded upload controls and paged external-catalog wire encoding.
-use super::{FRAME_BYTES, Frame, Shared, code, format, id_at, input, kind, output, u32_at, u64_at};
+use super::{
+    FRAME_BYTES, Frame, Shared, code, finish, format, id_at, input, kind, output, u32_at, u64_at,
+};
 use core::cell::UnsafeCell;
 use git_zero::{
     BlobFilter, Error, HistoryPolicy, ObjectFormat, ObjectInfo, ObjectKind, Result,
@@ -15,13 +17,7 @@ static UPLOAD: Shared<Option<Upload>> = Shared(UnsafeCell::new(None));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_version(length: usize, present: u32) -> i32 {
-    let value = (|| {
-        if present > 1 {
-            return Err(Error::InvalidRequest);
-        }
-        let header = core::str::from_utf8(input(length)?).map_err(|_| Error::InvalidRequest)?;
-        stored::protocol_version((present != 0).then_some(header)).map(usize::from)
-    })();
+    let value = version(length, present);
     result(value)
 }
 struct Upload {
@@ -48,13 +44,7 @@ fn session() -> Result<&'static mut Upload> {
     unsafe { (&mut *UPLOAD.0.get()).as_mut() }.ok_or(Error::InvalidRequest)
 }
 fn result(value: Result<usize>) -> i32 {
-    match value {
-        Ok(value) => value as i32,
-        Err(error) => {
-            host_upload_cancel();
-            code(error)
-        }
-    }
+    finish(value.map(|value| value as i32), host_upload_cancel)
 }
 fn emit(operation: impl FnOnce(&mut SliceWriter<'_>) -> Result<()>) -> i32 {
     let bytes = output();
@@ -74,123 +64,24 @@ fn emit(operation: impl FnOnce(&mut SliceWriter<'_>) -> Result<()>) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_init(object_format: u32, version: u32) -> i32 {
     host_upload_cancel();
-    let value = (|| {
-        let format = format(object_format)?;
-        if version > 2 {
-            return Err(Error::Unsupported);
-        }
-        // SAFETY: Exclusive call; prior CONTROL borrows have been dropped.
-        unsafe {
-            *UPLOAD.0.get() = Some(Upload {
-                format,
-                version: version as u8,
-                used: 0,
-                parsed: None,
-                objects: None,
-                acknowledgments: None,
-                shallow_updates: None,
-                history: None,
-                boundary_probe: false,
-            });
-        }
-        Ok(0)
-    })();
+    let value = initialize(object_format, version);
     result(value)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_append(length: usize) -> i32 {
-    result((|| {
-        let bytes = input(length)?;
-        let session = session()?;
-        if session.parsed.is_some() {
-            return Err(Error::InvalidRequest);
-        }
-        let end = session
-            .used
-            .checked_add(length)
-            .ok_or(Error::LimitExceeded)?;
-        if end > CONTROL_BYTES {
-            return Err(Error::LimitExceeded);
-        }
-        // SAFETY: Only this exclusive append accesses CONTROL mutably; parse
-        // freezes the arena and forbids further appends while borrows are live.
-        unsafe {
-            (&mut *CONTROL.0.get())[session.used..end].copy_from_slice(bytes);
-        }
-        session.used = end;
-        Ok(0)
-    })())
+    result(append(length))
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_parse() -> i32 {
-    let value = (|| {
-        let session = session()?;
-        if session.parsed.is_some() {
-            return Err(Error::InvalidRequest);
-        }
-        // SAFETY: CONTROL is immutable from parse until cancel; append rejects
-        // parsed state, and cancel drops both iterators and request first.
-        let bytes = unsafe { &(&*CONTROL.0.get())[..session.used] };
-        let parsed = Request::parse(bytes, session.format, session.version)?;
-        let mut frame = Frame::new(output());
-        let mut flags = match parsed.command() {
-            Command::Noop => 0,
-            Command::Refs => 1,
-            Command::Fetch => 2,
-        };
-        flags |= u32::from(parsed.band()) << 8;
-        flags |= u32::from(parsed.done()) << 16;
-        flags |= u32::from(parsed.include_tags()) << 17;
-        flags |= u32::from(parsed.ofs_delta()) << 21;
-        if let Some(options) = parsed.options() {
-            frame.wide(16, u64::from(options.depth.unwrap_or(0)));
-            flags |= u32::from(options.deepen_relative) << 18;
-            match options.filter {
-                BlobFilter::All => {}
-                BlobFilter::None => flags |= 1 << 19,
-                BlobFilter::Limit(limit) => {
-                    flags |= 1 << 20;
-                    frame.wide(24, limit);
-                }
-            }
-        }
-        frame.word(12, flags);
-        session.objects = Some(parsed.objects());
-        session.parsed = Some(parsed);
-        Ok(frame.finish(70, 0, 0) as usize)
-    })();
+    let value = parse();
     result(value)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_next() -> i32 {
-    let value = (|| {
-        let session = session()?;
-        let mut frame = Frame::new(output());
-        let object = session
-            .objects
-            .as_mut()
-            .ok_or(Error::InvalidRequest)?
-            .next();
-        let tag = match object {
-            Some(ObjectRequest::Want(id)) => {
-                frame.id(0, id);
-                71
-            }
-            Some(ObjectRequest::Have(id)) => {
-                frame.id(0, id);
-                72
-            }
-            Some(ObjectRequest::Shallow(id)) => {
-                frame.id(0, id);
-                73
-            }
-            None => 74,
-        };
-        Ok(frame.finish(tag, 0, 0) as usize)
-    })();
+    let value = next();
     result(value)
 }
 
@@ -199,40 +90,7 @@ pub extern "C" fn host_upload_next() -> i32 {
 /// complete-pack reuse permitted by the request=4, boundary announcements=8.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_history_init(length: usize) -> i32 {
-    let value = (|| {
-        let bytes = input(length)?;
-        if bytes.len() != 8 || u32_at(bytes, 0)? > 1 {
-            return Err(Error::InvalidRequest);
-        }
-        let has_boundaries = u32_at(bytes, 0)? != 0;
-        let nearest = u32_at(bytes, 4)?;
-        let session = session()?;
-        let options = session
-            .parsed
-            .as_ref()
-            .and_then(Request::options)
-            .ok_or(Error::InvalidRequest)?;
-        session.history = Some(options.history(has_boundaries, (nearest != 0).then_some(nearest))?);
-        let deepening = options.deepens_history(has_boundaries);
-        session.boundary_probe = deepening && options.deepen_relative;
-        let reuse =
-            options.depth.is_none() && matches!(options.filter, BlobFilter::All) && !has_boundaries;
-        let announces = session
-            .parsed
-            .as_ref()
-            .ok_or(Error::InvalidRequest)?
-            .shallow_updates()?
-            .is_enabled();
-        let mut frame = Frame::new(output());
-        frame.word(
-            12,
-            u32::from(deepening)
-                | (u32::from(session.boundary_probe) << 1)
-                | (u32::from(reuse) << 2)
-                | (u32::from(announces) << 3),
-        );
-        Ok(frame.finish(77, 0, 0) as usize)
-    })();
+    let value = history(length);
     result(value)
 }
 
@@ -241,49 +99,7 @@ pub extern "C" fn host_upload_history_init(length: usize) -> i32 {
 /// follow parents=2, shallow=4, unshallow=8; next parent distance u64@16.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_select(length: usize, probe: u32) -> i32 {
-    let value = (|| {
-        let bytes = input(length)?;
-        if bytes.len() != 20 || probe > 1 {
-            return Err(Error::InvalidRequest);
-        }
-        let flags = u32_at(bytes, 4)?;
-        let depth = u32_at(bytes, 16)?;
-        if flags > 3 || depth == 0 {
-            return Err(Error::InvalidRequest);
-        }
-        let info = ObjectInfo {
-            kind: kind(u32_at(bytes, 0)?)?,
-            size: u64_at(bytes, 8)?,
-        };
-        let session = session()?;
-        let history = session.history.ok_or(Error::InvalidRequest)?;
-        if probe != 0 && !session.boundary_probe {
-            return Err(Error::InvalidRequest);
-        }
-        let history = if probe != 0 {
-            HistoryPolicy::boundary_probe()
-        } else {
-            history
-        };
-        let options = session
-            .parsed
-            .as_ref()
-            .and_then(Request::options)
-            .ok_or(Error::InvalidRequest)?;
-        let boundary = flags & 1 != 0;
-        let stop = info.kind == ObjectKind::Commit && !history.follows_parents(depth, boundary);
-        let include = options.filter.includes(info, flags & 2 != 0);
-        let mut frame = Frame::new(output());
-        frame.word(
-            12,
-            u32::from(include)
-                | (u32::from(!stop) << 1)
-                | (u32::from(stop) << 2)
-                | (u32::from(info.kind == ObjectKind::Commit && boundary && !stop) << 3),
-        );
-        frame.wide(16, u64::from(history.parent_depth(depth)));
-        Ok(frame.finish(76, 0, 0) as usize)
-    })();
+    let value = select(length, probe);
     result(value)
 }
 
@@ -464,4 +280,198 @@ pub extern "C" fn host_upload_ack_finish() -> i32 {
             .ok_or(Error::InvalidRequest)?
             .finish(output)
     })
+}
+
+fn version(length: usize, present: u32) -> Result<usize> {
+    if present > 1 {
+        return Err(Error::InvalidRequest);
+    }
+    let header = core::str::from_utf8(input(length)?).map_err(|_| Error::InvalidRequest)?;
+    stored::protocol_version((present != 0).then_some(header)).map(usize::from)
+}
+
+fn initialize(object_format: u32, version: u32) -> Result<usize> {
+    let format = format(object_format)?;
+    if version > 2 {
+        return Err(Error::Unsupported);
+    }
+    // SAFETY: Exclusive call; prior CONTROL borrows have been dropped.
+    unsafe {
+        *UPLOAD.0.get() = Some(Upload {
+            format,
+            version: version as u8,
+            used: 0,
+            parsed: None,
+            objects: None,
+            acknowledgments: None,
+            shallow_updates: None,
+            history: None,
+            boundary_probe: false,
+        });
+    }
+    Ok(0)
+}
+
+fn parse() -> Result<usize> {
+    let session = session()?;
+    if session.parsed.is_some() {
+        return Err(Error::InvalidRequest);
+    }
+    // SAFETY: CONTROL is immutable from parse until cancel; append rejects
+    // parsed state, and cancel drops both iterators and request first.
+    let bytes = unsafe { &(&*CONTROL.0.get())[..session.used] };
+    let parsed = Request::parse(bytes, session.format, session.version)?;
+    let mut frame = Frame::new(output());
+    let mut flags = match parsed.command() {
+        Command::Noop => 0,
+        Command::Refs => 1,
+        Command::Fetch => 2,
+    };
+    flags |= u32::from(parsed.band()) << 8;
+    flags |= u32::from(parsed.done()) << 16;
+    flags |= u32::from(parsed.include_tags()) << 17;
+    flags |= u32::from(parsed.ofs_delta()) << 21;
+    if let Some(options) = parsed.options() {
+        frame.wide(16, u64::from(options.depth.unwrap_or(0)));
+        flags |= u32::from(options.deepen_relative) << 18;
+        match options.filter {
+            BlobFilter::All => {}
+            BlobFilter::None => flags |= 1 << 19,
+            BlobFilter::Limit(limit) => {
+                flags |= 1 << 20;
+                frame.wide(24, limit);
+            }
+        }
+    }
+    frame.word(12, flags);
+    session.objects = Some(parsed.objects());
+    session.parsed = Some(parsed);
+    Ok(frame.finish(70, 0, 0) as usize)
+}
+
+fn next() -> Result<usize> {
+    let session = session()?;
+    let mut frame = Frame::new(output());
+    let object = session
+        .objects
+        .as_mut()
+        .ok_or(Error::InvalidRequest)?
+        .next();
+    let tag = match object {
+        Some(ObjectRequest::Want(id)) => {
+            frame.id(0, id);
+            71
+        }
+        Some(ObjectRequest::Have(id)) => {
+            frame.id(0, id);
+            72
+        }
+        Some(ObjectRequest::Shallow(id)) => {
+            frame.id(0, id);
+            73
+        }
+        None => 74,
+    };
+    Ok(frame.finish(tag, 0, 0) as usize)
+}
+
+fn history(length: usize) -> Result<usize> {
+    let bytes = input(length)?;
+    if bytes.len() != 8 || u32_at(bytes, 0)? > 1 {
+        return Err(Error::InvalidRequest);
+    }
+    let has_boundaries = u32_at(bytes, 0)? != 0;
+    let nearest = u32_at(bytes, 4)?;
+    let session = session()?;
+    let options = session
+        .parsed
+        .as_ref()
+        .and_then(Request::options)
+        .ok_or(Error::InvalidRequest)?;
+    session.history = Some(options.history(has_boundaries, (nearest != 0).then_some(nearest))?);
+    let deepening = options.deepens_history(has_boundaries);
+    session.boundary_probe = deepening && options.deepen_relative;
+    let reuse =
+        options.depth.is_none() && matches!(options.filter, BlobFilter::All) && !has_boundaries;
+    let announces = session
+        .parsed
+        .as_ref()
+        .ok_or(Error::InvalidRequest)?
+        .shallow_updates()?
+        .is_enabled();
+    let mut frame = Frame::new(output());
+    frame.word(
+        12,
+        u32::from(deepening)
+            | (u32::from(session.boundary_probe) << 1)
+            | (u32::from(reuse) << 2)
+            | (u32::from(announces) << 3),
+    );
+    Ok(frame.finish(77, 0, 0) as usize)
+}
+
+fn select(length: usize, probe: u32) -> Result<usize> {
+    let bytes = input(length)?;
+    if bytes.len() != 20 || probe > 1 {
+        return Err(Error::InvalidRequest);
+    }
+    let flags = u32_at(bytes, 4)?;
+    let depth = u32_at(bytes, 16)?;
+    if flags > 3 || depth == 0 {
+        return Err(Error::InvalidRequest);
+    }
+    let info = ObjectInfo {
+        kind: kind(u32_at(bytes, 0)?)?,
+        size: u64_at(bytes, 8)?,
+    };
+    let session = session()?;
+    let history = session.history.ok_or(Error::InvalidRequest)?;
+    if probe != 0 && !session.boundary_probe {
+        return Err(Error::InvalidRequest);
+    }
+    let history = if probe != 0 {
+        HistoryPolicy::boundary_probe()
+    } else {
+        history
+    };
+    let options = session
+        .parsed
+        .as_ref()
+        .and_then(Request::options)
+        .ok_or(Error::InvalidRequest)?;
+    let boundary = flags & 1 != 0;
+    let stop = info.kind == ObjectKind::Commit && !history.follows_parents(depth, boundary);
+    let include = options.filter.includes(info, flags & 2 != 0);
+    let mut frame = Frame::new(output());
+    frame.word(
+        12,
+        u32::from(include)
+            | (u32::from(!stop) << 1)
+            | (u32::from(stop) << 2)
+            | (u32::from(info.kind == ObjectKind::Commit && boundary && !stop) << 3),
+    );
+    frame.wide(16, u64::from(history.parent_depth(depth)));
+    Ok(frame.finish(76, 0, 0) as usize)
+}
+
+fn append(length: usize) -> Result<usize> {
+    let bytes = input(length)?;
+    let session = session()?;
+    if session.parsed.is_some() {
+        return Err(Error::InvalidRequest);
+    }
+    let end = session
+        .used
+        .checked_add(length)
+        .ok_or(Error::LimitExceeded)?;
+    if end > CONTROL_BYTES {
+        return Err(Error::LimitExceeded);
+    }
+    // SAFETY: Only this exclusive append accesses CONTROL mutably; parse
+    // freezes the arena and forbids further appends while borrows are live.
+    unsafe {
+        (&mut *CONTROL.0.get())[session.used..end].copy_from_slice(bytes);
+    }
+    session.used = end;
+    Ok(0)
 }

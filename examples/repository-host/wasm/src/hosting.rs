@@ -214,3 +214,14 @@ impl<'a> Frame<'a> {
         (FRAME_BYTES + written) as i32
     }
 }
+
+// Typed operations have returned all arena borrows before failure cleanup.
+pub(super) fn finish(result: Result<i32>, cancel: extern "C" fn()) -> i32 {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            cancel();
+            code(error)
+        }
+    }
+}

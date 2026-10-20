@@ -1,5 +1,5 @@
 use super::{
-    Frame, INPUT_BYTES, Shared, code, format, input, key_at, kind, output, u32_at, u64_at,
+    Frame, INPUT_BYTES, Shared, code, finish, format, input, key_at, kind, output, u32_at, u64_at,
 };
 use core::cell::UnsafeCell;
 use git_zero::{
@@ -34,41 +34,7 @@ pub extern "C" fn host_range_cancel() {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_range_init(length: usize) -> i32 {
     host_range_cancel();
-    let result = (|| {
-        let bytes = input(length)?;
-        if bytes.len() != 104 {
-            return Err(Error::InvalidRequest);
-        }
-        let format = format(u32_at(bytes, 0)?)?;
-        let key = key_at(bytes, 4, 8, 16, format)?;
-        let range = match u32_at(bytes, 48)? {
-            0 => ObjectRange::All,
-            1 => ObjectRange::Bytes {
-                offset: u64_at(bytes, 56)?,
-                length: u64_at(bytes, 64)?,
-            },
-            _ => return Err(Error::InvalidRequest),
-        };
-        let limits = RangeLimits {
-            max_output: u64_at(bytes, 72)?,
-            max_work_bytes: u64_at(bytes, 80)?,
-            max_instructions: u64_at(bytes, 88)?,
-            max_depth: u32_at(bytes, 96)?,
-            max_read_bytes: u32_at(bytes, 100)? as usize,
-        };
-        if limits.max_depth > DEPTH || limits.max_read_bytes > INPUT_BYTES {
-            return Err(Error::LimitExceeded);
-        }
-        // SAFETY: cancel dropped all FRAMES references. Input/output arenas are
-        // disjoint; the new resolver retains only this private frame arena.
-        unsafe {
-            *RANGE.0.get() = Some(Session {
-                resolver: RangeResolver::new(format, key, range, &mut *FRAMES.0.get(), limits)?,
-                format,
-            });
-        }
-        Ok(0)
-    })();
+    let result = initialize(length);
     result.unwrap_or_else(code)
 }
 
@@ -103,18 +69,8 @@ fn object(bytes: &[u8], format: ObjectFormat) -> Result<RangeObject> {
 /// keep metadata/cache views stable until this reconstruction finishes.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_range_describe(length: usize) -> i32 {
-    let result = (|| {
-        let bytes = input(length)?;
-        // SAFETY: Exclusive session access; descriptor owns values, not INPUT.
-        let session = unsafe {
-            (&mut *RANGE.0.get())
-                .as_mut()
-                .ok_or(Error::InvalidRequest)?
-        };
-        session.resolver.describe(object(bytes, session.format)?)?;
-        Ok(0)
-    })();
-    finish(result)
+    let result = describe(length);
+    finish(result, host_range_cancel)
 }
 
 fn render(mut frame: Frame<'_>, request: RangeRequest, consumed: usize, written: usize) -> i32 {
@@ -143,48 +99,90 @@ fn render(mut frame: Frame<'_>, request: RangeRequest, consumed: usize, written:
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_range_request() -> i32 {
-    let result = (|| {
-        // SAFETY: Exclusive ABI call; result is copied into disjoint OUTPUT.
-        let session = unsafe {
-            (&mut *RANGE.0.get())
-                .as_mut()
-                .ok_or(Error::InvalidRequest)?
-        };
-        let request = session.resolver.request()?;
-        Ok(render(Frame::new(output()), request, 0, 0))
-    })();
-    finish(result)
+    let result = request();
+    finish(result, host_range_cancel)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_range_feed(length: usize, capacity: usize) -> i32 {
-    let result = (|| {
-        if capacity > INPUT_BYTES {
-            return Err(Error::BufferTooSmall);
-        }
-        let bytes = input(length)?;
-        // SAFETY: Resolver retains no input/output references, and sessions use
-        // separate scratch. This exclusive call obtains OUTPUT exactly once.
-        let session = unsafe {
-            (&mut *RANGE.0.get())
-                .as_mut()
-                .ok_or(Error::InvalidRequest)?
-        };
-        let mut frame = Frame::new(output());
-        let step = session
-            .resolver
-            .update(bytes, &mut frame.payload()[..capacity])?;
-        Ok(render(frame, step.request, step.consumed, step.written))
-    })();
-    finish(result)
+    let result = feed(length, capacity);
+    finish(result, host_range_cancel)
 }
 
-fn finish(result: Result<i32>) -> i32 {
-    match result {
-        Ok(value) => value,
-        Err(error) => {
-            host_range_cancel();
-            code(error)
-        }
+fn initialize(length: usize) -> Result<i32> {
+    let bytes = input(length)?;
+    if bytes.len() != 104 {
+        return Err(Error::InvalidRequest);
     }
+    let format = format(u32_at(bytes, 0)?)?;
+    let key = key_at(bytes, 4, 8, 16, format)?;
+    let range = match u32_at(bytes, 48)? {
+        0 => ObjectRange::All,
+        1 => ObjectRange::Bytes {
+            offset: u64_at(bytes, 56)?,
+            length: u64_at(bytes, 64)?,
+        },
+        _ => return Err(Error::InvalidRequest),
+    };
+    let limits = RangeLimits {
+        max_output: u64_at(bytes, 72)?,
+        max_work_bytes: u64_at(bytes, 80)?,
+        max_instructions: u64_at(bytes, 88)?,
+        max_depth: u32_at(bytes, 96)?,
+        max_read_bytes: u32_at(bytes, 100)? as usize,
+    };
+    if limits.max_depth > DEPTH || limits.max_read_bytes > INPUT_BYTES {
+        return Err(Error::LimitExceeded);
+    }
+    // SAFETY: cancel dropped all FRAMES references. Input/output arenas are
+    // disjoint; the new resolver retains only this private frame arena.
+    unsafe {
+        *RANGE.0.get() = Some(Session {
+            resolver: RangeResolver::new(format, key, range, &mut *FRAMES.0.get(), limits)?,
+            format,
+        });
+    }
+    Ok(0)
+}
+
+fn describe(length: usize) -> Result<i32> {
+    let bytes = input(length)?;
+    // SAFETY: Exclusive session access; descriptor owns values, not INPUT.
+    let session = unsafe {
+        (&mut *RANGE.0.get())
+            .as_mut()
+            .ok_or(Error::InvalidRequest)?
+    };
+    session.resolver.describe(object(bytes, session.format)?)?;
+    Ok(0)
+}
+
+fn request() -> Result<i32> {
+    // SAFETY: Exclusive ABI call; result is copied into disjoint OUTPUT.
+    let session = unsafe {
+        (&mut *RANGE.0.get())
+            .as_mut()
+            .ok_or(Error::InvalidRequest)?
+    };
+    let request = session.resolver.request()?;
+    Ok(render(Frame::new(output()), request, 0, 0))
+}
+
+fn feed(length: usize, capacity: usize) -> Result<i32> {
+    if capacity > INPUT_BYTES {
+        return Err(Error::BufferTooSmall);
+    }
+    let bytes = input(length)?;
+    // SAFETY: Resolver retains no input/output references, and sessions use
+    // separate scratch. This exclusive call obtains OUTPUT exactly once.
+    let session = unsafe {
+        (&mut *RANGE.0.get())
+            .as_mut()
+            .ok_or(Error::InvalidRequest)?
+    };
+    let mut frame = Frame::new(output());
+    let step = session
+        .resolver
+        .update(bytes, &mut frame.payload()[..capacity])?;
+    Ok(render(frame, step.request, step.consumed, step.written))
 }
