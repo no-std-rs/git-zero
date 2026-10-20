@@ -10,11 +10,15 @@ From `cloudflare/`, build and test the real local bindings:
 ```sh
 npm ci
 npm run test:streamed
-npm run dev -- --var HOST_TOKEN:local-development-token
+X_LOCAL_OBSERVABILITY=false npm run dev -- --var HOST_TOKEN:local-development-token
 ```
 
 The default Wrangler config starts the own implementation with local R2 and
-SQLite. Test-only routes are disabled in normal development and deployment.
+SQLite. The test and benchmark harnesses disable Wrangler's development trace
+collector (`X_LOCAL_OBSERVABILITY=false`); it records every SQL operation and
+can otherwise create a trace database larger than the repository metadata.
+Pass `observability: true` to the test launcher when investigating traces.
+Test-only routes are disabled in normal development and deployment.
 Repositories are addressed by namespace, for example
 `http://127.0.0.1:8787/demo.git`, and are created on their first authenticated
 request. Use ordinary clients:

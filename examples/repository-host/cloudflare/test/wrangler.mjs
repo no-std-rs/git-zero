@@ -6,13 +6,13 @@ import { resolve } from "node:path";
 export const TOKEN = "git-zero-local-storage-test";
 const root = new URL("../", import.meta.url);
 
-export async function start(persist, { config = "wrangler.toml", cwd = fileURLToPath(root), frozen = false } = {}) {
+export async function start(persist, { config = "wrangler.toml", cwd = fileURLToPath(root), frozen = false, observability = false } = {}) {
   const arguments_ = frozen ? [fileURLToPath(new URL("test/frozen-wrangler.mjs", root)), config, persist] : [
     fileURLToPath(new URL("node_modules/wrangler/bin/wrangler.js", root)), "dev",
     "--config", config, "--local", "--ip", "127.0.0.1", "--port", "0", "--inspector-port", "0",
     "--persist-to", persist, "--var", `HOST_TOKEN:${TOKEN}`, "--var", "TEST_MODE:true", "--show-interactive-dev-session=false",
   ];
-  const child = spawn(process.execPath, arguments_, { cwd, env: { ...process.env, WRANGLER_SEND_METRICS: "false", WRANGLER_REGISTRY_PATH: resolve(persist, "registry"), NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+  const child = spawn(process.execPath, arguments_, { cwd, env: { ...process.env, X_LOCAL_OBSERVABILITY: String(observability), WRANGLER_SEND_METRICS: "false", WRANGLER_REGISTRY_PATH: resolve(persist, "registry"), NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
   let logs = "", exited = false;
   child.once("exit", () => { exited = true; });
   const stop = async () => {
