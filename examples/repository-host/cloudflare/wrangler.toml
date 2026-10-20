@@ -1,25 +1,29 @@
-name = "git-zero-local-repository-services"
-main = "src/index.js"
+name = "git-zero-streamed-repository-host"
+main = "src/streamed.mjs"
 compatibility_date = "2026-10-06"
-workers_dev = false
+workers_dev = true
 send_metrics = false
 
+[build]
+command = "npm run build:streamed"
+watch_dir = ["src", "../wasm/src"]
+
 [vars]
-REPO_ID = "demo"
-LOCAL_TOKEN = "git-zero-local-services"
+REPO_FORMAT = "0"
+TEST_MODE = "false"
 
 [[r2_buckets]]
 binding = "BLOBS"
-bucket_name = "git-zero-local-repository-packs"
+bucket_name = "git-zero-repository-data"
 remote = false
 
 [[durable_objects.bindings]]
 name = "REPOSITORIES"
-class_name = "RepositoryServices"
+class_name = "OwnRepository"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["RepositoryServices"]
+new_sqlite_classes = ["OwnRepository"]
 
 [observability]
 enabled = false

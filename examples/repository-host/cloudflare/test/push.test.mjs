@@ -122,6 +122,14 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       // discovery must fit too, with exactly the host-backed upload capabilities.
       for (const version of [0, 1, 2]) assert.ok((await git(root, "-c", `protocol.version=${version}`, "ls-remote", "--symref", headRemote, "HEAD")).includes(`ref: ${headName}\tHEAD`));
 
+      const beforeRefOnly = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
+      for (let attempt = 0; attempt < 16; attempt++) {
+        const update = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: second, new: second, name: "refs/heads/main" }]) });
+        assert.equal(update.status, 200); assert.match(await update.text(), /ok refs\/heads\/main/);
+      }
+      const afterRefOnly = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
+      assert.equal(afterRefOnly.stagedChunks, beforeRefOnly.stagedChunks, "ref-only transactions must not retain empty pack claims");
+      assert.equal(afterRefOnly.stages.length, beforeRefOnly.stages.length);
       const commands = [{ old: first, new: second, name: "refs/heads/main" }, { old: zero, new: second, name: "refs/heads/accepted" }];
       let response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, commands) });
       assert.match(await response.text(), /ng refs\/heads\/accepted atomic push failed/);

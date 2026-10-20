@@ -112,7 +112,7 @@ try {
   const persist = join(work, "state");
   if (runtime === "wrangler") {
     const bundle = join(work, "frozen");
-    await command(process.execPath, [join(root, "node_modules/wrangler/bin/wrangler.js"), "deploy", "--config", "wrangler.streamed.toml", "--dry-run", "--outdir", bundle], root);
+    await command(process.execPath, [join(root, "node_modules/wrangler/bin/wrangler.js"), "deploy", "--config", "wrangler.toml", "--dry-run", "--outdir", bundle], root);
     const config = join(bundle, "wrangler.toml");
     await writeFile(config, `name = "git-zero-own-scale-proof"\nmain = "streamed.js"\ncompatibility_date = "2026-10-06"\nsend_metrics = false\n[vars]\nREPO_FORMAT = "${report.objectFormat === "sha256" ? 1 : 0}"\n[[r2_buckets]]\nbinding = "BLOBS"\nbucket_name = "git-zero-repository-data"\nremote = false\n[[durable_objects.bindings]]\nname = "REPOSITORIES"\nclass_name = "OwnRepository"\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["OwnRepository"]\n`);
     server = await start(persist, { config });

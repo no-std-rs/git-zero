@@ -1,0 +1,52 @@
+# Repository host
+
+This host implements Git smart HTTP in allocation-free `no_std` Rust Wasm.
+Workerd supplies HTTP, SQLite and opaque R2 storage. Hosting never starts Git or
+an external codec process. Git is required only for reference-client tests and
+benchmark fixtures.
+
+From `cloudflare/`, build and test the real local bindings:
+
+```sh
+npm ci
+npm run test:streamed
+npm run dev -- --var HOST_TOKEN:local-development-token
+```
+
+The default Wrangler config starts the own implementation with local R2 and
+SQLite. Test-only routes are disabled in normal development and deployment.
+Repositories are addressed by namespace, for example
+`http://127.0.0.1:8787/demo.git`, and are created on their first authenticated
+request. Use ordinary clients:
+
+```sh
+git -c http.extraHeader='Authorization: Bearer local-development-token' \
+  push http://127.0.0.1:8787/demo.git HEAD:refs/heads/main
+git -c http.extraHeader='Authorization: Bearer local-development-token' \
+  clone http://127.0.0.1:8787/demo.git
+```
+
+`HOST_TOKEN` grants access to every namespace on this host. Basic authentication
+also accepts it as the password. Store a deployed token as a secret. For a new
+SHA-256 repository, start with `--var REPO_FORMAT:1`; an existing repository's
+format is fixed. Preserve the local Wrangler state across restarts.
+
+The current suite covers SHA-1/SHA-256 push, clone and fetch using Git protocol
+preferences 0/1/2, atomic updates, push options, deletes, thin pushes, annotated
+tags, concurrent stale updates and durable recovery. Shallow and filtered fetch
+are still in progress. Full Linux end-to-end validation is running; component
+decoder measurements do not establish a complete hosting result.
+
+For large ordinary HTTP pushes, the same modules run directly under pinned
+workerd with local SQLite and signed R2 S3 requests. See
+[workerd.capnp](cloudflare/workerd.capnp),
+[serve.mjs](cloudflare/scripts/serve.mjs), the systemd unit and TLS proxy example.
+Set `HOST_TOKEN`, `R2_S3_URL` (full bucket URL), `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, and an absolute `GIT_ZERO_STATE_DIR`, then run
+`npm run serve:standalone`. This runtime uses workerd's experimental disk-backed
+Durable Object API. Its local tests use an independent S3 signature verifier.
+
+Verification for this task is local only. No live deployment, credential change
+or infrastructure purchase is needed. Full runtime resource usage and hosting
+costs are measured by `cloudflare/scripts/benchmark.mjs`; the 6 MiB Wasm and
+48 MiB byte-cache bounds do not describe the entire runtime process.

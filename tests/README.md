@@ -184,9 +184,13 @@ The separate hosting Wasm module is built with `npm run test:streamed` in
 controls and compressed plain/OFS/REF intake in both formats, then reconstruct
 and canonically hash results through the raw metadata/source/range/graph ABI.
 They also check typed links, binary names, historical modes, terminal intake
-failure, fresh-session scratch reuse, no host imports/allocator and a fixed 2 MiB
-linear-memory ceiling. The read-only demo keeps its existing independent budget.
-These ABI tests do not yet prove durable publication or a deployed Git host.
+failure, fresh-session scratch reuse, no host imports/allocator and a fixed 6 MiB
+linear-memory ceiling, including immutable upload controls. The read-only demo
+keeps its existing independent budget. The same suite drives ordinary Git
+push/clone/fetch against actual Wrangler R2/SQLite and direct workerd S3/SQLite,
+with atomic refs, graph validation, stale updates, cold restarts and reclamation.
+The former native Git hosting experiment and its tests have been replaced by
+these durable runtime tests; live deployment verification is outside this task.
 
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the

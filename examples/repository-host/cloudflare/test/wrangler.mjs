@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 export const TOKEN = "git-zero-local-storage-test";
 const root = new URL("../", import.meta.url);
 
-export async function start(persist, { config = "wrangler.streamed.toml" } = {}) {
+export async function start(persist, { config = "wrangler.toml" } = {}) {
   const child = spawn(process.execPath, [
     fileURLToPath(new URL("node_modules/wrangler/bin/wrangler.js", root)), "dev",
     "--config", config, "--local", "--ip", "127.0.0.1", "--port", "0", "--inspector-port", "0",

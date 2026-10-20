@@ -76,8 +76,8 @@ async snapshot persistence, but no complete-pack KV/R2 cache integration or
 deployed performance measurements. Server parity is still incomplete; further
 client and receive-pack work follows its completion gate.
 
-The separate repository-host prototype now has an own-codec receive path at
-`examples/repository-host/cloudflare/wrangler.streamed.toml`. Its Rust Wasm
+The repository host uses its own codec by default at
+`examples/repository-host/cloudflare/wrangler.toml`. Its Rust Wasm
 module has fixed memory and no allocator/imports. Runtime glue streams incoming
 packs into 8 MiB authenticated R2 chunks and records private object metadata in
 SQLite. Rust resolves delta ranges, hashes canonical objects and scans typed
@@ -131,7 +131,7 @@ The new storage path does not yet enable shallow/filtered fetch. It has not
 passed a full Linux push through Wrangler. Linux-scale metadata storage,
 ingress beyond Cloudflare request limits and measured hosting cost remain open;
 component pack-decoder measurements are not end-to-end hosting results. The
-default older example config is still a separate reference implementation.
+former native Git gateway and its local service-registration API are retired.
 Verification in this work is local only; no live Cloudflare deployment is
 requested or treated as a completion gate.
 

@@ -104,9 +104,9 @@ export class OwnRepository {
       return this.stream(this.report(codec, selected, outcomes, true), "application/x-git-receive-pack-result");
     }
     const outcomes = await publish(this.store, stage);
-    const selected = this.store.exec("SELECT selected FROM stages WHERE id=?", stage)[0].selected;
-    if (outcomes.every((outcome) => outcome.error)) await this.store.abandon(stage);
-    return this.stream(this.report(codec, selected, outcomes, false), "application/x-git-receive-pack-result");
+    const publication = this.store.exec("SELECT selected,phase FROM stages WHERE id=?", stage)[0];
+    if (publication.phase !== "published") await this.store.abandon(stage);
+    return this.stream(this.report(codec, publication.selected, outcomes, false), "application/x-git-receive-pack-result");
   }
   async *uploadAdvertisement(codec, version) {
     yield codec.uploadAdvert(version);
