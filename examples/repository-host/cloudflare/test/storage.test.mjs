@@ -64,6 +64,21 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     }
     assert.equal(batchRows.length, batches.length, "the last partial batch must be flushed");
     for (const at of [0, 511, 1024]) await canonical(server, batchNamespace, batchResult, batchRows[at], batches[at]);
+    const wideNamespace = `wide-tree-${randomUUID()}`;
+    const leaf = object(0, 3, "wide tree payload");
+    const wide = object(0, 2, Buffer.concat(Array.from({ length: 257 }, (_, i) => Buffer.concat([Buffer.from(`100644 file${String(i).padStart(3, "0")}\0`), leaf.id]))));
+    const widePack = pack(0, [entry(3, leaf.body), entry(2, wide.body)]);
+    const wideResult = await upload(server, wideNamespace, { wire: wire(0, widePack, wide.id) }, 0);
+    assert.ok(wideResult.usage.sqlCalls < 180, `tree metadata must be batched: ${wideResult.usage.sqlCalls} SQL calls`);
+    await canonical(server, wideNamespace, wideResult, await rowFor(server, wideNamespace, wideResult, wide.id), wide);
+    const emptyDirectory = object(0, 2, "");
+    const alias = object(0, 2, Buffer.concat([Buffer.from("100644 foo\0"), leaf.id, ...Array.from({ length: 32 }, (_, i) => Buffer.concat([Buffer.from(`100644 foo.${String(i).padStart(2, "0")}\0`), leaf.id])), Buffer.from("40000 foo\0"), emptyDirectory.id]));
+    const aliasPack = pack(0, [entry(3, leaf.body), entry(2, emptyDirectory.body), entry(2, alias.body)]);
+    const aliasNamespace = `wide-alias-${randomUUID()}`;
+    const aliasResponse = await fetch(`${server.origin}/_test/${aliasNamespace}/intake`, { method: "POST", headers: headers(), body: wire(0, aliasPack, alias.id) });
+    assert.equal(aliasResponse.status, 400); await aliasResponse.arrayBuffer();
+    const aliasState = await responseJson(await fetch(`${server.origin}/_test/${aliasNamespace}/state`, { headers: headers() }));
+    assert.deepEqual(aliasState.stages, [], "aliases separated across metadata batches must reject and reclaim");
     for (const format of [0, 1]) {
       for (const forward of [false, true]) {
         const namespace = `delta-${format}-${forward}-${randomUUID()}`;

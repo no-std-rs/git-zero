@@ -3,6 +3,8 @@ import { ByteCache, ChunkWriter, PAGE_BYTES } from "./storage.mjs";
 
 const CANONICAL_ENTRY_BYTES = 8 * 1024 * 1024;
 const REPRESENTATION_ENTRY_BYTES = 1024 * 1024;
+// At most 96 bindings for names, 80 for edges; never buffer a whole tree.
+const METADATA_BATCH = 16;
 const rowKey = (row) => row.stage ? `s:${row.stage}:${row.node}` : `o:${row.oid}`;
 const info = (row) => ({ kind: row.kind, size: row.size });
 
@@ -149,23 +151,42 @@ export class ObjectSource {
     await this.process(row, false);
   }
 
+  flushMetadata() {
+    if (this.names.length) {
+      this.store.exec(`INSERT INTO stage_names(stage,node,name,mode,dst,kind) VALUES${Array(this.names.length).fill("(?,?,?,?,?,?)").join(",")}`, ...this.names.flat());
+      this.names.length = 0;
+    }
+    if (this.edges.length) {
+      this.store.exec(`INSERT OR IGNORE INTO stage_edges(stage,node,dst,kind,relation) VALUES${Array(this.edges.length).fill("(?,?,?,?,?)").join(",")}`, ...this.edges.flat());
+      this.edges.length = 0;
+    }
+  }
+
+  edge(row, id, kind, relation) {
+    this.edges.push([this.stage, row.node, id, kind, relation]);
+    if (this.edges.length === METADATA_BATCH) this.flushMetadata();
+  }
+
   scan(row, data, eof, scan) {
     let consumed = 0;
     for (;;) {
       const event = this.codec.graphFeed(data.subarray(consumed), eof);
       consumed += event.consumed;
-      if (scan && event.tag === 31) this.store.exec("INSERT OR IGNORE INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,?)", this.stage, row.node, hex(event.id), event.flags, integer(event.a));
+      if (scan && event.tag === 31) this.edge(row, hex(event.id), event.flags, integer(event.a));
       if (scan && event.tag === 32) {
         this.namesStaged = true;
         const kind = event.flags & 255;
         // A database uniqueness constraint checks aliases even when they are
         // separated in Git's tree order. Raw names are bound as exact BLOBs.
-        this.store.exec("INSERT INTO stage_names(stage,node,name,mode,dst,kind) VALUES(?,?,?,?,?,?)", this.stage, row.node, event.data.slice().buffer, integer(event.a), hex(event.id), kind);
-        if (kind) this.store.exec("INSERT OR IGNORE INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,?)", this.stage, row.node, hex(event.id), kind, 3);
+        const id = hex(event.id);
+        this.names.push([this.stage, row.node, event.data.slice().buffer, integer(event.a), id, kind]);
+        if (this.names.length === METADATA_BATCH) this.flushMetadata();
+        if (kind) this.edge(row, id, kind, 3);
         if (!(event.flags & 256)) this.historicalModes++;
       }
       if (event.tag === 33) {
         if (consumed !== data.length) throw new Error("graph ended with unconsumed body bytes");
+        if (scan) this.flushMetadata();
         return hex(event.id);
       }
       if (event.tag === 30 && consumed === data.length && !eof) return undefined;
@@ -175,6 +196,7 @@ export class ObjectSource {
   async process(row, scan = true) {
     this.queries++;
     this.namesStaged = false;
+    this.names = []; this.edges = [];
     // Keys identify physical immutable representations within one query. An
     // identity delta may have the same canonical ID as its external base;
     // resolving by ID again would accidentally choose the delta itself.
