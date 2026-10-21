@@ -10,6 +10,7 @@ const DEFAULTS = Object.freeze({
   maxShallow: 16384, maxOptions: 16384, maxDepth: 128,
   maxWorkBytes: 1024 ** 4, maxInstructions: 100_000_000,
   maxReadBytes: INPUT, maxLinks: 100_000_000, nameScratch: 131072,
+  maxCanonicalBytes: 1024 ** 4, maxTotalWorkBytes: 16 * 1024 ** 4, maxTemporaryBytes: 64 * 1024 ** 3,
   capabilities: 0,
 });
 
@@ -17,12 +18,13 @@ export class CodecError extends Error {
   constructor(code, operation) { super(`Rust codec ${operation} failed (${code})`); this.code = code; }
 }
 
-function wide(view, offset, value) {
+function u64(value) {
   if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0)) throw new RangeError("unsafe integer in ABI frame");
   value = BigInt(value);
   if (value < 0n || value > U64_MAX) throw new RangeError("integer exceeds ABI field");
-  view.setBigUint64(offset, value, true);
+  return value;
 }
+function wide(view, offset, value) { view.setBigUint64(offset, u64(value), true); }
 
 function fields(length) {
   const bytes = new Uint8Array(length);
@@ -63,6 +65,13 @@ export class Codec {
     this.idBytes = format === 0 ? 20 : 32;
     this.limits = { ...DEFAULTS, ...limits };
     if (this.exports.host_input_capacity() !== INPUT || this.exports.host_output_capacity() !== 131072) throw new Error("unexpected codec ABI capacities");
+    this.invoke("host_budget_init", u64(this.limits.maxCanonicalBytes), u64(this.limits.maxTotalWorkBytes), u64(this.limits.maxTemporaryBytes));
+  }
+
+  charge(kind, bytes) { this.invoke("host_budget_charge", kind, u64(bytes)); }
+  budgetUsage() {
+    const event = this.event("host_budget_usage", null);
+    return { canonicalReservedBytes: integer(event.a), workBytes: integer(event.b), temporaryReservedBytes: integer(event.c), exhausted: !!(event.flags & 1) };
   }
 
   stage(bytes) {

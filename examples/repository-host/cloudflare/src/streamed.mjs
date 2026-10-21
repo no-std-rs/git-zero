@@ -141,7 +141,12 @@ export class OwnRepository {
       if (request.method === "GET" && parts[3] === "refs") return json({ refs: this.store.exec("SELECT name,oid FROM refs ORDER BY name").map((row) => ({ name: Array.from(bytes(row.name)), oid: row.oid })) });
       if (request.method === "POST" && parts[3] === "intake") {
         const format = Number(request.headers.get("x-test-format") ?? this.env.REPO_FORMAT ?? 0);
-        const codec = new Codec(module, format, { capabilities: 255 });
+        const limits = { capabilities: 255 };
+        for (const [name, field] of [["canonical", "maxCanonicalBytes"], ["work", "maxTotalWorkBytes"], ["temporary", "maxTemporaryBytes"]]) {
+          const value = request.headers.get(`x-test-${name}-bytes`);
+          if (value !== null) limits[field] = BigInt(value);
+        }
+        const codec = new Codec(module, format, limits);
         const stage = this.store.stage(format, true);
         const result = await new Intake(this.store, codec, stage).run(request);
         return json({ ...result, epoch: this.epoch, usage: this.store.statistics().usage });

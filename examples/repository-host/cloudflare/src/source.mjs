@@ -95,7 +95,7 @@ export class ObjectSource {
     const key = rowKey(row);
     if (this.reader?.key !== key || this.reader.next !== offset) {
       this.codec.sourceInit({ offset: row.node, maxBytes: row.end_offset - row.node }, { offset, length: row.packed_size - offset });
-      this.reader = { key, next: offset, wire: row.node, input: new Uint8Array(), cursor: 0 };
+      this.reader = { key, next: offset, wire: row.node, inflated: 0, input: new Uint8Array(), cursor: 0 };
     }
     const result = new Uint8Array(length);
     let written = 0;
@@ -114,6 +114,8 @@ export class ObjectSource {
       }
       const input = reader.input.subarray(reader.cursor);
       const event = this.codec.sourceStep(input, reader.wire + input.length === row.end_offset, Math.min(length - written, PAGE_BYTES));
+      const inflated = integer(event.b);
+      this.codec.charge(1, inflated - reader.inflated); reader.inflated = inflated;
       reader.cursor += event.consumed; reader.wire += event.consumed;
       result.set(event.data, written); written += event.written; reader.next += event.written;
       if (event.tag === 41 && written !== length) throw new Error("source ended before requested range");
@@ -183,6 +185,19 @@ export class ObjectSource {
     if (this.edges.length === METADATA_BATCH) this.flushMetadata();
   }
 
+  beginScan(row) {
+    this.namesStaged = false;
+    this.names.length = 0; this.edges.length = 0;
+    this.codec.graphInit(info(row));
+  }
+
+  finishScan(row) {
+    // Names establish uniqueness within one authenticated tree. Immutable tree
+    // bytes and typed edges are sufficient once its full digest is verified.
+    if (this.namesStaged) this.store.exec("DELETE FROM stage_names WHERE stage=? AND node=?", this.stage, row.node);
+    this.namesStaged = false;
+  }
+
   scan(row, data, eof, scan) {
     let consumed = 0;
     for (;;) {
@@ -209,17 +224,27 @@ export class ObjectSource {
     }
   }
 
+  scanCaptured(row, data, scan) {
+    let cursor = 0, digest;
+    do {
+      const end = Math.min(cursor + PAGE_BYTES, data.length);
+      digest = this.scan(row, data.subarray(cursor, end), end === data.length, scan);
+      cursor = end;
+    } while (cursor < data.length);
+    return digest;
+  }
+
   async process(row, scan = true) {
     this.queries++;
-    this.namesStaged = false;
-    this.names.length = 0; this.edges.length = 0;
+    this.codec.charge(0, row.size);
+    if (row.size > CANONICAL_ENTRY_BYTES) this.codec.charge(2, row.size);
     // Keys identify physical immutable representations within one query. An
     // identity delta may have the same canonical ID as its external base;
     // resolving by ID again would accidentally choose the delta itself.
     this.queryKeys = new Map(); this.queryRows = [];
     const rootKey = this.key(row);
     const descriptor = this.descriptor(row);
-    this.codec.rangeInit(rootKey); this.codec.graphInit(info(row));
+    this.codec.rangeInit(rootKey); this.beginScan(row);
     const captured = row.size <= CANONICAL_ENTRY_BYTES ? new Uint8Array(row.size) : null;
     const temporary = captured === null ? new ChunkWriter(this.store, this.stage, rowKey(row)) : null;
     let written = 0, digest, request = this.codec.rangeRequest();
@@ -234,6 +259,7 @@ export class ObjectSource {
         const offset = integer(request.a), length = integer(request.b);
         const input = root ? await this.readRow(row, request.flags, offset, length) : await this.read(request.key, request.flags, offset, length);
         const event = this.codec.rangeFeed(input);
+        this.codec.charge(1, event.consumed);
         if (captured) captured.set(event.data, written);
         if (temporary && event.data.length) await temporary.write(event.data);
         written += event.written;
@@ -243,12 +269,7 @@ export class ObjectSource {
         // Captured bytes are already bounded and owned by this query. Scan
         // whole pages instead of crossing the ABI for each tiny delta copy.
         if (captured) {
-          let cursor = 0;
-          do {
-            const end = Math.min(cursor + PAGE_BYTES, captured.length);
-            digest = this.scan(row, captured.subarray(cursor, end), end === captured.length, scan);
-            cursor = end;
-          } while (cursor < captured.length);
+          digest = this.scanCaptured(row, captured, scan);
         } else digest ??= this.scan(row, new Uint8Array(), true, scan);
         break;
       } else throw new Error("unexpected reconstruction event");
@@ -262,10 +283,7 @@ export class ObjectSource {
     }
     if (scan) {
       this.store.exec("UPDATE stage_objects SET oid=?,verified=1,scanned=1 WHERE stage=? AND node=?", digest, this.stage, row.node);
-      // Names prove uniqueness within this one authenticated tree. Fetch uses
-      // immutable tree bytes and typed edges; these scratch rows are redundant
-      // after the full canonical digest and scanner have both succeeded.
-      if (this.namesStaged) this.store.exec("DELETE FROM stage_names WHERE stage=? AND node=?", this.stage, row.node);
+      this.finishScan(row);
     }
     if (captured) this.canonical.put(digest, captured);
     return digest;

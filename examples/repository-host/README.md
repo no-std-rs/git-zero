@@ -47,6 +47,21 @@ and contained prefixes reuse slots. Request bodies have a 60-second input idle
 deadline that excludes chunk processing. Response readers have a 60-second idle
 deadline, reset whenever output is pulled, so stalled clients release repository
 scratch after cleanup without imposing a total transfer deadline.
+Each HTTP operation also has shared Rust byte budgets: 1 TiB of canonical
+output reservations, 16 TiB of decoding/representation work, and 64 GiB of
+temporary canonical bodies. These accumulate across objects and repeated base
+reconstruction, and exhaustion stays terminal for that request. Complete body
+sizes are reserved before temporary writes; work counts input inflation,
+representation reads and reinflated prefixes. `Codec` limit overrides can lower
+or raise these defaults. Cleanup remains available after exhaustion. The local
+state endpoint exposes `lastIntakeBudget`; this diagnostic resets on a cold
+restart. The native Linux source inventory totals about 151.4 GiB of canonical
+data; its 25 objects above the 8 MiB capture threshold total about 391.5 MiB.
+This inventory is a compatibility check for the defaults, not a completed
+hosting measurement.
+Plain commits, trees and tags are scanned while their original decoded bytes
+are available; their metadata stays private until pack and graph validation
+finish. A large plain body does not require a temporary reconstruction copy.
 The npm lockfile pins a runtime containing Cloudflare's
 [RPC stream EOF accounting fix](https://github.com/cloudflare/workerd/commit/0edfb056c6fafb04a584cf23297b3de91bfcac7a).
 Use `npm ci` to install that exact runtime; older builds can fail or truncate

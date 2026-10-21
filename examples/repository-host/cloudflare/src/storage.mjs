@@ -193,6 +193,7 @@ export class Store {
       stages: this.exec("SELECT id,format,phase,bytes,expected FROM stages ORDER BY created DESC LIMIT 64"),
       databaseBytes: this.ctx.storage.sql.databaseSize ?? null,
       workerCpuMs: null,
+      lastIntakeBudget: this.lastIntakeBudget ?? null,
     };
     result.usage = { ...this.usage, sqlRowsRead: this.sqlKnown ? this.usage.sqlRowsRead : null, sqlRowsWritten: this.sqlKnown ? this.usage.sqlRowsWritten : null };
     return result;

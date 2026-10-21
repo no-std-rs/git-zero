@@ -45,9 +45,11 @@ test("incremental readers pin their current page across owned chunk eviction", a
     exec: () => [{ key: "chunk", start: 12, length: bytes.length }],
     async get(chunk, cache) { const hit = cache.get(chunk.key); if (hit) return hit; cache.put(chunk.key, bytes); return bytes; },
   };
+  let inflated = 0;
   const codec = {
-    sourceInit() {},
-    sourceStep(input, eof, capacity) { const take = Math.min(input.length, capacity); return { consumed: take, written: take, data: input.slice(0, take), tag: 40, flags: 2 }; },
+    sourceInit() { inflated = 0; },
+    charge() {},
+    sourceStep(input, eof, capacity) { const take = Math.min(input.length, capacity); inflated += take; return { consumed: take, written: take, data: input.slice(0, take), tag: 40, flags: 2, b: BigInt(inflated) }; },
   };
   const source = new ObjectSource(store, codec, "pin", { ownedBuffers: true });
   source.chunks.limit = PAGE_BYTES;

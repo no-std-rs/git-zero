@@ -24,11 +24,13 @@ export class Intake {
     this.pendingObjects.length = 0;
   }
   async event(event, input) {
+    if ((event.tag === 9 || event.tag === 10) && event.written) this.codec.charge(1, event.written);
     if (this.inPack && event.consumed) await this.writer.write(input.subarray(0, event.consumed));
     if ((event.tag === 9 || event.tag === 10) && event.written) {
       if (!this.current) throw new Error("body has no staged object");
       if (this.current.body) this.current.body.set(event.data, this.current.written);
       this.current.written += event.written;
+      if (this.current.structural && !this.current.body) this.current.digest = this.source.scan(this.current, event.data, event.tag === 10, true);
     }
     const stage = this.stage;
     switch (event.tag) {
@@ -47,19 +49,27 @@ export class Intake {
         this.expected = integer(event.a); break;
       case 8: {
         const node = integer(event.a), size = integer(event.b), kind = event.flags;
+        if (kind < 5) this.codec.charge(0, size);
         this.hasOfs ||= kind === 6;
-        this.current = { node, size, kind, written: 0, body: size <= REPRESENTATION_LIMIT ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
+        this.current = { node, size, kind, structural: kind < 5 && kind !== 3, digest: null, written: 0, body: size <= REPRESENTATION_LIMIT ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
+        if (this.current.structural) this.source.beginScan(this.current);
         this.objects++; break;
       }
       case 10: {
         const current = this.current;
         if (!current || current.written !== current.size || !!event.flags !== (current.kind < 5)) throw new Error("staged entry metadata differs");
+        const oid = event.flags ? hex(event.id) : null;
+        if (current.structural) {
+          const digest = current.body ? this.source.scanCaptured(current, current.body, true) : current.digest ?? this.source.scan(current, EMPTY, true, true);
+          if (digest !== oid) throw new Error("canonical object hash differs");
+          this.source.finishScan(current);
+        }
         this.lastEnd = integer(event.a);
-        this.pendingObjects.push([...current.fields, this.lastEnd, integer(event.b), event.flags ? hex(event.id) : null, event.flags ? 1 : 0, event.flags & 2 ? 1 : 0]);
+        this.pendingObjects.push([...current.fields, this.lastEnd, integer(event.b), oid, event.flags ? 1 : 0, event.flags ? 1 : 0]);
         if (this.pendingObjects.length === 4) this.flushObjects();
         if (current.body) {
           this.source.seed({ stage, node: current.node, packed_size: current.size }, current.body);
-          if (event.flags & 2) this.source.canonical.put(hex(event.id), current.body);
+          if (event.flags) this.source.canonical.put(oid, current.body);
         }
         this.current = null; break;
       }
@@ -93,8 +103,8 @@ export class Intake {
   }
 
   async validate() {
-    // Plain objects already have canonical IDs from intake; scan their links
-    // and warm bounded canonical caches before processing ready deltas.
+    // New plain objects are scanned while their decoded bytes are available.
+    // Older/quarantined records can still require a structural scan here.
     // Without statistics SQLite prefers the stage's primary key, rescanning
     // completed objects on every page and every dependency update.
     for (;;) {
@@ -141,6 +151,7 @@ export class Intake {
         historicalModes: this.source.historicalModes,
         caches: { canonicalPeak: this.source.canonical.peak, representationPeak: this.source.representations.peak, chunkPeak: this.source.chunks.peak },
         wasmMemoryBytes: this.codec.memory.byteLength,
+        budgets: this.codec.budgetUsage(),
       };
     } catch (error) {
       console.error(JSON.stringify({ event: "receive-rejected", stage: this.stage, phase: this.inPack ? "pack" : this.eof ? "validation" : "controls", objects: this.objects, expected: this.expected, lastEnd: this.lastEnd, queries: this.source.queries, error: String(error.message ?? error), codecError: error.code ?? null }));
@@ -152,6 +163,7 @@ export class Intake {
       this.codec.receiveCancel(); this.codec.sourceCancel(); this.codec.rangeCancel(); this.codec.graphCancel();
       this.source.releaseCaches();
       await this.store.clearTemporary(this.stage);
+      this.store.lastIntakeBudget = this.codec.budgetUsage();
     }
   }
 }
