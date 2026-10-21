@@ -95,7 +95,7 @@ export class FetchJob {
     const repository = this.store.exec("SELECT object_count FROM repository WHERE id=1")[0];
     if (!sources.count || sources.objects !== repository.object_count) return false;
     const length = sources.bytes - (sources.count - 1) * (12 + this.codec.idBytes);
-    if (!Number.isSafeInteger(length) || length > this.codec.limits.maxPackBytes || sources.objects > this.codec.limits.maxObjects) throw new RequestError("full pack exceeds resource limits");
+    if (!Number.isSafeInteger(length) || length > this.codec.limits.maxPackBytes || sources.objects > this.codec.limits.maxObjects) return false;
     this.rawSources = sources; return true;
   }
   walk(table, { excludeCommon = false, snapshots = false, nonCommit = false } = {}) {

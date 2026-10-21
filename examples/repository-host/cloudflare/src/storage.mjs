@@ -305,16 +305,13 @@ export class Store {
     this.exec("UPDATE stages SET phase='failed' WHERE id=?", stage);
       await this.clearTemporary(stage);
       for (;;) {
-        const rows = this.exec("SELECT seq,key FROM stage_chunks WHERE stage=? LIMIT 128", stage);
+        const rows = this.exec("SELECT c.seq,c.key,NOT EXISTS(SELECT 1 FROM stage_chunks other WHERE other.key=c.key AND other.stage<>c.stage) AS unshared FROM stage_chunks c WHERE c.stage=? LIMIT 128", stage);
         if (!rows.length) break;
-        for (const row of rows) {
-          // Claims precede R2 puts. Delete the last owner's bytes before its
-          // claim, so a crash/outage always leaves a durable retry record.
-          if (!this.exec("SELECT 1 FROM stage_chunks WHERE key=? AND stage<>? LIMIT 1", row.key, stage).length) {
-            await this.delete(row.key);
-          }
-          this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
-        }
+        // Claims precede R2 puts. Keep the entire batch's ownership records
+        // until deleting its unshared bytes succeeds, including on partial loss.
+        const keys = rows.filter((row) => row.unshared).map((row) => row.key);
+        if (keys.length) await this.delete(keys);
+        for (const row of rows) this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
       }
       for (const table of STAGE_METADATA) {
         const statement = table === "stage_edges" && this.compactEdges

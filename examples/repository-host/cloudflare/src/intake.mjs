@@ -37,8 +37,11 @@ export class Intake {
     switch (event.tag) {
       case 2:
         this.store.exec("INSERT OR IGNORE INTO stage_shallow(stage,oid) VALUES(?,?)", stage, hex(event.id)); break;
-      case 3:
-        this.store.exec("INSERT INTO stage_commands(stage,seq,name,old_oid,new_oid,branch,creation,deletion) VALUES(?,?,?,?,?,?,?,?)", stage, this.commands++, blob(event.data), hex(event.id), hex(event.other), event.flags & 1, (event.flags >> 1) & 1, (event.flags >> 2) & 1); break;
+      case 3: {
+        const inserted = this.store.exec("INSERT INTO stage_commands(stage,seq,name,old_oid,new_oid,branch,creation,deletion) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(stage,name) DO NOTHING RETURNING seq", stage, this.commands, blob(event.data), hex(event.id), hex(event.other), event.flags & 1, (event.flags >> 1) & 1, (event.flags >> 2) & 1);
+        if (!inserted.length) throw new RequestError("duplicate ref command");
+        this.commands++; break;
+      }
       case 5:
         this.store.exec("INSERT INTO stage_options(stage,seq,value) VALUES(?,?,?)", stage, this.options++, blob(event.data)); break;
       case 6:
