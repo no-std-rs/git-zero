@@ -85,7 +85,7 @@ const SCHEMA = [
   "CREATE INDEX IF NOT EXISTS stage_ready_work ON stage_objects(stage,node) WHERE verified=0 AND ready=1",
   "CREATE INDEX IF NOT EXISTS stage_offset_dependencies ON stage_objects(stage,wire_base_offset) WHERE verified=0 AND wire_base_offset IS NOT NULL",
   "CREATE INDEX IF NOT EXISTS stage_id_dependencies ON stage_objects(stage,wire_base_id) WHERE verified=0 AND wire_base_id IS NOT NULL",
-  "CREATE TABLE IF NOT EXISTS stage_edges (stage TEXT NOT NULL, node INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, relation INTEGER NOT NULL, PRIMARY KEY(stage,node,relation,dst)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS stage_edges (stage INTEGER NOT NULL, node INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, relation INTEGER NOT NULL, PRIMARY KEY(stage,node,relation,dst)) WITHOUT ROWID",
   // One immutable target cannot satisfy two expected kinds. Check conflicts
   // before OR IGNORE can discard them; this also protects existing schemas.
   "CREATE TRIGGER IF NOT EXISTS stage_edge_kind BEFORE INSERT ON stage_edges WHEN EXISTS(SELECT 1 FROM stage_edges WHERE stage=NEW.stage AND node=NEW.node AND relation=NEW.relation AND dst=NEW.dst AND kind<>NEW.kind) BEGIN SELECT RAISE(ABORT,'conflicting graph target kinds'); END",
@@ -115,7 +115,15 @@ export class Store {
     this.ctx = ctx; this.env = env; this.namespace = namespace; this.blobs = bucket(env);
     this.usage = { sqlCalls: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2Puts: 0, r2Deletes: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
     this.sqlKnown = true;
+    this.edgeStages = new Map();
     for (const statement of SCHEMA) this.exec(statement);
+    // Existing text catalogs retain their layout. Fresh catalogs intern the
+    // opaque stage handle once instead of repeating its UUID in every edge.
+    this.compactEdges = this.exec("PRAGMA table_info(stage_edges)").find((column) => column.name === "stage").type === "INTEGER";
+    if (this.compactEdges) {
+      this.exec("CREATE TABLE IF NOT EXISTS edge_stages(id INTEGER PRIMARY KEY,stage TEXT NOT NULL UNIQUE)");
+      this.exec("CREATE TRIGGER IF NOT EXISTS stage_edge_owner BEFORE INSERT ON stage_edges WHEN typeof(NEW.stage)<>'integer' BEGIN SELECT RAISE(ABORT,'graph stage ID is invalid'); END");
+    }
     // Earlier pending checks selected attributes only. Preserve that meaning.
     if (!this.exec("PRAGMA table_info(stage_blob_checks)").some((column) => column.name === "checks")) this.exec("ALTER TABLE stage_blob_checks ADD COLUMN checks INTEGER NOT NULL DEFAULT 2");
     // Older stages have unknown entry kinds; conservatively disable raw OFS reuse.
@@ -156,8 +164,27 @@ export class Store {
   stage(format, retained = false) {
     this.initialize(format);
     const id = crypto.randomUUID();
-    this.exec("INSERT INTO stages(id,format,phase,created,retained) VALUES(?,?,?,?,?)", id, format, "receiving", Date.now(), Number(retained));
+    let graph;
+    this.ctx.storage.transactionSync(() => {
+      this.exec("INSERT INTO stages(id,format,phase,created,retained) VALUES(?,?,?,?,?)", id, format, "receiving", Date.now(), Number(retained));
+      if (this.compactEdges) graph = this.exec("INSERT INTO edge_stages(stage) VALUES(?) RETURNING id", id)[0].id;
+    });
+    if (this.compactEdges) this.rememberEdgeStage(id, graph);
     return id;
+  }
+  rememberEdgeStage(stage, id) {
+    if (!Number.isSafeInteger(id) || id <= 0) throw new Error("invalid graph stage ID");
+    if (!this.edgeStages.has(stage) && this.edgeStages.size >= 256) this.edgeStages.delete(this.edgeStages.keys().next().value);
+    this.edgeStages.set(stage, id);
+  }
+  edgeStage(stage) {
+    if (!this.compactEdges) return stage;
+    const cached = this.edgeStages.get(stage);
+    if (cached !== undefined) return cached;
+    const row = this.exec("SELECT id FROM edge_stages WHERE stage=?", stage)[0];
+    if (!row) throw new Error("graph stage is absent");
+    this.rememberEdgeStage(stage, row.id);
+    return row.id;
   }
   node(stage, node) { return this.exec("SELECT * FROM stage_objects WHERE stage=? AND node=?", stage, node)[0]; }
   object(stage, oid) {
@@ -172,7 +199,7 @@ export class Store {
     let row = find(oid);
     for (let depth = 0; row?.kind === 4; depth++) {
       if (depth >= 128) throw new Error("tag peeling budget exceeded");
-      const edge = this.exec("SELECT dst FROM stage_edges WHERE stage=? AND node=? AND relation=2 LIMIT 1", row.stage, row.node)[0];
+      const edge = this.exec("SELECT dst FROM stage_edges WHERE stage=? AND node=? AND relation=2 LIMIT 1", this.edgeStage(row.stage), row.node)[0];
       if (!edge) throw new Error("stored tag has no target");
       row = find(edge.dst);
     }
@@ -195,7 +222,9 @@ export class Store {
       temporaryChunks: this.exec("SELECT COUNT(*) AS count FROM temp_chunks")[0].count,
       temporaryObjects: this.exec("SELECT COUNT(*) AS count FROM temp_objects")[0].count,
       treeNameScratchRows: this.exec("SELECT COUNT(*) AS count FROM stage_names")[0].count,
-      quarantineRows: STAGE_METADATA.reduce((count, table) => count + this.exec(`SELECT COUNT(*) AS count FROM ${table} d JOIN stages s ON s.id=d.stage WHERE s.phase='failed'`)[0].count, 0),
+      quarantineRows: STAGE_METADATA.reduce((count, table) => count + (table === "stage_edges" && this.compactEdges
+        ? this.exec("SELECT COUNT(*) AS count FROM stage_edges WHERE stage IN(SELECT g.id FROM edge_stages g JOIN stages s ON s.id=g.stage WHERE s.phase='failed')")[0].count
+        : this.exec(`SELECT COUNT(*) AS count FROM ${table} d JOIN stages s ON s.id=d.stage WHERE s.phase='failed'`)[0].count), 0),
       refs: this.exec("SELECT COUNT(*) AS count FROM refs")[0].count,
       stages: this.exec("SELECT id,format,phase,bytes,expected FROM stages ORDER BY created DESC LIMIT 64"),
       databaseBytes: this.ctx.storage.sql.databaseSize ?? null,
@@ -269,7 +298,16 @@ export class Store {
           this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
         }
       }
-      for (const table of STAGE_METADATA) this.exec(`DELETE FROM ${table} WHERE stage=?`, stage);
+      for (const table of STAGE_METADATA) {
+        const statement = table === "stage_edges" && this.compactEdges
+          ? "DELETE FROM stage_edges WHERE stage=(SELECT id FROM edge_stages WHERE stage=?)"
+          : `DELETE FROM ${table} WHERE stage=?`;
+        this.exec(statement, stage);
+      }
+      if (this.compactEdges) {
+        this.exec("DELETE FROM edge_stages WHERE stage=?", stage);
+        this.edgeStages.delete(stage);
+      }
       this.exec("DELETE FROM stages WHERE id=? AND phase='failed'", stage);
     } catch (error) {
       await this.ctx.storage.setAlarm(Date.now() + 60000);

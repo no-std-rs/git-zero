@@ -97,3 +97,8 @@ repository metadata and runtime belong in the server's disk budget.
 New opaque chunks are 1 MiB, keeping more physical ranges in the fixed-size
 read cache when delta reconstruction jumps between bases. Existing chunks up to
 8 MiB remain readable; no stored pack or object offsets need migration.
+Fresh catalogs store a numeric stage key in graph edges and keep each opaque
+stage UUID once in a separate lookup table. Existing text-key catalogs remain
+readable and writable without migration. The 100,000-edge SQLite fixture uses
+about 38% less space for its complete catalog with numeric keys; this does not
+establish the storage reduction for the full Linux repository.

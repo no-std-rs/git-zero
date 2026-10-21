@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { Codec } from "../src/codec.mjs";
 import { Store } from "../src/storage.mjs";
 import { publish } from "../src/publication.mjs";
+import { sqliteContext } from "./sqlite.mjs";
 
 const module = await WebAssembly.compile(await readFile(new URL("../build/git_zero_host_wasm.wasm", import.meta.url)));
 
@@ -22,19 +23,7 @@ test("publication transaction failures await private-pack reclamation", async ()
 function verifiedStage(name, legacyBlobChecks = false) {
   const database = new DatabaseSync(":memory:");
   if (legacyBlobChecks) database.exec("CREATE TABLE stage_blob_checks(stage TEXT NOT NULL,oid TEXT NOT NULL,PRIMARY KEY(stage,oid)) WITHOUT ROWID; INSERT INTO stage_blob_checks VALUES('legacy','pending-attributes')");
-  const storage = {
-    sql: { exec(statement, ...bindings) {
-      const rows = database.prepare(statement).all(...bindings.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value));
-      return { toArray: () => rows };
-    } },
-    transactionSync(operation) {
-      database.exec("BEGIN");
-      try { const result = operation(); database.exec("COMMIT"); return result; }
-      catch (error) { database.exec("ROLLBACK"); throw error; }
-    },
-    async setAlarm() {},
-  };
-  const store = new Store({ storage }, { BLOBS: { async delete() {} } }, "publication");
+  const store = new Store(sqliteContext(database), { BLOBS: { async delete() {} } }, "publication");
   const stage = store.stage(0), oid = "1".repeat(40);
   store.exec("UPDATE stages SET phase='verified',expected=1 WHERE id=?", stage);
   store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,end_offset,oid,kind,size,depth,verified,scanned) VALUES(?,12,1,1,13,14,?,1,0,0,1,1)", stage, oid);
@@ -82,7 +71,7 @@ test("branch ancestry follows merge parents in paged, deduplicated storage", asy
     store.exec("INSERT INTO refs(name,oid) VALUES(?,?)", Buffer.from("refs/heads/main"), oid);
     for (const [node, id] of [[13, tip], [14, other]]) store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,oid,kind,size,depth,verified,scanned) VALUES(?,?,1,1,1,?,1,0,0,1,1)", stage, node, id);
     // Old tip is a second merge parent; a shared ancestor must be queued once.
-    for (const [node, dst] of [[13, other], [13, oid], [14, oid]]) store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,1,1)", stage, node, dst);
+    for (const [node, dst] of [[13, other], [13, oid], [14, oid]]) store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,1,1)", store.edgeStage(stage), node, dst);
     store.exec("UPDATE stages SET expected=3 WHERE id=?", stage);
     const outcomes = await publish(store, stage, codec);
     assert.equal(outcomes[0].error, null);
@@ -97,7 +86,7 @@ test("ancestry budget exhaustion rejects the update without leaving queue state"
     const old = "2".repeat(40);
     store.exec("UPDATE stage_commands SET branch=1,creation=0,old_oid=? WHERE stage=?", old, stage);
     store.exec("INSERT INTO refs(name,oid) VALUES(?,?)", Buffer.from("refs/heads/main"), old);
-    store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,12,?,1,1)", stage, old);
+    store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,12,?,1,1)", store.edgeStage(stage), old);
     store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,oid,kind,size,depth,verified,scanned) VALUES(?,13,1,1,1,?,1,0,0,1,1)", stage, old);
     const outcomes = await publish(store, stage, new Codec(module, 0, { maxLinks: 1 }));
     assert.equal(outcomes[0].error, "ancestry traversal limit exceeded");
@@ -174,7 +163,7 @@ test("repeated nested-tag targets share one publication peel", async (t) => {
     for (let index = 0; index < depth; index++) {
       const id = (index + 2).toString(16).padStart(40, "0"), node = 1000 + index;
       store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,end_offset,oid,kind,size,depth,verified,scanned) VALUES(?,?,4,1,?,?,?,4,0,0,1,1)", stage, node, node + 1, node + 2, id);
-      store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,2)", stage, node, target, index ? 4 : 1);
+      store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,2)", store.edgeStage(stage), node, target, index ? 4 : 1);
       target = id;
     }
     store.exec("UPDATE stages SET expected=? WHERE id=?", depth + 1, stage);

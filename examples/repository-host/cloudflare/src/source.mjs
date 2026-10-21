@@ -22,7 +22,7 @@ export class ObjectSource {
     this.chunks = new ByteCache(16 * 1024 * 1024, 8192, ownership);
     this.reader = null; this.readBuffer = null;
     this.temporary = new Map();
-    this.names = []; this.edges = [];
+    this.names = []; this.edges = []; this.graphStage = null;
     this.queries = 0; this.storageReads = 0; this.historicalModes = 0;
   }
 
@@ -183,7 +183,7 @@ export class ObjectSource {
   }
 
   edge(row, id, kind, relation) {
-    this.edges.push([this.stage, row.node, id, kind, relation]);
+    this.edges.push([this.graphStage ??= this.store.edgeStage(this.stage), row.node, id, kind, relation]);
     if (this.edges.length === METADATA_BATCH) this.flushMetadata();
   }
 

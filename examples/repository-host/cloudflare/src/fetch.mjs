@@ -106,7 +106,7 @@ export class FetchJob {
         const row = this.store.published(item.oid);
         if (!row) throw new Error("published closure is incomplete");
         this.store.exec(`UPDATE ${table} SET stage=?,node=?,walked=1 WHERE oid=?`, row.stage, row.node, row.oid);
-        this.store.exec(`INSERT OR IGNORE INTO ${table}(oid) SELECT e.dst FROM stage_edges e WHERE e.stage=? AND e.node=?${snapshots ? " AND e.relation<>1" : ""}${excludeCommon ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""}`, row.stage, row.node);
+        this.store.exec(`INSERT OR IGNORE INTO ${table}(oid) SELECT e.dst FROM stage_edges e WHERE e.stage=? AND e.node=?${snapshots ? " AND e.relation<>1" : ""}${excludeCommon ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""}`, this.store.edgeStage(row.stage), row.node);
       }
     }
   }
@@ -122,7 +122,7 @@ export class FetchJob {
         const step = this.codec.uploadSelect(row, item.depth, { clientBoundary: !!item.boundary, wanted: !!item.wanted, probe });
         this.store.exec(`UPDATE ${table} SET walked=1,stage=?,node=? WHERE oid=?`, row.stage, row.node, row.oid);
         if (!probe) this.store.exec("UPDATE fetch_selected SET included=?,shallow=?,unshallow=? WHERE oid=?", step.flags & 1, (step.flags >> 2) & 1, (step.flags >> 3) & 1, row.oid);
-        this.store.exec(`INSERT INTO ${table}(oid,depth) SELECT e.dst,CASE WHEN e.relation=1 THEN ? ELSE ? END FROM stage_edges e WHERE e.stage=? AND e.node=? AND (e.relation<>1 OR ?)${probe ? " AND e.kind IN (1,4)" : ""}${exclude ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""} ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<${table}.depth`, integer(step.a), item.depth, row.stage, row.node, (step.flags >> 1) & 1);
+        this.store.exec(`INSERT INTO ${table}(oid,depth) SELECT e.dst,CASE WHEN e.relation=1 THEN ? ELSE ? END FROM stage_edges e WHERE e.stage=? AND e.node=? AND (e.relation<>1 OR ?)${probe ? " AND e.kind IN (1,4)" : ""}${exclude ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""} ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<${table}.depth`, integer(step.a), item.depth, this.store.edgeStage(row.stage), row.node, (step.flags >> 1) & 1);
       }
     }
   }

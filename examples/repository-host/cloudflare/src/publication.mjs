@@ -21,7 +21,7 @@ function fastForward(store, stage, command, codec) {
         if (!row) throw new Error("commit ancestry target is absent");
         if (codec.ancestryVisit(fromHex(item.oid), row.kind)) return true;
         store.exec("UPDATE receive_walk SET walked=1 WHERE oid=?", item.oid);
-        store.exec("INSERT OR IGNORE INTO receive_walk(oid,depth) SELECT dst,? FROM stage_edges WHERE stage=? AND node=? AND relation=1 AND kind=1", item.depth + 1, row.stage, row.node);
+        store.exec("INSERT OR IGNORE INTO receive_walk(oid,depth) SELECT dst,? FROM stage_edges WHERE stage=? AND node=? AND relation=1 AND kind=1", item.depth + 1, store.edgeStage(row.stage), row.node);
       }
     }
   } finally { store.exec("DELETE FROM receive_walk"); }
