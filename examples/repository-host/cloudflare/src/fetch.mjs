@@ -38,7 +38,8 @@ export class FetchJob {
   }
   async decode(request) {
     this.reset(); this.codec.uploadInit(this.version);
-    const stream = decodedBody(request, this.codec.limits.maxControlBytes, "fetch controls");
+    const encodedLimit = 2n * BigInt(this.codec.limits.maxControlBytes) + 64n;
+    const stream = decodedBody(request, encodedLimit, "fetch controls");
     for await (const bytes of requestBody(stream)) {
       for (let offset = 0; offset < bytes.length; offset += PAGE_BYTES) this.codec.uploadAppend(bytes.subarray(offset, offset + PAGE_BYTES));
     }

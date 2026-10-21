@@ -449,11 +449,14 @@ test("compressed fetch controls enforce transport and decoded byte budgets", asy
   const codec = { limits: { maxControlBytes: 64 }, uploadInit() {}, uploadAppend() {}, uploadParse() { parsed = true; return { flags: 0 }; } };
   const store = { namespace: "gzip-budget", exec() { return []; } };
   const request = (body) => new Request("http://example.test/repo.git/git-upload-pack", { method: "POST", headers: { "content-encoding": "gzip" }, body });
-  const emptyBlocks = Buffer.concat([Buffer.from("1f8b0800000000000003", "hex"), ...Array.from({ length: 20 }, () => Buffer.from([0, 0, 0, 255, 255])), Buffer.from([1, 0, 0, 255, 255]), Buffer.alloc(8)]);
+  const emptyBlocks = Buffer.concat([Buffer.from("1f8b0800000000000003", "hex"), ...Array.from({ length: 50 }, () => Buffer.from([0, 0, 0, 255, 255])), Buffer.from([1, 0, 0, 255, 255]), Buffer.alloc(8)]);
   await assert.rejects(new FetchJob(store, codec, 0).decode(request(emptyBlocks)), /compressed fetch controls exceed byte limit/);
   assert.equal(parsed, false, "oversized compressed input must fail before parsing");
   await new FetchJob(store, codec, 0).decode(request(gzipSync(Buffer.from("0000"))));
   assert.equal(parsed, true);
+  const framed = gzipSync(Buffer.alloc(64, 97), { level: 0 });
+  assert.ok(framed.length > codec.limits.maxControlBytes);
+  await new FetchJob(store, codec, 0).decode(request(framed));
   const real = new Codec(module, 0, { maxControlBytes: 64 });
   await assert.rejects(new FetchJob(store, real, 0).decode(request(gzipSync(Buffer.alloc(65, 97)))), CodecError);
 });
