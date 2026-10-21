@@ -42,6 +42,30 @@ function verifiedStage(name, legacyBlobChecks = false) {
   return { database, store, stage, oid };
 }
 
+test("HEAD replacement uses surviving raw refs and resets when no branches remain", async () => {
+  const raw = Buffer.concat([Buffer.from("refs/heads/"), Buffer.from([255])]);
+  const cases = [
+    [[Buffer.from("refs/heads/a"), Buffer.from("refs/heads/master")], Buffer.from("refs/heads/master")],
+    [[raw, Buffer.from("refs/heads/a")], Buffer.from("refs/heads/a")],
+    [[raw], raw],
+    [[], Buffer.from("refs/heads/main")],
+  ];
+  for (const [survivors, expected] of cases) {
+    const { database, store, stage, oid } = verifiedStage("refs/heads/removed");
+    try {
+      const removed = Buffer.from("refs/heads/removed");
+      store.exec("UPDATE repository SET head=?", removed);
+      for (const name of [removed, ...survivors, Buffer.from("refs/tags/kept")]) store.exec("INSERT INTO refs(name,oid) VALUES(?,?)", name, oid);
+      store.exec("UPDATE stage_commands SET branch=1,creation=0,deletion=1,old_oid=?,new_oid=? WHERE stage=?", oid, "0".repeat(40), stage);
+      const result = await publish(store, stage, new Codec(module));
+      assert.equal(result[0].error, null);
+      assert.deepEqual(Buffer.from(store.exec("SELECT head FROM repository")[0].head), expected);
+      assert.equal(store.exec("SELECT 1 FROM refs WHERE name=?", removed).length, 0);
+      assert.equal(store.exec("SELECT COUNT(*) AS count FROM refs")[0].count, survivors.length + 1);
+    } finally { database.close(); }
+  }
+});
+
 test("pending attributes checks retain their policy when the durable schema upgrades", () => {
   const { database, store } = verifiedStage("refs/tags/migration", true);
   try {

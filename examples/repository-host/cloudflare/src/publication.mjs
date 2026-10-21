@@ -1,6 +1,10 @@
 import { bytes } from "./storage.mjs";
 import { CodecError } from "./codec.mjs";
 
+const refBytes = (name) => new TextEncoder().encode(name).buffer;
+const MAIN = refBytes("refs/heads/main"), MASTER = refBytes("refs/heads/master");
+const HEADS = refBytes("refs/heads/"), HEADS_END = refBytes("refs/heads0");
+
 const fromHex = (id) => Uint8Array.from(id.match(/../g), (byte) => Number.parseInt(byte, 16));
 
 function fastForward(store, stage, command, codec) {
@@ -106,8 +110,9 @@ export async function publish(store, stage, codec) {
       const state = store.exec("SELECT head FROM repository WHERE id=1")[0];
       let head = state.head;
       if (!store.exec("SELECT 1 FROM refs WHERE name=?", head).length) {
-        const branch = accepted.find((command) => command.branch && !command.deletion);
-        if (branch) head = branch.name;
+        const branch = store.exec("SELECT name FROM refs WHERE name=?", MASTER)[0]
+          ?? store.exec("SELECT name FROM refs WHERE name>=? AND name<? ORDER BY name LIMIT 1", HEADS, HEADS_END)[0];
+        head = branch?.name ?? MAIN;
       }
       // Equality proves every physical entry has a new, distinct canonical ID.
       // These segments can later form a complete pack without per-object I/O.
