@@ -246,7 +246,7 @@ export class FetchJob {
     } finally {
       this.codec.uploadCancel(); this.codec.packCancel(); this.reset();
       this.source.releaseCaches();
-      await this.store.clearTemporary(this.temporary);
+      await this.store.clearTemporary(this.temporary, { defer: true });
     }
   }
 }

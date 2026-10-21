@@ -161,7 +161,7 @@ export class Intake {
     } finally {
       this.codec.receiveCancel(); this.codec.sourceCancel(); this.codec.rangeCancel(); this.codec.graphCancel();
       this.source.releaseCaches();
-      await this.store.clearTemporary(this.stage);
+      await this.store.clearTemporary(this.stage, { defer: true });
       this.store.lastIntakeBudget = this.codec.budgetUsage();
     }
   }

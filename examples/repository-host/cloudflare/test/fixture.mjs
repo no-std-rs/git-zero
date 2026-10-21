@@ -1,9 +1,24 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { deflateSync } from "node:zlib";
 
 export const digest = (format, bytes) => createHash(format === 0 ? "sha1" : "sha256").update(bytes).digest();
 export const object = (format, kind, body) => ({ kind, body: Buffer.from(body), id: digest(format, Buffer.concat([Buffer.from(`${["", "commit", "tree", "blob", "tag"][kind]} ${Buffer.byteLength(body)}\0`), Buffer.from(body)])) });
 export function packet(bytes) { bytes = Buffer.from(bytes); return Buffer.concat([Buffer.from((bytes.length + 4).toString(16).padStart(4, "0")), bytes]); }
+
+// Join channel-one payloads before interpreting the nested receive report.
+export function receiveReport(input) {
+  const bytes = Buffer.from(input), pieces = [];
+  let cursor = 0;
+  while (cursor < bytes.length) {
+    const length = Number.parseInt(bytes.subarray(cursor, cursor + 4).toString(), 16);
+    if (length === 0) { assert.equal(cursor + 4, bytes.length); break; }
+    assert.ok(length >= 5 && cursor + length <= bytes.length);
+    assert.equal(bytes[cursor + 4], 1);
+    pieces.push(bytes.subarray(cursor + 5, cursor + length)); cursor += length;
+  }
+  return Buffer.concat(pieces).toString();
+}
 
 export function entry(kind, body, base = Buffer.alloc(0)) {
   let size = BigInt(body.length);

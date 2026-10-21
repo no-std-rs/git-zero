@@ -187,6 +187,8 @@ export class Store {
       objects: this.exec("SELECT object_count FROM repository WHERE id=1")[0]?.object_count ?? 0,
       stagedObjects: this.exec("SELECT COUNT(*) AS count FROM stage_objects")[0].count,
       stagedChunks: this.exec("SELECT COUNT(*) AS count FROM stage_chunks")[0].count,
+      temporaryChunks: this.exec("SELECT COUNT(*) AS count FROM temp_chunks")[0].count,
+      temporaryObjects: this.exec("SELECT COUNT(*) AS count FROM temp_objects")[0].count,
       treeNameScratchRows: this.exec("SELECT COUNT(*) AS count FROM stage_names")[0].count,
       quarantineRows: STAGE_METADATA.reduce((count, table) => count + this.exec(`SELECT COUNT(*) AS count FROM ${table} d JOIN stages s ON s.id=d.stage WHERE s.phase='failed'`)[0].count, 0),
       refs: this.exec("SELECT COUNT(*) AS count FROM refs")[0].count,
@@ -223,7 +225,7 @@ export class Store {
     if (await sha256(data) !== chunk.sha) throw new Error("stored chunk hash differs");
     cache.put(chunk.key, data); return data;
   }
-  async clearTemporary(stage) {
+  async clearTemporary(stage, { defer = false } = {}) {
     try {
     for (;;) {
       const rows = this.exec("SELECT object,seq,key FROM temp_chunks WHERE stage=? LIMIT 1000", stage);
@@ -233,7 +235,15 @@ export class Store {
       for (const row of rows) this.exec("DELETE FROM temp_chunks WHERE stage=? AND object=? AND seq=?", stage, row.object, row.seq);
     }
     this.exec("DELETE FROM temp_objects WHERE stage=?", stage);
-    } catch (error) { await this.ctx.storage.setAlarm(Date.now() + 60000); throw error; }
+    return true;
+    } catch (error) {
+      await this.ctx.storage.setAlarm(Date.now() + 60000);
+      if (!defer) throw error;
+      // Ownership rows remain durable until deletion succeeds. Only defer
+      // after the recovery alarm has itself been scheduled successfully.
+      console.error(JSON.stringify({ event: "temporary-cleanup-deferred", stage, error: String(error.message ?? error) }));
+      return false;
+    }
   }
   async abandon(stage) {
     try {

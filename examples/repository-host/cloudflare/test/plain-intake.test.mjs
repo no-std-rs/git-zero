@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { entry, object, pack, project, wire } from "./fixture.mjs";
+import { entry, object, pack, project, receiveReport, wire } from "./fixture.mjs";
 import { headers, start, TOKEN } from "./wrangler.mjs";
 import { startStandalone } from "./standalone.mjs";
 
@@ -18,16 +18,7 @@ async function state(server, namespace) {
 
 async function report(response) {
   assert.equal(response.status, 200);
-  const bytes = Buffer.from(await response.arrayBuffer()), pieces = [];
-  let cursor = 0;
-  while (cursor < bytes.length) {
-    const length = Number.parseInt(bytes.subarray(cursor, cursor + 4).toString(), 16);
-    if (length === 0) { assert.equal(cursor + 4, bytes.length); break; }
-    assert.ok(length >= 5 && cursor + length <= bytes.length);
-    assert.equal(bytes[cursor + 4], 1);
-    pieces.push(bytes.subarray(cursor + 5, cursor + length)); cursor += length;
-  }
-  return Buffer.concat(pieces).toString();
+  return receiveReport(await response.arrayBuffer());
 }
 
 for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} scans plain structural objects before discarding decoded bytes`, { timeout: 120000 }, async (t) => {
