@@ -5,6 +5,10 @@ Workerd supplies HTTP, SQLite and opaque R2 storage. Hosting never starts Git or
 an external codec process. Git is required only for reference-client tests and
 benchmark fixtures.
 
+The deployment runs entirely on Cloudflare: clients connect directly to the
+Worker, which runs the Git implementation with SQLite-backed Durable Objects
+and R2 bindings. Discovery and pack transfers use that same endpoint.
+
 From `cloudflare/`, build and test the real local bindings:
 
 ```sh
@@ -76,29 +80,36 @@ The npm lockfile pins a runtime containing Cloudflare's
 Use `npm ci` to install that exact runtime; older builds can fail or truncate
 compressed responses received over RPC.
 
-Full Linux end-to-end validation is running; component
-decoder measurements do not establish a complete hosting result.
+Full Linux end-to-end validation remains incomplete; component decoder
+measurements and local Wrangler runs do not establish deployed Linux-scale
+hosting. Cloudflare's [request limits](https://developers.cloudflare.com/workers/platform/limits/)
+apply to streamed HTTP bodies too. Request bodies are limited to 100 MB on
+Free/Pro and 200 MB on Business; Enterprise permits self-service increases up
+to 5 GB. Larger limits require agreement with Cloudflare. The measured initial
+Linux push is 6,535,602,999 bytes, exceeding even that 5 GB limit. Streaming
+does not bypass it. Workers also limit isolate memory to 128 MB; active CPU
+per request is configurable up to five minutes on Paid. SQLite-backed
+[Durable Objects](https://developers.cloudflare.com/durable-objects/platform/limits/)
+limit each object's database to 10 GB. The current catalog uses one Durable
+Object per repository. These limits still require a Cloudflare-only solution
+before full Linux hosting can be claimed.
 
-For large ordinary HTTP pushes, the same modules run directly under pinned
-workerd with local SQLite and signed R2 S3 requests. See
-[workerd.capnp](cloudflare/workerd.capnp),
-[serve.mjs](cloudflare/scripts/serve.mjs), the systemd unit and TLS proxy example.
-Set `HOST_TOKEN`, `R2_S3_URL` (full bucket URL), `R2_ACCESS_KEY_ID`,
-`R2_SECRET_ACCESS_KEY`, and an absolute `GIT_ZERO_STATE_DIR`, then run
-`npm run serve:standalone`. This runtime uses workerd's experimental disk-backed
-Durable Object API. Its local tests use an independent S3 signature verifier.
-Cloudflare's [request limits](https://developers.cloudflare.com/workers/platform/limits/)
-apply to streamed HTTP bodies too; the direct runtime provides the large-push
-ingress option with the same Git implementation and R2 storage API.
+The [Wrangler configuration](cloudflare/wrangler.toml) is the production entry
+point. With deployment access, create the configured R2 bucket, set `HOST_TOKEN`
+using `wrangler secret put HOST_TOKEN`, then run `wrangler deploy`. The initial
+deployment creates the SQLite-backed Durable Object class through its migration.
+Verification for this task stays local; deployment has not been performed.
 
-Verification for this task is local only. No live deployment, credential change
-or infrastructure purchase is needed. Full runtime resource usage and hosting
-costs are measured by `cloudflare/scripts/benchmark.mjs`; the 6 MiB Wasm and
-48 MiB byte-cache bounds do not describe the entire runtime process.
+Direct workerd with the S3 fixture is retained only for local compatibility and
+fault-injection tests. It uses workerd's experimental disk-backed Durable
+Object API and an independent S3 signature verifier. The benchmark defaults to
+actual local Wrangler R2/SQLite. Full runtime resource usage is measured by
+`cloudflare/scripts/benchmark.mjs`; the 6 MiB Wasm and 48 MiB byte-cache bounds
+do not describe the entire runtime process or deployed billing.
 The push and cold-fetch reports also separate repository metadata on disk from
 opaque object storage and local R2 mock metadata. Reference source/clone copies
-are excluded. In standalone production, object storage resides in R2; only the
-repository metadata and runtime belong in the server's disk budget.
+are excluded. Production uses the Cloudflare R2 and Durable Object bindings;
+local filesystem usage does not establish production storage cost.
 New opaque chunks are 1 MiB, keeping more physical ranges in the fixed-size
 read cache when delta reconstruction jumps between bases. Existing chunks up to
 8 MiB remain readable; no stored pack or object offsets need migration.
