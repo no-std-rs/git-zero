@@ -318,83 +318,31 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         if work.len() < count || selected.len() < count {
             return Err(Error::BufferTooSmall);
         }
-        let work = &mut work[..count];
-        work.copy_from_slice(self.objects);
-        for slot in work.iter_mut() {
-            let object = slot.as_mut().expect("validated metadata");
-            object.reset_walk();
-            object.client_shallow = false;
-        }
-        let mut has_shallow = false;
-        for id in shallow {
-            let index = find(work, self.by_id, id?).ok_or(Error::InvalidRequest)?;
-            let object = work[index].as_mut().expect("validated metadata");
-            if object.info.kind != ObjectKind::Commit {
-                return Err(Error::InvalidRequest);
-            }
-            object.client_shallow = true;
-            has_shallow = true;
-        }
+        let mut selection = Selection {
+            repository: self,
+            work: &mut work[..count],
+            scratch: (read_scratch, parse_scratch),
+            remaining: graph_read_limit,
+        };
+        let has_shallow = selection.prepare(shallow)?;
         // A relative request from a full client is an ordinary incremental
         // fetch. Its depth cannot expose missing history behind a boundary.
         let deepening = fetch.deepens_history(has_shallow);
-        for id in common {
-            let id = id?;
-            let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-            if !deepening {
-                reach(work, self.by_id, id, metadata(work, index).info.kind)?;
-            }
-        }
-        let mut remaining = graph_read_limit;
-        walk(
-            self,
-            work,
-            self.by_id,
-            (read_scratch, parse_scratch),
-            Some(&mut remaining),
-            History {
-                limit: None,
-                client: true,
-                distance: false,
-            },
-        )?;
-        for slot in work.iter_mut() {
-            let object = slot.as_mut().expect("validated metadata");
-            object.excluded = object.reached;
-            object.reset_walk();
-        }
+        selection.exclude_common(common, deepening)?;
         let nearest = match fetch.depth.filter(|_| deepening) {
-            Some(_) if fetch.deepen_relative => self.nearest_boundary_depth(
-                roots,
-                work,
-                (read_scratch, parse_scratch),
-                &mut remaining,
-            )?,
+            Some(_) if fetch.deepen_relative => selection.nearest_boundary_depth(roots)?,
             _ => None,
         };
         let history = fetch.history(has_shallow, nearest)?;
-        self.walk_wants(
-            roots,
-            work,
-            (read_scratch, parse_scratch),
-            &mut remaining,
-            history,
-        )?;
-        filter_blobs(work, roots, fetch.filter);
+        selection.walk_wants(roots, history)?;
+        filter_blobs(selection.work, roots, fetch.filter);
         if include_tags {
-            self.include_matching_tags(work)?;
-            walk(
-                self,
-                work,
-                self.by_id,
-                (read_scratch, parse_scratch),
-                Some(&mut remaining),
-                history,
-            )?;
-            filter_blobs(work, roots, fetch.filter);
+            selection.include_matching_tags()?;
+            selection.walk(history)?;
+            filter_blobs(selection.work, roots, fetch.filter);
         }
         let mut length = 0;
-        for (index, slot) in work.iter().enumerate() {
+        for (index, slot) in selection.work.iter().enumerate() {
             if slot.expect("initialized metadata").reached {
                 selected[length] = index;
                 length += 1;
@@ -402,57 +350,129 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         }
         Ok(&selected[..length])
     }
+}
 
-    fn nearest_boundary_depth(
-        &self,
-        roots: &[ObjectId],
-        work: &mut [Option<ValidationMetadata>],
-        scratch: (&mut [u8], &mut [u8]),
-        remaining: &mut u64,
-    ) -> Result<Option<u32>> {
+// One selection owns its caller buffers and a single shared read budget.
+// History, boundary probing and wanted/tag walks all use this same context.
+struct Selection<'request, 'index, 'repo, R: Repository + ?Sized> {
+    repository: &'request ValidatedRepository<'index, 'repo, R>,
+    work: &'request mut [Option<ValidationMetadata>],
+    scratch: (&'request mut [u8], &'request mut [u8]),
+    remaining: u64,
+}
+
+impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
+    fn walk(&mut self, history: History) -> Result<()> {
+        walk(
+            self.repository,
+            self.work,
+            self.repository.by_id,
+            (&mut *self.scratch.0, &mut *self.scratch.1),
+            Some(&mut self.remaining),
+            history,
+        )
+    }
+
+    fn prepare(&mut self, shallow: impl IntoIterator<Item = Result<ObjectId>>) -> Result<bool> {
+        let work = &mut *self.work;
+        work.copy_from_slice(self.repository.objects);
+        for slot in work.iter_mut() {
+            let object = slot.as_mut().expect("validated metadata");
+            object.reset_walk();
+            object.client_shallow = false;
+        }
+        let mut has_shallow = false;
+        for id in shallow {
+            let index = find(work, self.repository.by_id, id?).ok_or(Error::InvalidRequest)?;
+            let object = work[index].as_mut().expect("validated metadata");
+            if object.info.kind != ObjectKind::Commit {
+                return Err(Error::InvalidRequest);
+            }
+            object.client_shallow = true;
+            has_shallow = true;
+        }
+        Ok(has_shallow)
+    }
+
+    fn exclude_common(
+        &mut self,
+        common: impl IntoIterator<Item = Result<ObjectId>>,
+        deepening: bool,
+    ) -> Result<()> {
+        let work = &mut *self.work;
+        for id in common {
+            let id = id?;
+            let index = find(work, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
+            if !deepening {
+                reach(
+                    work,
+                    self.repository.by_id,
+                    id,
+                    metadata(work, index).info.kind,
+                )?;
+            }
+        }
+        self.walk(History {
+            limit: None,
+            client: true,
+            distance: false,
+        })?;
+        for slot in self.work.iter_mut() {
+            let object = slot.as_mut().expect("validated metadata");
+            object.excluded = object.reached;
+            object.reset_walk();
+        }
+        Ok(())
+    }
+
+    fn nearest_boundary_depth(&mut self, roots: &[ObjectId]) -> Result<Option<u32>> {
         // Git 2.55 measures the nearest client boundary from the wants.
         // Unrelated shallow branches cannot influence or extend this cut.
-        self.walk_wants(roots, work, scratch, remaining, History::boundary_probe())?;
+        self.walk_wants(roots, History::boundary_probe())?;
         // Git 2.55 get_shallow_commits returns no new boundaries when none
         // match. Unlike Git 2.54, this leaves wanted history complete.
-        let limit = work
+        let limit = self
+            .work
             .iter()
             .flatten()
             .filter(|object| object.reached && object.client_shallow)
             .map(|object| object.depth)
             .min();
-        for slot in work.iter_mut() {
+        for slot in self.work.iter_mut() {
             slot.as_mut().expect("validated metadata").reset_walk();
         }
         Ok(limit)
     }
 
-    fn walk_wants(
-        &self,
-        roots: &[ObjectId],
-        work: &mut [Option<ValidationMetadata>],
-        scratch: (&mut [u8], &mut [u8]),
-        remaining: &mut u64,
-        history: History,
-    ) -> Result<()> {
+    fn walk_wants(&mut self, roots: &[ObjectId], history: History) -> Result<()> {
+        let work = &mut *self.work;
         for &id in roots {
-            let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-            reach(work, self.by_id, id, metadata(work, index).info.kind)?;
+            let index = find(work, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
+            reach(
+                work,
+                self.repository.by_id,
+                id,
+                metadata(work, index).info.kind,
+            )?;
         }
-        walk(self, work, self.by_id, scratch, Some(remaining), history)
+        self.walk(history)
     }
 
-    fn include_matching_tags(&self, work: &mut [Option<ValidationMetadata>]) -> Result<()> {
-        for reference in 0..self.reference_count() {
-            let Some(peeled) = self.reference_peeled(reference) else {
+    fn include_matching_tags(&mut self) -> Result<()> {
+        let work = &mut *self.work;
+        for reference in 0..self.repository.reference_count() {
+            let Some(peeled) = self.repository.reference_peeled(reference) else {
                 continue;
             };
-            let index = find(work, self.by_id, peeled).ok_or(Error::ObjectNotFound)?;
+            let index = find(work, self.repository.by_id, peeled).ok_or(Error::ObjectNotFound)?;
             if metadata(work, index).reached {
-                let id = self.reference_id(reference).ok_or(Error::InvalidObject)?;
+                let id = self
+                    .repository
+                    .reference_id(reference)
+                    .ok_or(Error::InvalidObject)?;
                 reach_at(
                     work,
-                    self.by_id,
+                    self.repository.by_id,
                     id,
                     ObjectKind::Tag,
                     metadata(work, index).depth,
