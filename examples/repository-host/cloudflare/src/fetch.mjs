@@ -1,7 +1,7 @@
 import { hex, integer } from "./codec.mjs";
 import { bytes, FETCH_TABLES, PAGE_BYTES } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
-import { requestBody } from "./body.mjs";
+import { requestBody, decodedBody } from "./body.mjs";
 
 const encode = (value) => new TextEncoder().encode(value);
 const fromHex = (value) => Uint8Array.from(value.match(/../g), (pair) => Number.parseInt(pair, 16));
@@ -38,19 +38,7 @@ export class FetchJob {
   }
   async decode(request) {
     this.reset(); this.codec.uploadInit(this.version);
-    let stream = request.body;
-    const coding = request.headers.get("content-encoding")?.toLowerCase();
-    if (coding && coding !== "identity") {
-      if (coding !== "gzip" || !stream) throw new Error("unsupported HTTP content coding");
-      let encoded = 0;
-      stream = stream.pipeThrough(new TransformStream({
-        transform: (chunk, controller) => {
-          encoded += chunk.byteLength;
-          if (encoded > this.codec.limits.maxControlBytes) throw new Error("compressed fetch controls exceed byte limit");
-          controller.enqueue(chunk);
-        },
-      })).pipeThrough(new DecompressionStream("gzip"));
-    }
+    const stream = decodedBody(request, this.codec.limits.maxControlBytes, "fetch controls");
     for await (const bytes of requestBody(stream)) {
       for (let offset = 0; offset < bytes.length; offset += PAGE_BYTES) this.codec.uploadAppend(bytes.subarray(offset, offset + PAGE_BYTES));
     }

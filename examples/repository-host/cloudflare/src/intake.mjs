@@ -1,7 +1,7 @@
 import { hex, integer } from "./codec.mjs";
 import { ChunkWriter, blob } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
-import { requestBody } from "./body.mjs";
+import { requestBody, decodedBody } from "./body.mjs";
 
 const EMPTY = new Uint8Array();
 const REPRESENTATION_LIMIT = 1024 * 1024;
@@ -84,7 +84,9 @@ export class Intake {
 
   async decode(request) {
     this.codec.receiveInit();
-    for await (const bytes of requestBody(request.body)) {
+    // Allow gzip framing overhead while Rust retains its decoded byte quotas.
+    const encodedLimit = 2n * (BigInt(this.codec.limits.maxPackBytes) + BigInt(this.codec.limits.maxControlBytes));
+    for await (const bytes of requestBody(decodedBody(request, encodedLimit, "receive bytes"))) {
       let offset = 0;
       while (offset < bytes.length) {
         const input = bytes.subarray(offset, Math.min(offset + 65536, bytes.length));

@@ -139,8 +139,8 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       assert.equal(await git(fresh, "rev-parse", "annotated^{}"), second);
       await git(directory, "push", remote, ":refs/tags/annotated");
       const control = Buffer.concat([packet(`want ${second} multi_ack_detailed side-band-64k object-format=${format ? "sha256" : "sha1"}\n`), Buffer.from("0000"), packet("done\n")]);
-      for (const coding of ["gzip", "GZip", "GZIP", "identity", "Identity", "IDENTITY"]) {
-        const response = await fetch(`${remote}/git-upload-pack`, { method: "POST", headers: { ...headers(), "content-type": "application/x-git-upload-pack-request", "content-encoding": coding }, body: coding.toLowerCase() === "gzip" ? gzipSync(control) : control });
+      for (const coding of ["gzip", "GZip", "GZIP", "x-gzip", "identity", "Identity", "IDENTITY"]) {
+        const response = await fetch(`${remote}/git-upload-pack`, { method: "POST", headers: { ...headers(), "content-type": "application/x-git-upload-pack-request", "content-encoding": coding }, body: coding.toLowerCase().endsWith("gzip") ? gzipSync(control) : control });
         assert.equal(response.status, 200, `${coding}: ${await response.clone().text()}`);
         assert.ok(Buffer.from(await response.arrayBuffer()).includes(Buffer.from("PACK")));
       }

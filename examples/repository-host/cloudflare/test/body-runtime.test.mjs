@@ -43,12 +43,12 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", (persist) => start(persis
   const clients = []; let server;
   try {
     server = await serve(directory);
-    await Promise.all(["git-receive-pack", "git-upload-pack"].map(async (service) => {
-      const namespace = `body-${service}-${randomUUID()}`;
+    await Promise.all([["git-receive-pack", null, "000"], ["git-upload-pack", null, "000"], ["git-receive-pack", "gzip", Buffer.from([31, 139, 8])]].map(async ([service, coding, prefix]) => {
+      const namespace = `body-${service}-${coding ?? "identity"}-${randomUUID()}`;
       const transport = { error: null, status: null };
-      const client = request(`${server.origin}/${namespace}.git/${service}`, { method: "POST", headers: { ...headers(), "content-type": `application/x-${service}-request` } }, (response) => { transport.status = response.statusCode; response.resume(); });
+      const client = request(`${server.origin}/${namespace}.git/${service}`, { method: "POST", headers: { ...headers(), "content-type": `application/x-${service}-request`, ...(coding ? { "content-encoding": coding } : {}) } }, (response) => { transport.status = response.statusCode; response.resume(); });
       clients.push(client); client.on("error", (error) => { transport.error = error; });
-      client.write("000"); // Deliberately leave both the pkt-line and HTTP body open.
+      client.write(prefix); // Leave the pkt-line or gzip header and HTTP body open.
       await waitForHandler(directory, namespace, transport, server);
       const waiting = Date.now();
       let completed = false;

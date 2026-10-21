@@ -1,3 +1,19 @@
+// HTTP content coding wraps the Git byte stream. The Rust consumers enforce
+// decoded control/pack limits; this bound also caps compressed transport input.
+export function decodedBody(request, maximum, label) {
+  const coding = request.headers.get("content-encoding")?.toLowerCase();
+  if (!coding || coding === "identity") return request.body;
+  if ((coding !== "gzip" && coding !== "x-gzip") || !request.body) throw new Error("unsupported HTTP content coding");
+  let remaining = BigInt(maximum);
+  return request.body.pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      remaining -= BigInt(chunk.byteLength);
+      if (remaining < 0n) throw new Error(`compressed ${label} exceed byte limit`);
+      controller.enqueue(chunk);
+    },
+  })).pipeThrough(new DecompressionStream("gzip"));
+}
+
 // The deadline covers waiting for input, not time spent processing a chunk.
 export async function* requestBody(stream, idleMs = 60000) {
   if (!stream) return;

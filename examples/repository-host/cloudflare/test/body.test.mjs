@@ -1,8 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { requestBody } from "../src/body.mjs";
+import { gzipSync } from "node:zlib";
+import { requestBody, decodedBody } from "../src/body.mjs";
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("HTTP gzip transport counts encoded bytes independently of decoded content", async () => {
+  const plain = Buffer.alloc(32769, 97), encoded = gzipSync(plain);
+  for (const coding of ["gzip", "GZIP", "x-gzip"]) {
+    const request = new Request("http://fixture/receive", { method: "POST", headers: { "content-encoding": coding }, body: encoded });
+    assert.deepEqual(Buffer.from(await new Response(decodedBody(request, encoded.length, "receive bytes")).arrayBuffer()), plain);
+  }
+  const oversized = new Request("http://fixture/receive", { method: "POST", headers: { "content-encoding": "gzip" }, body: encoded });
+  await assert.rejects(new Response(decodedBody(oversized, BigInt(encoded.length - 1), "receive bytes")).arrayBuffer(), /compressed receive bytes exceed byte limit/);
+});
+
+test("HTTP transport rejects unsupported codings and corrupt gzip footers", async () => {
+  const encoded = gzipSync(Buffer.from("verified control and pack bytes"));
+  const unsupported = new Request("http://fixture/receive", { method: "POST", headers: { "content-encoding": "deflate" }, body: encoded });
+  assert.throws(() => decodedBody(unsupported, encoded.length, "receive bytes"), /unsupported HTTP content coding/);
+  encoded[encoded.length - 8] ^= 1;
+  const corrupt = new Request("http://fixture/receive", { method: "POST", headers: { "content-encoding": "gzip" }, body: encoded });
+  await assert.rejects(new Response(decodedBody(corrupt, encoded.length, "receive bytes")).arrayBuffer());
+});
 
 test("idle body reads settle even when transport cancellation never resolves", { timeout: 1000 }, async () => {
   let cancelled = false;
