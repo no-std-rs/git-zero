@@ -56,11 +56,43 @@ impl ObjectFormat {
             Self::Sha256 => Hash::Sha256(Sha256::new()),
         }
     }
+    pub(crate) fn checked_hash(self) -> CheckedHash {
+        match self {
+            Self::Sha1 => CheckedHash::Sha1(sha1_checked::Sha1::default()),
+            Self::Sha256 => CheckedHash::Sha256(Sha256::new()),
+        }
+    }
     #[cfg(feature = "read")]
-    pub(crate) fn digest(self, bytes: &[u8]) -> ObjectId {
-        let mut hash = self.hash();
+    pub(crate) fn digest(self, bytes: &[u8]) -> Result<ObjectId> {
+        let mut hash = self.checked_hash();
         hash.update(bytes);
         hash.finish()
+    }
+}
+
+// The collision detector retains its state inline: boxing it would introduce
+// an allocator into object/pack authentication on bare-metal and Wasm targets.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone)]
+pub(crate) enum CheckedHash {
+    Sha1(sha1_checked::Sha1),
+    Sha256(Sha256),
+}
+impl CheckedHash {
+    pub(crate) fn update(&mut self, bytes: &[u8]) {
+        match self {
+            Self::Sha1(hash) => hash.update(bytes),
+            Self::Sha256(hash) => hash.update(bytes),
+        }
+    }
+    pub(crate) fn finish(self) -> Result<ObjectId> {
+        match self {
+            Self::Sha1(hash) => match hash.try_finalize() {
+                sha1_checked::CollisionResult::Ok(digest) => Ok(ObjectId::Sha1(digest.into())),
+                _ => Err(Error::InvalidObject),
+            },
+            Self::Sha256(hash) => Ok(ObjectId::Sha256(hash.finalize().into())),
+        }
     }
 }
 
@@ -273,13 +305,13 @@ impl ObjectInfo {
 /// all-or-nothing; a length mismatch never authenticates a partial object.
 #[derive(Clone)]
 pub struct ObjectDigest {
-    hash: Hash,
+    hash: CheckedHash,
     remaining: u64,
 }
 
 impl ObjectDigest {
     pub fn new(info: ObjectInfo, format: ObjectFormat) -> Self {
-        let mut hash = format.hash();
+        let mut hash = format.checked_hash();
         let mut header = [0; 32];
         hash.update(
             info.header(&mut header)
@@ -308,7 +340,7 @@ impl ObjectDigest {
         if self.remaining != 0 {
             return Err(Error::InvalidObject);
         }
-        Ok(self.hash.clone().finish())
+        self.hash.clone().finish()
     }
 }
 
@@ -326,7 +358,7 @@ impl<'a> Object<'a> {
             + 1;
         let info = ObjectInfo::from_header(&bytes[..end])?;
         let data = &bytes[end..];
-        if data.len() as u64 != info.size || expected.format().digest(bytes) != expected {
+        if data.len() as u64 != info.size || expected.format().digest(bytes)? != expected {
             return Err(Error::InvalidObject);
         }
         Ok(Self {
@@ -351,10 +383,14 @@ impl<'a> Object<'a> {
     }
 
     pub fn id_with_format(&self, format: ObjectFormat) -> ObjectId {
-        let mut digest = ObjectDigest::new(self.info(), format);
-        digest
-            .update(self.data)
-            .expect("slice length matches metadata");
-        digest.finish().expect("complete object body")
+        // This infallible helper computes the conventional ID. Authentication
+        // uses ObjectDigest, whose fallible finish also rejects SHA-1 attacks.
+        let mut hash = format.hash();
+        hash.update(self.header(&mut [0; 32]).expect("object header fits"));
+        hash.update(self.data);
+        hash.finish()
     }
 }
+
+#[cfg(test)]
+mod collision_tests;

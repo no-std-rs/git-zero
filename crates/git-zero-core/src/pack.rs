@@ -88,7 +88,9 @@ pub fn validate_with_format(bytes: &[u8], format: ObjectFormat) -> Result<()> {
         return Err(Error::CorruptPack);
     }
     let trailer = bytes.len() - format.id_length();
-    let actual = format.digest(&bytes[..trailer]);
+    let actual = format
+        .digest(&bytes[..trailer])
+        .map_err(|_| Error::CorruptPack)?;
     if actual.as_bytes() != &bytes[trailer..] {
         return Err(Error::CorruptPack);
     }

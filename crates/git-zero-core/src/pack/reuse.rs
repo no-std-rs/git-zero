@@ -73,6 +73,8 @@ impl PackComposer {
         header[..8].copy_from_slice(b"PACK\0\0\0\x02");
         header[8..].copy_from_slice(&count.to_be_bytes());
         output.write_all(&header)?;
+        // Source authentication belongs to intake. This encoding-only API
+        // retains a compact checksum state while copying verified entries.
         let mut hash = format.hash();
         hash.update(&header);
         Ok(Self {

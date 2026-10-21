@@ -3,7 +3,7 @@
 use super::{EntryHeader, EntryKind, crc::Crc32, decode::parse_entry_header};
 use crate::{
     Error, ObjectDigest, ObjectFormat, ObjectId, ObjectInfo, Result,
-    object::Hash,
+    object::CheckedHash as Hash,
     zlib::{InflateLimits, InflateStatus, Inflater, WINDOW_SIZE},
 };
 
@@ -179,7 +179,7 @@ impl<'a> Decoder<'a> {
             offset: 0,
             entry_offset: 12,
             remaining: 0,
-            hash: format.hash(),
+            hash: format.checked_hash(),
             crc: Crc32::new(),
             object_hash: None,
             failure: None,
@@ -342,7 +342,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn verify_trailer(&mut self) -> Result<()> {
-        let id = self.hash.clone().finish();
+        let id = self.hash.clone().finish().map_err(|_| Error::CorruptPack)?;
         if id.as_bytes() != &self.header[..self.header_len] {
             return Err(Error::CorruptPack);
         }
