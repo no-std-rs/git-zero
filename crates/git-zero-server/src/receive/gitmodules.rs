@@ -44,6 +44,17 @@ pub struct FsckModules {
     failure: Option<Error>,
 }
 impl FsckModules {
+    /// Match strict receive's buffer policy for a newly packed plain blob.
+    /// Native Git streams plain blobs above its default 512 MiB threshold
+    /// without retaining a config buffer and reports gitmodulesLarge. Delta
+    /// results and blobs read from earlier packs still provide their contents.
+    pub fn new_received(size: u64, plain: bool) -> Result<Self> {
+        if plain && size > 512 * 1024 * 1024 {
+            return Err(Error::InvalidObject);
+        }
+        Ok(Self::new(size))
+    }
+
     pub fn new(size: u64) -> Self {
         Self {
             remaining: size,

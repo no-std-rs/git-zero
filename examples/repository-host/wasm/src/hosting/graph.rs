@@ -28,6 +28,7 @@ pub extern "C" fn host_graph_cancel() {
 /// Init (40 bytes): format/kind u32@0/4; size u64@8; max bytes/links
 /// u64@16/24; name scratch capacity u32@32 (two names, at most 131072),
 /// policy bits u32@36: strict headers/trees=1, modules blob=2, attributes blob=4.
+/// Flag 8 marks a newly received plain modules blob for native size policy.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_graph_init(length: usize) -> i32 {
     host_graph_cancel();
@@ -61,7 +62,10 @@ fn initialize(length: usize) -> git_zero::Result<i32> {
     };
     let capacity = u32_at(bytes, 32)? as usize;
     let strict = u32_at(bytes, 36)?;
-    if strict & !7 != 0 || (strict & 6 != 0 && info.kind != ObjectKind::Blob) {
+    if strict & !15 != 0
+        || (strict & 6 != 0 && info.kind != ObjectKind::Blob)
+        || (strict & 8 != 0 && strict & 2 == 0)
+    {
         return Err(Error::InvalidRequest);
     }
     if capacity > 131072 {
@@ -90,7 +94,7 @@ fn initialize(length: usize) -> git_zero::Result<i32> {
                 None
             },
             modules: if strict & 2 != 0 {
-                Some(FsckModules::new(info.size))
+                Some(FsckModules::new_received(info.size, strict & 8 != 0)?)
             } else {
                 None
             },

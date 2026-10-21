@@ -393,13 +393,30 @@ test("designated modules and attributes policies compose over fragmented blob by
   }
 });
 
+test("native received-plain modules size policy precedes storage reads", () => {
+  const limit = 512 * 1024 * 1024;
+  for (const format of [0, 1]) {
+    const codec = new Codec(module, format);
+    const source = new ObjectSource({ exec() { throw new Error("unexpected storage read"); } }, codec, "current");
+    const row = { stage: "current", wire_kind: 3, kind: 3, size: limit };
+    assert.doesNotThrow(() => source.beginScan(row, false, 1));
+    for (const size of [limit + 1, 2 ** 31]) {
+      const large = { ...row, size };
+      assert.throws(() => source.beginScan(large, false, 1), (error) => error instanceof CodecError && error.code === -7);
+      assert.doesNotThrow(() => source.beginScan({ ...large, wire_kind: 7 }, false, 1));
+      assert.doesNotThrow(() => source.beginScan({ ...large, stage: "published" }, false, 1));
+      assert.doesNotThrow(() => source.beginScan(large, false, 0));
+    }
+  }
+});
+
 test("gitmodules Wasm acceptance matches the saved configured-native-Git corpus", () => {
   for (const format of [0, 1]) {
     const codec = new Codec(module, format);
     for (const row of modulesReference.cases) {
       const body = row.hex ? Buffer.from(row.hex, "hex") : Buffer.from(row.body);
       for (const chunk of [1, 2, 7, Math.max(1, body.length)]) {
-        codec.graphInit({ kind: 3, size: body.length }, { checks: 1 });
+        codec.graphInit({ kind: 3, size: body.length }, { checks: 1, receivedPlain: true });
         const scan = () => {
           if (!body.length) return graph(codec, body, true);
           for (let at = 0; at < body.length; at += chunk) graph(codec, body.subarray(at, at + chunk), at + chunk >= body.length);

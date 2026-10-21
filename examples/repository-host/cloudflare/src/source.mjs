@@ -190,7 +190,7 @@ export class ObjectSource {
   beginScan(row, strict = true, checks = 0) {
     this.namesStaged = false;
     this.names.length = 0; this.edges.length = 0;
-    this.codec.graphInit(info(row), { strict, checks });
+    this.codec.graphInit(info(row), { strict, checks, receivedPlain: Boolean(checks & 1) && row.stage === this.stage && row.wire_kind === 3 });
   }
 
   finishScan(row) {
@@ -241,7 +241,10 @@ export class ObjectSource {
   async process(row, scan = true, checks = 0) {
     this.queries++;
     this.codec.charge(0, row.size);
-    if (row.size > CANONICAL_ENTRY_BYTES) this.codec.charge(2, row.size);
+    // Designated policies may rescan a body reconstructed earlier in this
+    // request. Reuse its authenticated temporary object and reserve it once.
+    const createTemporary = row.size > CANONICAL_ENTRY_BYTES && !this.cachedTemporary(row);
+    if (createTemporary) this.codec.charge(2, row.size);
     // Keys identify physical immutable representations within one query. An
     // identity delta may have the same canonical ID as its external base;
     // resolving by ID again would accidentally choose the delta itself.
@@ -250,7 +253,7 @@ export class ObjectSource {
     const descriptor = this.descriptor(row);
     this.codec.rangeInit(rootKey); this.beginScan(row, scan, checks);
     const captured = row.size <= CANONICAL_ENTRY_BYTES ? new Uint8Array(row.size) : null;
-    const temporary = captured === null ? new ChunkWriter(this.store, this.stage, rowKey(row)) : null;
+    const temporary = createTemporary ? new ChunkWriter(this.store, this.stage, rowKey(row)) : null;
     let written = 0, digest, request = this.codec.rangeRequest();
     for (;;) {
       if (request.tag === 20) {

@@ -429,6 +429,18 @@ fn config_character_limit_does_not_discard_an_unsafe_pending_value() {
     });
 }
 
+#[test]
+fn designated_modules_size_policy_preserves_large_delta_results() {
+    use git_zero::http::receive::FsckModules;
+    let limit = 512 * 1024 * 1024;
+    allocations::without_allocations(|| {
+        for size in [limit - 1, limit, limit + 1, 1 << 31] {
+            assert_eq!(FsckModules::new_received(size, true).is_ok(), size <= limit);
+            assert!(FsckModules::new_received(size, false).is_ok());
+        }
+    });
+}
+
 fn command(old: ObjectId, new: ObjectId, name: &[u8], caps: Option<&[u8]>) -> Vec<u8> {
     let mut line = Vec::new();
     line.extend_from_slice(old.to_hex().as_bytes());
