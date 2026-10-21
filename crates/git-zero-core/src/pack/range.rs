@@ -113,6 +113,102 @@ impl RangeFrame {
         }
     }
 
+    fn describe(
+        &mut self,
+        object: RangeObject,
+        format: ObjectFormat,
+        limits: RangeLimits,
+        root: bool,
+    ) -> Result<u64> {
+        let depth = object_depth(object)?;
+        if depth > limits.max_depth {
+            return Err(Error::LimitExceeded);
+        }
+        if self
+            .expected
+            .is_some_and(|expected| expected != (object.info, depth))
+        {
+            return Err(Error::InvalidObject);
+        }
+        let (start, length) = match self.range {
+            ObjectRange::All => (0, object.info.size),
+            ObjectRange::Bytes { offset, length } => (offset, length),
+        };
+        let end = start
+            .checked_add(length)
+            .filter(|end| *end <= object.info.size)
+            .ok_or(Error::InvalidObject)?;
+        if root && length > limits.max_output {
+            return Err(Error::LimitExceeded);
+        }
+        self.start = start;
+        self.end = end;
+        self.remaining = length;
+        match object.representation {
+            RangeRepresentation::Plain => self.cursor = start,
+            RangeRepresentation::Delta {
+                base,
+                base_info,
+                base_depth,
+                ..
+            } => {
+                check_key(format, base)?;
+                if base_info.kind != object.info.kind {
+                    return Err(Error::InvalidObject);
+                }
+                self.delta = Some(DeltaDecoder::new(
+                    base_info.size,
+                    base_depth,
+                    DeltaLimits {
+                        max_output: object.info.size,
+                        max_instructions: limits.max_instructions,
+                        max_depth: limits.max_depth,
+                    },
+                )?);
+            }
+        }
+        self.object = Some(object);
+        Ok(length)
+    }
+
+    fn next_read(
+        &mut self,
+        max_read_bytes: usize,
+        remaining_work: u64,
+    ) -> Result<Option<RangeRequest>> {
+        let Some(object) = self.object else {
+            return Ok(Some(RangeRequest::Describe(self.key)));
+        };
+        let (kind, remaining) = match object.representation {
+            RangeRepresentation::Plain => (RangeInput::Plain, self.remaining),
+            RangeRepresentation::Delta {
+                instructions_size, ..
+            } => {
+                if self.cursor == instructions_size {
+                    let delta = self.delta.as_mut().ok_or(Error::InvalidObject)?;
+                    let step = delta.update(&[], true)?;
+                    if step.status != DeltaStatus::Finished || self.remaining != 0 {
+                        return Err(Error::CorruptPack);
+                    }
+                    delta.finish()?;
+                    self.complete = true;
+                    return Ok(None);
+                }
+                (RangeInput::Delta, instructions_size - self.cursor)
+            }
+        };
+        if remaining_work == 0 {
+            return Err(Error::LimitExceeded);
+        }
+        let length = remaining.min(max_read_bytes as u64).min(remaining_work) as usize;
+        Ok(Some(RangeRequest::Read {
+            object: self.key,
+            kind,
+            offset: self.cursor,
+            length,
+        }))
+    }
+
     fn done(&self) -> bool {
         self.complete
             || self.object.is_some_and(|object| {
@@ -249,39 +345,12 @@ impl<'frames> RangeResolver<'frames> {
                 self.active -= 1;
                 continue;
             }
-            let Some(object) = frame.object else {
-                return Ok(RangeRequest::Describe(frame.key));
-            };
-            let (kind, remaining) = match object.representation {
-                RangeRepresentation::Plain => (RangeInput::Plain, frame.remaining),
-                RangeRepresentation::Delta {
-                    instructions_size, ..
-                } => {
-                    if frame.cursor == instructions_size {
-                        let delta = frame.delta.as_mut().ok_or(Error::InvalidObject)?;
-                        let step = delta.update(&[], true)?;
-                        if step.status != DeltaStatus::Finished || frame.remaining != 0 {
-                            return Err(Error::CorruptPack);
-                        }
-                        delta.finish()?;
-                        frame.complete = true;
-                        continue;
-                    }
-                    (RangeInput::Delta, instructions_size - frame.cursor)
-                }
-            };
-            if self.work == self.limits.max_work_bytes {
-                return Err(Error::LimitExceeded);
+            if let Some(request) = frame.next_read(
+                self.limits.max_read_bytes,
+                self.limits.max_work_bytes - self.work,
+            )? {
+                return Ok(request);
             }
-            let length = remaining
-                .min(self.limits.max_read_bytes as u64)
-                .min(self.limits.max_work_bytes - self.work) as usize;
-            return Ok(RangeRequest::Read {
-                object: frame.key,
-                kind,
-                offset: frame.cursor,
-                length,
-            });
         }
     }
 
@@ -289,58 +358,15 @@ impl<'frames> RangeResolver<'frames> {
         if !matches!(self.next()?, RangeRequest::Describe(_)) {
             return Err(Error::InvalidRequest);
         }
-        let depth = object_depth(object)?;
-        if depth > self.limits.max_depth {
-            return Err(Error::LimitExceeded);
-        }
-        let frame = &mut self.frames[self.active];
-        if frame
-            .expected
-            .is_some_and(|expected| expected != (object.info, depth))
-        {
-            return Err(Error::InvalidObject);
-        }
-        let (start, length) = match frame.range {
-            ObjectRange::All => (0, object.info.size),
-            ObjectRange::Bytes { offset, length } => (offset, length),
-        };
-        let end = start
-            .checked_add(length)
-            .filter(|end| *end <= object.info.size)
-            .ok_or(Error::InvalidObject)?;
+        let length = self.frames[self.active].describe(
+            object,
+            self.format,
+            self.limits,
+            self.active == 0,
+        )?;
         if self.active == 0 {
-            if length > self.limits.max_output {
-                return Err(Error::LimitExceeded);
-            }
             self.expected = Some(length);
         }
-        frame.start = start;
-        frame.end = end;
-        frame.remaining = length;
-        match object.representation {
-            RangeRepresentation::Plain => frame.cursor = start,
-            RangeRepresentation::Delta {
-                base,
-                base_info,
-                base_depth,
-                ..
-            } => {
-                check_key(self.format, base)?;
-                if base_info.kind != object.info.kind {
-                    return Err(Error::InvalidObject);
-                }
-                frame.delta = Some(DeltaDecoder::new(
-                    base_info.size,
-                    base_depth,
-                    DeltaLimits {
-                        max_output: object.info.size,
-                        max_instructions: self.limits.max_instructions,
-                        max_depth: self.limits.max_depth,
-                    },
-                )?);
-            }
-        }
-        frame.object = Some(object);
         Ok(())
     }
 
