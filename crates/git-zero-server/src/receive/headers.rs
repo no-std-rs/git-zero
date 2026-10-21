@@ -95,40 +95,34 @@ impl FsckHeaders {
             Line::Skip | Line::Parent => return Ok(()),
             Line::Prefix => {}
         }
-        match self.phase {
-            Phase::Parents | Phase::Committer | Phase::Tagger => {
-                self.prefix[self.used] = byte;
-                self.used += 1;
-                let prefix = &self.prefix[..self.used];
-                let expected: &[u8] = if matches!(self.phase, Phase::Committer) {
-                    b"committer "
-                } else {
-                    b"tagger "
-                };
-                if matches!(self.phase, Phase::Parents) {
-                    if b"parent ".starts_with(prefix) {
-                        if self.used == 7 {
-                            self.line = Line::Parent;
-                        }
-                    } else if b"author ".starts_with(prefix) {
-                        if self.used == 7 {
-                            self.line = Line::Identity(Identity::new());
-                        }
-                    } else {
-                        return Err(Error::InvalidObject);
-                    }
-                } else if expected.starts_with(prefix) {
-                    if self.used == expected.len() {
-                        self.line = Line::Identity(Identity::new());
-                    }
-                } else if matches!(self.phase, Phase::Tagger) {
-                    self.line = Line::Skip;
-                } else {
-                    return Err(Error::InvalidObject);
-                }
+        let expected: &[u8] = match self.phase {
+            Phase::Parents => b"author ",
+            Phase::Committer => b"committer ",
+            Phase::Tagger => b"tagger ",
+            _ => {
+                self.line = Line::Skip;
+                return Ok(());
             }
-            _ => self.line = Line::Skip,
+        };
+        self.prefix[self.used] = byte;
+        self.used += 1;
+        let prefix = &self.prefix[..self.used];
+        if matches!(self.phase, Phase::Parents) && b"parent ".starts_with(prefix) {
+            if self.used == 7 {
+                self.line = Line::Parent;
+            }
+            return Ok(());
         }
+        if expected.starts_with(prefix) {
+            if self.used == expected.len() {
+                self.line = Line::Identity(Identity::new());
+            }
+            return Ok(());
+        }
+        if !matches!(self.phase, Phase::Tagger) {
+            return Err(Error::InvalidObject);
+        }
+        self.line = Line::Skip;
         Ok(())
     }
 
