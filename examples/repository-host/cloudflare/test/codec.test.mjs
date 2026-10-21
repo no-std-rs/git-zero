@@ -223,6 +223,12 @@ function graph(codec, bytes, eof) {
   assert.fail("graph session made no bounded progress");
 }
 
+function scanChunks(codec, body, chunk) {
+  for (let at = 0; at < body.length; at += chunk) {
+    graph(codec, body.subarray(at, at + chunk), at + chunk >= body.length);
+  }
+}
+
 test("hosting Wasm has fixed memory, no imports and no allocator", () => {
   assert.deepEqual(WebAssembly.Module.imports(module), []);
   assert.ok(!WebAssembly.Module.exports(module).some(({ name }) => /alloc|free/.test(name)));
@@ -350,7 +356,7 @@ test("strict receive header policy is opt-in and survives fragmented identities"
       const body = Buffer.from(`tree ${target}\nauthor ${identity}\ncommitter A <a@b> 0 +0000\n\nmessage`);
       for (const chunk of [1, 7, body.length]) {
         codec.graphInit({ kind: 1, size: body.length }, { strict: true });
-        const scan = () => { for (let at = 0; at < body.length; at += chunk) graph(codec, body.subarray(at, at + chunk), at + chunk >= body.length); };
+        const scan = () => scanChunks(codec, body, chunk);
         if (accepted) scan();
         else assert.throws(scan, (error) => error instanceof CodecError && error.code === -7);
       }
@@ -368,7 +374,7 @@ test("designated attributes checks bound size before reading and stream line bou
     for (const [body, accepted] of [[Buffer.alloc(2047, 120), true], [Buffer.alloc(2048, 120), false], [Buffer.concat([Buffer.from("\0"), Buffer.alloc(4096, 120)]), true]]) {
       for (const chunk of [1, 7, body.length]) {
         codec.graphInit({ kind: 3, size: body.length }, { checks: 2 });
-        const scan = () => { for (let at = 0; at < body.length; at += chunk) graph(codec, body.subarray(at, at + chunk), at + chunk >= body.length); };
+        const scan = () => scanChunks(codec, body, chunk);
         if (accepted) scan(); else assert.throws(scan, (error) => error.code === -7);
       }
     }
@@ -387,7 +393,7 @@ test("designated modules and attributes policies compose over fragmented blob by
     const codec = new Codec(module, format);
     for (const [body, checks, accepted] of cases) for (const chunk of [1, 7, 64, body.length]) {
       codec.graphInit({ kind: 3, size: body.length }, { checks });
-      const scan = () => { for (let at=0; at<body.length; at+=chunk) graph(codec,body.subarray(at,at+chunk),at+chunk>=body.length); };
+      const scan = () => scanChunks(codec, body, chunk);
       if (accepted) scan(); else assert.throws(scan,(error)=>error.code===-7);
     }
     assert.throws(()=>codec.graphInit({kind:1,size:0},{checks:1}),(error)=>error.code===-3);
@@ -420,7 +426,7 @@ test("gitmodules Wasm acceptance matches the saved configured-native-Git corpus"
         codec.graphInit({ kind: 3, size: body.length }, { checks: 1, receivedPlain: true });
         const scan = () => {
           if (!body.length) return graph(codec, body, true);
-          for (let at = 0; at < body.length; at += chunk) graph(codec, body.subarray(at, at + chunk), at + chunk >= body.length);
+          scanChunks(codec, body, chunk);
         };
         if (row.accepted) assert.doesNotThrow(scan, row.case);
         else assert.throws(scan, (error) => error instanceof CodecError && error.code === -7, row.case);

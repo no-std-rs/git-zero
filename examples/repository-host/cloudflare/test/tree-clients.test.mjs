@@ -16,26 +16,30 @@ async function git(cwd, ...args) {
   return result.stdout.trim();
 }
 
+async function checkTreeClients(server, root, format) {
+  const source = join(root, `source-${format}`), namespace = `tree-clients-${format}`, remote = `${server.origin}/${namespace}.git`;
+  const initialized = await fetch(`${server.origin}/_test/${namespace}/initialize`, { method: "POST", headers: headers(format) }); assert.equal(initialized.status, 200); await initialized.arrayBuffer();
+  await git(root, "init", "-q", "-b", "main", `--object-format=${format ? "sha256" : "sha1"}`, source);
+  const paths = ["root.txt", "a/deep/file", "z-short/file"];
+  for (const name of paths) { await mkdir(dirname(join(source, name)), { recursive: true }); await writeFile(join(source, name), name === "root.txt" ? "root data\n" : "shared leaf\n"); }
+  await git(source, "add", "."); await git(source, "commit", "-q", "-m", "tree-filter fixture");
+  await git(source, "push", "--atomic", remote, "HEAD:refs/heads/main");
+  for (const [version, depth] of combinations([0, 1, 2], [0, 1, 2])) {
+    const filter = `tree:${depth}`, clone = join(root, `clone-${format}-${version}-${depth}`);
+    await git(root, "-c", `protocol.version=${version}`, "clone", "-q", "--no-checkout", "--single-branch", "--no-tags", `--filter=${filter}`, remote, clone);
+    assert.equal(await git(clone, "config", "remote.origin.partialclonefilter"), filter);
+    await git(clone, "-c", `protocol.version=${version}`, "checkout", "-q", "main");
+    for (const name of paths) assert.deepEqual(await readFile(join(clone, name)), await readFile(join(source, name)), `${format}/${version}/${depth}/${name}`);
+    await git(clone, "fsck", "--full", "--strict");
+  }
+}
+
 testRuntimes("{runtime} supports ordinary tree-filter clones and lazy checkout", { timeout: 120000 }, async (serve) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-tree-clients-")); let server;
   try {
     server = await serve(join(root, "state"));
     for (const format of [0, 1]) {
-      const source = join(root, `source-${format}`), namespace = `tree-clients-${format}`, remote = `${server.origin}/${namespace}.git`;
-      const initialized = await fetch(`${server.origin}/_test/${namespace}/initialize`, { method: "POST", headers: headers(format) }); assert.equal(initialized.status, 200); await initialized.arrayBuffer();
-      await git(root, "init", "-q", "-b", "main", `--object-format=${format ? "sha256" : "sha1"}`, source);
-      const paths = ["root.txt", "a/deep/file", "z-short/file"];
-      for (const name of paths) { await mkdir(dirname(join(source, name)), { recursive: true }); await writeFile(join(source, name), name === "root.txt" ? "root data\n" : "shared leaf\n"); }
-      await git(source, "add", "."); await git(source, "commit", "-q", "-m", "tree-filter fixture");
-      await git(source, "push", "--atomic", remote, "HEAD:refs/heads/main");
-      for (const [version, depth] of combinations([0, 1, 2], [0, 1, 2])) {
-        const filter = `tree:${depth}`, clone = join(root, `clone-${format}-${version}-${depth}`);
-        await git(root, "-c", `protocol.version=${version}`, "clone", "-q", "--no-checkout", "--single-branch", "--no-tags", `--filter=${filter}`, remote, clone);
-        assert.equal(await git(clone, "config", "remote.origin.partialclonefilter"), filter);
-        await git(clone, "-c", `protocol.version=${version}`, "checkout", "-q", "main");
-        for (const name of paths) assert.deepEqual(await readFile(join(clone, name)), await readFile(join(source, name)), `${format}/${version}/${depth}/${name}`);
-        await git(clone, "fsck", "--full", "--strict");
-      }
+      await checkTreeClients(server, root, format);
     }
   } finally { await server?.stop(); await rm(root, { recursive: true, force: true }); }
 });

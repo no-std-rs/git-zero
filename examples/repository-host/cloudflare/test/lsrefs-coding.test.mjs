@@ -27,31 +27,35 @@ function controls(format, length) {
   parts.push(Buffer.from("0000")); return Buffer.concat(parts);
 }
 
+async function checkLsRefsCoding(server, root, format) {
+  const source = join(root, `source-${format}`), namespace = `coding-${format}`;
+  git(["init", "--bare", "--initial-branch=main", `--object-format=${format ? "sha256" : "sha1"}`, source]);
+  const initialized = await fetch(`${server.origin}/_test/${namespace}/initialize`, { method: "POST", headers: headers(format) }); assert.equal(initialized.status, 200); await initialized.arrayBuffer();
+  const url = `${server.origin}/${namespace}.git/git-upload-pack`, requestHeaders = { ...headers(), "content-type": "application/x-git-upload-pack-request", "git-protocol": "version=2" };
+  const native = (body) => git(["upload-pack", "--stateless-rpc", source], body);
+  for (const args of [[], ["unborn"], ["symrefs"], ["unborn", "symrefs"], ["unborn", "ref-prefix HEAD"], ["unborn", "symrefs", "ref-prefix missing"]]) {
+    const body = command(format, args), expected = native(body), response = await fetch(url, { method: "POST", headers: requestHeaders, body });
+    assert.equal(response.status, 200); assert.deepEqual(Buffer.from(await response.arrayBuffer()), expected);
+  }
+  const limit = 4 * 1024 * 1024;
+  for (const length of [limit, limit + 1]) {
+    const decoded = controls(format, length), encoded = gzipSync(decoded, { level: 0 }), expected = native(decoded);
+    assert.equal(decoded.length, length); assert.ok(encoded.length > length, "stored deflate blocks exercise framing beyond the decoded limit");
+    for (const coding of ["identity", "gzip", "x-gzip"]) {
+      const response = await fetch(url, { method: "POST", headers: { ...requestHeaders, "content-encoding": coding }, body: coding === "identity" ? decoded : encoded });
+      assert.equal(response.status, length === limit ? 200 : 400, `${format}/${coding}/${length}`);
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (length === limit) assert.deepEqual(bytes, expected);
+    }
+  }
+}
+
 testRuntimes("{runtime} matches native unborn ls-refs and accepts gzip framing at the decoded control limit", { timeout: 120000 }, async (serve) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-lsrefs-coding-")); let server;
   try {
     server = await serve(join(root, "state"));
     for (const format of [0, 1]) {
-      const source = join(root, `source-${format}`), namespace = `coding-${format}`;
-      git(["init", "--bare", "--initial-branch=main", `--object-format=${format ? "sha256" : "sha1"}`, source]);
-      const initialized = await fetch(`${server.origin}/_test/${namespace}/initialize`, { method: "POST", headers: headers(format) }); assert.equal(initialized.status, 200); await initialized.arrayBuffer();
-      const url = `${server.origin}/${namespace}.git/git-upload-pack`, requestHeaders = { ...headers(), "content-type": "application/x-git-upload-pack-request", "git-protocol": "version=2" };
-      const native = (body) => git(["upload-pack", "--stateless-rpc", source], body);
-      for (const args of [[], ["unborn"], ["symrefs"], ["unborn", "symrefs"], ["unborn", "ref-prefix HEAD"], ["unborn", "symrefs", "ref-prefix missing"]]) {
-        const body = command(format, args), expected = native(body), response = await fetch(url, { method: "POST", headers: requestHeaders, body });
-        assert.equal(response.status, 200); assert.deepEqual(Buffer.from(await response.arrayBuffer()), expected);
-      }
-      const limit = 4 * 1024 * 1024;
-      for (const length of [limit, limit + 1]) {
-        const decoded = controls(format, length), encoded = gzipSync(decoded, { level: 0 }), expected = native(decoded);
-        assert.equal(decoded.length, length); assert.ok(encoded.length > length, "stored deflate blocks exercise framing beyond the decoded limit");
-        for (const coding of ["identity", "gzip", "x-gzip"]) {
-          const response = await fetch(url, { method: "POST", headers: { ...requestHeaders, "content-encoding": coding }, body: coding === "identity" ? decoded : encoded });
-          assert.equal(response.status, length === limit ? 200 : 400, `${format}/${coding}/${length}`);
-          const bytes = Buffer.from(await response.arrayBuffer());
-          if (length === limit) assert.deepEqual(bytes, expected);
-        }
-      }
+      await checkLsRefsCoding(server, root, format);
     }
   } finally { await server?.stop(); await rm(root, { recursive: true, force: true }); }
 });
