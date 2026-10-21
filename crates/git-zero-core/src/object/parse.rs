@@ -235,13 +235,7 @@ impl Tag {
             .and_then(|line| line.strip_prefix(b"object "))
             .ok_or(Error::InvalidObject)?;
         let target = ObjectId::from_hex(object)?;
-        let target_kind = match lines.next() {
-            Some(b"type commit") => ObjectKind::Commit,
-            Some(b"type tree") => ObjectKind::Tree,
-            Some(b"type blob") => ObjectKind::Blob,
-            Some(b"type tag") => ObjectKind::Tag,
-            _ => return Err(Error::InvalidObject),
-        };
+        let target_kind = ObjectKind::from_tag_header(lines.next().ok_or(Error::InvalidObject)?)?;
         let name = lines
             .next()
             .and_then(|line| line.strip_prefix(b"tag "))

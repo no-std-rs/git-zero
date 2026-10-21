@@ -387,16 +387,10 @@ impl State {
                 None
             }
             Phase::TagType => {
-                let kind = match line {
-                    b"type commit" => ObjectKind::Commit,
-                    b"type tree" => ObjectKind::Tree,
-                    b"type blob" => ObjectKind::Blob,
-                    b"type tag" => ObjectKind::Tag,
-                    _ => return Err(Error::InvalidObject),
-                };
                 if self.header_overflow {
                     return Err(Error::InvalidObject);
                 }
+                let kind = ObjectKind::from_tag_header(line)?;
                 self.phase = Phase::TagName;
                 Some(LinkStatus::Link {
                     id: self.target,

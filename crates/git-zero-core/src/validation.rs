@@ -872,13 +872,7 @@ fn tag_target(
     if id.is_zero() {
         return Err(Error::InvalidObject);
     }
-    let kind = match body.line(scratch)? {
-        b"type commit" => ObjectKind::Commit,
-        b"type tree" => ObjectKind::Tree,
-        b"type blob" => ObjectKind::Blob,
-        b"type tag" => ObjectKind::Tag,
-        _ => return Err(Error::InvalidObject),
-    };
+    let kind = ObjectKind::from_tag_header(body.line(scratch)?)?;
     Ok((id, kind))
 }
 

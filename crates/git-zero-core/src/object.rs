@@ -201,6 +201,22 @@ impl ObjectKind {
             Self::Tag => "tag",
         }
     }
+
+    #[cfg(feature = "read")]
+    pub(crate) fn from_name(name: &[u8]) -> Result<Self> {
+        match name {
+            b"commit" => Ok(Self::Commit),
+            b"tree" => Ok(Self::Tree),
+            b"blob" => Ok(Self::Blob),
+            b"tag" => Ok(Self::Tag),
+            _ => Err(Error::InvalidObject),
+        }
+    }
+
+    #[cfg(feature = "read")]
+    pub(crate) fn from_tag_header(line: &[u8]) -> Result<Self> {
+        Self::from_name(line.strip_prefix(b"type ").ok_or(Error::InvalidObject)?)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -227,13 +243,7 @@ impl ObjectInfo {
             .iter()
             .position(|&byte| byte == b' ')
             .ok_or(Error::InvalidObject)?;
-        let kind = match &header[..space] {
-            b"commit" => ObjectKind::Commit,
-            b"tree" => ObjectKind::Tree,
-            b"blob" => ObjectKind::Blob,
-            b"tag" => ObjectKind::Tag,
-            _ => return Err(Error::InvalidObject),
-        };
+        let kind = ObjectKind::from_name(&header[..space])?;
         let decimal = &header[space + 1..];
         if decimal.is_empty()
             || decimal.len() > 20
