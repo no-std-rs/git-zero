@@ -55,6 +55,8 @@ export class ObjectSource {
     return undefined;
   }
   cachedTemporary(row) {
+    // process() captures these bodies; only larger objects create temp rows.
+    if (row.size <= CANONICAL_ENTRY_BYTES) return undefined;
     const key = rowKey(row);
     if (this.temporary.has(key)) return this.temporary.get(key);
     const value = this.store.exec("SELECT * FROM temp_objects WHERE stage=? AND object=?", this.stage, key)[0];
