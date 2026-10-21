@@ -14,7 +14,8 @@ X_LOCAL_OBSERVABILITY=false npm run dev -- --var HOST_TOKEN:local-development-to
 ```
 
 The default Wrangler config starts the own implementation with local R2 and
-SQLite. The test and benchmark harnesses disable Wrangler's development trace
+SQLite. The build script uses Cargo's `hosting` profile to optimize the codec
+for throughput. The test and benchmark harnesses disable Wrangler's development trace
 collector (`X_LOCAL_OBSERVABILITY=false`); it records every SQL operation and
 can otherwise create a trace database larger than the repository metadata.
 Pass `observability: true` to the test launcher when investigating traces.

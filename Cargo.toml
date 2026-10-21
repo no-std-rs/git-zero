@@ -198,7 +198,7 @@ lto = true
 codegen-units = 1
 opt-level = "s"
 
-# Native component profiling prioritizes throughput over Wasm/core size.
+# Repository hosting prioritizes throughput over binary size.
 [profile.hosting]
 inherits = "release"
 opt-level = 3
