@@ -2,7 +2,19 @@ mod fuzz_support;
 
 type Target = (&'static str, fn(&[u8]), &'static [&'static [u8]]);
 
-const TARGETS: [Target; 7] = [
+const TARGETS: [Target; 8] = [
+    (
+        "receive",
+        fuzz_support::receive,
+        &[
+            include_bytes!("../fuzz/corpus/receive/sha1"),
+            include_bytes!("../fuzz/corpus/receive/sha256"),
+            include_bytes!("../fuzz/corpus/receive/options"),
+            include_bytes!("../fuzz/corpus/receive/shallow"),
+            b"0000",
+            b"0003",
+        ],
+    ),
     (
         "loose",
         fuzz_support::loose,

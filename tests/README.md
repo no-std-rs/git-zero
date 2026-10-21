@@ -134,6 +134,64 @@ malformed sizes/varints/instructions, exact/overrun capacities, output/CPU/depth
 budgets and cursor-preserving retries. Allocation tracking covers pack reading,
 hashing, CRC computation and delta resolution with fixed caller storage.
 
+`delta_streaming` checks fragmented instruction events, partial literals, sparse
+copy operands, default 65536-byte copies, 64-bit sizes, every truncation, exact
+EOF, sticky errors and independent size/instruction/depth budgets. The real Git
+pack-reader fixture also reconstructs every delta through the streamed parser
+at three fragment sizes and compares it with bodies checked by `cat-file`.
+Allocation tracking covers the fixed parser state and chunked `ObjectDigest`;
+its IDs are compared with independent canonical SHA-1/SHA-256 hashes.
+
+`index_lookup` checks every ID and missing neighbor in SHA-1/SHA-256 indexes,
+mixed direct/64-bit offsets, malformed ranges and sticky failures, empty indexes,
+and logical index offsets above 4 GiB without allocating the index. Lookup state
+is allocation tracked; the real Git pack fixture checks every Git-produced index
+entry through the same resumable range interface.
+
+Single-entry range decoding also checks every fragmented plain/OFS/REF entry in
+the synthetic pack fixture and Git-generated packs. Tests cover offsets above
+4 GiB, preservation of trailing entries, truncated bodies, wire budgets,
+zero-output backpressure, repeated completion and allocation-free state.
+
+`pack_reuse` checks fixed-state compressed-entry assembly in both formats,
+forward reference deltas, exact wire limits, malformed metadata and terminal
+sink failures in every framing/body/trailer position. The real Git delta fixture
+reverses all entry order, converts OFS bases to verified reference IDs and reuses
+the original compressed streams. Git's strict indexer accepts the result and
+generates exactly the same index as the composer's CRCs/offsets.
+
+`object_links` checks streamed root/parent/tag edges and tree entries for both
+formats, arbitrary fragmentation, raw byte names, gitlinks, historical modes,
+large opaque headers/messages, exact EOF, syntax errors and separate byte/link
+budgets. It tracks allocations and guards caller name buffers. Git-generated
+objects are compared with complete structural views; the graph fuzz target also
+compares full/fragmented scanner events and terminal failures. Complete target
+and duplicate-name validation belongs to the host's persistent graph index.
+
+`object_ranges` reconstructs nested deltas and every subrange in both formats,
+including staged objects, 64-bit logical ranges, zero-length results, bounded
+caller frame stacks, output backpressure, malformed metadata/instructions and
+independent work/output/depth budgets. `entry_ranges` supplies inflated plain or
+delta-instruction ranges from fragmented packed input with guarded scratch and
+allocation tracking. The Git pack fixture combines both APIs to reconstruct
+every complete object and partial range directly from the compressed OFS/REF
+packs; bodies and canonical IDs match the independently Git-verified objects.
+The entries fuzz target also compares full range reconstruction with apply_delta
+and verifies clipped entry-range bytes against the complete pack reader.
+
+The separate hosting Wasm module is built with `npm run test:streamed` in
+`examples/repository-host/cloudflare`. Its Node tests drive fragmented receive
+controls and compressed plain/OFS/REF intake in both formats, then reconstruct
+and canonically hash results through the raw metadata/source/range/graph ABI.
+They also check typed links, binary names, historical modes, terminal intake
+failure, fresh-session scratch reuse, no host imports/allocator and a fixed 6 MiB
+linear-memory ceiling, including immutable upload controls. The read-only demo
+keeps its existing independent budget. The same suite drives ordinary Git
+push/clone/fetch against actual Wrangler R2/SQLite and direct workerd S3/SQLite,
+with atomic refs, graph validation, stale updates, cold restarts and reclamation.
+The former native Git hosting experiment and its tests have been replaced by
+these durable runtime tests; live deployment verification is outside this task.
+
 Each case owns its temporary directory, Git configuration environment, bound
 ephemeral port, child processes, and timeouts. Ports are reported only after the
 socket is bound, avoiding port reservation races. Servers and directories are
@@ -846,9 +904,9 @@ Wasm compilation/linking succeeds without supplying any global allocator.
 
 ## Parser fuzzing
 
-`cargo test -p git-zero --test fuzz --locked` embeds and replays the 32 independently
-authored binary seeds, every prefix truncation, six byte substitutions at every position,
-and reproducible xorshift inputs against seven shared targets.
+`cargo test -p git-zero --test fuzz --locked` embeds and replays the binary seeds,
+every prefix truncation, six byte substitutions at every position,
+and reproducible xorshift inputs against eight shared targets.
 `cargo test -p git-zero --test core --locked` also checks non-hex packet prefixes
 at every position and the maximum packet-length boundary.
 The same target functions back a separate cargo-fuzz workspace; core dependencies
@@ -864,6 +922,13 @@ records reach parsing, and compare borrowed versus short-read providers using
 the same bounded scratch. Inflation checks resumable state and output/ratio
 limits; loose/pack targets validate envelopes, entries and bounded delta
 instructions. Pack-index file parsing remains roadmap work.
+
+Receive control fuzzing covers fragmented command/option packets, negotiated
+capabilities, independent budgets, raw ref names and terminal errors. Reports
+exercise sideband packet boundaries and guarded output. `cargo test --test receive`
+also exchanges pushes with ordinary Git over localhost HTTP, including SHA-1,
+SHA-256, atomic requests, push options and chunked uploads. That fixture tests the
+wire protocol and a known pack; it is not a persistent repository host.
 
 ## Git's existing HTTP tests
 

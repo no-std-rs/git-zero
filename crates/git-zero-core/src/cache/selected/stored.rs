@@ -6,9 +6,9 @@ pub(super) fn read(bytes: &[u8], format: ObjectFormat, ids: &mut [ObjectId]) -> 
         .checked_sub(format.id_length())
         .ok_or(Error::CorruptPack)?;
     let (payload, trailer) = bytes.split_at(end);
-    let mut hash = format.hash();
+    let mut hash = format.checked_hash();
     hash.update(payload);
-    if hash.finish().as_bytes() != trailer {
+    if hash.finish().map_err(|_| Error::CorruptPack)?.as_bytes() != trailer {
         return Err(Error::CorruptPack);
     }
     let mut input = payload;
@@ -28,7 +28,7 @@ pub(super) fn read(bytes: &[u8], format: ObjectFormat, ids: &mut [ObjectId]) -> 
 
 fn object(input: &mut &[u8], format: ObjectFormat) -> Result<ObjectId> {
     let info = entry(input)?;
-    let mut hash = format.hash();
+    let mut hash = format.checked_hash();
     hash.update(info.header(&mut [0; 32])?);
     let zlib = take(input, 2)?;
     if zlib[0] & 15 != 8
@@ -63,7 +63,7 @@ fn object(input: &mut &[u8], format: ObjectFormat) -> Result<ObjectId> {
     if remaining != 0 || u32::from_be_bytes(take(input, 4)?.try_into().unwrap()) != adler.value() {
         return Err(Error::CorruptPack);
     }
-    Ok(hash.finish())
+    hash.finish().map_err(|_| Error::CorruptPack)
 }
 
 fn entry(input: &mut &[u8]) -> Result<ObjectInfo> {

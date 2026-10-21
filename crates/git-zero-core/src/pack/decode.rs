@@ -13,10 +13,19 @@ pub enum EntryKind {
     ReferenceDelta { base_id: ObjectId },
 }
 
+/// Pack-relative position, representation, and inflated length of one entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EntryHeader {
+    pub offset: u64,
+    pub kind: EntryKind,
+    pub size: u64,
+}
+
 /// One checksummed/inflated entry. Delta data is an instruction stream rather
 /// than a Git object body; resolve it against an authenticated materialized base.
 pub struct Entry<'a> {
     offset: u64,
+    compressed_offset: u64,
     end_offset: u64,
     crc: u32,
     kind: EntryKind,
@@ -30,6 +39,10 @@ impl<'a> Entry<'a> {
     }
     pub fn end_offset(&self) -> u64 {
         self.end_offset
+    }
+    /// First byte of the zlib stream, after type/size and delta-base metadata.
+    pub fn compressed_offset(&self) -> u64 {
+        self.compressed_offset
     }
     pub fn crc32(&self) -> u32 {
         self.crc
@@ -246,6 +259,7 @@ impl<'a> Reader<'a> {
         self.remaining -= 1;
         Ok(Some(Entry {
             offset: start as u64,
+            compressed_offset: cursor as u64,
             end_offset: end as u64,
             crc,
             kind,
@@ -259,39 +273,19 @@ impl<'a> Reader<'a> {
             self.finish()?;
             return Ok(None);
         }
-        let start = self.position;
-        let mut cursor = start;
-        let first = byte(self.bytes, &mut cursor)?;
-        let mut size = u64::from(first & 15);
-        let mut last = first;
-        let mut shift = 4;
-        while last & 128 != 0 {
-            last = byte(self.bytes, &mut cursor)?;
-            size |= chunk(u64::from(last & 127), shift)?;
-            shift += 7;
-        }
-        let kind = match (first >> 4) & 7 {
-            1 => EntryKind::Object(ObjectKind::Commit),
-            2 => EntryKind::Object(ObjectKind::Tree),
-            3 => EntryKind::Object(ObjectKind::Blob),
-            4 => EntryKind::Object(ObjectKind::Tag),
-            6 => EntryKind::OffsetDelta {
-                base_offset: offset_base(self.bytes, &mut cursor, start as u64)?,
-            },
-            7 => {
-                let format = self.pack_id.format();
-                let end = cursor
-                    .checked_add(format.id_length())
-                    .ok_or(Error::CorruptPack)?;
-                let id = self.bytes.get(cursor..end).ok_or(Error::CorruptPack)?;
-                cursor = end;
-                EntryKind::ReferenceDelta {
-                    base_id: ObjectId::from_bytes(format, id).map_err(|_| Error::CorruptPack)?,
-                }
+        let (length, header) = parse_entry_header(
+            &self.bytes[self.position..],
+            self.position as u64,
+            self.pack_id.format(),
+        )
+        .map_err(|error| {
+            if error == Error::BufferTooSmall {
+                Error::CorruptPack
+            } else {
+                error
             }
-            _ => return Err(Error::CorruptPack),
-        };
-        Ok(Some((cursor, size, kind)))
+        })?;
+        Ok(Some((self.position + length, header.size, header.kind)))
     }
 
     pub fn finish(&self) -> Result<()> {
@@ -368,6 +362,44 @@ pub fn apply_delta<'a>(
     })
 }
 
+// Shared by the complete-pack reader and incremental intake. A missing byte
+// is distinct from malformed syntax so only the incremental caller can wait.
+pub(super) fn parse_entry_header(
+    bytes: &[u8],
+    offset: u64,
+    format: ObjectFormat,
+) -> Result<(usize, EntryHeader)> {
+    let mut cursor = 0;
+    let first = byte(bytes, &mut cursor)?;
+    let mut size = u64::from(first & 15);
+    let mut last = first;
+    let mut shift = 4;
+    while last & 128 != 0 {
+        last = byte(bytes, &mut cursor)?;
+        size |= chunk(u64::from(last & 127), shift)?;
+        shift += 7;
+    }
+    let kind = match (first >> 4) & 7 {
+        1 => EntryKind::Object(ObjectKind::Commit),
+        2 => EntryKind::Object(ObjectKind::Tree),
+        3 => EntryKind::Object(ObjectKind::Blob),
+        4 => EntryKind::Object(ObjectKind::Tag),
+        6 => EntryKind::OffsetDelta {
+            base_offset: offset_base(bytes, &mut cursor, offset)?,
+        },
+        7 => {
+            let end = cursor + format.id_length();
+            let id = bytes.get(cursor..end).ok_or(Error::BufferTooSmall)?;
+            cursor = end;
+            EntryKind::ReferenceDelta {
+                base_id: ObjectId::from_bytes(format, id)?,
+            }
+        }
+        _ => return Err(Error::CorruptPack),
+    };
+    Ok((cursor, EntryHeader { offset, kind, size }))
+}
+
 fn offset_base(bytes: &[u8], cursor: &mut usize, start: u64) -> Result<u64> {
     let mut last = byte(bytes, cursor)?;
     let mut distance = u64::from(last & 127);
@@ -411,7 +443,7 @@ fn sparse_parameter(mut flags: u8, width: u32, bytes: &mut &[u8]) -> Result<u32>
 }
 
 fn byte(bytes: &[u8], cursor: &mut usize) -> Result<u8> {
-    let result = bytes.get(*cursor).copied().ok_or(Error::CorruptPack)?;
+    let result = bytes.get(*cursor).copied().ok_or(Error::BufferTooSmall)?;
     *cursor += 1;
     Ok(result)
 }
@@ -429,14 +461,18 @@ fn chunk(value: u64, shift: u32) -> Result<u64> {
     Ok(value << shift)
 }
 
+// The buffered and resumable delta decoders share checked size accumulation.
+pub(super) fn variable_byte(value: &mut u64, shift: &mut u32, byte: u8) -> Result<Option<u64>> {
+    *value |= chunk(u64::from(byte & 127), *shift)?;
+    *shift += 7;
+    Ok((byte & 128 == 0).then_some(*value))
+}
+
 fn variable(bytes: &mut &[u8]) -> Result<u64> {
-    let (mut result, mut shift) = (0, 0);
+    let (mut value, mut shift) = (0, 0);
     loop {
-        let byte = take_byte(bytes)?;
-        result |= chunk(u64::from(byte & 127), shift)?;
-        if byte & 128 == 0 {
-            return Ok(result);
+        if let Some(value) = variable_byte(&mut value, &mut shift, take_byte(bytes)?)? {
+            return Ok(value);
         }
-        shift += 7;
     }
 }

@@ -119,119 +119,171 @@ fn reachable_grant_is_request_local_and_denies_mixed_private_wants_before_output
             let mut storage = SelectionBuffers::<3, 3, 16, 256>::new();
             let mut bytes = [0; 4096];
             pool.2.set(0);
-            for ids in [[blob, private], [private, blob]] {
-                for done in [false, true] {
-                    let body = body(&ids, version, done);
-                    let mut output = SliceWriter::new(&mut bytes);
-                    assert_eq!(
-                        allocations::without_allocations(|| http::serve_with_selection_policy(
-                            &repository,
-                            request(&body, version),
-                            &mut storage.storage(4096),
-                            WantOptions::all_visible_reachable(2),
-                            &mut output
-                        ))
-                        .map(|_| ()),
-                        Err(Error::InvalidRequest)
-                    );
-                    assert!(output.as_bytes().is_empty());
-                    assert_eq!(
-                        pool.2.get(),
-                        0,
-                        "denied wants performed provider body reads"
-                    );
-                }
-            }
-            for id in [blob, snapshot.object_id(1).unwrap()] {
-                let body = body(&[id], version, true);
-                let mut output = SliceWriter::new(&mut bytes);
-                assert_eq!(
-                    http::serve_with_selection(
-                        &repository,
-                        request(&body, version),
-                        &mut storage.storage(4096),
-                        &mut output
-                    )
-                    .map(|_| ()),
-                    Err(Error::InvalidRequest)
-                );
-                assert!(output.as_bytes().is_empty());
-                let options = WantOptions::all_visible_reachable(1);
-                allocations::without_allocations(|| {
-                    http::serve_with_selection_policy(
-                        &repository,
-                        request(&body, version),
-                        &mut storage.storage(4096),
-                        options,
-                        &mut output,
-                    )
-                })
-                .unwrap();
-                let expected = output.as_bytes().to_vec();
-                let mut control = [0; 512];
-                let mut encoder = allocations::without_allocations(|| {
-                    http::stream::ResponseEncoder::with_selection_storage_policy(
-                        &repository,
-                        request(&body, version),
-                        storage.storage(4096),
-                        options,
-                        &mut control,
-                    )
-                })
-                .unwrap();
-                let mut actual = Vec::new();
-                let mut one = [0; 1];
-                loop {
-                    let count =
-                        allocations::without_allocations(|| encoder.read(&repository, &mut one))
-                            .unwrap();
-                    if count == 0 {
-                        break;
-                    }
-                    actual.extend_from_slice(&one[..count]);
-                }
-                if version == 2 {
-                    assert_eq!(v2_pack(&actual), v2_pack(&expected));
-                } else {
-                    assert_eq!(actual, expected);
-                }
-                let mut output = SliceWriter::new(&mut bytes);
-                assert_eq!(
-                    http::serve_with_selection(
-                        &repository,
-                        request(&body, version),
-                        &mut storage.storage(4096),
-                        &mut output
-                    )
-                    .map(|_| ()),
-                    Err(Error::InvalidRequest)
-                );
-            }
-            let duplicate = body(&[blob, blob], version, true);
-            let mut output = SliceWriter::new(&mut bytes);
-            assert_eq!(
-                http::serve_with_selection_policy(
-                    &repository,
-                    request(&duplicate, version),
-                    &mut storage.storage(0),
-                    WantOptions::all_visible_reachable(1),
-                    &mut output
-                )
-                .map(|_| ()),
-                Err(Error::LimitExceeded)
-            );
-            assert!(output.as_bytes().is_empty());
-            // Explicit leaf blobs consume no structural graph budget, and a retry resets the occurrence counter.
-            http::serve_with_selection_policy(
+            check_private_wants(
                 &repository,
-                request(&duplicate, version),
-                &mut storage.storage(0),
-                WantOptions::all_visible_reachable(2),
-                &mut output,
-            )
-            .unwrap();
+                &pool,
+                blob,
+                private,
+                version,
+                &mut storage,
+                &mut bytes,
+            );
+            for id in [blob, snapshot.object_id(1).unwrap()] {
+                check_reachable_grant(&repository, id, version, &mut storage, &mut bytes);
+            }
+            check_duplicate_wants(&repository, blob, version, &mut storage, &mut bytes);
         }
     }
+}
+
+type Storage = SelectionBuffers<3, 3, 16, 256>;
+
+fn check_private_wants(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    pool: &Pool<'_>,
+    blob: ObjectId,
+    private: ObjectId,
+    version: u8,
+    storage: &mut Storage,
+    bytes: &mut [u8],
+) {
+    for ids in [[blob, private], [private, blob]] {
+        for done in [false, true] {
+            let body = body(&ids, version, done);
+            let mut output = SliceWriter::new(bytes);
+            assert_eq!(
+                allocations::without_allocations(|| http::serve_with_selection_policy(
+                    repository,
+                    request(&body, version),
+                    &mut storage.storage(4096),
+                    WantOptions::all_visible_reachable(2),
+                    &mut output
+                ))
+                .map(|_| ()),
+                Err(Error::InvalidRequest)
+            );
+            assert!(output.as_bytes().is_empty());
+            assert_eq!(
+                pool.2.get(),
+                0,
+                "denied wants performed provider body reads"
+            );
+        }
+    }
+}
+
+fn check_reachable_grant(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    id: ObjectId,
+    version: u8,
+    storage: &mut Storage,
+    bytes: &mut [u8],
+) {
+    let body = body(&[id], version, true);
+    let mut output = SliceWriter::new(bytes);
+    assert_strict_denied(repository, &body, version, storage, &mut output);
+    assert!(output.as_bytes().is_empty());
+    let options = WantOptions::all_visible_reachable(1);
+    allocations::without_allocations(|| {
+        http::serve_with_selection_policy(
+            repository,
+            request(&body, version),
+            &mut storage.storage(4096),
+            options,
+            &mut output,
+        )
+    })
+    .unwrap();
+    let expected = output.as_bytes().to_vec();
+    let actual = stream_reachable(repository, &body, version, storage, options);
+    if version == 2 {
+        assert_eq!(v2_pack(&actual), v2_pack(&expected));
+    } else {
+        assert_eq!(actual, expected);
+    }
+    let mut output = SliceWriter::new(bytes);
+    assert_strict_denied(repository, &body, version, storage, &mut output);
+}
+
+fn assert_strict_denied(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    body: &[u8],
+    version: u8,
+    storage: &mut Storage,
+    output: &mut SliceWriter<'_>,
+) {
+    assert_eq!(
+        http::serve_with_selection(
+            repository,
+            request(body, version),
+            &mut storage.storage(4096),
+            output,
+        )
+        .map(|_| ()),
+        Err(Error::InvalidRequest)
+    );
+}
+
+fn stream_reachable(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    body: &[u8],
+    version: u8,
+    storage: &mut Storage,
+    options: WantOptions,
+) -> Vec<u8> {
+    let mut control = [0; 512];
+    let mut encoder = allocations::without_allocations(|| {
+        http::stream::ResponseEncoder::with_selection_storage_policy(
+            repository,
+            request(body, version),
+            storage.storage(4096),
+            options,
+            &mut control,
+        )
+    })
+    .unwrap();
+    let mut actual = Vec::new();
+    let mut one = [0; 1];
+    loop {
+        let count =
+            allocations::without_allocations(|| encoder.read(repository, &mut one)).unwrap();
+        if count == 0 {
+            return actual;
+        }
+        actual.extend_from_slice(&one[..count]);
+    }
+}
+
+fn check_duplicate_wants(
+    repository: &ValidatedRepository<'_, '_, impl Repository>,
+    blob: ObjectId,
+    version: u8,
+    storage: &mut Storage,
+    bytes: &mut [u8],
+) {
+    let duplicate = body(&[blob, blob], version, true);
+    let mut output = SliceWriter::new(bytes);
+    assert_eq!(
+        http::serve_with_selection_policy(
+            repository,
+            request(&duplicate, version),
+            &mut storage.storage(0),
+            WantOptions::all_visible_reachable(1),
+            &mut output
+        )
+        .map(|_| ()),
+        Err(Error::LimitExceeded)
+    );
+    assert!(output.as_bytes().is_empty());
+    // Explicit leaf blobs consume no structural graph budget, and a retry resets the occurrence counter.
+    http::serve_with_selection_policy(
+        repository,
+        request(&duplicate, version),
+        &mut storage.storage(0),
+        WantOptions::all_visible_reachable(2),
+        &mut output,
+    )
+    .unwrap();
 }
 
 fn v2_pack(mut wire: &[u8]) -> Vec<u8> {

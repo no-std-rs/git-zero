@@ -29,7 +29,7 @@ pub mod validation;
 #[cfg(any(feature = "read", feature = "write"))]
 pub mod zlib;
 
-pub use object::{HexId, Object, ObjectFormat, ObjectId, ObjectInfo, ObjectKind};
+pub use object::{HexId, Object, ObjectDigest, ObjectFormat, ObjectId, ObjectInfo, ObjectKind};
 pub use reader::{ObjectHasher, ObjectReader};
 pub use repository::{
     EmptyRepository, Head, IndexedRepository, ObjectMetadata, RefRepository, Reference, Repository,
@@ -62,4 +62,4 @@ pub enum Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 mod fetch;
-pub use fetch::{BlobFilter, FetchOptions};
+pub use fetch::{BlobFilter, FetchOptions, HistoryPolicy};

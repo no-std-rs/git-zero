@@ -1,5 +1,5 @@
 //! Complete, caller-owned pack materialization with constant-stack indexing.
-use super::{DeltaLimits, EntryKind, Reader, apply_delta};
+use super::{DeltaLimits, Entry, EntryKind, Reader, apply_delta};
 use crate::{
     Error, Object, ObjectId, ObjectKind, Result,
     object::Tree,
@@ -187,60 +187,16 @@ pub fn materialize<'a>(
             if index[i].kind != 0 {
                 continue;
             }
-            let mut base = None;
-            if !matches!(entry.kind(), EntryKind::Object(_)) && remaining != count {
-                for candidate in index.iter() {
-                    base_probes = base_probes.checked_sub(1).ok_or(Error::LimitExceeded)?;
-                    let matches = match entry.kind() {
-                        EntryKind::OffsetDelta { base_offset } => {
-                            candidate.pack_offset == base_offset
-                        }
-                        EntryKind::ReferenceDelta { base_id } => {
-                            candidate.id.as_slice() == base_id.as_bytes()
-                        }
-                        EntryKind::Object(_) => false,
-                    };
-                    if candidate.kind != 0 && matches {
-                        base = Some(*candidate);
-                        break;
-                    }
-                }
-            }
+            let base = if remaining == count {
+                None
+            } else {
+                find_base(entry.kind(), index, &mut base_probes)?
+            };
             if !matches!(entry.kind(), EntryKind::Object(_)) && base.is_none() {
                 continue;
             }
             let (previous, output) = arena.split_at_mut(used);
-            let (object, depth) = if let Some(base) = base {
-                if base.depth >= limits.delta.max_depth {
-                    return Err(Error::LimitExceeded);
-                }
-                let end = base
-                    .offset
-                    .checked_add(base.length)
-                    .ok_or(Error::CorruptPack)?;
-                let body = previous.get(base.offset..end).ok_or(Error::CorruptPack)?;
-                (
-                    apply_delta(
-                        Object {
-                            kind: base.kind()?,
-                            data: body,
-                        },
-                        entry.data(),
-                        output,
-                        limits.delta,
-                    )?,
-                    base.depth + 1,
-                )
-            } else {
-                let EntryKind::Object(kind) = entry.kind() else {
-                    return Err(Error::CorruptPack);
-                };
-                let output = output
-                    .get_mut(..entry.data().len())
-                    .ok_or(Error::BufferTooSmall)?;
-                output.copy_from_slice(entry.data());
-                (Object { kind, data: output }, 0)
-            };
+            let (object, depth) = materialize_entry(&entry, base, previous, output, limits.delta)?;
             if object.kind == ObjectKind::Tree {
                 Tree::parse_with_budget(object.data, &mut tree_bytes)?;
             }
@@ -272,6 +228,68 @@ pub fn materialize<'a>(
         }
     }
     Err(Error::LimitExceeded)
+}
+
+// Charge every inspected slot, including unresolved entries, before matching.
+fn find_base(
+    kind: EntryKind,
+    index: &[MaterializedEntry],
+    probes: &mut u64,
+) -> Result<Option<MaterializedEntry>> {
+    if matches!(kind, EntryKind::Object(_)) {
+        return Ok(None);
+    }
+    for candidate in index {
+        *probes = probes.checked_sub(1).ok_or(Error::LimitExceeded)?;
+        let matches = match kind {
+            EntryKind::OffsetDelta { base_offset } => candidate.pack_offset == base_offset,
+            EntryKind::ReferenceDelta { base_id } => candidate.id.as_slice() == base_id.as_bytes(),
+            EntryKind::Object(_) => false,
+        };
+        if candidate.kind != 0 && matches {
+            return Ok(Some(*candidate));
+        }
+    }
+    Ok(None)
+}
+
+// Prior bodies and the destination are disjoint regions of the caller's arena.
+fn materialize_entry<'out>(
+    entry: &Entry<'_>,
+    base: Option<MaterializedEntry>,
+    previous: &[u8],
+    output: &'out mut [u8],
+    limits: DeltaLimits,
+) -> Result<(Object<'out>, u32)> {
+    if let Some(base) = base {
+        if base.depth >= limits.max_depth {
+            return Err(Error::LimitExceeded);
+        }
+        let end = base
+            .offset
+            .checked_add(base.length)
+            .ok_or(Error::CorruptPack)?;
+        let body = previous.get(base.offset..end).ok_or(Error::CorruptPack)?;
+        let object = apply_delta(
+            Object {
+                kind: base.kind()?,
+                data: body,
+            },
+            entry.data(),
+            output,
+            limits,
+        )?;
+        Ok((object, base.depth + 1))
+    } else {
+        let EntryKind::Object(kind) = entry.kind() else {
+            return Err(Error::CorruptPack);
+        };
+        let output = output
+            .get_mut(..entry.data().len())
+            .ok_or(Error::BufferTooSmall)?;
+        output.copy_from_slice(entry.data());
+        Ok((Object { kind, data: output }, 0))
+    }
 }
 
 fn sort_index(index: &mut [MaterializedEntry]) {

@@ -141,3 +141,17 @@ the policy-aware uncached API. Its shared preparation rechecks the grant and
 want-occurrence cap before any callback/cache access, including a warmed hit.
 The original selected-pack hook remains strict. Neither cached bytes nor a
 client capability can enable a host policy.
+
+The opt-in `receive` module implements receive-pack control framing,
+advertisements and report-status/v2 replies without `std` or allocation.
+`ControlDecoder` borrows one packet buffer and emits commands, shallow boundaries
+and negotiated push options as input arrives; the pack suffix is never consumed.
+All control bytes, command counts, shallow IDs and options have explicit budgets.
+Raw ref names preserve non-UTF-8 Git bytes. SHA-1 and SHA-256 are supported.
+
+The host advertises only capabilities it implements, authenticates the request,
+stages commands/objects, resolves deltas and validates graph/ref updates before
+publishing. `atomic` requires an authoritative all-ref transaction. `Report`
+encodes the actual publication result, and `write_progress` can send sideband
+messages beforehand without acknowledging success. HTTP framing and storage are
+host operations. Existing read-only routing does not enable pushes implicitly.

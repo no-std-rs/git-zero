@@ -119,7 +119,8 @@ fn arguments(mut bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
 }
 
 pub(crate) struct Refs<'a> {
-    args: &'a [u8],
+    prefixes: [&'a [u8]; 256],
+    prefix_count: usize,
     symrefs: bool,
     peel: bool,
     unborn: bool,
@@ -142,7 +143,8 @@ fn attribute<'a>(marker: &'a [u8], value: Option<&'a [u8]>) -> [&'a [u8]; 2] {
 impl<'a> Refs<'a> {
     pub fn parse(args: &'a [u8]) -> Result<Self> {
         let mut refs = Self {
-            args,
+            prefixes: [b""; 256],
+            prefix_count: 0,
             symrefs: false,
             peel: false,
             unborn: false,
@@ -152,28 +154,55 @@ impl<'a> Refs<'a> {
                 b"symrefs" => refs.symrefs = true,
                 b"peel" => refs.peel = true,
                 b"unborn" => refs.unborn = true,
-                _ if arg.starts_with(b"ref-prefix ") && !arg.contains(&0) => {}
+                _ if arg.starts_with(b"ref-prefix ") && !arg.contains(&0) => {
+                    refs.prefix(&arg[b"ref-prefix ".len()..])?;
+                }
                 _ => return Err(Error::Unsupported),
             }
         }
         Ok(refs)
     }
 
-    fn matches(&self, name: &str) -> bool {
-        let mut prefixes = arguments(self.args)
-            .filter_map(|arg| arg.strip_prefix(b"ref-prefix "))
-            .peekable();
-        prefixes.peek().is_none() || prefixes.any(|prefix| name.as_bytes().starts_with(prefix))
+    fn matches(&self, name: &[u8]) -> bool {
+        let prefixes = &self.prefixes[..self.prefix_count];
+        let end = prefixes.partition_point(|prefix| *prefix <= name);
+        prefixes.is_empty() || (end > 0 && name.starts_with(prefixes[end - 1]))
     }
 
-    fn write_ref(
+    // Keep disjoint prefixes in byte order. Duplicate and contained arguments
+    // consume no slots, and each catalog reference needs one binary lookup.
+    fn prefix(&mut self, prefix: &'a [u8]) -> Result<()> {
+        let index = match self.prefixes[..self.prefix_count].binary_search(&prefix) {
+            Ok(_) => return Ok(()),
+            Err(index) => index,
+        };
+        if index > 0 && prefix.starts_with(self.prefixes[index - 1]) {
+            return Ok(());
+        }
+        let end = index
+            + self.prefixes[index..self.prefix_count]
+                .partition_point(|existing| existing.starts_with(prefix));
+        let retained = self.prefix_count - (end - index);
+        if retained == self.prefixes.len() {
+            return Err(Error::LimitExceeded);
+        }
+        self.prefixes.copy_within(end..self.prefix_count, index + 1);
+        self.prefixes[index] = prefix;
+        self.prefix_count = retained + 1;
+        Ok(())
+    }
+
+    pub(crate) fn write_ref(
         &self,
         id: Option<ObjectId>,
-        name: &str,
-        symbolic: Option<&str>,
+        name: &[u8],
+        symbolic: Option<&[u8]>,
         peeled: Option<ObjectId>,
         output: &mut impl Write,
     ) -> Result<()> {
+        if id.is_none() && !(self.unborn && self.symrefs) {
+            return Ok(());
+        }
         if !self.matches(name) {
             return Ok(());
         }
@@ -182,10 +211,8 @@ impl<'a> Refs<'a> {
             .as_ref()
             .map_or(b"unborn".as_slice(), |hex| hex.as_ref());
         let peeled_hex = peeled.filter(|_| self.peel).map(|id| id.to_hex());
-        let [symbolic_marker, symbolic] = attribute(
-            b" symref-target:",
-            symbolic.filter(|_| self.symrefs).map(str::as_bytes),
-        );
+        let [symbolic_marker, symbolic] =
+            attribute(b" symref-target:", symbolic.filter(|_| self.symrefs));
         let [peeled_marker, peeled] =
             attribute(b" peeled:", peeled_hex.as_ref().map(|hex| hex.as_ref()));
         pktline::write_parts(
@@ -193,7 +220,7 @@ impl<'a> Refs<'a> {
             &[
                 id,
                 b" ",
-                name.as_bytes(),
+                name,
                 symbolic_marker,
                 symbolic,
                 peeled_marker,
@@ -221,7 +248,7 @@ impl<'a> Refs<'a> {
                 Head::Symbolic { target, .. } => Some(resolve_reference(repository, target)?.0),
                 _ => head.target(),
             };
-            self.write_ref(head.id(), "HEAD", target, None, output)?;
+            self.write_ref(head.id(), b"HEAD", target.map(str::as_bytes), None, output)?;
         }
         for index in 0..repository.reference_count() {
             let name = repository
@@ -233,8 +260,8 @@ impl<'a> Refs<'a> {
                 .transpose()?;
             self.write_ref(
                 repository.reference_id(index),
-                name,
-                symbolic,
+                name.as_bytes(),
+                symbolic.map(str::as_bytes),
                 repository.reference_peeled(index),
                 output,
             )?;
@@ -246,6 +273,7 @@ impl<'a> Refs<'a> {
 pub(crate) struct Fetch {
     pub done: bool,
     pub include_tags: bool,
+    pub ofs_delta: bool,
 }
 
 impl Fetch {
@@ -258,6 +286,7 @@ impl Fetch {
         let mut fetch = Self {
             done: false,
             include_tags: false,
+            ofs_delta: false,
         };
         let mut wanted = false;
         for arg in arguments(args) {
@@ -274,8 +303,9 @@ impl Fetch {
                 (b"deepen-relative", None) if !extensions.options.deepen_relative => {
                     extensions.options.deepen_relative = true;
                 }
-                // Full, non-delta packs also satisfy thin-pack/ofs-delta requests.
-                (b"thin-pack" | b"ofs-delta" | b"no-progress", None) => {}
+                (b"ofs-delta", None) => fetch.ofs_delta = true,
+                // Full packs also satisfy thin-pack requests.
+                (b"thin-pack" | b"no-progress", None) => {}
                 _ => extensions.argument(arg, format)?,
             }
         }
@@ -285,25 +315,4 @@ impl Fetch {
         extensions.require_filter_capability(true)?;
         Ok(fetch)
     }
-}
-
-pub(crate) fn acknowledge(
-    done: bool,
-    common: impl Iterator<Item = Result<ObjectId>>,
-    output: &mut impl Write,
-) -> Result<()> {
-    if done {
-        return pktline::write(output, b"packfile\n");
-    }
-    pktline::write(output, b"acknowledgments\n")?;
-    let mut known = false;
-    for id in common {
-        pktline::write_parts(output, &[b"ACK ", &id?.to_hex(), b"\n"])?;
-        known = true;
-    }
-    if !known {
-        pktline::write(output, b"NAK\n")?
-    }
-    // Wait for done; never claim an early sufficient cut point.
-    output.write_all(b"0000")
 }

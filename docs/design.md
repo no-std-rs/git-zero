@@ -76,6 +76,122 @@ async snapshot persistence, but no complete-pack KV/R2 cache integration or
 deployed performance measurements. Server parity is still incomplete; further
 client and receive-pack work follows its completion gate.
 
+The repository host uses its own codec by default at
+`examples/repository-host/cloudflare/wrangler.toml`. Its Rust Wasm
+module has fixed memory and no allocator/imports. Runtime glue streams incoming
+packs into 8 MiB authenticated R2 chunks and records private object metadata in
+SQLite. Rust resolves delta ranges, hashes canonical objects and scans typed
+graph links before a SQLite transaction publishes refs. The catalog stays in
+place when published; refs and stage visibility change atomically. No Git
+executable or external codec service participates in this path.
+
+Chunk ownership is recorded before R2 writes. Failed intake reclaims its claims
+and deletes bytes only when no other stage owns the same chunk. Deletion keeps
+its retry record until R2 confirms it; alarms and cold-start recovery finish
+interrupted cleanup. Test-retained quarantines can expire through the private
+test API; production jobs never retain an unpublished verified pack indefinitely.
+
+From that Cloudflare directory, `npm ci` and `npm run test:streamed` build the
+Wasm module and run actual Wrangler R2/SQLite tests. Tests include ordinary Git
+push clients in SHA-1/SHA-256, thin incremental packs, protocol preference 0/1/2,
+atomic updates, push options, deletion, HTTP chunking, concurrent stale updates,
+invalid graphs and cold restarts. The config defaults to `TEST_MODE=false`;
+private fixture endpoints require both test mode and authentication. Public
+receive requests use `/<repository>.git/info/refs?service=git-receive-pack` and
+`/<repository>.git/git-receive-pack`, with `HOST_TOKEN` supplied as a secret.
+
+The own-codec path also serves full clone/fetch in protocols 0/1/2, including
+SHA-256, raw ref prefixes, symbolic HEAD, annotated-tag peeling, gzip control
+bodies and incremental negotiation. The existing Rust request parsers and ACK
+encoder serve both repository adapters and the external catalog. A fixed 4 MiB
+control arena keeps validated packet storage immutable while iterating wants and
+haves. Total Wasm linear memory is bounded at 6 MiB; object bodies remain outside
+that arena and the runtime caches remain bounded at 48 MiB.
+Each byte cache also has an independent 8,192-entry cap, so empty or tiny
+representations cannot exhaust memory through map metadata.
+
+Fetch selection uses SQLite queues, not repository-sized JS arrays. Compressed
+entries are copied in physical pack order; OFS deltas become REF deltas. When a
+base is outside the selected pack, Rust reconstructs and streams a canonical
+stored-block zlib representation instead. This keeps a full pack independent of
+the client's existing bases. Real Git clones, fetches, checkouts and strict fsck
+pass through Wrangler for both formats and all three protocol versions.
+
+For a cold full fetch, publication records which packs contain only new,
+distinct object IDs. If these disjoint packs cover the complete published
+catalog, fetch copies their complete entry regions instead of selecting every
+object. Rust writes the combined count and checksum; shifting an entire region
+preserves its internal OFS distances, and catalog coverage proves that every
+REF base is included. A single covering pack streams unchanged. This path is
+available only without known haves or shallow/filter extensions. It can include
+extra published objects from the same repository: `HOST_TOKEN` grants access to
+that entire repository. Otherwise fetch uses the per-object selection above.
+
+The storage path supports depth-limited clone, relative deepening, unshallowing,
+and `blob:none`/`blob:limit` filters. Rust shares history and blob decisions with
+the existing in-memory selector; SQLite stores the work frontier, shortest
+commit distances and shallow changes. Depth requests resend their bounded
+closure so shallow haves cannot hide requested history. Filtered objects do not
+qualify as compressed delta bases in the outgoing pack. Explicit blob wants
+remain included, supporting ordinary partial-clone checkout.
+
+`HOST_TOKEN` grants the namespace's whole published catalog. The host advertises
+reachable-object retrieval for v0/v1 clients and authorizes wants through the
+published OID index; private quarantines stay outside that index's visibility.
+Receive preflights every created ref against full upload capabilities, and
+branches against the larger unborn symbolic-HEAD carrier as well. This includes
+discovery after deletion of the last branch. Tests exercise exact packet limits
+with the negotiated capability set, including long tag-only catalogs.
+
+The host has not passed a full Linux push through Wrangler. Linux-scale metadata storage,
+ingress beyond Cloudflare request limits and measured hosting cost remain open;
+component pack-decoder measurements are not end-to-end hosting results. The
+former native Git gateway and its local service-registration API are retired.
+Verification in this work is local only; no live Cloudflare deployment is
+requested or treated as a completion gate.
+
+The same modules also run directly under the pinned workerd binary using
+`examples/repository-host/cloudflare/workerd.capnp`. This deployment candidate
+uses persistent SQLite on the host and signed R2 S3 requests for opaque chunks;
+it does not run a Git executable. The same real-Git round-trip suite passes
+against direct workerd, with an independent S3 signature verifier and byte store.
+Wrangler tests continue to exercise the native R2/SQLite bindings separately.
+
+Build with `npm ci && npm run build:streamed`, then set `HOST_TOKEN`,
+`R2_S3_URL` (the full bucket URL), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and
+an absolute `GIT_ZERO_STATE_DIR`. `npm run serve:standalone` starts workerd on
+loopback, with test routes disabled. A systemd unit and streaming TLS proxy
+example are provided in that directory. The state directory, namespace key in
+the config and R2 bucket together identify the durable repository; preserve them
+across restarts and backups. workerd's disk-backed Durable Object API is
+experimental, so this candidate pins the runtime through the lockfile and still
+requires Linux-scale and live-environment validation before shipping.
+
+Plain blobs need no second reconstruction after the intake decoder has hashed
+their complete bodies; they have no structural links. Small authenticated blob
+bodies also warm the bounded base cache directly. Tree-name uniqueness rows
+are scratch for one tree and are removed only after its full scanner and
+canonical digest succeed; typed graph edges remain available to fetch planning.
+
+For a reviewable scale run, use `node scripts/benchmark.mjs --source REPO
+--work-dir NEW_DIRECTORY` from the Cloudflare directory. The default runtime
+freezes the current bundle and starts actual Wrangler R2/SQLite through its
+pinned API, with file watching and the shared dev registry disabled. Both
+runtimes start from a separate snapshot directory before source traversal, and
+cold restarts use that same snapshot. Ordinary Git pushes a complete source,
+clones it, pushes one new commit without changing the source branch, restarts
+the host and fetches the increment. Strict fsck diagnostics must match the
+source, preserving historical badFilemode warnings. The report records phase
+times, application SQL/R2 counters, database size and local server process-tree
+CPU/RSS samples. These process samples include runtime/development services;
+they are not Cloudflare billing CPU. `--runtime workerd` measures direct workerd
+with the independently signed local S3 byte fixture instead.
+The diagnostic comparison streams the selected source closure, retaining only
+the diagnostic IDs; unreachable source tags/objects do not create false clone
+failures. `--baseline-report REPORT` can reuse a successful native source fsck
+from the same repository, revision and object format. Server push/clone/fetch
+still run against fresh storage, and the source visibility walk runs again.
+
 ## Workspace
 
 | Location | Responsibility |

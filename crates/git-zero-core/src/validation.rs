@@ -2,8 +2,8 @@
 use core::cmp::Ordering;
 
 use crate::{
-    BlobFilter, Error, FetchOptions, Head, Object, ObjectFormat, ObjectHasher, ObjectId,
-    ObjectInfo, ObjectKind, ObjectReader, Repository, Result,
+    BlobFilter, Error, FetchOptions, Head, HistoryPolicy as History, Object, ObjectFormat,
+    ObjectHasher, ObjectId, ObjectInfo, ObjectKind, ObjectReader, Repository, Result,
     names::{cmp_tree_names, validate_name},
     repository::validate_refs,
 };
@@ -16,6 +16,9 @@ pub struct ValidationMetadata {
     reached: bool,
     checked: bool,
     excluded: bool,
+    forced: bool,
+    wanted: bool,
+    // Commit distance, or one plus tree distance during tree-filter selection.
     depth: u32,
     client_shallow: bool,
     shallow: bool,
@@ -27,6 +30,8 @@ impl ValidationMetadata {
         self.checked = false;
         self.depth = u32::MAX;
         self.shallow = false;
+        self.forced = false;
+        self.wanted = false;
     }
 
     /// A reached commit at a requested history boundary (including root commits).
@@ -38,13 +43,6 @@ impl ValidationMetadata {
     pub fn is_unshallow(&self) -> bool {
         self.reached && self.client_shallow && !self.shallow
     }
-}
-
-#[derive(Clone, Copy, Default)]
-struct History {
-    limit: Option<u32>,
-    client: bool,
-    distance: bool,
 }
 
 /// Traversal budget and annotated-tag policy for a selected fetch pack.
@@ -136,6 +134,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             (read_scratch, parse_scratch),
             None,
             History::default(),
+            BlobFilter::All,
         )?;
         if objects
             .iter()
@@ -325,88 +324,33 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         if work.len() < count || selected.len() < count {
             return Err(Error::BufferTooSmall);
         }
-        let work = &mut work[..count];
-        work.copy_from_slice(self.objects);
-        for slot in work.iter_mut() {
-            let object = slot.as_mut().expect("validated metadata");
-            object.reset_walk();
-            object.client_shallow = false;
-        }
-        let mut has_shallow = false;
-        for id in shallow {
-            let index = find(work, self.by_id, id?).ok_or(Error::InvalidRequest)?;
-            let object = work[index].as_mut().expect("validated metadata");
-            if object.info.kind != ObjectKind::Commit {
-                return Err(Error::InvalidRequest);
-            }
-            object.client_shallow = true;
-            has_shallow = true;
-        }
+        let mut selection = Selection {
+            repository: self,
+            work: &mut work[..count],
+            scratch: (read_scratch, parse_scratch),
+            remaining: graph_read_limit,
+            filter: BlobFilter::All,
+        };
+        let has_shallow = selection.prepare(shallow)?;
         // A relative request from a full client is an ordinary incremental
         // fetch. Its depth cannot expose missing history behind a boundary.
-        let deepening = fetch.depth.is_some() && (!fetch.deepen_relative || has_shallow);
-        for id in common {
-            let id = id?;
-            let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-            if !deepening {
-                reach(work, self.by_id, id, metadata(work, index).info.kind)?;
-            }
-        }
-        let mut remaining = graph_read_limit;
-        walk(
-            self,
-            work,
-            self.by_id,
-            (read_scratch, parse_scratch),
-            Some(&mut remaining),
-            History {
-                limit: None,
-                client: true,
-                distance: false,
-            },
-        )?;
-        for slot in work.iter_mut() {
-            let object = slot.as_mut().expect("validated metadata");
-            object.excluded = object.reached;
-            object.reset_walk();
-        }
-        let depth = match fetch.depth.filter(|_| deepening) {
-            Some(depth) if fetch.deepen_relative => self.relative_depth(
-                roots,
-                work,
-                (read_scratch, parse_scratch),
-                &mut remaining,
-                depth,
-            )?,
-            depth => depth,
+        let deepening = fetch.deepens_history(has_shallow);
+        selection.exclude_common(common, deepening)?;
+        let nearest = match fetch.depth.filter(|_| deepening) {
+            Some(_) if fetch.deepen_relative => selection.nearest_boundary_depth(roots)?,
+            _ => None,
         };
-        let history = History {
-            limit: depth,
-            client: fetch.depth.is_none(),
-            distance: false,
-        };
-        self.walk_wants(
-            roots,
-            work,
-            (read_scratch, parse_scratch),
-            &mut remaining,
-            history,
-        )?;
-        filter_blobs(work, roots, fetch.filter);
+        let history = fetch.history(has_shallow, nearest)?;
+        selection.filter = fetch.filter;
+        selection.walk_wants(roots, history)?;
+        filter_objects(selection.work, fetch.filter);
         if include_tags {
-            self.include_matching_tags(work)?;
-            walk(
-                self,
-                work,
-                self.by_id,
-                (read_scratch, parse_scratch),
-                Some(&mut remaining),
-                history,
-            )?;
-            filter_blobs(work, roots, fetch.filter);
+            selection.include_matching_tags()?;
+            selection.walk(history)?;
+            filter_objects(selection.work, fetch.filter);
         }
         let mut length = 0;
-        for (index, slot) in work.iter().enumerate() {
+        for (index, slot) in selection.work.iter().enumerate() {
             if slot.expect("initialized metadata").reached {
                 selected[length] = index;
                 length += 1;
@@ -414,73 +358,142 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         }
         Ok(&selected[..length])
     }
+}
 
-    fn relative_depth(
-        &self,
-        roots: &[ObjectId],
-        work: &mut [Option<ValidationMetadata>],
-        scratch: (&mut [u8], &mut [u8]),
-        remaining: &mut u64,
-        depth: u32,
-    ) -> Result<Option<u32>> {
+// One selection owns its caller buffers and a single shared read budget.
+// History, boundary probing and wanted/tag walks all use this same context.
+struct Selection<'request, 'index, 'repo, R: Repository + ?Sized> {
+    repository: &'request ValidatedRepository<'index, 'repo, R>,
+    work: &'request mut [Option<ValidationMetadata>],
+    scratch: (&'request mut [u8], &'request mut [u8]),
+    remaining: u64,
+    filter: BlobFilter,
+}
+
+impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
+    fn walk(&mut self, history: History) -> Result<()> {
+        walk(
+            self.repository,
+            self.work,
+            self.repository.by_id,
+            (&mut *self.scratch.0, &mut *self.scratch.1),
+            Some(&mut self.remaining),
+            history,
+            self.filter,
+        )
+    }
+
+    fn prepare(&mut self, shallow: impl IntoIterator<Item = Result<ObjectId>>) -> Result<bool> {
+        let work = &mut *self.work;
+        work.copy_from_slice(self.repository.objects);
+        for slot in work.iter_mut() {
+            let object = slot.as_mut().expect("validated metadata");
+            object.reset_walk();
+            object.client_shallow = false;
+        }
+        let mut has_shallow = false;
+        for id in shallow {
+            let index = find(work, self.repository.by_id, id?).ok_or(Error::InvalidRequest)?;
+            let object = work[index].as_mut().expect("validated metadata");
+            if object.info.kind != ObjectKind::Commit {
+                return Err(Error::InvalidRequest);
+            }
+            object.client_shallow = true;
+            has_shallow = true;
+        }
+        Ok(has_shallow)
+    }
+
+    fn exclude_common(
+        &mut self,
+        common: impl IntoIterator<Item = Result<ObjectId>>,
+        deepening: bool,
+    ) -> Result<()> {
+        let work = &mut *self.work;
+        for id in common {
+            let id = id?;
+            let index = find(work, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
+            if !deepening {
+                reach(
+                    work,
+                    self.repository.by_id,
+                    id,
+                    metadata(work, index).info.kind,
+                )?;
+            }
+        }
+        self.walk(History {
+            limit: None,
+            client: true,
+            distance: false,
+        })?;
+        for slot in self.work.iter_mut() {
+            let object = slot.as_mut().expect("validated metadata");
+            object.excluded = object.reached;
+            object.reset_walk();
+        }
+        Ok(())
+    }
+
+    fn nearest_boundary_depth(&mut self, roots: &[ObjectId]) -> Result<Option<u32>> {
         // Git 2.55 measures the nearest client boundary from the wants.
         // Unrelated shallow branches cannot influence or extend this cut.
-        self.walk_wants(
-            roots,
-            work,
-            scratch,
-            remaining,
-            History {
-                limit: None,
-                client: true,
-                distance: true,
-            },
-        )?;
+        self.walk_wants(roots, History::boundary_probe())?;
         // Git 2.55 get_shallow_commits returns no new boundaries when none
         // match. Unlike Git 2.54, this leaves wanted history complete.
-        let limit = work
+        let limit = self
+            .work
             .iter()
             .flatten()
             .filter(|object| object.reached && object.client_shallow)
             .map(|object| object.depth)
-            .min()
-            .map(|boundary| boundary.checked_add(depth).ok_or(Error::LimitExceeded))
-            .transpose()?;
-        for slot in work.iter_mut() {
+            .min();
+        for slot in self.work.iter_mut() {
             slot.as_mut().expect("validated metadata").reset_walk();
         }
         Ok(limit)
     }
 
-    fn walk_wants(
-        &self,
-        roots: &[ObjectId],
-        work: &mut [Option<ValidationMetadata>],
-        scratch: (&mut [u8], &mut [u8]),
-        remaining: &mut u64,
-        history: History,
-    ) -> Result<()> {
+    fn walk_wants(&mut self, roots: &[ObjectId], history: History) -> Result<()> {
+        let work = &mut *self.work;
         for &id in roots {
-            let index = find(work, self.by_id, id).ok_or(Error::ObjectNotFound)?;
-            reach(work, self.by_id, id, metadata(work, index).info.kind)?;
+            let index = find(work, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
+            work[index].as_mut().expect("validated metadata").wanted = true;
+            reach_at(
+                work,
+                self.repository.by_id,
+                id,
+                metadata(work, index).info.kind,
+                1,
+                true,
+            )?;
         }
-        walk(self, work, self.by_id, scratch, Some(remaining), history)
+        self.walk(history)
     }
 
-    fn include_matching_tags(&self, work: &mut [Option<ValidationMetadata>]) -> Result<()> {
-        for reference in 0..self.reference_count() {
-            let Some(peeled) = self.reference_peeled(reference) else {
+    fn include_matching_tags(&mut self) -> Result<()> {
+        let work = &mut *self.work;
+        for reference in 0..self.repository.reference_count() {
+            let Some(peeled) = self.repository.reference_peeled(reference) else {
                 continue;
             };
-            let index = find(work, self.by_id, peeled).ok_or(Error::ObjectNotFound)?;
+            let index = find(work, self.repository.by_id, peeled).ok_or(Error::ObjectNotFound)?;
             if metadata(work, index).reached {
-                let id = self.reference_id(reference).ok_or(Error::InvalidObject)?;
+                let id = self
+                    .repository
+                    .reference_id(reference)
+                    .ok_or(Error::InvalidObject)?;
+                // include-tag adds the annotation outside the object filter.
+                // Its complete tag chain must survive the second policy pass.
+                let tag = find(work, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
+                work[tag].as_mut().expect("validated metadata").wanted = true;
                 reach_at(
                     work,
-                    self.by_id,
+                    self.repository.by_id,
                     id,
                     ObjectKind::Tag,
                     metadata(work, index).depth,
+                    false,
                 )?;
             }
         }
@@ -488,22 +501,13 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
     }
 }
 
-fn filter_blobs(
-    objects: &mut [Option<ValidationMetadata>],
-    roots: &[ObjectId],
-    filter: BlobFilter,
-) {
-    let limit = match filter {
-        BlobFilter::All => return,
-        BlobFilter::None => 0,
-        BlobFilter::Limit(limit) => limit,
-    };
+fn filter_objects(objects: &mut [Option<ValidationMetadata>], filter: BlobFilter) {
+    if matches!(filter, BlobFilter::All) {
+        return;
+    }
     for slot in objects {
         let object = slot.as_mut().expect("validated metadata");
-        if object.info.kind == ObjectKind::Blob
-            && !roots.contains(&object.id)
-            && object.info.size >= limit
-        {
+        if !filter.includes_at(object.info, object.wanted, object.depth.saturating_sub(1)) {
             object.reached = false;
         }
     }
@@ -584,6 +588,8 @@ fn initialize_index(
             reached: false,
             checked: false,
             excluded: false,
+            forced: false,
+            wanted: false,
             depth: u32::MAX,
             client_shallow: false,
             shallow: false,
@@ -607,6 +613,7 @@ fn walk(
     scratch: (&mut [u8], &mut [u8]),
     mut budget: Option<&mut u64>,
     history: History,
+    filter: BlobFilter,
 ) -> Result<()> {
     let (read_scratch, parse_scratch) = scratch;
     while let Some(index) = objects.iter().position(|slot| {
@@ -617,33 +624,55 @@ fn walk(
             .as_mut()
             .expect("initialized metadata")
             .checked = true;
-        let mut body = Body::budgeted(repository, index, read_scratch, budget.as_deref_mut())?;
         let object = *metadata(objects, index);
+        if object.info.kind == ObjectKind::Tree
+            && !filter.follows_tree(object.depth.saturating_sub(1))
+        {
+            continue;
+        }
+        let mut body = Body::budgeted(repository, index, read_scratch, budget.as_deref_mut())?;
         match object.info.kind {
             ObjectKind::Commit => {
-                let stop = history.limit.is_some_and(|limit| object.depth >= limit)
-                    || (history.client && object.client_shallow);
+                let stop = !history.follows_parents(object.depth, object.client_shallow);
                 validate_commit(
                     &mut body,
                     parse_scratch,
                     objects,
                     by_id,
-                    (!stop).then_some(if history.limit.is_some() || history.distance {
-                        object.depth.saturating_add(1)
-                    } else {
-                        1
-                    }),
+                    (!stop).then_some(history.parent_depth(object.depth)),
                 )?;
                 objects[index]
                     .as_mut()
                     .expect("initialized metadata")
                     .shallow = stop;
             }
-            ObjectKind::Tree => validate_tree(&mut body, parse_scratch, objects, by_id)?,
-            ObjectKind::Blob => {}
-            ObjectKind::Tag => {
-                validate_tag(&mut body, parse_scratch, objects, by_id, object.depth)?
+            ObjectKind::Tree => {
+                let child_depth = if matches!(filter, BlobFilter::TreeDepth(_))
+                    && !(object.wanted && object.forced)
+                {
+                    object.depth.saturating_add(1)
+                } else {
+                    1
+                };
+                validate_tree(
+                    &mut body,
+                    parse_scratch,
+                    objects,
+                    by_id,
+                    object.forced,
+                    child_depth,
+                )?
             }
+            ObjectKind::Blob => {}
+            ObjectKind::Tag => validate_tag(
+                &mut body,
+                parse_scratch,
+                objects,
+                by_id,
+                object.depth,
+                object.forced,
+                object.wanted,
+            )?,
         }
     }
     Ok(())
@@ -728,7 +757,7 @@ fn reach(
     id: ObjectId,
     kind: ObjectKind,
 ) -> Result<()> {
-    reach_at(objects, by_id, id, kind, 1)
+    reach_at(objects, by_id, id, kind, 1, false)
 }
 
 fn reach_at(
@@ -737,6 +766,7 @@ fn reach_at(
     id: ObjectId,
     kind: ObjectKind,
     depth: u32,
+    forced: bool,
 ) -> Result<()> {
     if id.is_zero() {
         return Err(Error::InvalidObject);
@@ -746,10 +776,18 @@ fn reach_at(
     if object.info.kind != kind {
         return Err(Error::InvalidObject);
     }
+    // Explicit non-commit wants retain their tree/tag closure even when a
+    // reported commit references it. Common commits still cut tag history.
+    let forced = forced && kind != ObjectKind::Commit;
+    let newly_forced = forced && !object.forced;
+    object.forced |= forced;
+    if forced {
+        object.excluded = false;
+    }
     if !object.excluded {
         object.reached = true;
-        if depth < object.depth {
-            object.depth = depth;
+        if depth < object.depth || newly_forced {
+            object.depth = object.depth.min(depth);
             object.checked = false;
         }
     }
@@ -878,7 +916,7 @@ fn validate_commit(
     while line.starts_with(b"parent ") {
         let id = link(line, b"parent ", format)?;
         if let Some(depth) = parent_depth {
-            reach_at(objects, by_id, id, ObjectKind::Commit, depth)?;
+            reach_at(objects, by_id, id, ObjectKind::Commit, depth, false)?;
         }
         line = body.line(scratch)?;
     }
@@ -905,13 +943,7 @@ fn tag_target(
     if id.is_zero() {
         return Err(Error::InvalidObject);
     }
-    let kind = match body.line(scratch)? {
-        b"type commit" => ObjectKind::Commit,
-        b"type tree" => ObjectKind::Tree,
-        b"type blob" => ObjectKind::Blob,
-        b"type tag" => ObjectKind::Tag,
-        _ => return Err(Error::InvalidObject),
-    };
+    let kind = ObjectKind::from_tag_header(body.line(scratch)?)?;
     Ok((id, kind))
 }
 
@@ -921,9 +953,15 @@ fn validate_tag(
     objects: &mut [Option<ValidationMetadata>],
     by_id: &[usize],
     depth: u32,
+    forced: bool,
+    wanted: bool,
 ) -> Result<()> {
     let (id, kind) = tag_target(body, scratch)?;
-    reach_at(objects, by_id, id, kind, depth)?;
+    reach_at(objects, by_id, id, kind, depth, forced)?;
+    if wanted {
+        let index = find(objects, by_id, id).ok_or(Error::ObjectNotFound)?;
+        objects[index].as_mut().expect("validated metadata").wanted = true;
+    }
     let line = body.line(scratch)?;
     if !line.starts_with(b"tag ") || line.len() == b"tag ".len() {
         return Err(Error::InvalidObject);
@@ -1002,6 +1040,8 @@ fn validate_tree(
     scratch: &mut [u8],
     objects: &mut [Option<ValidationMetadata>],
     by_id: &[usize],
+    forced: bool,
+    child_depth: u32,
 ) -> Result<()> {
     let capacity = scratch.len() / 2;
     let (previous, rest) = scratch.split_at_mut(capacity);
@@ -1025,7 +1065,7 @@ fn validate_tree(
             }
         }
         if kind != ObjectKind::Commit {
-            reach(objects, by_id, id, kind)?;
+            reach_at(objects, by_id, id, kind, child_depth, forced)?;
         }
         // A file "foo", file "foo.bar", directory "foo" is sorted but
         // still duplicates a name. Reread earlier entries instead of keeping

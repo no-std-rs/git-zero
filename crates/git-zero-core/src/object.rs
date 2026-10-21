@@ -9,6 +9,11 @@ mod parse;
 #[cfg(feature = "read")]
 pub use parse::{Commit, Tag, Tree, TreeEntries, TreeEntry};
 
+#[cfg(feature = "read")]
+mod links;
+#[cfg(feature = "read")]
+pub use links::{LinkDecoder, LinkLimits, LinkProgress, LinkRelation, LinkStatus};
+
 /// One repository's object/hash encoding. Object formats cannot be mixed.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash)]
 pub enum ObjectFormat {
@@ -51,11 +56,43 @@ impl ObjectFormat {
             Self::Sha256 => Hash::Sha256(Sha256::new()),
         }
     }
+    pub(crate) fn checked_hash(self) -> CheckedHash {
+        match self {
+            Self::Sha1 => CheckedHash::Sha1(sha1_checked::Sha1::default()),
+            Self::Sha256 => CheckedHash::Sha256(Sha256::new()),
+        }
+    }
     #[cfg(feature = "read")]
-    pub(crate) fn digest(self, bytes: &[u8]) -> ObjectId {
-        let mut hash = self.hash();
+    pub(crate) fn digest(self, bytes: &[u8]) -> Result<ObjectId> {
+        let mut hash = self.checked_hash();
         hash.update(bytes);
         hash.finish()
+    }
+}
+
+// The collision detector retains its state inline: boxing it would introduce
+// an allocator into object/pack authentication on bare-metal and Wasm targets.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone)]
+pub(crate) enum CheckedHash {
+    Sha1(sha1_checked::Sha1),
+    Sha256(Sha256),
+}
+impl CheckedHash {
+    pub(crate) fn update(&mut self, bytes: &[u8]) {
+        match self {
+            Self::Sha1(hash) => hash.update(bytes),
+            Self::Sha256(hash) => hash.update(bytes),
+        }
+    }
+    pub(crate) fn finish(self) -> Result<ObjectId> {
+        match self {
+            Self::Sha1(hash) => match hash.try_finalize() {
+                sha1_checked::CollisionResult::Ok(digest) => Ok(ObjectId::Sha1(digest.into())),
+                _ => Err(Error::InvalidObject),
+            },
+            Self::Sha256(hash) => Ok(ObjectId::Sha256(hash.finalize().into())),
+        }
     }
 }
 
@@ -196,6 +233,22 @@ impl ObjectKind {
             Self::Tag => "tag",
         }
     }
+
+    #[cfg(feature = "read")]
+    pub(crate) fn from_name(name: &[u8]) -> Result<Self> {
+        match name {
+            b"commit" => Ok(Self::Commit),
+            b"tree" => Ok(Self::Tree),
+            b"blob" => Ok(Self::Blob),
+            b"tag" => Ok(Self::Tag),
+            _ => Err(Error::InvalidObject),
+        }
+    }
+
+    #[cfg(feature = "read")]
+    pub(crate) fn from_tag_header(line: &[u8]) -> Result<Self> {
+        Self::from_name(line.strip_prefix(b"type ").ok_or(Error::InvalidObject)?)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -222,13 +275,7 @@ impl ObjectInfo {
             .iter()
             .position(|&byte| byte == b' ')
             .ok_or(Error::InvalidObject)?;
-        let kind = match &header[..space] {
-            b"commit" => ObjectKind::Commit,
-            b"tree" => ObjectKind::Tree,
-            b"blob" => ObjectKind::Blob,
-            b"tag" => ObjectKind::Tag,
-            _ => return Err(Error::InvalidObject),
-        };
+        let kind = ObjectKind::from_name(&header[..space])?;
         let decimal = &header[space + 1..];
         if decimal.is_empty()
             || decimal.len() > 20
@@ -254,6 +301,49 @@ impl ObjectInfo {
     }
 }
 
+/// Canonical object hashing for chunked or asynchronous storage. Updates are
+/// all-or-nothing; a length mismatch never authenticates a partial object.
+#[derive(Clone)]
+pub struct ObjectDigest {
+    hash: CheckedHash,
+    remaining: u64,
+}
+
+impl ObjectDigest {
+    pub fn new(info: ObjectInfo, format: ObjectFormat) -> Self {
+        let mut hash = format.checked_hash();
+        let mut header = [0; 32];
+        hash.update(
+            info.header(&mut header)
+                .expect("object header fits in 32 bytes"),
+        );
+        Self {
+            hash,
+            remaining: info.size,
+        }
+    }
+
+    pub fn remaining(&self) -> u64 {
+        self.remaining
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) -> Result<()> {
+        if bytes.len() as u64 > self.remaining {
+            return Err(Error::InvalidObject);
+        }
+        self.hash.update(bytes);
+        self.remaining -= bytes.len() as u64;
+        Ok(())
+    }
+
+    pub fn finish(&self) -> Result<ObjectId> {
+        if self.remaining != 0 {
+            return Err(Error::InvalidObject);
+        }
+        self.hash.clone().finish()
+    }
+}
+
 impl<'a> Object<'a> {
     /// Validate already inflated loose bytes before exposing a borrowed body.
     /// Header syntax, exact body length and the expected ID's hash must all match.
@@ -268,7 +358,7 @@ impl<'a> Object<'a> {
             + 1;
         let info = ObjectInfo::from_header(&bytes[..end])?;
         let data = &bytes[end..];
-        if data.len() as u64 != info.size || expected.format().digest(bytes) != expected {
+        if data.len() as u64 != info.size || expected.format().digest(bytes)? != expected {
             return Err(Error::InvalidObject);
         }
         Ok(Self {
@@ -293,14 +383,14 @@ impl<'a> Object<'a> {
     }
 
     pub fn id_with_format(&self, format: ObjectFormat) -> ObjectId {
-        // Largest header: "commit " + 20 decimal digits + NUL on a 64-bit target.
-        let mut storage = [0; 32];
-        let header = self
-            .header(&mut storage)
-            .expect("object header fits in 32 bytes");
+        // This infallible helper computes the conventional ID. Authentication
+        // uses ObjectDigest, whose fallible finish also rejects SHA-1 attacks.
         let mut hash = format.hash();
-        hash.update(header);
+        hash.update(self.header(&mut [0; 32]).expect("object header fits"));
         hash.update(self.data);
         hash.finish()
     }
 }
+
+#[cfg(test)]
+mod collision_tests;

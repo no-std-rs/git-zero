@@ -1,0 +1,199 @@
+import { hex, integer } from "./codec.mjs";
+import { ChunkWriter, blob } from "./storage.mjs";
+import { ObjectSource } from "./source.mjs";
+import { requestBody, decodedBody } from "./body.mjs";
+import { RequestError } from "./errors.mjs";
+
+const EMPTY = new Uint8Array();
+const REPRESENTATION_LIMIT = 1024 * 1024;
+// Four complete records use 60 bindings, below the SQLite binding limit.
+const OBJECT_COLUMNS = "stage,node,wire_kind,packed_size,compressed_offset,wire_base_offset,wire_base_id,kind,size,depth,end_offset,crc,oid,verified,scanned";
+const OBJECT_VALUES = "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
+export class Intake {
+  constructor(store, codec, stage) {
+    this.store = store; this.codec = codec; this.stage = stage;
+    this.source = new ObjectSource(store, codec, stage, { ownedBuffers: true });
+    this.writer = null; this.inPack = false; this.pack = null;
+    this.commands = 0; this.options = 0; this.objects = 0; this.expected = 0;
+    this.pendingObjects = []; this.hasOfs = false; this.hasRefs = false;
+    this.current = null; this.lastEnd = 12; this.eof = false;
+  }
+  flushObjects() {
+    if (!this.pendingObjects.length) return;
+    this.store.exec(`INSERT INTO stage_objects(${OBJECT_COLUMNS}) VALUES${Array(this.pendingObjects.length).fill(OBJECT_VALUES).join(",")}`, ...this.pendingObjects.flat());
+    this.pendingObjects.length = 0;
+  }
+  async event(event, input) {
+    if ((event.tag === 9 || event.tag === 10) && event.written) this.codec.charge(1, event.written);
+    if (this.inPack && event.consumed) await this.writer.write(input.subarray(0, event.consumed));
+    if ((event.tag === 9 || event.tag === 10) && event.written) {
+      if (!this.current) throw new Error("body has no staged object");
+      if (this.current.body) this.current.body.set(event.data, this.current.written);
+      this.current.written += event.written;
+      if (this.current.structural && !this.current.body) this.current.digest = this.source.scan(this.current, event.data, event.tag === 10, true);
+    }
+    const stage = this.stage;
+    switch (event.tag) {
+      case 2:
+        this.store.exec("INSERT OR IGNORE INTO stage_shallow(stage,oid) VALUES(?,?)", stage, hex(event.id)); break;
+      case 3: {
+        const inserted = this.store.exec("INSERT INTO stage_commands(stage,seq,name,old_oid,new_oid,branch,creation,deletion) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(stage,name) DO NOTHING RETURNING seq", stage, this.commands, blob(event.data), hex(event.id), hex(event.other), event.flags & 1, (event.flags >> 1) & 1, (event.flags >> 2) & 1);
+        if (!inserted.length) throw new RequestError("duplicate ref command");
+        this.commands++; break;
+      }
+      case 5:
+        this.store.exec("INSERT INTO stage_options(stage,seq,value) VALUES(?,?,?)", stage, this.options++, blob(event.data)); break;
+      case 6:
+        this.inPack = !!event.flags;
+        this.store.exec("UPDATE stages SET selected=? WHERE id=?", this.codec.receiveCapabilities(), stage);
+        if (this.inPack) this.writer = new ChunkWriter(this.store, stage);
+        break;
+      case 7:
+        this.expected = integer(event.a); break;
+      case 8: {
+        const node = integer(event.a), size = integer(event.b), kind = event.flags;
+        if (kind < 5) this.codec.charge(0, size);
+        this.hasOfs ||= kind === 6;
+        this.hasRefs ||= kind === 7;
+        this.current = { node, size, kind, structural: kind < 5 && kind !== 3, digest: null, written: 0, body: size <= REPRESENTATION_LIMIT ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
+        if (this.current.structural) this.source.beginScan(this.current);
+        this.objects++; break;
+      }
+      case 10: {
+        const current = this.current;
+        if (!current || current.written !== current.size || !!event.flags !== (current.kind < 5)) throw new Error("staged entry metadata differs");
+        const oid = event.flags ? hex(event.id) : null;
+        if (current.structural) {
+          const digest = current.body ? this.source.scanCaptured(current, current.body, true) : current.digest ?? this.source.scan(current, EMPTY, true, true);
+          if (digest !== oid) throw new Error("canonical object hash differs");
+          this.source.finishScan(current);
+        }
+        this.lastEnd = integer(event.a);
+        this.pendingObjects.push([...current.fields, this.lastEnd, integer(event.b), oid, event.flags ? 1 : 0, event.flags ? 1 : 0]);
+        if (this.pendingObjects.length === 4) this.flushObjects();
+        if (current.body) {
+          this.source.seed({ stage, node: current.node, packed_size: current.size }, current.body);
+          if (event.flags) this.source.canonical.put(oid, current.body);
+        }
+        this.current = null; break;
+      }
+      case 11:
+        this.pack = hex(event.id); break;
+      case 12:
+        if (integer(event.a) !== this.commands) throw new Error("command count differs");
+        this.eof = true; this.inPack = false; break;
+    }
+  }
+
+  async decode(request) {
+    this.codec.receiveInit();
+    // Allow gzip framing overhead while Rust retains its decoded byte quotas.
+    const encodedLimit = 2n * (BigInt(this.codec.limits.maxPackBytes) + BigInt(this.codec.limits.maxControlBytes));
+    for await (const bytes of requestBody(decodedBody(request, encodedLimit, "receive bytes"))) {
+      let offset = 0;
+      while (offset < bytes.length) {
+        const input = bytes.subarray(offset, Math.min(offset + 65536, bytes.length));
+        const event = this.codec.receiveStep(input, false);
+        await this.event(event, input); offset += event.consumed;
+        if (event.consumed === 0 && event.written === 0 && event.tag === 1) throw new Error("input decoder made no progress");
+      }
+    }
+    for (let attempts = 0; !this.eof && attempts < 128; attempts++) await this.event(this.codec.receiveStep(EMPTY, true), EMPTY);
+    if (!this.eof || this.current || this.objects !== this.expected) throw new RequestError("intake did not close exactly");
+    this.flushObjects();
+    const bytes = this.writer ? await this.writer.finish() : 0;
+    if (this.writer && (!this.pack || bytes !== this.lastEnd + this.codec.idBytes)) throw new Error("stored pack extent differs");
+    this.writer = null;
+    this.store.exec("UPDATE stages SET phase='decoded',pack=?,bytes=?,selected=?,expected=?,has_ofs=? WHERE id=?", this.pack, bytes, this.codec.receiveCapabilities(), this.expected, Number(this.hasOfs), this.stage);
+    return bytes;
+  }
+
+  async validate() {
+    // New plain objects are scanned while their decoded bytes are available.
+    // Older/quarantined records can still require a structural scan here.
+    // Without statistics SQLite prefers the stage's primary key, rescanning
+    // completed objects on every page and every dependency update.
+    for (;;) {
+      const rows = this.store.exec("SELECT * FROM stage_objects INDEXED BY stage_object_work WHERE stage=? AND verified=1 AND scanned=0 ORDER BY node LIMIT 128", this.stage);
+      if (!rows.length) break;
+      for (const row of rows) await this.source.process(row, true);
+    }
+    this.store.exec("UPDATE stage_objects AS e SET ready=1 WHERE e.stage=? AND e.verified=0 AND ((e.wire_base_offset IS NOT NULL AND EXISTS(SELECT 1 FROM stage_objects b WHERE b.stage=e.stage AND b.node=e.wire_base_offset AND b.verified=1)) OR (e.wire_base_id IS NOT NULL AND (EXISTS(SELECT 1 FROM stage_objects b INDEXED BY stage_object_ids WHERE b.stage=e.stage AND b.oid=e.wire_base_id AND b.verified=1) OR EXISTS(SELECT 1 FROM stage_objects b JOIN stages p ON p.id=b.stage WHERE b.oid=e.wire_base_id AND p.phase='published'))))", this.stage);
+    for (;;) {
+      const rows = this.store.exec("SELECT * FROM stage_objects INDEXED BY stage_ready_work WHERE stage=? AND verified=0 AND ready=1 ORDER BY node LIMIT 128", this.stage);
+      if (!rows.length) break;
+      for (const row of rows) await this.delta(row);
+    }
+    if (this.store.exec("SELECT node FROM stage_objects WHERE stage=? AND (verified=0 OR scanned=0) LIMIT 1", this.stage).length) throw new RequestError("unresolved or cyclic delta base");
+    const target = this.store.edgeTargetSQL("e.dst");
+    const missing = this.store.exec(`SELECT ${target} AS dst,e.kind FROM stage_edges e WHERE e.stage=? AND NOT EXISTS(SELECT 1 FROM stage_objects t INDEXED BY stage_object_ids WHERE t.stage=? AND t.oid=${target} AND t.verified=1 AND t.kind=e.kind) AND NOT EXISTS(SELECT 1 FROM stage_objects t JOIN stages p ON p.id=t.stage WHERE t.oid=${target} AND t.kind=e.kind AND p.phase='published') LIMIT 1`, this.store.edgeStage(this.stage), this.stage)[0];
+    if (missing) throw new RequestError("object link target is missing or has the wrong kind");
+    // A newly received tree can designate a blob from an older published pack.
+    // The work queue is keyed by canonical ID, independent of physical stages.
+    for (;;) {
+      const rows = this.store.exec("SELECT oid,checks FROM stage_blob_checks WHERE stage=? ORDER BY oid LIMIT 128", this.stage);
+      if (!rows.length) break;
+      for (const { oid, checks } of rows) {
+        const row = this.store.object(this.stage, oid);
+        if (!row || row.kind !== 3) throw new RequestError("designated target is not a blob");
+        // Reject an oversized designated blob before warming or reading it.
+        this.source.beginScan(row, false, checks);
+        const cached = this.source.canonical.get(oid);
+        if (cached) {
+          this.codec.charge(0, row.size); this.codec.charge(1, row.size);
+          if (this.source.scanCaptured(row, cached, false) !== oid) throw new Error("designated object hash differs");
+        } else {
+          if (row.wire_kind >= 5) await this.source.warm(this.source.base(row));
+          await this.source.process(row, false, checks);
+        }
+        this.store.exec("DELETE FROM stage_blob_checks WHERE stage=? AND oid=?", this.stage, oid);
+      }
+    }
+    this.store.exec("UPDATE stages SET phase='verified' WHERE id=?", this.stage);
+  }
+
+  async delta(row) {
+    const base = this.source.base(row);
+    if (!base?.verified) throw new Error("ready delta has an unverified base");
+    const prefix = await this.source.representation(row, 0, Math.min(32, row.packed_size));
+    const header = this.codec.deltaHeader(prefix, { size: base.size, depth: base.depth });
+    row.kind = base.kind; row.size = integer(header.b); row.depth = integer(header.c);
+    row.base_stage = base.stage; row.base_node = base.node; row.base_oid = base.oid;
+    await this.source.warm(base);
+    const id = await this.source.process(row, true);
+    // Indexed dependency updates avoid repeatedly scanning all unresolved
+    // objects when a pack uses forward reference-delta chains.
+    // After decoding the complete pack, an absent wire kind has no dependents.
+    // Validation of preexisting staged records still updates both indexes.
+    if (!this.eof || this.hasOfs) this.store.exec("UPDATE stage_objects INDEXED BY stage_offset_dependencies SET ready=1 WHERE stage=? AND wire_base_offset=? AND verified=0", this.stage, row.node);
+    if (!this.eof || this.hasRefs) this.store.exec("UPDATE stage_objects INDEXED BY stage_id_dependencies SET ready=1 WHERE stage=? AND wire_base_id=? AND verified=0", this.stage, id);
+  }
+
+  async run(request) {
+    try {
+      const bytes = await this.decode(request);
+      await this.validate();
+      return {
+        stage: this.stage, pack: this.pack, packBytes: bytes, objects: this.objects,
+        commands: this.commands, options: this.options, refsUpdated: 0, quarantine: true,
+        queries: this.source.queries, representationReads: this.source.storageReads,
+        historicalModes: this.source.historicalModes,
+        caches: { canonicalPeak: this.source.canonical.peak, representationPeak: this.source.representations.peak, chunkPeak: this.source.chunks.peak },
+        wasmMemoryBytes: this.codec.memory.byteLength,
+        budgets: this.codec.budgetUsage(),
+      };
+    } catch (error) {
+      console.error(JSON.stringify({ event: "receive-rejected", stage: this.stage, phase: this.inPack ? "pack" : this.eof ? "validation" : "controls", objects: this.objects, expected: this.expected, lastEnd: this.lastEnd, queries: this.source.queries, error: String(error.message ?? error), codecError: error.code ?? null }));
+      error.commands = this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", this.stage);
+      error.selected = this.store.exec("SELECT selected FROM stages WHERE id=?", this.stage)[0]?.selected ?? 0;
+      await this.store.abandon(this.stage, { defer: true });
+      throw error;
+    } finally {
+      this.codec.receiveCancel(); this.codec.sourceCancel(); this.codec.rangeCancel(); this.codec.graphCancel();
+      this.source.releaseCaches();
+      await this.store.clearTemporary(this.stage, { defer: true });
+      this.store.lastIntakeBudget = this.codec.budgetUsage();
+    }
+  }
+}

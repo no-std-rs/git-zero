@@ -12,7 +12,10 @@ use git_zero_core::{
 mod fetch;
 mod policy;
 pub use policy::{WantOptions, WantPolicy};
+pub mod receive;
 mod route;
+#[cfg(feature = "read")]
+pub mod stored;
 pub mod stream;
 mod upload;
 mod v2;
@@ -209,7 +212,11 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
         None
     };
     if indices.is_some() {
-        upload.shallow_info(&storage.objects[..repository.object_count()], output)?;
+        upload.shallow_info(
+            repository.object_format(),
+            &storage.objects[..repository.object_count()],
+            output,
+        )?;
     } else if boundary_probe {
         output.write_all(b"0000")?;
     }

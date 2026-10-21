@@ -1,5 +1,7 @@
 #[path = "common/allocations.rs"]
 mod allocations;
+#[path = "common/packed_ranges.rs"]
+mod packed_ranges;
 
 use git_zero::{
     Error, Object, ObjectId, ObjectKind,
@@ -515,6 +517,7 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
     );
     let index = std::fs::read(&index_path).unwrap();
     let rows = index_rows(&index);
+    verify_index_ranges(&index, bytes.len() as u64, &rows);
     let count = rows.len();
     let mut window = [0; WINDOW_SIZE];
     let mut buffers: Vec<_> = (0..count).map(|_| vec![0; CAPACITY]).collect();
@@ -543,6 +546,7 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
         }
         assert!(progress, "fixture has a missing or cyclic delta base");
     }
+    packed_ranges::verify(&bytes, &entries, &resolved);
     let (mut deltas, mut kinds) = (0, [false; 4]);
     let (mut requests, mut decoded) = (Vec::new(), Vec::new());
     for (entry, object) in entries.iter().zip(&resolved) {
@@ -551,6 +555,7 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
         verify_git_object(entry, object, expected, crc, offsets);
         writeln!(requests, "{expected}").unwrap();
         let body = object.object();
+        verify_git_links(body, object.id().format());
         writeln!(
             decoded,
             "{expected} {} {}",
@@ -567,6 +572,192 @@ fn verify_git_pack(directory: &Path, ids: &[u8], offsets: bool) {
     assert_eq!(kinds, [true; 4], "commit/tree/blob/tag coverage");
     // One independent Git process validates every body and its batch envelope.
     assert_eq!(decoded, git(directory, &["cat-file", "--batch"], &requests));
+    verify_reused_git_pack(directory, &bytes, &entries, &resolved, offsets);
+}
+
+fn verify_git_links(object: Object<'_>, format: git_zero::ObjectFormat) {
+    use git_zero::object::{LinkDecoder, LinkLimits, LinkStatus, Tag, Tree};
+    let mut names = [0; 512];
+    let mut decoder = LinkDecoder::new(
+        object.info(),
+        format,
+        &mut names,
+        LinkLimits {
+            max_body_bytes: 1 << 20,
+            max_links: 1000,
+        },
+    )
+    .unwrap();
+    let mut actual = Vec::new();
+    let mut offset = 0;
+    loop {
+        let end = (offset + 7).min(object.data.len());
+        let step = decoder
+            .update(&object.data[offset..end], end == object.data.len())
+            .unwrap();
+        offset += step.consumed;
+        match step.status {
+            LinkStatus::Link { id, kind, .. } => actual.push((id, Some(kind), Vec::new())),
+            LinkStatus::TreeEntry {
+                id,
+                kind,
+                name,
+                canonical_mode,
+                ..
+            } => {
+                assert!(canonical_mode);
+                actual.push((id, kind, name.to_vec()));
+            }
+            LinkStatus::Finished => break,
+            LinkStatus::NeedInput => {}
+        }
+    }
+    decoder.finish().unwrap();
+    let expected: Vec<_> = match object.kind {
+        ObjectKind::Blob => vec![],
+        ObjectKind::Tree => Tree::parse_with_format(object.data, format)
+            .unwrap()
+            .entries()
+            .map(|entry| {
+                (
+                    entry.id,
+                    match entry.mode {
+                        0o040000 => Some(ObjectKind::Tree),
+                        0o160000 => None,
+                        _ => Some(ObjectKind::Blob),
+                    },
+                    entry.name.to_vec(),
+                )
+            })
+            .collect(),
+        ObjectKind::Tag => {
+            let tag = Tag::parse(object.data).unwrap();
+            vec![(tag.target, Some(tag.target_kind), Vec::new())]
+        }
+        ObjectKind::Commit => {
+            let mut lines = object.data.split(|byte| *byte == b'\n');
+            let mut result = vec![(
+                ObjectId::from_hex(&lines.next().unwrap()[5..]).unwrap(),
+                Some(ObjectKind::Tree),
+                Vec::new(),
+            )];
+            for line in lines.take_while(|line| line.starts_with(b"parent ")) {
+                result.push((
+                    ObjectId::from_hex(&line[7..]).unwrap(),
+                    Some(ObjectKind::Commit),
+                    Vec::new(),
+                ));
+            }
+            result
+        }
+    };
+    assert_eq!(actual, expected);
+}
+
+fn verify_reused_git_pack(
+    directory: &Path,
+    bytes: &[u8],
+    entries: &[Entry<'_>],
+    resolved: &[Option<ResolvedObject<'_>>],
+    offsets: bool,
+) {
+    use pack::{CompressedEntry, CompressedKind, PackComposer};
+    let mut output = Bytes(Vec::new());
+    let mut composer = PackComposer::new(
+        git_zero::ObjectFormat::Sha1,
+        entries.len() as u32,
+        1 << 24,
+        &mut output,
+    )
+    .unwrap();
+    let mut metadata = Vec::new();
+    // Reverse order forces deltas before their bases and moves all offsets.
+    // Replacing OFS bases with verified IDs keeps compressed zlib bytes intact.
+    for (entry, object) in entries.iter().zip(resolved).rev() {
+        let kind = match entry.kind() {
+            EntryKind::Object(kind) => CompressedKind::Object(kind),
+            EntryKind::ReferenceDelta { base_id } => CompressedKind::Delta { base_id },
+            EntryKind::OffsetDelta { base_offset } => CompressedKind::Delta {
+                base_id: resolved
+                    .iter()
+                    .flatten()
+                    .find(|base| base.offset() == Some(base_offset))
+                    .unwrap()
+                    .id(),
+            },
+        };
+        let compressed = &bytes[entry.compressed_offset() as usize..entry.end_offset() as usize];
+        composer
+            .start_entry(
+                CompressedEntry {
+                    id: object.as_ref().unwrap().id(),
+                    kind,
+                    inflated_size: entry.data().len() as u64,
+                    compressed_size: compressed.len() as u64,
+                },
+                &mut output,
+            )
+            .unwrap();
+        for chunk in compressed.chunks(7) {
+            composer.write_compressed(chunk, &mut output).unwrap();
+        }
+        metadata.push(composer.finish_entry().unwrap());
+    }
+    let checksum = composer.finish(&mut output).unwrap();
+    metadata.sort_unstable_by_key(|entry| entry.id);
+    let mut index = Bytes(Vec::new());
+    pack::write_index(&metadata, checksum, &mut index).unwrap();
+    let name = if offsets { "reused-ofs" } else { "reused-ref" };
+    let pack_path = directory.join(format!("{name}.pack"));
+    let index_path = directory.join(format!("{name}.idx"));
+    std::fs::write(&pack_path, &output.0).unwrap();
+    git(
+        directory,
+        &[
+            "index-pack",
+            "--strict",
+            "--index-version=2",
+            "-o",
+            index_path.to_str().unwrap(),
+            pack_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(std::fs::read(index_path).unwrap(), index.0);
+}
+
+fn verify_index_ranges(index: &[u8], pack_bytes: u64, rows: &[(ObjectId, u32, u64)]) {
+    use pack::{IndexHeader, LookupStatus};
+    let header = IndexHeader::parse(
+        git_zero::ObjectFormat::Sha1,
+        &index[..1032],
+        index.len() as u64,
+        pack_bytes,
+    )
+    .unwrap();
+    assert_eq!(header.object_count() as usize, rows.len());
+    for (row, &(id, crc32, offset)) in rows.iter().enumerate() {
+        let mut lookup = header.lookup(id).unwrap();
+        loop {
+            match lookup.status().unwrap() {
+                LookupStatus::Read(range) => {
+                    lookup
+                        .update(&index[range.offset as usize..range.offset as usize + range.length])
+                        .unwrap();
+                }
+                result => {
+                    assert_eq!(
+                        result,
+                        LookupStatus::Found {
+                            row: row as u32,
+                            entry: pack::IndexEntry { id, offset, crc32 }
+                        }
+                    );
+                    break;
+                }
+            }
+        }
+    }
 }
 
 fn index_rows(index: &[u8]) -> Vec<(ObjectId, u32, u64)> {
@@ -606,11 +797,39 @@ fn resolve_entry<'a>(
             EntryKind::ReferenceDelta { base_id } => object.id() == base_id,
             EntryKind::Object(_) => unreachable!(),
         })?;
-    Some(
-        entry
-            .resolve_delta(base, staging.take().unwrap(), DELTA)
-            .unwrap(),
-    )
+    let object = entry
+        .resolve_delta(base, staging.take().unwrap(), DELTA)
+        .unwrap();
+    verify_fragmented_delta(entry.data(), base, &object);
+    Some(object)
+}
+
+fn verify_fragmented_delta(bytes: &[u8], base: &ResolvedObject<'_>, expected: &ResolvedObject<'_>) {
+    use pack::{DeltaDecoder, DeltaStatus};
+    for chunk in [1, 7, bytes.len()] {
+        let mut decoder =
+            DeltaDecoder::new(base.object().data.len() as u64, base.delta_depth(), DELTA).unwrap();
+        let (mut offset, mut output) = (0, Vec::new());
+        loop {
+            let end = (offset + chunk).min(bytes.len());
+            let progress = decoder
+                .update(&bytes[offset..end], end == bytes.len())
+                .unwrap();
+            offset += progress.consumed;
+            match progress.status {
+                DeltaStatus::Copy { offset, length } => output.extend_from_slice(
+                    &base.object().data[offset as usize..(offset + length) as usize],
+                ),
+                DeltaStatus::Insert(bytes) => output.extend_from_slice(bytes),
+                DeltaStatus::Finished => break,
+                _ => {}
+            }
+        }
+        decoder.finish().unwrap();
+        assert_eq!(offset, bytes.len());
+        assert_eq!(decoder.depth(), expected.delta_depth());
+        assert_eq!(output, expected.object().data);
+    }
 }
 
 fn verify_git_object(

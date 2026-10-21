@@ -55,6 +55,10 @@ pub use gzip::decode_gzip;
 #[cfg(feature = "write")]
 mod encode;
 #[cfg(feature = "write")]
+mod stored;
+#[cfg(feature = "write")]
 pub use encode::write_parts;
 #[cfg(feature = "write")]
 pub(crate) use encode::write_reader;
+#[cfg(feature = "write")]
+pub use stored::StoredEncoder;

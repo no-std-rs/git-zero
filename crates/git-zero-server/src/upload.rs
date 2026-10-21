@@ -25,6 +25,8 @@ const CAPABILITY_FLAGS: &[(&[u8], u16)] = &[
     (b"shallow", 64),
     (b"filter", 128),
     (b"deepen-relative", 256),
+    (b"ofs-delta", 512),
+    (b"include-tag", 1024),
 ];
 
 fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u16> {
@@ -46,14 +48,18 @@ fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u16> {
 impl Capabilities {
     fn parse(bytes: &[u8], format: ObjectFormat) -> Result<Self> {
         let mut seen = 0_u16;
-        for capability in bytes.split(|&byte| byte == b' ') {
+        // libgit2 can leave a trailing separator; empty fields select nothing.
+        for capability in bytes
+            .split(|&byte| byte == b' ')
+            .filter(|part| !part.is_empty())
+        {
             let flag = capability_flag(capability, format)?;
             if seen & flag != 0 {
                 return Err(Error::InvalidRequest);
             }
             seen |= flag;
         }
-        if seen & 3 == 3 || seen & 12 == 12 {
+        if seen & 12 == 12 {
             return Err(Error::InvalidRequest);
         }
         Ok(Self(seen))
@@ -72,7 +78,12 @@ impl Capabilities {
     }
 
     fn ack(self) -> u8 {
-        (self.0 & 3) as u8
+        // Clients can select both advertised modes; detailed takes precedence.
+        if self.0 & 2 != 0 {
+            2
+        } else {
+            (self.0 & 1) as u8
+        }
     }
     fn band(self) -> u8 {
         ((self.0 >> 2) & 3) as u8
@@ -187,7 +198,7 @@ impl<'a> UploadRequest<'a> {
             let fetch = crate::v2::Fetch::parse(command.args, format, want, &mut extensions)?;
             return Ok(Self {
                 done: fetch.done,
-                capabilities: Capabilities::default(),
+                capabilities: Capabilities(u16::from(fetch.ofs_delta) * 512),
                 haves: command.args,
                 v2: true,
                 #[cfg(feature = "read")]
@@ -207,12 +218,19 @@ impl<'a> UploadRequest<'a> {
             shallow_body,
             extensions,
             #[cfg(feature = "read")]
-            include_tags: false,
+            include_tags: capabilities.0 & 1024 != 0,
         })
     }
 
+    #[cfg(feature = "read")]
+    pub fn ofs_delta(&self) -> bool {
+        self.capabilities.0 & 512 != 0
+    }
+
     pub fn require_complete(&self) -> Result<()> {
-        if self.extensions.active() || self.capabilities.0 & 192 != 0 {
+        // A caller-supplied complete pack cannot promise follow-tag selection.
+        // Only the graph-backed API advertises include-tag.
+        if self.extensions.active() || self.capabilities.0 & (192 | 1024) != 0 {
             return Err(Error::Unsupported);
         }
         Ok(())
@@ -221,27 +239,17 @@ impl<'a> UploadRequest<'a> {
     #[cfg(feature = "read")]
     pub fn shallow_info(
         &self,
+        format: ObjectFormat,
         objects: &[Option<git_zero_core::ValidationMetadata>],
         output: &mut impl Write,
     ) -> Result<()> {
-        if self.extensions.options.depth.is_none() || (self.v2 && !self.done) {
-            return Ok(());
+        let mut updates = ShallowUpdates::new(self, format);
+        if updates.enabled {
+            for (marker, id) in objects.iter().flatten().filter_map(shallow_change) {
+                updates.change(id, marker == b"unshallow ", output)?;
+            }
         }
-        let mut changes = objects
-            .iter()
-            .flatten()
-            .filter_map(shallow_change)
-            .peekable();
-        if self.v2 && changes.peek().is_none() {
-            return Ok(());
-        }
-        if self.v2 {
-            pktline::write(output, b"shallow-info\n")?;
-        }
-        for (marker, id) in changes {
-            pktline::write_parts(output, &[marker, &id.to_hex(), b"\n"])?;
-        }
-        output.write_all(if self.v2 { b"0001" } else { b"0000" })
+        updates.finish(output)
     }
 
     #[cfg(feature = "read")]
@@ -312,34 +320,12 @@ impl<'a> UploadRequest<'a> {
     }
 
     pub fn acknowledge(&self, repository: &impl Repository, output: &mut impl Write) -> Result<()> {
-        if self.v2 {
-            return crate::v2::acknowledge(self.done, self.common(repository), output);
-        }
-        if self.extensions.options.depth.is_some() && self.haves.is_empty() {
-            // The v0 shallow-list probe precedes any have/done round. A NAK
-            // here would be consumed as the next replay's shallow-list header.
-            return Ok(());
-        }
-        let mut last = None;
+        let mut acknowledgments = Acknowledgments::new(self);
+        acknowledgments.start(output)?;
         for id in self.common(repository) {
-            let id = id?;
-            if self.capabilities.ack() == 0 {
-                pktline::write_parts(output, &[b"ACK ", &id.to_hex(), b"\n"])?;
-                return Ok(());
-            }
-            let status: &[u8] = if self.capabilities.ack() == 1 {
-                b" continue\n"
-            } else {
-                b" common\n"
-            };
-            pktline::write_parts(output, &[b"ACK ", &id.to_hex(), status])?;
-            last = Some(id);
+            acknowledgments.common(id?, output)?;
         }
-        if let Some(id) = last.filter(|_| self.done) {
-            pktline::write_parts(output, &[b"ACK ", &id.to_hex(), b"\n"])
-        } else {
-            pktline::write(output, b"NAK\n")
-        }
+        acknowledgments.finish(output)
     }
 
     pub fn output<'w, W: Write>(&self, output: &'w mut W) -> PackOutput<'w, W> {
@@ -451,4 +437,166 @@ pub fn write_upload_error(error: Error, output: &mut impl Write) -> Result<()> {
         _ => b"invalid upload request",
     };
     pktline::write_parts(output, &[b"ERR ", message, b"\n"])
+}
+
+/// Stream host-computed shallow changes before acknowledgments/pack framing.
+/// The host must validate commit IDs and may only unshallow a client boundary.
+/// A v0/v1 depth probe ends with a flush even without changes; v2 emits a
+/// section only for changes in a final response. Errors are terminal.
+#[cfg(feature = "read")]
+pub struct ShallowUpdates {
+    format: ObjectFormat,
+    v2: bool,
+    enabled: bool,
+    started: bool,
+    finished: bool,
+    failure: Option<Error>,
+}
+#[cfg(feature = "read")]
+impl ShallowUpdates {
+    pub(crate) fn new(request: &UploadRequest<'_>, format: ObjectFormat) -> Self {
+        Self {
+            format,
+            v2: request.v2,
+            enabled: request.extensions.options.depth.is_some() && (!request.v2 || request.done),
+            started: false,
+            finished: false,
+            failure: None,
+        }
+    }
+    /// Whether this protocol round carries depth-boundary announcements.
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+    pub fn change(&mut self, id: ObjectId, unshallow: bool, output: &mut impl Write) -> Result<()> {
+        let result = (|| {
+            self.ready()?;
+            if self.finished || !self.enabled {
+                return Err(Error::InvalidRequest);
+            }
+            if id.is_zero() || id.format() != self.format {
+                return Err(Error::InvalidObjectId);
+            }
+            if !self.started && self.v2 {
+                pktline::write(output, b"shallow-info\n")?;
+            }
+            self.started = true;
+            let marker: &[u8] = if unshallow {
+                b"unshallow "
+            } else {
+                b"shallow "
+            };
+            pktline::write_parts(output, &[marker, id.to_hex().as_bytes(), b"\n"])
+        })();
+        self.record(result)
+    }
+    pub fn finish(&mut self, output: &mut impl Write) -> Result<()> {
+        let result = (|| {
+            self.ready()?;
+            if self.finished {
+                return Err(Error::InvalidRequest);
+            }
+            self.finished = true;
+            if self.enabled && (!self.v2 || self.started) {
+                output.write_all(if self.v2 { b"0001" } else { b"0000" })?;
+            }
+            Ok(())
+        })();
+        self.record(result)
+    }
+    fn ready(&self) -> Result<()> {
+        self.failure.map_or(Ok(()), Err)
+    }
+    fn record(&mut self, result: Result<()>) -> Result<()> {
+        if let Err(error) = result {
+            self.failure.get_or_insert(error);
+        }
+        result
+    }
+}
+
+/// Feed only host-verified common commit IDs. Sinks may change between calls.
+/// The host must not acknowledge private/unreachable IDs or claim an early cut.
+pub struct Acknowledgments {
+    v2: bool,
+    done: bool,
+    mode: u8,
+    suppress: bool,
+    last: Option<ObjectId>,
+    started: bool,
+    finished: bool,
+}
+impl Acknowledgments {
+    pub(crate) fn new(request: &UploadRequest<'_>) -> Self {
+        Self {
+            v2: request.v2,
+            done: request.done,
+            mode: request.capabilities.ack(),
+            suppress: !request.v2
+                && request.extensions.options.depth.is_some()
+                && request.haves.is_empty(),
+            last: None,
+            started: false,
+            finished: false,
+        }
+    }
+    pub fn start(&mut self, output: &mut impl Write) -> Result<()> {
+        if self.started || self.finished {
+            return Err(Error::InvalidRequest);
+        }
+        self.started = true;
+        if self.v2 {
+            pktline::write(
+                output,
+                if self.done {
+                    b"packfile\n"
+                } else {
+                    b"acknowledgments\n"
+                },
+            )?;
+        }
+        Ok(())
+    }
+    pub fn common(&mut self, id: ObjectId, output: &mut impl Write) -> Result<()> {
+        if !self.started || self.finished || id.is_zero() {
+            return Err(Error::InvalidRequest);
+        }
+        if self.suppress
+            || (self.v2 && self.done)
+            || (!self.v2 && self.mode == 0 && self.last.is_some())
+        {
+            return Ok(());
+        }
+        let suffix: &[u8] = if self.v2 || self.mode == 0 {
+            b"\n"
+        } else if self.mode == 1 {
+            b" continue\n"
+        } else {
+            b" common\n"
+        };
+        pktline::write_parts(output, &[b"ACK ", id.to_hex().as_bytes(), suffix])?;
+        self.last = Some(id);
+        Ok(())
+    }
+    pub fn finish(&mut self, output: &mut impl Write) -> Result<()> {
+        if !self.started || self.finished {
+            return Err(Error::InvalidRequest);
+        }
+        self.finished = true;
+        if self.v2 {
+            if !self.done {
+                if self.last.is_none() {
+                    pktline::write(output, b"NAK\n")?;
+                }
+                output.write_all(b"0000")?;
+            }
+        } else if !self.suppress && !(self.mode == 0 && self.last.is_some()) {
+            if let Some(id) = self.last.filter(|_| self.done) {
+                pktline::write_parts(output, &[b"ACK ", id.to_hex().as_bytes(), b"\n"])?;
+            } else {
+                pktline::write(output, b"NAK\n")?;
+            }
+        }
+        Ok(())
+    }
 }

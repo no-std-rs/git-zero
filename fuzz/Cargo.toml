@@ -18,6 +18,13 @@ sha2 = { version = "0.10.9", default-features = false }
 members = ["."]
 
 [[bin]]
+name = "receive"
+path = "fuzz_targets/receive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "loose"
 path = "fuzz_targets/loose.rs"
 test = false

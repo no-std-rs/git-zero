@@ -58,6 +58,363 @@ fn expected(ids: &[Option<ObjectId>]) -> Vec<ObjectId> {
 }
 
 #[test]
+fn tree_filters_revisit_shared_closures_at_the_minimum_depth_without_allocating() {
+    let mut graph = Graph::new();
+    let old = graph.ids;
+    let blob = add(
+        &mut graph.objects,
+        ObjectKind::Blob,
+        b"tree-depth leaf".to_vec(),
+    );
+    let shared = tree(&mut graph.objects, &[("leaf", blob)]);
+    let mut body = b"40000 shared\0".to_vec();
+    body.extend_from_slice(shared.as_bytes());
+    let deep = add(&mut graph.objects, ObjectKind::Tree, body);
+    let first = commit(&mut graph.objects, deep, &[old.main.unwrap()], "deep first");
+    let second = commit(&mut graph.objects, shared, &[first], "shallower later");
+    let tag = annotation(&mut graph.objects, deep, "tree", "tree-depth");
+    for reference in &mut graph.refs {
+        if reference.id == old.main.unwrap() {
+            reference.id = second;
+        }
+    }
+    graph.ids.main = Some(second);
+    graph.refs.push(Reference {
+        name: "refs/tags/tree-depth",
+        id: tag,
+        symbolic_target: None,
+        peeled: Some(deep),
+    });
+    graph.refs.sort_unstable_by_key(|r| r.name);
+    let commits = [first, second, old.main.unwrap(), old.base.unwrap()];
+    let trees = [deep, shared, old.main_tree.unwrap(), old.base_tree.unwrap()];
+    let full = sorted(
+        commits
+            .into_iter()
+            .chain(trees)
+            .chain([
+                blob,
+                old.main_blob.unwrap(),
+                old.base_blob.unwrap(),
+                old.shared.unwrap(),
+            ])
+            .collect(),
+    );
+    for _ in 0..2 {
+        for (roots, depth, expected) in [
+            (vec![first, second], 0, sorted(commits.to_vec())),
+            (
+                vec![first, second],
+                1,
+                sorted(commits.into_iter().chain(trees).collect()),
+            ),
+            (vec![first, second], 2, full.clone()),
+            (vec![shared], 0, vec![shared]),
+            (vec![shared], 1, sorted(vec![shared, blob])),
+            (vec![deep], 1, sorted(vec![deep, shared])),
+            (vec![deep], 2, sorted(vec![deep, shared, blob])),
+            (vec![tag], 0, sorted(vec![tag, deep])),
+            (vec![tag], 1, sorted(vec![tag, deep, shared])),
+        ] {
+            assert_eq!(
+                select(
+                    &graph,
+                    &roots,
+                    &[],
+                    &[],
+                    FetchOptions {
+                        filter: BlobFilter::TreeDepth(depth),
+                        ..FetchOptions::default()
+                    },
+                    false
+                )
+                .0,
+                expected,
+                "roots={roots:?}, depth={depth}"
+            );
+        }
+        graph.objects.reverse();
+    }
+}
+
+#[test]
+fn object_type_filters_preserve_explicit_objects_and_nested_tag_targets() {
+    let mut graph = Graph::new();
+    let ids = graph.ids;
+    let cases = [
+        (ids.base, ObjectKind::Commit, expected(&[ids.base])),
+        (
+            ids.base,
+            ObjectKind::Tree,
+            expected(&[ids.base, ids.base_tree]),
+        ),
+        (
+            ids.base,
+            ObjectKind::Blob,
+            expected(&[ids.base, ids.base_blob, ids.shared]),
+        ),
+        (ids.base, ObjectKind::Tag, expected(&[ids.base])),
+        (
+            ids.nested,
+            ObjectKind::Commit,
+            expected(&[ids.nested, ids.tag, ids.side, ids.base]),
+        ),
+        (
+            ids.nested,
+            ObjectKind::Tree,
+            expected(&[ids.nested, ids.tag, ids.side, ids.side_tree, ids.base_tree]),
+        ),
+        (
+            ids.nested,
+            ObjectKind::Blob,
+            expected(&[
+                ids.nested,
+                ids.tag,
+                ids.side,
+                ids.side_blob,
+                ids.base_blob,
+                ids.shared,
+            ]),
+        ),
+        (
+            ids.nested,
+            ObjectKind::Tag,
+            expected(&[ids.nested, ids.tag, ids.side]),
+        ),
+    ];
+    for _ in 0..2 {
+        for (root, kind, expected) in &cases {
+            assert_eq!(
+                select(
+                    &graph,
+                    &[root.unwrap()],
+                    &[],
+                    &[],
+                    FetchOptions {
+                        filter: BlobFilter::Type(*kind),
+                        ..FetchOptions::default()
+                    },
+                    false
+                )
+                .0,
+                *expected
+            );
+        }
+        for (kind, expected) in [
+            (
+                ObjectKind::Commit,
+                expected(&[ids.side, ids.base, ids.tag, ids.nested]),
+            ),
+            (
+                ObjectKind::Tree,
+                expected(&[ids.side, ids.base_tree, ids.side_tree, ids.tag, ids.nested]),
+            ),
+            (
+                ObjectKind::Blob,
+                expected(&[
+                    ids.side,
+                    ids.base_blob,
+                    ids.side_blob,
+                    ids.shared,
+                    ids.tag,
+                    ids.nested,
+                ]),
+            ),
+            (ObjectKind::Tag, expected(&[ids.side, ids.tag, ids.nested])),
+        ] {
+            assert_eq!(
+                select(
+                    &graph,
+                    &[ids.side.unwrap()],
+                    &[],
+                    &[],
+                    FetchOptions {
+                        filter: BlobFilter::Type(kind),
+                        ..FetchOptions::default()
+                    },
+                    true
+                )
+                .0,
+                expected
+            );
+        }
+        graph.objects.reverse();
+    }
+}
+
+#[test]
+fn explicit_non_commit_objects_override_common_snapshots() {
+    let mut graph = Graph::new();
+    let ids = graph.ids;
+    let common = ids.base.unwrap();
+    for _ in 0..2 {
+        for (wanted, filter, expected) in [
+            (
+                ids.shared.unwrap(),
+                BlobFilter::All,
+                expected(&[ids.shared]),
+            ),
+            (
+                ids.shared.unwrap(),
+                BlobFilter::None,
+                expected(&[ids.shared]),
+            ),
+            (
+                ids.base_tree.unwrap(),
+                BlobFilter::All,
+                expected(&[ids.base_tree, ids.base_blob, ids.shared]),
+            ),
+            (
+                ids.base_tree.unwrap(),
+                BlobFilter::None,
+                expected(&[ids.base_tree]),
+            ),
+        ] {
+            assert_eq!(
+                select(
+                    &graph,
+                    &[wanted],
+                    &[common],
+                    &[],
+                    FetchOptions {
+                        filter,
+                        ..FetchOptions::default()
+                    },
+                    false,
+                )
+                .0,
+                expected,
+                "{wanted} {filter:?}",
+            );
+        }
+        graph.objects.reverse();
+    }
+}
+
+#[test]
+fn explicit_non_commit_tags_retain_peeled_blob_filter_exceptions() {
+    let mut graph = Graph::new();
+    let ids = graph.ids;
+    let blob = ids.shared.unwrap();
+    let tree = ids.base_tree.unwrap();
+    let blob_tag = annotation(&mut graph.objects, blob, "blob", "blob-target");
+    let tree_tag = annotation(&mut graph.objects, tree, "tree", "tree-target");
+    let nested = annotation(&mut graph.objects, tree_tag, "tag", "nested-tree");
+    for (name, id, peeled) in [
+        ("refs/tags/z-blob-target", blob_tag, blob),
+        ("refs/tags/z-tree-target", tree_tag, tree),
+        ("refs/tags/z-nested-tree", nested, tree),
+    ] {
+        graph.refs.push(Reference {
+            name,
+            id,
+            symbolic_target: None,
+            peeled: Some(peeled),
+        });
+    }
+    graph.refs.sort_unstable_by_key(|reference| reference.name);
+    for _ in 0..2 {
+        assert_eq!(
+            select(
+                &graph,
+                &[blob_tag],
+                &[],
+                &[],
+                FetchOptions {
+                    filter: BlobFilter::None,
+                    ..FetchOptions::default()
+                },
+                false,
+            )
+            .0,
+            sorted(vec![blob_tag, blob]),
+        );
+        for (wanted, common, filter, expected) in [
+            (
+                blob_tag,
+                ids.base.unwrap(),
+                BlobFilter::None,
+                sorted(vec![blob_tag, blob]),
+            ),
+            (
+                tree_tag,
+                ids.base.unwrap(),
+                BlobFilter::All,
+                sorted(vec![tree_tag, tree, blob, ids.base_blob.unwrap()]),
+            ),
+            (
+                nested,
+                ids.base.unwrap(),
+                BlobFilter::None,
+                sorted(vec![nested, tree_tag, tree]),
+            ),
+            (
+                ids.tag.unwrap(),
+                ids.side.unwrap(),
+                BlobFilter::All,
+                expected(&[ids.tag]),
+            ),
+        ] {
+            assert_eq!(
+                select(
+                    &graph,
+                    &[wanted],
+                    &[common],
+                    &[],
+                    FetchOptions {
+                        filter,
+                        ..FetchOptions::default()
+                    },
+                    false,
+                )
+                .0,
+                expected,
+                "{wanted} {filter:?}",
+            );
+        }
+        graph.objects.reverse();
+    }
+}
+
+#[test]
+fn explicit_non_commit_tags_reopen_trees_already_walked_from_a_commit() {
+    let mut graph = Graph::new();
+    let ids = graph.ids;
+    let tree = ids.main_tree.unwrap();
+    let tagged = annotation(&mut graph.objects, tree, "tree", "main-tree");
+    graph.refs.push(Reference {
+        name: "refs/tags/z-main-tree",
+        id: tagged,
+        symbolic_target: None,
+        peeled: Some(tree),
+    });
+    graph.refs.sort_unstable_by_key(|reference| reference.name);
+    for _ in 0..2 {
+        for roots in [[ids.main.unwrap(), tagged], [tagged, ids.main.unwrap()]] {
+            assert_eq!(
+                select(
+                    &graph,
+                    &roots,
+                    &[ids.base.unwrap()],
+                    &[],
+                    FetchOptions::default(),
+                    false
+                )
+                .0,
+                sorted(vec![
+                    tagged,
+                    tree,
+                    ids.main.unwrap(),
+                    ids.main_blob.unwrap(),
+                    ids.shared.unwrap()
+                ]),
+            );
+        }
+        graph.objects.reverse();
+    }
+}
+
+#[test]
 fn depth_one_keeps_only_the_merge_tip_and_its_tree_closure() {
     let graph = Graph::new();
     let ids = graph.ids;
@@ -835,15 +1192,15 @@ fn malformed_extensions_leave_output_empty_in_both_protocols() {
         &["filter blob:none\0"],
         &["filter combine:blob:none+tree:1"],
         &["filter sparse:oid=HEAD"],
-        &["filter object:type=blob"],
+        &["filter object:type=invalid"],
         &["deepen -1"],
         &["deepen +1"],
-        &["filter blob:limit=+1"],
+        &["filter blob:limit=++1"],
         &["deepen 2147483648"],
         &["deepen 1", "deepen-relative", "deepen-relative"],
         &["deepen-since 1"],
         &["deepen-not main"],
-        &["filter tree:0"],
+        &["filter tree:invalid"],
         &["filter blob:limit="],
         &["filter blob:limit=18446744073709551615k"],
         &[&blob_shallow],
@@ -1021,6 +1378,10 @@ fn reusable_buffers_do_not_carry_depth_filter_wants_or_client_boundaries_between
         (ids.shared.unwrap(), &["filter blob:none"]),
         (ids.nested.unwrap(), &["deepen 1", "filter blob:limit=6"]),
         (ids.merge.unwrap(), &["filter blob:limit=6"]),
+        (ids.nested.unwrap(), &["filter object:type=commit"]),
+        (ids.base_tree.unwrap(), &["filter object:type=blob"]),
+        (ids.merge.unwrap(), &["filter object:type=tree"]),
+        (ids.shared.unwrap(), &["filter object:type=tag"]),
         (graph.head(), &[&client_boundary]),
         (ids.merge.unwrap(), &["deepen 2147483647"]),
         (graph.head(), &[]),

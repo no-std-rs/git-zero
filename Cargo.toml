@@ -12,7 +12,7 @@ readme = "README.md"
 include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*"]
 
 [workspace]
-members = ["crates/git-zero-core", "crates/git-zero-client", "crates/git-zero-server", "crates/git-zero-rustix", "examples/cloudflare-worker/wasm", "examples/linux-kernel/codec", "examples/repository-host"]
+members = ["crates/git-zero-core", "crates/git-zero-client", "crates/git-zero-server", "crates/git-zero-rustix", "examples/cloudflare-worker/wasm", "examples/linux-kernel/codec", "examples/repository-host/wasm"]
 default-members = [".", "crates/git-zero-rustix"]
 resolver = "3"
 
@@ -105,6 +105,10 @@ name = "object_parse"
 required-features = ["read"]
 
 [[test]]
+name = "object_links"
+required-features = ["read"]
+
+[[test]]
 name = "pack_git"
 required-features = ["write"]
 
@@ -119,6 +123,34 @@ required-features = ["read", "write"]
 [[test]]
 name = "pack_reader"
 required-features = ["read", "write"]
+
+[[test]]
+name = "pack_receive"
+required-features = ["read", "write"]
+
+[[test]]
+name = "delta_streaming"
+required-features = ["read"]
+
+[[test]]
+name = "object_ranges"
+required-features = ["read"]
+
+[[test]]
+name = "entry_ranges"
+required-features = ["read", "write"]
+
+[[test]]
+name = "index_lookup"
+required-features = ["read", "write"]
+
+[[test]]
+name = "pack_reuse"
+required-features = ["read", "write"]
+
+[[test]]
+name = "receive"
+required-features = ["read", "server"]
 
 [[test]]
 name = "reader"
@@ -166,7 +198,7 @@ lto = true
 codegen-units = 1
 opt-level = "s"
 
-# The native hosting experiment prioritizes throughput over Wasm/core size.
+# Repository hosting prioritizes throughput over binary size.
 [profile.hosting]
 inherits = "release"
 opt-level = 3

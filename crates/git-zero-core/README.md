@@ -8,6 +8,67 @@ verified entry metadata can be streamed separately with `pack::write_index`.
 
 Allocation-free Git objects, repositories, pack and zlib primitives. Safe `no_std` Rust without `alloc`.
 
+With `read`, `pack::Decoder` accepts fragmented SHA-1/SHA-256 packs without
+retaining a complete pack, object body, or object-count-sized index. The host
+supplies a 32 KiB inflate window and arbitrary input/output slices. Events expose
+entry headers, body fragments, entry CRCs, plain-object IDs, and the verified
+pack checksum. Offset/reference deltas emit instruction bytes for separate base
+resolution. Wire size, object count, inflation size and expansion ratio have
+independent limits. Stage all output privately until the trailer and subsequent
+object/base/connectivity validation pass; this decoder alone is not a push
+validator. No Git executable, filesystem, allocator or runtime API is used.
+
+`pack::DeltaDecoder` parses inflated delta instructions across arbitrary chunks.
+It checks base/result sizes, source/target ranges, instruction count, chain depth
+and exact EOF. Copy events expose ranges for bounded asynchronous base reads;
+insert events borrow input fragments. It owns neither the base nor the output.
+Execute every event before resuming and use `ObjectDigest` to hash output chunks
+with the inherited kind and declared size. A completed delta authenticates its
+syntax; the host still verifies storage I/O, object identity and connectivity.
+
+`pack::IndexHeader` retains only a version-2 index's 1032-byte header/fanout.
+Its independent `IndexLookup` states request exact ranges for binary search,
+CRCs and direct/64-bit offsets, without loading the complete index. Hosts can
+await reads and cache larger immutable storage pages. Authenticate index bytes,
+ordering and their pack relationship before using this lookup API; parsing a
+header alone does not establish integrity or trustworthy absence.
+
+`pack::EntryDecoder` resumes at a trusted pack offset using the same bounded
+entry parser as pack intake. It stops after one entry, preserving following
+input bytes, and reports its CRC and plain-object ID. Compare those with the
+authenticated index; resolve delta instructions separately. It verifies neither
+the enclosing pack checksum nor graph connectivity.
+
+With `write`, `pack::PackComposer` assembles fetch packs from authenticated zlib
+streams without inflation/recompression. It writes fresh entry headers, CRCs and
+a pack checksum with a bounded wire budget and fixed state. Reference deltas
+allow a host to reorder entries or move OFS deltas between packs after resolving
+their base IDs. The host supplies a unique authorized selection and its delta
+base closure, and awaits storage between writes. Errors invalidate partial output.
+
+`object::LinkDecoder` streams commit parents, root trees, tag targets and tree
+entries into a host-owned graph index. It retains two caller-sized tree names,
+fixed header scratch and 64-bit positions; opaque messages and blobs need no
+body storage. Historical recognized tree modes are preserved and flagged when
+noncanonical. The host authenticates objects, checks target existence/kinds and
+all duplicate tree names, and enforces reachability and ref-update policy.
+Scanner completion alone is not proof of a valid repository graph.
+
+`pack::RangeResolver` reconstructs complete objects or partial canonical ranges
+through explicit metadata/read requests. It follows nested deltas using caller
+`RangeFrame` slots, with independent output, representation-work, instruction,
+read-size and depth limits. Storage failures can be retried before supplying a
+reply. For new staged objects, request `ObjectRange::All`, hash every output
+fragment and complete pack/graph validation before publication. Existing bases
+must already have authenticated metadata and canonical identities.
+
+`pack::EntryRangeDecoder` supplies representation ranges from authenticated
+compressed entries using one 32 KiB window and caller read scratch. It skips the
+inflated prefix, preserves pending output under backpressure, and stops at the
+requested boundary. Partial completion does not validate the unread entry tail.
+Hosts can await bounded source reads and cache inflated pages/ranges to avoid
+repeated prefix inflation; neither API retains complete objects or an index.
+
 `read` enables zlib inflation, pack/delta decoding and repository validation.
 `write` enables snapshots, pack/zlib encoding and pack caching. Both are enabled
 by default. Object IDs, borrowed objects, repositories, readers, packet lines and

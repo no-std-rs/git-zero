@@ -1,12 +1,14 @@
 {
-  "name": "git-zero-local-repository-services",
+  "name": "git-zero-repository-host",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local --ip 127.0.0.1 --show-interactive-dev-session=false"
+    "dev": "wrangler dev --local --ip 127.0.0.1 --show-interactive-dev-session=false",
+    "build:streamed": "node scripts/build.mjs",
+    "test:streamed": "npm run build:streamed && node --test --test-concurrency=2 test/*.test.mjs"
   },
   "devDependencies": {
-    "wrangler": "4.149.0"
+    "wrangler": "4.151.3"
   }
 }

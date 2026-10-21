@@ -1,0 +1,17 @@
+[package]
+name = "git-zero-host-wasm"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Streaming no_std repository hosting codec for Workers"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+git-zero = { path = "../../..", default-features = false, features = ["read", "server"] }
+
+[lints]
+workspace = true
