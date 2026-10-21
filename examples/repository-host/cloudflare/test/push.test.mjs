@@ -11,7 +11,7 @@ import { headers, start, TOKEN } from "./wrangler.mjs";
 import { startStandalone } from "./standalone.mjs";
 
 async function git(directory, ...args) {
-  const child = spawn("git", ["-c", "user.name=Worker test", "-c", "user.email=worker@example.test", "-c", "http.extraHeader=Authorization: Bearer " + TOKEN, ...args], {
+  const child = spawn("git", ["-c", "user.name=Worker test", "-c", "user.email=worker@example.test", "-c", "http.followRedirects=false", "-c", "http.extraHeader=Authorization: Bearer " + TOKEN, ...args], {
     cwd: directory, timeout: 30000, killSignal: "SIGKILL", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
   });
   let stdout = "", stderr = "";
