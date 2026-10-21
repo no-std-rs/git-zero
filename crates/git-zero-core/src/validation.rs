@@ -339,11 +339,11 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         };
         let history = fetch.history(has_shallow, nearest)?;
         selection.walk_wants(roots, history)?;
-        filter_blobs(selection.work, fetch.filter);
+        filter_objects(selection.work, fetch.filter);
         if include_tags {
             selection.include_matching_tags()?;
             selection.walk(history)?;
-            filter_blobs(selection.work, fetch.filter);
+            filter_objects(selection.work, fetch.filter);
         }
         let mut length = 0;
         for (index, slot) in selection.work.iter().enumerate() {
@@ -477,6 +477,10 @@ impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
                     .repository
                     .reference_id(reference)
                     .ok_or(Error::InvalidObject)?;
+                // include-tag adds the annotation outside the object filter.
+                // Its complete tag chain must survive the second policy pass.
+                let tag = find(work, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
+                work[tag].as_mut().expect("validated metadata").wanted = true;
                 reach_at(
                     work,
                     self.repository.by_id,
@@ -491,13 +495,13 @@ impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
     }
 }
 
-fn filter_blobs(objects: &mut [Option<ValidationMetadata>], filter: BlobFilter) {
+fn filter_objects(objects: &mut [Option<ValidationMetadata>], filter: BlobFilter) {
     if matches!(filter, BlobFilter::All) {
         return;
     }
     for slot in objects {
         let object = slot.as_mut().expect("validated metadata");
-        if object.info.kind == ObjectKind::Blob && !filter.includes(object.info, object.wanted) {
+        if !filter.includes(object.info, object.wanted) {
             object.reached = false;
         }
     }

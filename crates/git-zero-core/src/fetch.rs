@@ -1,4 +1,4 @@
-/// Supported partial-clone blob policies. Explicitly wanted blobs are retained.
+/// Partial-clone object policies. Explicitly wanted objects are retained.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum BlobFilter {
     /// Keep the complete selected closure.
@@ -8,24 +8,26 @@ pub enum BlobFilter {
     None,
     /// Omit blobs of this size or larger, in bytes.
     Limit(u64),
+    /// Omit every other kind, retaining explicitly wanted objects.
+    Type(ObjectKind),
 }
 
 impl BlobFilter {
-    /// Keep explicitly wanted blobs regardless of filtering; other object
-    /// kinds always remain in the selected graph.
+    /// Keep explicitly wanted objects; apply the requested policy to the rest.
     pub const fn includes(self, info: ObjectInfo, explicitly_wanted: bool) -> bool {
-        if !matches!(info.kind, ObjectKind::Blob) || explicitly_wanted {
+        if explicitly_wanted {
             return true;
         }
         match self {
             Self::All => true,
-            Self::None => false,
-            Self::Limit(limit) => info.size < limit,
+            Self::None => !matches!(info.kind, ObjectKind::Blob),
+            Self::Limit(limit) => !matches!(info.kind, ObjectKind::Blob) || info.size < limit,
+            Self::Type(kind) => info.kind as u8 == kind as u8,
         }
     }
 }
 
-/// Bounded history and blob selection, sharing the ordinary graph-read budget.
+/// Bounded history and object selection, sharing the ordinary graph-read budget.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FetchOptions {
     /// Absolute commit depth from the wanted tips (1..=2147483647).
@@ -37,7 +39,7 @@ pub struct FetchOptions {
     /// (Git 2.55). Inert without a depth; unrelated client boundaries are preserved.
     /// Without a boundary in wanted history, select its complete closure.
     pub deepen_relative: bool,
-    /// Apply the blob policy after reachability and common-history exclusion.
+    /// Apply the object policy after reachability and common-history exclusion.
     /// Filtering does not change commit parents or tree bodies. The receiving
     /// host must retain Git's shallow/promisor metadata when importing the pack.
     pub filter: BlobFilter,

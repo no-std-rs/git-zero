@@ -37,6 +37,22 @@ export class FetchJob {
     if (!v2 && first) yield this.codec.uploadRef({ name: new Uint8Array(), target: bytes(state.head) }, { first: true, selection: true, reachable: true });
     yield this.codec.uploadFlush();
   }
+  want(id) {
+    // Freeze every explicit tag target before selection starts, so queue order
+    // cannot hide filter exceptions for intermediate tags or the peeled object.
+    for (;;) {
+      if (this.store.exec("SELECT 1 FROM fetch_wants WHERE oid=?", id).length) return;
+      const object = this.store.published(id);
+      if (!object) throw new RequestError("want is not published");
+      if (object.kind !== 1) this.allCommitWants = false;
+      this.store.exec("INSERT OR IGNORE INTO fetch_wants(oid) VALUES(?)", id);
+      if (object.kind !== 4) return;
+      this.tick();
+      const edge = this.store.exec(`SELECT ${this.store.edgeTargetSQL()} AS dst FROM stage_edges WHERE stage=? AND node=? AND relation=2 LIMIT 1`, this.store.edgeStage(object.stage), object.node)[0];
+      if (!edge) throw new Error("stored tag has no target");
+      id = edge.dst;
+    }
+  }
   async decode(request) {
     this.reset(); this.codec.uploadInit(this.version);
     const encodedLimit = 2n * BigInt(this.codec.limits.maxControlBytes) + 64n;
@@ -54,16 +70,7 @@ export class FetchJob {
       const event = this.codec.uploadNext(); if (event.tag === 74) break;
       const id = hex(event.id);
       if (event.tag === 71) {
-        if (this.store.exec("SELECT 1 FROM fetch_wants WHERE oid=?", id).length) continue;
-        const object = this.store.published(id);
-        // HOST_TOKEN grants the complete published catalog, as does full-pack
-        // reuse. Indexed lookup never exposes private/quarantined objects.
-        if (!object) throw new RequestError("want is not published");
-        if (object.kind !== 1) this.allCommitWants = false;
-        this.store.exec("INSERT OR IGNORE INTO fetch_wants(oid) VALUES(?)", id);
-        // Git treats a wanted tag's peeled object as explicitly wanted too,
-        // including a blob that would otherwise be removed by a blob filter.
-        if (object.kind === 4) this.store.exec("INSERT OR IGNORE INTO fetch_wants(oid) VALUES(?)", this.store.peeled(id));
+        this.want(id);
       } else if (event.tag === 72) {
         if (this.store.exec("SELECT 1 FROM fetch_haves WHERE oid=?", id).length) continue;
         if (this.store.published(id)?.kind === 1) this.store.exec("INSERT OR IGNORE INTO fetch_haves(oid) VALUES(?)", id);
@@ -149,7 +156,11 @@ export class FetchJob {
     this.historyWalk("fetch_selected");
     if (this.includeTags) {
       for (const ref of this.store.references()) {
-        if (ref.peeled) this.store.exec("INSERT INTO fetch_selected(oid,depth) SELECT ?,depth FROM fetch_selected WHERE oid=? AND included=1 ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<fetch_selected.depth", ref.oid, ref.peeled);
+        if (!ref.peeled) continue;
+        const selected = this.store.exec("SELECT depth FROM fetch_selected WHERE oid=? AND included=1", ref.peeled)[0];
+        if (!selected) continue;
+        this.want(ref.oid);
+        this.store.exec("INSERT INTO fetch_selected(oid,depth) VALUES(?,?) ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<fetch_selected.depth", ref.oid, selected.depth);
       }
       this.historyWalk("fetch_selected");
     }

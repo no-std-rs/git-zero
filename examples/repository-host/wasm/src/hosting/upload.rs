@@ -342,6 +342,10 @@ fn parse() -> Result<usize> {
         match options.filter {
             BlobFilter::All => {}
             BlobFilter::None => flags |= 1 << 19,
+            BlobFilter::Type(kind) => {
+                flags |= 1 << 22;
+                frame.wide(24, kind as u64);
+            }
             BlobFilter::Limit(limit) => {
                 flags |= 1 << 20;
                 frame.wide(24, limit);

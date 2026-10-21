@@ -26,6 +26,7 @@ const CAPABILITY_FLAGS: &[(&[u8], u16)] = &[
     (b"filter", 128),
     (b"deepen-relative", 256),
     (b"ofs-delta", 512),
+    (b"include-tag", 1024),
 ];
 
 fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u16> {
@@ -217,7 +218,7 @@ impl<'a> UploadRequest<'a> {
             shallow_body,
             extensions,
             #[cfg(feature = "read")]
-            include_tags: false,
+            include_tags: capabilities.0 & 1024 != 0,
         })
     }
 
@@ -227,7 +228,9 @@ impl<'a> UploadRequest<'a> {
     }
 
     pub fn require_complete(&self) -> Result<()> {
-        if self.extensions.active() || self.capabilities.0 & 192 != 0 {
+        // A caller-supplied complete pack cannot promise follow-tag selection.
+        // Only the graph-backed API advertises include-tag.
+        if self.extensions.active() || self.capabilities.0 & (192 | 1024) != 0 {
             return Err(Error::Unsupported);
         }
         Ok(())

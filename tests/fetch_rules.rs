@@ -75,6 +75,18 @@ fn blob_filters_keep_explicit_wants_and_exact_size_boundaries() {
         ] {
             for size in [0, 7, 8, u64::MAX] {
                 let info = ObjectInfo { kind, size };
+                for selected in [
+                    ObjectKind::Commit,
+                    ObjectKind::Tree,
+                    ObjectKind::Blob,
+                    ObjectKind::Tag,
+                ] {
+                    assert_eq!(
+                        BlobFilter::Type(selected).includes(info, false),
+                        kind == selected
+                    );
+                    assert!(BlobFilter::Type(selected).includes(info, true));
+                }
                 assert!(BlobFilter::All.includes(info, false));
                 assert_eq!(
                     BlobFilter::None.includes(info, false),

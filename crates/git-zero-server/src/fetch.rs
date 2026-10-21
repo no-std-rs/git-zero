@@ -1,5 +1,5 @@
 //! Request-local shallow/filter policy; packet storage remains owned by the host.
-use git_zero_core::{BlobFilter, Error, FetchOptions, ObjectFormat, Result};
+use git_zero_core::{BlobFilter, Error, FetchOptions, ObjectFormat, ObjectKind, Result};
 #[derive(Default)]
 pub(crate) struct Extensions {
     pub options: FetchOptions,
@@ -67,6 +67,15 @@ fn number(value: &[u8]) -> Result<u64> {
 fn filter(value: &[u8]) -> Result<BlobFilter> {
     if value == b"blob:none" {
         return Ok(BlobFilter::None);
+    }
+    if let Some(kind) = value.strip_prefix(b"object:type=") {
+        return Ok(BlobFilter::Type(match kind {
+            b"commit" => ObjectKind::Commit,
+            b"tree" => ObjectKind::Tree,
+            b"blob" => ObjectKind::Blob,
+            b"tag" => ObjectKind::Tag,
+            _ => return Err(Error::InvalidRequest),
+        }));
     }
     let value = value
         .strip_prefix(b"blob:limit=")

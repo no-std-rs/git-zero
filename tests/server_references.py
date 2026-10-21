@@ -147,6 +147,7 @@ def all_object_ids(repo, env):
 def clone_branch(root, bare, urls, protocol, branch, env):
     expected_head = git(bare, "rev-parse", "refs/heads/" + branch, env=env).strip().decode()
     expected = object_manifest(bare, expected_head, env)
+    native_ids = None
     for name, url in urls:
         clone = root / f"{name}-{protocol}-{branch}"
         run("git", "-c", "protocol.version=0", "clone", "-q", "--single-branch", "--no-tags", "--branch", branch, url, str(clone), env=env)
@@ -154,9 +155,12 @@ def clone_branch(root, bare, urls, protocol, branch, env):
         assert object_manifest(clone, "HEAD", env) == expected
         actual_ids = all_object_ids(clone, env)
         assert set(expected) <= actual_ids
-        if name == "reference" and protocol == "smart":
-            # Git's client requests include-tag even with --no-tags. It may
-            # receive unreferenced tags of selected objects without saving refs.
+        if protocol == "smart":
+            if name == "reference":
+                native_ids = actual_ids
+            assert actual_ids == native_ids, "single-branch pack differs from native Git"
+            # Git's client requests include-tag even with --no-tags. Require
+            # the same annotations, each peeling into the selected closure.
             for oid in actual_ids - set(expected):
                 assert git(clone, "cat-file", "-t", oid.decode(), env=env).strip() == b"tag"
                 assert git(clone, "rev-parse", oid.decode() + "^{}", env=env).strip() in expected
