@@ -131,6 +131,71 @@ fn fragmented_commit_parents_tag_targets_and_opaque_headers_and_messages() {
     }
 }
 
+#[test]
+fn final_newline_headers_do_not_require_a_blank_message_separator() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let target = id(format, 1);
+        for (kind, body, expected) in [
+            (
+                ObjectKind::Commit,
+                format!("tree {target}\nauthor A <a@b> 0 +0000\ncommitter A <a@b> 0 +0000\n"),
+                Event::Link(target, ObjectKind::Tree, LinkRelation::RootTree),
+            ),
+            (
+                ObjectKind::Tag,
+                format!("object {target}\ntype commit\ntag old\n"),
+                Event::Link(target, ObjectKind::Commit, LinkRelation::TagTarget),
+            ),
+        ] {
+            for chunk in [1, 2, 7, body.len()] {
+                assert_eq!(
+                    scan(body.as_bytes(), kind, format, chunk, 0, LIMITS)
+                        .unwrap()
+                        .as_slice(),
+                    core::slice::from_ref(&expected)
+                );
+                assert_eq!(
+                    scan(
+                        &body.as_bytes()[..body.len() - 1],
+                        kind,
+                        format,
+                        chunk,
+                        0,
+                        LIMITS
+                    ),
+                    Err(Error::InvalidObject)
+                );
+            }
+            let mut decoder = LinkDecoder::new(
+                ObjectInfo {
+                    kind,
+                    size: body.len() as u64,
+                },
+                format,
+                &mut [],
+                LIMITS,
+            )
+            .unwrap();
+            let mut offset = 0;
+            allocations::without_allocations(|| {
+                loop {
+                    let progress = decoder.update(&body.as_bytes()[offset..], false).unwrap();
+                    offset += progress.consumed;
+                    if progress.status == LinkStatus::NeedInput {
+                        break;
+                    }
+                }
+                assert_eq!(offset, body.len());
+                assert_eq!(
+                    decoder.update(&[], true).unwrap().status,
+                    LinkStatus::Finished
+                );
+                decoder.finish().unwrap();
+            });
+        }
+    }
+}
+
 fn tree(entries: &[(&[u8], &[u8], ObjectId)]) -> Vec<u8> {
     let mut body = Vec::new();
     for &(mode, name, id) in entries {

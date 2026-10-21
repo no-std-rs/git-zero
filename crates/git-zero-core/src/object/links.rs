@@ -295,9 +295,13 @@ impl State {
         if matches!(self.phase, Phase::Done) {
             return Ok(LinkStatus::Finished);
         }
-        if !matches!(self.phase, Phase::Blob | Phase::Message)
-            && !(matches!(self.phase, Phase::Mode) && self.mode_digits == 0)
-        {
+        let complete = match self.phase {
+            Phase::Blob | Phase::Message => true,
+            Phase::Mode => self.mode_digits == 0,
+            Phase::Headers | Phase::TagHeaders => self.header_len == 0 && !self.header_overflow,
+            _ => false,
+        };
+        if !complete {
             return Err(Error::InvalidObject);
         }
         if !eof {

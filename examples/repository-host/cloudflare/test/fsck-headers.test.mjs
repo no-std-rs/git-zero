@@ -52,6 +52,14 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
         const report = await send(value, pack(format, [entry(4, value.body)]), `refs/tags/case-${randomUUID()}`);
         assert.match(report, accepted ? /unpack ok/ : /unpack invalid/);
       }
+      const commit = object(format, 1, `tree ${fixture.objects[1].id.toString("hex")}\nauthor A <a@b> 0 +0000\ncommitter A <a@b> 0 +0000\n`);
+      assert.match(await send(commit, pack(format, [entry(1, commit.body)]), "refs/heads/newline"), /unpack ok/);
+      const tag = object(format, 4, `object ${commit.id.toString("hex")}\ntype commit\ntag old\n`);
+      assert.match(await send(tag, pack(format, [entry(4, tag.body)]), "refs/tags/newline"), /unpack ok/);
+      for (const value of [commit, tag]) {
+        const truncated = object(format, value.kind, value.body.subarray(0, -1));
+        assert.match(await send(truncated, pack(format, [entry(value.kind, truncated.body)]), "refs/tags/truncated"), /unpack invalid/);
+      }
     }
   } finally { await server?.stop(); await rm(directory, { recursive: true, force: true }); }
 });
