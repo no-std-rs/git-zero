@@ -1,89 +1,96 @@
 //! Bounded submodule URL policy; no normalized URL string is retained.
 #[derive(Clone, Copy)]
-enum Mode {
-    Prefix,
-    Other,
-    Relative,
-    Curl,
-}
-#[derive(Clone, Copy)]
-pub(super) struct Url {
-    mode: Mode,
-    head: [u8; 8],
-    used: usize,
-    bad: bool,
-    relative: Relative,
-    curl: Curl,
+pub(super) enum Url {
+    Prefix(Prefix),
+    Other(bool),
+    Relative(Relative),
+    Curl(Curl),
 }
 impl Url {
     pub(super) fn new() -> Self {
-        Self {
-            mode: Mode::Prefix,
-            head: [0; 8],
-            used: 0,
-            bad: false,
-            relative: Relative::new(false, false),
-            curl: Curl::new(false),
-        }
+        Self::Prefix(Prefix::default())
     }
     pub(super) fn push(&mut self, byte: u8) {
-        match self.mode {
-            Mode::Other => {}
-            Mode::Relative => self.relative.push(byte),
-            Mode::Curl => self.curl.push(byte),
-            Mode::Prefix => {
-                if self.used == 0 && byte == b'-' {
-                    self.bad = true;
-                    self.mode = Mode::Other;
-                    return;
-                }
-                self.head[self.used] = byte;
-                self.used += 1;
-                let prefix = &self.head[..self.used];
-                let choices: [(&[u8], u8); 11] = [
-                    (b"./", 1),
-                    (b"../", 2),
-                    (b"git://", 3),
-                    (b"http://", 4),
-                    (b"https://", 4),
-                    (b"ftp://", 4),
-                    (b"ftps://", 4),
-                    (b"http::", 5),
-                    (b"https::", 5),
-                    (b"ftp::", 5),
-                    (b"ftps::", 5),
-                ];
-                let mut possible = false;
-                for (needle, kind) in choices {
-                    if !needle.starts_with(prefix) {
-                        continue;
-                    }
-                    possible = true;
-                    if prefix.len() != needle.len() {
-                        continue;
-                    }
-                    if kind <= 3 {
-                        self.relative = Relative::new(kind == 2, kind == 3);
-                        self.mode = Mode::Relative;
-                    } else {
-                        self.curl = Curl::new(kind == 4);
-                        self.mode = Mode::Curl;
-                    }
-                    return;
-                }
-                if !possible {
-                    self.mode = Mode::Other;
+        match self {
+            Self::Prefix(prefix) => {
+                if let Some(next) = prefix.push(byte) {
+                    *self = next;
                 }
             }
+            Self::Other(_) => {}
+            Self::Relative(relative) => relative.push(byte),
+            Self::Curl(curl) => curl.push(byte),
         }
     }
     pub(super) fn invalid(&self) -> bool {
-        self.bad
-            || match self.mode {
-                Mode::Prefix | Mode::Other => false,
-                Mode::Relative => self.relative.invalid(),
-                Mode::Curl => self.curl.invalid(),
+        match self {
+            Self::Prefix(_) => false,
+            Self::Other(bad) => *bad,
+            Self::Relative(relative) => relative.invalid(),
+            Self::Curl(curl) => curl.invalid(),
+        }
+    }
+}
+#[derive(Clone, Copy, Default)]
+pub(super) struct Prefix {
+    head: [u8; 8],
+    used: usize,
+}
+#[derive(Clone, Copy)]
+enum Transport {
+    Relative,
+    Parent,
+    Git,
+    Curl,
+    RemoteCurl,
+}
+impl Transport {
+    fn start(self) -> Url {
+        match self {
+            Self::Relative => Url::Relative(Relative::new(false, false)),
+            Self::Parent => Url::Relative(Relative::new(true, false)),
+            Self::Git => Url::Relative(Relative::new(false, true)),
+            Self::Curl => Url::Curl(Curl::new(true)),
+            Self::RemoteCurl => Url::Curl(Curl::new(false)),
+        }
+    }
+}
+impl Prefix {
+    fn push(&mut self, byte: u8) -> Option<Url> {
+        if self.used == 0 && byte == b'-' {
+            return Some(Url::Other(true));
+        }
+        self.head[self.used] = byte;
+        self.used += 1;
+        let prefix = &self.head[..self.used];
+        let choices: [(&[u8], Transport); 11] = [
+            (b"./", Transport::Relative),
+            (b"../", Transport::Parent),
+            (b"git://", Transport::Git),
+            (b"http://", Transport::Curl),
+            (b"https://", Transport::Curl),
+            (b"ftp://", Transport::Curl),
+            (b"ftps://", Transport::Curl),
+            (b"http::", Transport::RemoteCurl),
+            (b"https::", Transport::RemoteCurl),
+            (b"ftp::", Transport::RemoteCurl),
+            (b"ftps::", Transport::RemoteCurl),
+        ];
+        let mut possible = false;
+        for (needle, next) in choices {
+            if !needle.starts_with(prefix) {
+                continue;
             }
+            possible = true;
+            if prefix.len() == needle.len() {
+                return Some(next.start());
+            }
+        }
+        if possible {
+            None
+        } else {
+            Some(Url::Other(false))
+        }
     }
 }
 
@@ -95,39 +102,29 @@ struct Percent {
 }
 impl Percent {
     fn push(&mut self, byte: u8) -> Option<(u8, bool)> {
-        match self.phase {
-            0 => {
-                if byte == b'%' {
-                    self.phase = 1;
-                    None
-                } else {
-                    Some((byte, false))
-                }
+        if self.phase == 0 {
+            if byte == b'%' {
+                self.phase = 1;
+                return None;
             }
-            1 => match hex(byte) {
-                Some(value) => {
-                    self.high = value;
-                    self.phase = 2;
-                    None
-                }
-                None => {
-                    self.bad = true;
-                    self.phase = u8::from(byte == b'%');
-                    Some((byte, false))
-                }
-            },
-            _ => match hex(byte) {
-                Some(value) => {
-                    self.phase = 0;
-                    Some((self.high * 16 + value, true))
-                }
-                None => {
-                    self.bad = true;
-                    self.phase = u8::from(byte == b'%');
-                    Some((byte, false))
-                }
-            },
+            return Some((byte, false));
         }
+        let Some(value) = hex(byte) else {
+            self.bad = true;
+            self.phase = u8::from(byte == b'%');
+            return Some((byte, false));
+        };
+        if self.phase == 1 {
+            self.high = value;
+            self.phase = 2;
+            None
+        } else {
+            self.phase = 0;
+            Some((self.high * 16 + value, true))
+        }
+    }
+    fn invalid(self) -> bool {
+        self.bad || self.phase != 0
     }
 }
 fn hex(byte: u8) -> Option<u8> {
@@ -140,7 +137,7 @@ fn hex(byte: u8) -> Option<u8> {
 }
 
 #[derive(Clone, Copy)]
-struct Relative {
+pub(super) struct Relative {
     leading: bool,
     up: bool,
     dots: u8,
@@ -208,7 +205,7 @@ enum CurlPhase {
     Query,
 }
 #[derive(Clone, Copy)]
-struct Curl {
+pub(super) struct Curl {
     phase: CurlPhase,
     scheme: [u8; 4],
     scheme_len: usize,
@@ -243,23 +240,7 @@ impl Curl {
     }
     fn push(&mut self, byte: u8) {
         match self.phase {
-            CurlPhase::Scheme => {
-                if byte == b':' {
-                    self.bad |= self.scheme_len == 0 || !self.scheme_ok;
-                    self.file = self.scheme_len == 4 && self.scheme.eq_ignore_ascii_case(b"file");
-                    self.phase = CurlPhase::Slash1;
-                } else {
-                    self.scheme_ok &= if self.scheme_len == 0 {
-                        byte.is_ascii_alphabetic()
-                    } else {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-')
-                    };
-                    if self.scheme_len < 4 {
-                        self.scheme[self.scheme_len] = byte;
-                    }
-                    self.scheme_len = self.scheme_len.saturating_add(1);
-                }
-            }
+            CurlPhase::Scheme => self.scheme(byte),
             CurlPhase::Slash1 => {
                 self.bad |= byte != b'/';
                 self.phase = CurlPhase::Slash2;
@@ -268,47 +249,65 @@ impl Curl {
                 self.bad |= byte != b'/';
                 self.phase = CurlPhase::Authority;
             }
-            CurlPhase::Authority => {
-                if matches!(byte, b'/' | b'?' | b'#') {
-                    self.bad |=
-                        self.host.invalid(self.file) || self.percent.bad || self.percent.phase != 0;
-                    self.percent = Percent::default();
-                    self.phase = CurlPhase::Path;
-                    if byte != b'/' {
-                        self.path.end();
-                        self.phase = CurlPhase::Query;
-                    }
-                    return;
-                }
-                if byte == b'@' {
-                    self.bad |= self.at || self.percent.bad || self.percent.phase != 0;
-                    self.at = true;
-                    self.host = Host::default();
-                    self.percent = Percent::default();
-                    return;
-                }
-                if let Some((b, _)) = self.percent.push(byte) {
-                    self.permanent_lf |= b == b'\n';
-                }
-                self.host.push(byte);
-            }
-            CurlPhase::Path => {
-                if matches!(byte, b'/' | b'?' | b'#') {
-                    self.bad |= self.percent.bad || self.percent.phase != 0;
-                    self.percent = Percent::default();
-                    self.path.end();
-                    if byte != b'/' {
-                        self.phase = CurlPhase::Query;
-                    }
-                } else if let Some((b, _)) = self.percent.push(byte) {
-                    self.path.push(b);
-                }
-            }
+            CurlPhase::Authority => self.authority(byte),
+            CurlPhase::Path => self.path(byte),
             CurlPhase::Query => {
                 if let Some((b, _)) = self.percent.push(byte) {
                     self.permanent_lf |= b == b'\n';
                 }
             }
+        }
+    }
+    fn scheme(&mut self, byte: u8) {
+        if byte == b':' {
+            self.bad |= self.scheme_len == 0 || !self.scheme_ok;
+            self.file = self.scheme_len == 4 && self.scheme.eq_ignore_ascii_case(b"file");
+            self.phase = CurlPhase::Slash1;
+        } else {
+            self.scheme_ok &= if self.scheme_len == 0 {
+                byte.is_ascii_alphabetic()
+            } else {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-')
+            };
+            if self.scheme_len < 4 {
+                self.scheme[self.scheme_len] = byte;
+            }
+            self.scheme_len = self.scheme_len.saturating_add(1);
+        }
+    }
+    fn authority(&mut self, byte: u8) {
+        if matches!(byte, b'/' | b'?' | b'#') {
+            self.bad |= self.host.invalid(self.file) || self.percent.invalid();
+            self.percent = Percent::default();
+            self.phase = CurlPhase::Path;
+            if byte != b'/' {
+                self.path.end();
+                self.phase = CurlPhase::Query;
+            }
+            return;
+        }
+        if byte == b'@' {
+            self.bad |= self.at || self.percent.invalid();
+            self.at = true;
+            self.host = Host::default();
+            self.percent = Percent::default();
+            return;
+        }
+        if let Some((b, _)) = self.percent.push(byte) {
+            self.permanent_lf |= b == b'\n';
+        }
+        self.host.push(byte);
+    }
+    fn path(&mut self, byte: u8) {
+        if matches!(byte, b'/' | b'?' | b'#') {
+            self.bad |= self.percent.invalid();
+            self.percent = Percent::default();
+            self.path.end();
+            if byte != b'/' {
+                self.phase = CurlPhase::Query;
+            }
+        } else if let Some((b, _)) = self.percent.push(byte) {
+            self.path.push(b);
         }
     }
     fn invalid(mut self) -> bool {

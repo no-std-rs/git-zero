@@ -138,62 +138,14 @@ impl FsckModules {
     }
     fn consume(&mut self, byte: u8) -> Result<()> {
         match self.phase {
-            Phase::Main => match byte {
-                b'\n' if self.eof_seen => self.phase = Phase::Halted,
-                b'#' | b';' => self.phase = Phase::Comment,
-                b'[' => {
-                    self.section = Section::new();
-                    self.base_seen = false;
-                    self.phase = Phase::Base;
-                }
-                _ if space(byte) => {}
-                _ if byte.is_ascii_alphabetic() => {
-                    self.key = Key::default();
-                    self.key.push(byte.to_ascii_lowercase());
-                    self.phase = Phase::Key;
-                }
-                _ => self.phase = Phase::Halted,
-            },
+            Phase::Main => self.main(byte),
             Phase::Comment => {
                 if byte == b'\n' {
                     self.phase = Phase::Main;
                 }
             }
-            Phase::Base => {
-                if self.eof_seen {
-                    self.phase = Phase::Halted;
-                    return Ok(());
-                }
-                if byte == b']' {
-                    self.phase = if self.base_seen {
-                        Phase::Main
-                    } else {
-                        Phase::Halted
-                    };
-                } else if space(byte) {
-                    self.phase = if byte == b'\n' {
-                        Phase::Halted
-                    } else {
-                        Phase::SectionSpace
-                    };
-                } else if key_char(byte) || byte == b'.' {
-                    self.base_seen = true;
-                    self.section.base(byte);
-                } else {
-                    self.phase = Phase::Halted;
-                }
-            }
-            Phase::SectionSpace => {
-                if byte == b'\n' {
-                    self.phase = Phase::Halted;
-                } else if space(byte) {
-                } else if byte == b'"' && self.base_seen {
-                    self.section.extended();
-                    self.phase = Phase::Name;
-                } else {
-                    self.phase = Phase::Halted;
-                }
-            }
+            Phase::Base => self.base(byte),
+            Phase::SectionSpace => self.section_space(byte),
             Phase::Name => match byte {
                 b'\n' => self.phase = Phase::Halted,
                 b'\\' => self.phase = Phase::NameEscape,
@@ -215,35 +167,78 @@ impl FsckModules {
                     Phase::Halted
                 }
             }
-            Phase::Key => {
-                if key_char(byte) && !self.eof_seen {
-                    self.key.push(byte.to_ascii_lowercase());
-                } else {
-                    match byte {
-                        b' ' | b'\t' => self.phase = Phase::KeySpace,
-                        b'=' => self.start_value(),
-                        b'\n' => self.boolean()?,
-                        _ => self.phase = Phase::Halted,
-                    }
-                }
-            }
-            Phase::KeySpace => match byte {
-                b' ' | b'\t' => {}
-                b'=' => self.start_value(),
-                b'\n' => self.boolean()?,
-                _ => self.phase = Phase::Halted,
-            },
-            Phase::Value => match self.value.push(byte) {
-                ValueStep::More => {}
-                ValueStep::Malformed => self.phase = Phase::Halted,
-                ValueStep::Complete => {
-                    if self.value.invalid() {
-                        return Err(Error::InvalidObject);
-                    }
-                    self.phase = Phase::Main;
-                }
-            },
+            Phase::Key | Phase::KeySpace => self.key(byte)?,
+            Phase::Value => self.value(byte)?,
             Phase::Halted => {}
+        }
+        Ok(())
+    }
+    fn main(&mut self, byte: u8) {
+        match byte {
+            b'\n' if self.eof_seen => self.phase = Phase::Halted,
+            b'#' | b';' => self.phase = Phase::Comment,
+            b'[' => {
+                self.section = Section::new();
+                self.base_seen = false;
+                self.phase = Phase::Base;
+            }
+            _ if space(byte) => {}
+            _ if byte.is_ascii_alphabetic() => {
+                self.key = Key::default();
+                self.key.push(byte.to_ascii_lowercase());
+                self.phase = Phase::Key;
+            }
+            _ => self.phase = Phase::Halted,
+        }
+    }
+    fn base(&mut self, byte: u8) {
+        if self.eof_seen {
+            self.phase = Phase::Halted;
+            return;
+        }
+        match byte {
+            b']' if self.base_seen => self.phase = Phase::Main,
+            b' ' | b'\t' | b'\r' => self.phase = Phase::SectionSpace,
+            _ if key_char(byte) || byte == b'.' => {
+                self.base_seen = true;
+                self.section.base(byte);
+            }
+            _ => self.phase = Phase::Halted,
+        }
+    }
+    fn section_space(&mut self, byte: u8) {
+        match byte {
+            b' ' | b'\t' | b'\r' => {}
+            b'"' if self.base_seen => {
+                self.section.extended();
+                self.phase = Phase::Name;
+            }
+            _ => self.phase = Phase::Halted,
+        }
+    }
+    fn key(&mut self, byte: u8) -> Result<()> {
+        if matches!(self.phase, Phase::Key) && key_char(byte) && !self.eof_seen {
+            self.key.push(byte.to_ascii_lowercase());
+            return Ok(());
+        }
+        match byte {
+            b' ' | b'\t' => self.phase = Phase::KeySpace,
+            b'=' => self.start_value(),
+            b'\n' => self.boolean()?,
+            _ => self.phase = Phase::Halted,
+        }
+        Ok(())
+    }
+    fn value(&mut self, byte: u8) -> Result<()> {
+        match self.value.push(byte) {
+            ValueStep::More => {}
+            ValueStep::Malformed => self.phase = Phase::Halted,
+            ValueStep::Complete => {
+                if self.value.invalid() {
+                    return Err(Error::InvalidObject);
+                }
+                self.phase = Phase::Main;
+            }
         }
         Ok(())
     }
@@ -286,9 +281,7 @@ fn space(byte: u8) -> bool {
 struct Value {
     field: Field,
     bad_name: bool,
-    first: bool,
     bad: bool,
-    ended: bool,
     actual: bool,
     pending_space: bool,
     quote: bool,
@@ -302,9 +295,7 @@ impl Value {
         Self {
             field,
             bad_name,
-            first: true,
             bad: false,
-            ended: false,
             actual: false,
             pending_space: false,
             quote: false,
@@ -315,23 +306,31 @@ impl Value {
     }
     fn emit(&mut self, byte: u8) {
         self.actual = true;
-        if self.ended {
+        if self.field == Field::Other {
             return;
         }
         if byte == 0 {
-            self.ended = true;
+            self.bad |= self.field == Field::Url && self.url.invalid();
+            self.field = Field::Other;
             return;
         }
-        if self.first {
-            self.bad |= match self.field {
-                Field::Path => byte == b'-',
-                Field::Update => byte == b'!',
-                _ => false,
-            };
-            self.first = false;
-        }
-        if self.field == Field::Url {
-            self.url.push(byte);
+        match self.field {
+            Field::Path => {
+                self.bad |= byte == b'-';
+                self.field = Field::Other;
+            }
+            Field::Update => {
+                self.bad |= byte == b'!';
+                self.field = Field::Other;
+            }
+            Field::Url => {
+                self.url.push(byte);
+                if let Url::Other(bad) = self.url {
+                    self.bad |= bad;
+                    self.field = Field::Other;
+                }
+            }
+            Field::Other => {}
         }
     }
     fn flush_space(&mut self) {
