@@ -58,6 +58,16 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const second = await git(directory, "rev-parse", "HEAD");
       await git(directory, "-c", "protocol.version=2", "-c", "http.postBuffer=1", "push", "--atomic", remote, "main");
       assert.deepEqual(await refs(server, namespace), [{ name: "refs/heads/main", oid: second }]);
+      const rewind = [{ old: second, new: first, name: "refs/heads/main" }, { old: "0".repeat(first.length), new: second, name: "refs/tags/rewind-side" }];
+      for (const atomic of [true, false]) {
+        const response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, rewind, atomic) });
+        assert.equal(response.status, 200);
+        const report = await response.text();
+        assert.match(report, /ng refs\/heads\/main non-fast-forward/);
+        assert.match(report, atomic ? /ng refs\/tags\/rewind-side atomic push failed/ : /ok refs\/tags\/rewind-side/);
+        assert.equal((await refs(server, namespace)).find((ref) => ref.name === "refs/heads/main").oid, second);
+      }
+      await git(directory, "push", remote, ":refs/tags/rewind-side");
       const state = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
       const stage = state.stages.find((stage) => stage.phase === "published");
       const staged = await json(await fetch(`${server.origin}/_test/${namespace}/stage/${stage.id}`, { headers: headers() }));
@@ -199,6 +209,14 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const afterRefOnly = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
       assert.equal(afterRefOnly.stagedChunks, beforeRefOnly.stagedChunks, "ref-only transactions must not retain empty pack claims");
       assert.equal(afterRefOnly.stages.length, beforeRefOnly.stages.length);
+      const unused = object(format, 3, `unused no-op pack ${randomUUID()}`);
+      const unchanged = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: second, new: second, name: "refs/heads/main" }], true, pack(format, [entry(3, unused.body)])) });
+      assert.equal(unchanged.status, 200); assert.match(await unchanged.text(), /ok refs\/heads\/main/);
+      const absentDeletion = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: zero, new: zero, name: "refs/heads/absent" }], true, Buffer.alloc(0)) });
+      assert.equal(absentDeletion.status, 200); assert.match(await absentDeletion.text(), /ok refs\/heads\/absent/);
+      const afterAbsent = await json(await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() }));
+      assert.equal(afterAbsent.objects, beforeRefOnly.objects);
+      assert.equal(afterAbsent.stages.length, beforeRefOnly.stages.length);
       const commands = [{ old: first, new: second, name: "refs/heads/main" }, { old: zero, new: second, name: "refs/heads/accepted" }];
       let response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, commands) });
       assert.match(await response.text(), /ng refs\/heads\/accepted atomic push failed/);
@@ -294,7 +312,12 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const collision = [{ old: zero, new: second, name: "refs/heads/main/topic" }];
       response = await fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, collision) });
       assert.match(await response.text(), /ref name conflicts/);
-      const races = await Promise.all([0, 1].map(() => fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: second, new: first, name: "refs/heads/main" }]) }).then((response) => response.text())));
+      await git(directory, "commit", "--allow-empty", "-m", "concurrent advance");
+      const third = await git(directory, "rev-parse", "HEAD");
+      const racingCommit = object(format, 1, `${await git(directory, "cat-file", "commit", third)}\n`);
+      assert.equal(racingCommit.id.toString("hex"), third);
+      const racingPack = pack(format, [entry(1, racingCommit.body)]);
+      const races = await Promise.all([0, 1].map(() => fetch(`${remote}/git-receive-pack`, { method: "POST", headers: headers(), body: request(format, [{ old: second, new: third, name: "refs/heads/main" }], true, racingPack) }).then((response) => response.text())));
       assert.equal(races.filter((response) => response.includes("ok refs/heads/main")).length, 1);
       assert.equal(races.filter((response) => response.includes("stale ref")).length, 1);
       await git(directory, "push", remote, "main");

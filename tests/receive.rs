@@ -40,6 +40,44 @@ fn id(format: ObjectFormat, byte: u8) -> ObjectId {
     ObjectId::from_bytes(format, &[byte; 32][..format.id_length()]).unwrap()
 }
 
+#[test]
+fn ancestry_requires_commits_and_shares_a_finite_budget_between_updates() {
+    use git_zero::{ObjectKind, http::receive::Ancestry};
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let old = id(format, 1);
+        let mut walk = Ancestry::new(format, 3);
+        assert_eq!(
+            walk.visit(old, ObjectKind::Commit),
+            Err(Error::InvalidRequest)
+        );
+        walk.start(old).unwrap();
+        assert_eq!(walk.visit(old, ObjectKind::Tree), Err(Error::InvalidObject));
+        let other = if format == ObjectFormat::Sha1 {
+            ObjectFormat::Sha256
+        } else {
+            ObjectFormat::Sha1
+        };
+        assert_eq!(
+            walk.visit(id(other, 1), ObjectKind::Commit),
+            Err(Error::InvalidObjectId)
+        );
+        assert!(!walk.visit(id(format, 2), ObjectKind::Commit).unwrap());
+        assert!(walk.visit(old, ObjectKind::Commit).unwrap());
+        assert_eq!(
+            walk.visit(old, ObjectKind::Commit),
+            Err(Error::InvalidRequest)
+        );
+        walk.start(old).unwrap();
+        assert!(!walk.visit(id(format, 3), ObjectKind::Commit).unwrap());
+        assert_eq!(
+            walk.visit(old, ObjectKind::Commit),
+            Err(Error::LimitExceeded)
+        );
+        assert_eq!(walk.start(old), Err(Error::LimitExceeded));
+        assert_eq!(walk.start(id(format, 4)), Err(Error::LimitExceeded));
+    }
+}
+
 fn command(old: ObjectId, new: ObjectId, name: &[u8], caps: Option<&[u8]>) -> Vec<u8> {
     let mut line = Vec::new();
     line.extend_from_slice(old.to_hex().as_bytes());

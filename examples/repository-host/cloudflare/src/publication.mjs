@@ -1,4 +1,27 @@
 import { bytes } from "./storage.mjs";
+import { CodecError } from "./codec.mjs";
+
+const fromHex = (id) => Uint8Array.from(id.match(/../g), (byte) => Number.parseInt(byte, 16));
+
+function fastForward(store, stage, command, codec) {
+  if (!codec) throw new Error("branch updates require ancestry validation");
+  store.exec("DELETE FROM receive_walk");
+  try {
+    codec.ancestryStart(fromHex(command.old_oid));
+    store.exec("INSERT INTO receive_walk(oid,depth) VALUES(?,0)", command.new_oid);
+    for (;;) {
+      const page = store.exec("SELECT oid,depth FROM receive_walk WHERE walked=0 AND depth=(SELECT MIN(depth) FROM receive_walk WHERE walked=0) ORDER BY depth,oid LIMIT 128");
+      if (!page.length) return false;
+      for (const item of page) {
+        const row = store.object(stage, item.oid);
+        if (!row) throw new Error("commit ancestry target is absent");
+        if (codec.ancestryVisit(fromHex(item.oid), row.kind)) return true;
+        store.exec("UPDATE receive_walk SET walked=1 WHERE oid=?", item.oid);
+        store.exec("INSERT OR IGNORE INTO receive_walk(oid,depth) SELECT dst,? FROM stage_edges WHERE stage=? AND node=? AND relation=1 AND kind=1", item.depth + 1, row.stage, row.node);
+      }
+    }
+  } finally { store.exec("DELETE FROM receive_walk"); }
+}
 
 function ancestors(store, name, ends) {
   // Bind the raw name once; SQLite slices BLOB bytes, including non-UTF-8 refs.
@@ -27,12 +50,13 @@ function conflicts(store, value) {
 
 // Storage visibility is one SQLite transaction. Objects keep their immutable
 // physical stage/offset keys; publication never copies the object/edge catalog.
-export async function publish(store, stage) {
+export async function publish(store, stage, codec) {
   try {
     return store.ctx.storage.transactionSync(() => {
     const pack = store.exec("SELECT * FROM stages WHERE id=? AND phase='verified'", stage)[0];
     if (!pack) throw new Error("stage is not ready for publication");
     const commands = store.exec("SELECT * FROM stage_commands WHERE stage=? ORDER BY seq", stage);
+    codec?.ancestryInit();
     const outcomes = commands.map((command) => {
       const current = store.exec("SELECT oid FROM refs WHERE name=?", command.name)[0];
       const old = command.creation ? null : command.old_oid;
@@ -41,6 +65,13 @@ export async function publish(store, stage) {
       if ((current?.oid ?? null) !== old) error = "stale ref";
       else if (!command.deletion && !target) error = "missing target";
       else if (target && command.branch && target.kind !== 1) error = "branch target is not a commit";
+      else if (command.branch && !command.creation && !command.deletion && command.old_oid !== command.new_oid) {
+        try { if (!fastForward(store, stage, command, codec)) error = "non-fast-forward"; }
+        catch (failure) {
+          if (!(failure instanceof CodecError) || failure.code !== -14) throw failure;
+          error = "ancestry traversal limit exceeded";
+        }
+      }
       return { ...command, deletion: command.deletion, error };
     });
     // Stage candidate ref names in SQLite, so collision checks include planned
@@ -57,7 +88,7 @@ export async function publish(store, stage) {
     if ((pack.selected & 16) && outcomes.some((command) => command.error)) {
       for (const command of outcomes) command.error ??= "atomic push failed";
     }
-    const accepted = outcomes.filter((command) => !command.error);
+    const accepted = outcomes.filter((command) => !command.error && command.old_oid !== command.new_oid);
     if (accepted.length) {
       // Count each new ID once, including duplicate pack entries. The global
       // OID index lets later incremental pushes probe existing published data.

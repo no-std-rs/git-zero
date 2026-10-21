@@ -4,9 +4,11 @@
 use git_zero_core::{Error, ObjectFormat, Result, io::Write};
 
 mod advertisement;
+mod ancestry;
 mod control;
 mod report;
 pub use advertisement::{Advertisement, write_advertisement};
+pub use ancestry::Ancestry;
 pub use control::{Command, ControlDecoder, ControlEvent, ControlProgress, Limits};
 pub use report::{Report, Status, write_progress};
 

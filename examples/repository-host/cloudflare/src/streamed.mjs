@@ -97,7 +97,7 @@ export class OwnRepository {
       const outcomes = names.map((row) => ({ ...row, error: "unpacker error" }));
       return this.stream(this.report(codec, selected, outcomes, true), "application/x-git-receive-pack-result");
     }
-    const outcomes = await publish(this.store, stage);
+    const outcomes = await publish(this.store, stage, codec);
     const publication = this.store.exec("SELECT selected,phase FROM stages WHERE id=?", stage)[0];
     if (publication.phase !== "published") {
       try { await this.store.abandon(stage); }

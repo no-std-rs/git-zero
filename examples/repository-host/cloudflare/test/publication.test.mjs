@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import { readFile } from "node:fs/promises";
+import { Codec } from "../src/codec.mjs";
 import { Store } from "../src/storage.mjs";
 import { publish } from "../src/publication.mjs";
+
+const module = await WebAssembly.compile(await readFile(new URL("../build/git_zero_host_wasm.wasm", import.meta.url)));
 
 test("publication transaction failures await private-pack reclamation", async () => {
   const failure = new Error("injected transaction failure");
@@ -36,6 +40,55 @@ function verifiedStage(name) {
   store.exec("INSERT INTO stage_commands(stage,seq,name,old_oid,new_oid,branch,creation,deletion) VALUES(?,0,?,?,?,0,1,0)", stage, Buffer.from(name), "0".repeat(40), oid);
   return { database, store, stage, oid };
 }
+
+test("branch ancestry follows merge parents in paged, deduplicated storage", async () => {
+  const { database, store, stage, oid } = verifiedStage("refs/heads/main");
+  const codec = new Codec(module), tip = "2".repeat(40), other = "3".repeat(40);
+  try {
+    store.exec("UPDATE stage_commands SET branch=1,creation=0,old_oid=?,new_oid=? WHERE stage=?", oid, tip, stage);
+    store.exec("INSERT INTO refs(name,oid) VALUES(?,?)", Buffer.from("refs/heads/main"), oid);
+    for (const [node, id] of [[13, tip], [14, other]]) store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,oid,kind,size,depth,verified,scanned) VALUES(?,?,1,1,1,?,1,0,0,1,1)", stage, node, id);
+    // Old tip is a second merge parent; a shared ancestor must be queued once.
+    for (const [node, dst] of [[13, other], [13, oid], [14, oid]]) store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,1,1)", stage, node, dst);
+    store.exec("UPDATE stages SET expected=3 WHERE id=?", stage);
+    const outcomes = await publish(store, stage, codec);
+    assert.equal(outcomes[0].error, null);
+    assert.equal(store.exec("SELECT oid FROM refs")[0].oid, tip);
+    assert.equal(store.exec("SELECT COUNT(*) AS count FROM receive_walk")[0].count, 0);
+  } finally { database.close(); }
+});
+
+test("ancestry budget exhaustion rejects the update without leaving queue state", async () => {
+  const { database, store, stage, oid } = verifiedStage("refs/heads/main");
+  try {
+    const old = "2".repeat(40);
+    store.exec("UPDATE stage_commands SET branch=1,creation=0,old_oid=? WHERE stage=?", old, stage);
+    store.exec("INSERT INTO refs(name,oid) VALUES(?,?)", Buffer.from("refs/heads/main"), old);
+    store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,12,?,1,1)", stage, old);
+    store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,oid,kind,size,depth,verified,scanned) VALUES(?,13,1,1,1,?,1,0,0,1,1)", stage, old);
+    const outcomes = await publish(store, stage, new Codec(module, 0, { maxLinks: 1 }));
+    assert.equal(outcomes[0].error, "ancestry traversal limit exceeded");
+    assert.equal(store.exec("SELECT oid FROM refs")[0].oid, old);
+    assert.equal(store.exec("SELECT generation FROM repository")[0].generation, 0);
+    assert.equal(store.exec("SELECT COUNT(*) AS count FROM receive_walk")[0].count, 0);
+  } finally { database.close(); }
+});
+
+test("accepted unchanged refs do not publish unrelated pack objects", async () => {
+  for (const deletion of [0, 1]) {
+    const { database, store, stage, oid } = verifiedStage("refs/tags/unchanged");
+    try {
+      const value = deletion ? "0".repeat(40) : oid;
+      store.exec("UPDATE stage_commands SET creation=?,deletion=?,old_oid=?,new_oid=? WHERE stage=?", deletion, deletion, value, value, stage);
+      if (!deletion) store.exec("INSERT INTO refs(name,oid) VALUES(?,?)", Buffer.from("refs/tags/unchanged"), oid);
+      const outcomes = await publish(store, stage);
+      assert.equal(outcomes[0].error, null);
+      assert.equal(store.exec("SELECT generation,object_count FROM repository")[0].generation, 0);
+      assert.equal(store.exec("SELECT phase FROM stages WHERE id=?", stage)[0].phase, "verified");
+      assert.equal(store.exec("SELECT object_count FROM repository")[0].object_count, 0);
+    } finally { database.close(); }
+  }
+});
 
 test("deep ref publication batches indexed ancestor lookups", async (t) => {
   const name = `refs/tags/${"x/".repeat(4096)}tip`;

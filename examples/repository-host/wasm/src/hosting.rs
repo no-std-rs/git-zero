@@ -7,6 +7,7 @@ use git_zero::{
     Error, ObjectFormat, ObjectId, ObjectKind, Result, http::receive::Capabilities, pack::ObjectKey,
 };
 
+mod ancestry;
 mod budget;
 mod compose;
 mod graph;

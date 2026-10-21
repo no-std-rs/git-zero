@@ -127,6 +127,10 @@ export class Codec {
   receiveCapabilities() { return this.invoke("host_receive_capabilities"); }
   receiveCancel() { this.invoke("host_receive_cancel"); }
 
+  ancestryInit() { this.invoke("host_ancestry_init", this.format, u64(this.limits.maxLinks)); }
+  ancestryStart(id) { this.stage(id); this.invoke("host_ancestry_start", id.length, this.format); }
+  ancestryVisit(id, kind) { this.stage(id); return !!this.invoke("host_ancestry_visit", id.length, this.format, kind); }
+
   advertStart() { return this.event("host_advert_start", null, this.format, this.limits.capabilities).data; }
   advertRef(id, name) {
     const f = fields(32 + name.length); this.id(f, 0, id); f.bytes.set(name, 32);
