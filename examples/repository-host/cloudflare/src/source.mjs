@@ -22,6 +22,7 @@ export class ObjectSource {
     this.chunks = new ByteCache(16 * 1024 * 1024, 8192, ownership);
     this.reader = null; this.readBuffer = null;
     this.temporary = new Map();
+    this.bases = new Map();
     this.names = []; this.edges = []; this.graphStage = null;
     this.queries = 0; this.storageReads = 0; this.historicalModes = 0;
   }
@@ -29,6 +30,7 @@ export class ObjectSource {
   releaseCaches() {
     this.readBuffer?.buffer.transfer(0);
     this.reader = null; this.readBuffer = null;
+    this.bases.clear();
     for (const cache of [this.canonical, this.representations, this.chunks]) cache.clear();
   }
 
@@ -47,12 +49,27 @@ export class ObjectSource {
     return row;
   }
   base(row) {
-    if (row.base_stage && row.base_node !== null) return this.store.node(row.base_stage, row.base_node);
-    if (row.base_node !== null && row.base_node !== undefined && row.stage) return this.store.node(row.stage, row.base_node);
-    if (row.base_oid) return this.store.object(this.stage, row.base_oid);
-    if (row.wire_base_offset !== null && row.wire_base_offset !== undefined) return this.store.node(row.stage, row.wire_base_offset);
-    if (row.wire_base_id) return this.store.object(this.stage, row.wire_base_id);
+    if (row.base_stage && row.base_node !== null) return this.loadBase(row.base_stage, row.base_node);
+    if (row.base_node !== null && row.base_node !== undefined && row.stage) return this.loadBase(row.stage, row.base_node);
+    if (row.base_oid) return this.loadBase(null, null, row.base_oid);
+    if (row.wire_base_offset !== null && row.wire_base_offset !== undefined) return this.loadBase(row.stage, row.wire_base_offset);
+    if (row.wire_base_id) return this.loadBase(null, null, row.wire_base_id);
     return undefined;
+  }
+  loadBase(stage, node, oid = null) {
+    const key = oid === null ? `s:${stage}:${node}` : `o:${oid}`;
+    const cached = this.bases.get(key);
+    if (cached) return cached;
+    const row = oid === null ? this.store.node(stage, node) : this.store.object(this.stage, oid);
+    // Only authenticated, immutable rows survive a lookup. A missing or
+    // unresolved base must remain visible when validation advances.
+    if (row?.verified) {
+      for (const alias of [key, rowKey(row)]) {
+        if (!this.bases.has(alias) && this.bases.size >= 256) this.bases.delete(this.bases.keys().next().value);
+        this.bases.set(alias, row);
+      }
+    }
+    return row;
   }
   cachedTemporary(row) {
     // process() captures these bodies; only larger objects create temp rows.

@@ -3,6 +3,46 @@ import { test } from "node:test";
 import { ByteCache, CacheBuffers, PAGE_BYTES } from "../src/storage.mjs";
 import { ObjectSource } from "../src/source.mjs";
 
+test("verified base metadata shares canonical and physical aliases within one request", () => {
+  const oid = "1".repeat(40), base = { stage: "published", node: 12, oid, verified: 1, kind: 3, size: 7 };
+  let reads = 0;
+  const store = {
+    object(stage, id) { reads++; assert.equal(stage, "intake"); assert.equal(id, oid); return { ...base }; },
+    node() { assert.fail("resolved physical aliases must reuse the verified row"); },
+  };
+  const source = new ObjectSource(store, {}, "intake"), received = { stage: "intake", node: 42, wire_base_id: oid };
+  assert.deepEqual(source.base(received), base);
+  assert.deepEqual(source.base({ ...received, base_stage: base.stage, base_node: base.node }), base);
+  assert.deepEqual(source.base(received), base);
+  assert.equal(reads, 1);
+  assert.deepEqual(new ObjectSource(store, {}, "intake").base(received), base);
+  assert.equal(reads, 2, "a new request must consult its own visible catalog");
+});
+
+test("base metadata keeps stage identity, retries unresolved rows and releases its bounded cache", () => {
+  let reads = 0;
+  const rows = new Map();
+  const store = { node(stage, node) { reads++; return rows.get(`${stage}:${node}`); } };
+  const source = new ObjectSource(store, {}, "intake"), lookup = (stage, node) => source.base({ stage, wire_base_offset: node });
+  assert.equal(lookup("one", 12), undefined);
+  rows.set("one:12", { stage: "one", node: 12, oid: "1".repeat(40), verified: 0 });
+  assert.equal(lookup("one", 12).verified, 0);
+  rows.set("one:12", { stage: "one", node: 12, oid: "1".repeat(40), verified: 1 });
+  assert.equal(lookup("one", 12).verified, 1);
+  rows.set("two:12", { stage: "two", node: 12, oid: "2".repeat(40), verified: 1 });
+  assert.equal(lookup("two", 12).stage, "two");
+  assert.equal(reads, 4);
+  for (let node = 13; node < 1037; node++) {
+    rows.set(`one:${node}`, { stage: "one", node, oid: node.toString(16).padStart(40, "0"), verified: 1 });
+    assert.equal(lookup("one", node).node, node);
+  }
+  assert.ok(source.bases.size <= 256);
+  const before = reads;
+  assert.equal(lookup("one", 12).stage, "one");
+  assert.equal(reads, before + 1, "evicted metadata must be loaded again");
+  source.releaseCaches(); assert.equal(source.bases.size, 0);
+});
+
 test("cache entry count bounds empty and tiny object representations independently of byte budget", () => {
   const cache = new ByteCache(1024, 16);
   for (let index = 0; index < 10000; index++) cache.put(`entry-${index}`, new Uint8Array(index % 2));

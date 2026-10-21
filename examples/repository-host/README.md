@@ -102,3 +102,6 @@ stage UUID once in a separate lookup table. Existing text-key catalogs remain
 readable and writable without migration. The 100,000-edge SQLite fixture uses
 about 38% less space for its complete catalog with numeric keys; this does not
 establish the storage reduction for the full Linux repository.
+Each request also caches at most 256 aliases for verified delta-base metadata.
+Missing and unresolved bases are looked up again as validation advances; the
+metadata cache is released with the request's byte caches.
