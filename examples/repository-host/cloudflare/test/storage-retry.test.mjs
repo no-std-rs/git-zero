@@ -74,27 +74,35 @@ test("chunk reads preserve compatibility with earlier eight MiB storage extents"
 });
 
 
+async function signedReadRetry(getFailure) {
+  const directory = await mkdtemp(join(tmpdir(), "git-zero-r2-retry-"));
+  let server;
+  try {
+    server = await startStandalone(directory, { getFailure });
+    const fixture = project(0), namespace = "retry";
+    const intake = await fetch(`${server.origin}/_test/${namespace}/intake`, { method: "POST", headers: headers(), body: fixture.wire });
+    assert.equal(intake.status, 200, await intake.clone().text());
+    const received = await intake.json();
+    const row = await (await fetch(`${server.origin}/_test/${namespace}/stage/${received.stage}`, { headers: headers() })).json();
+    const root = row.objects.find((item) => item.oid === fixture.root.id.toString("hex"));
+    const canonical = await fetch(`${server.origin}/_test/${namespace}/object/${received.stage}?node=${root.node}&data=1`, { headers: headers() });
+    assert.equal(canonical.status, 200, await canonical.clone().text());
+    assert.deepEqual(Buffer.from(await canonical.arrayBuffer()), fixture.root.body);
+    assert.equal(server.storageFaults.injected, 1);
+    if (getFailure.endsWith("-stall")) assert.equal(server.storageFaults.aborted, 1);
+    const state = await (await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() })).json();
+    assert.equal(state.usage.r2Retries, 1);
+  } finally { await server?.stop(); await rm(directory, { recursive: true, force: true }); }
+}
+
 test("signed S3 reads recover dropped connections, truncated bodies and 503 responses", { timeout: 30000 }, async () => {
-  for (const getFailure of ["connection", "body", "status"]) {
-    const directory = await mkdtemp(join(tmpdir(), "git-zero-r2-retry-"));
-    let server;
-    try {
-      server = await startStandalone(directory, { getFailure });
-      const fixture = project(0), namespace = "retry";
-      const intake = await fetch(`${server.origin}/_test/${namespace}/intake`, { method: "POST", headers: headers(), body: fixture.wire });
-      assert.equal(intake.status, 200, await intake.clone().text());
-      const received = await intake.json();
-      const row = await (await fetch(`${server.origin}/_test/${namespace}/stage/${received.stage}`, { headers: headers() })).json();
-      const root = row.objects.find((item) => item.oid === fixture.root.id.toString("hex"));
-      const canonical = await fetch(`${server.origin}/_test/${namespace}/object/${received.stage}?node=${root.node}&data=1`, { headers: headers() });
-      assert.equal(canonical.status, 200, await canonical.clone().text());
-      assert.deepEqual(Buffer.from(await canonical.arrayBuffer()), fixture.root.body);
-      assert.equal(server.storageFaults.injected, 1);
-      const state = await (await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers() })).json();
-      assert.equal(state.usage.r2Retries, 1);
-    } finally { await server?.stop(); await rm(directory, { recursive: true, force: true }); }
-  }
+  for (const failure of ["connection", "body", "status"]) await signedReadRetry(failure);
 });
+
+test("signed S3 attempts abort stalled headers and bodies before retrying", { timeout: 90000 }, async () => {
+  for (const failure of ["headers-stall", "body-stall"]) await signedReadRetry(failure);
+});
+
 
 test("committed refs retain successful reports when redundant-pack cleanup is deferred", { timeout: 30000 }, async () => {
   for (const format of [0, 1]) {

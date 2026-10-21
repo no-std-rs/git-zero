@@ -24,7 +24,7 @@ export class R2S3Bucket {
     for (const value of ["auto", "s3", "aws4_request"]) key = await hmac(key, value);
     this.signing = { date, key }; return key;
   }
-  async request(method, key, data = null) {
+  async request(method, key, data = null, consume = null) {
     const url = new URL(this.url);
     url.pathname = `${url.pathname.replace(/\/$/, "")}/${key.split("/").map(encodeURIComponent).join("/")}`;
     const time = new Date().toISOString().replace(/[:-]|\.\d{3}/g, ""), date = time.slice(0, 8);
@@ -33,28 +33,39 @@ export class R2S3Bucket {
     const canonical = [method, url.pathname, "", `host:${url.host}\nx-amz-content-sha256:${digest}\nx-amz-date:${time}\n`, signed, digest].join("\n");
     const scope = `${date}/auto/s3/aws4_request`;
     const signature = hex(await hmac(await this.signingKey(date), `AWS4-HMAC-SHA256\n${time}\n${scope}\n${await hash(encode(canonical))}`));
-    const response = await fetch(url, { method, body: data, redirect: "manual", headers: {
-      "x-amz-date": time, "x-amz-content-sha256": digest,
-      authorization: `AWS4-HMAC-SHA256 Credential=${this.accessKey}/${scope}, SignedHeaders=${signed}, Signature=${signature}`,
-    } });
-    if (!response.ok && !(method === "GET" && response.status === 404)) {
-      await response.body?.cancel();
-      const error = new Error(`R2 S3 ${method} failed (${response.status})`);
-      error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+    const controller = new AbortController();
+    const timeout = new Error("R2 S3 request deadline exceeded");
+    timeout.retryable = true;
+    const timer = setTimeout(() => controller.abort(timeout), 30000);
+    try {
+      const response = await fetch(url, { method, body: data, redirect: "manual", signal: controller.signal, headers: {
+        "x-amz-date": time, "x-amz-content-sha256": digest,
+        authorization: `AWS4-HMAC-SHA256 Credential=${this.accessKey}/${scope}, SignedHeaders=${signed}, Signature=${signature}`,
+      } });
+      if (!response.ok && !(method === "GET" && response.status === 404)) {
+        await response.body?.cancel();
+        const error = new Error(`R2 S3 ${method} failed (${response.status})`);
+        error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+        throw error;
+      }
+      return consume ? await consume(response) : await response.body?.cancel();
+    } catch (error) {
+      if (controller.signal.aborted) throw timeout;
       throw error;
-    }
-    return response;
+    } finally { clearTimeout(timer); }
   }
-  async put(key, data) { const response = await this.request("PUT", key, data); await response.body?.cancel(); }
+  async put(key, data) { await this.request("PUT", key, data); }
   async get(key) {
-    const response = await this.request("GET", key);
-    if (response.status === 404) { await response.body?.cancel(); return null; }
-    const size = Number(response.headers.get("content-length"));
-    if (!Number.isSafeInteger(size) || size < 0 || !response.headers.has("content-length")) { await response.body?.cancel(); throw new Error("R2 S3 response size is absent or invalid"); }
-    return { size, arrayBuffer: () => response.arrayBuffer() };
+    return this.request("GET", key, null, async (response) => {
+      if (response.status === 404) { await response.body?.cancel(); return null; }
+      const size = Number(response.headers.get("content-length"));
+      if (!Number.isSafeInteger(size) || size < 0 || size > 8 * 1024 * 1024 || !response.headers.has("content-length")) { await response.body?.cancel(); throw new Error("R2 S3 response size is absent or invalid"); }
+      const data = await response.arrayBuffer();
+      return { size, arrayBuffer: async () => data };
+    });
   }
   async delete(keys) {
-    for (const key of typeof keys === "string" ? [keys] : keys) { const response = await this.request("DELETE", key); await response.body?.cancel(); }
+    for (const key of typeof keys === "string" ? [keys] : keys) await this.request("DELETE", key);
   }
 }
 

@@ -17,7 +17,7 @@ const hmac = (key, bytes) => createHmac("sha256", key).update(bytes).digest();
 
 async function s3(directory, getFailure, deleteFailures) {
   await mkdir(directory, { recursive: true });
-  const faults = { injected: 0, deleteFailures: 0 };
+  const faults = { injected: 0, deleteFailures: 0, aborted: 0 };
   const server = createServer(async (request, response) => {
     try {
       const parts = []; let length = 0;
@@ -45,6 +45,15 @@ async function s3(directory, getFailure, deleteFailures) {
           const value = await readFile(path);
           if (getFailure && faults.injected === 0) {
             faults.injected++;
+            if (getFailure === "headers-stall" || getFailure === "body-stall") {
+              response.once("close", () => { if (!response.writableEnded) faults.aborted++; });
+              if (getFailure === "body-stall") {
+                response.writeHead(200, { "Content-Length": value.length });
+                response.write(value.subarray(0, Math.floor(value.length / 2)));
+                response.flushHeaders();
+              }
+              return;
+            }
             if (getFailure === "status") { response.writeHead(503); response.end(); return; }
             if (getFailure === "body") {
               response.writeHead(200, { "Content-Length": value.length });
