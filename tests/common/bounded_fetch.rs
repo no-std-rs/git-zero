@@ -1010,7 +1010,7 @@ fn malformed_extensions_leave_output_empty_in_both_protocols() {
         &["filter object:type=blob"],
         &["deepen -1"],
         &["deepen +1"],
-        &["filter blob:limit=+1"],
+        &["filter blob:limit=++1"],
         &["deepen 2147483648"],
         &["deepen 1", "deepen-relative", "deepen-relative"],
         &["deepen-since 1"],
