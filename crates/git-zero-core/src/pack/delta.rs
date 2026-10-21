@@ -1,5 +1,5 @@
 //! Resumable Git delta instructions, independent of base/result storage.
-use super::DeltaLimits;
+use super::{DeltaLimits, decode::variable_byte};
 use crate::{Error, Result};
 
 /// One instruction or boundary. Execute each copy/insert before resuming.
@@ -198,15 +198,9 @@ impl DeltaDecoder {
     }
 
     fn size_byte(&mut self, byte: u8) -> Result<Option<DeltaStatus<'static>>> {
-        if self.shift >= 64 || u64::from(byte & 127) > (u64::MAX >> self.shift) {
-            return Err(Error::CorruptPack);
-        }
-        self.variable |= u64::from(byte & 127) << self.shift;
-        self.shift += 7;
-        if byte & 128 != 0 {
+        let Some(value) = variable_byte(&mut self.variable, &mut self.shift, byte)? else {
             return Ok(None);
-        }
-        let value = self.variable;
+        };
         self.variable = 0;
         self.shift = 0;
         if matches!(self.state, State::Base) {

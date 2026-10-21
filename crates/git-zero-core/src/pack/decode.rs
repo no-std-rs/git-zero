@@ -461,14 +461,18 @@ fn chunk(value: u64, shift: u32) -> Result<u64> {
     Ok(value << shift)
 }
 
+// The buffered and resumable delta decoders share checked size accumulation.
+pub(super) fn variable_byte(value: &mut u64, shift: &mut u32, byte: u8) -> Result<Option<u64>> {
+    *value |= chunk(u64::from(byte & 127), *shift)?;
+    *shift += 7;
+    Ok((byte & 128 == 0).then_some(*value))
+}
+
 fn variable(bytes: &mut &[u8]) -> Result<u64> {
-    let (mut result, mut shift) = (0, 0);
+    let (mut value, mut shift) = (0, 0);
     loop {
-        let byte = take_byte(bytes)?;
-        result |= chunk(u64::from(byte & 127), shift)?;
-        if byte & 128 == 0 {
-            return Ok(result);
+        if let Some(value) = variable_byte(&mut value, &mut shift, take_byte(bytes)?)? {
+            return Ok(value);
         }
-        shift += 7;
     }
 }
