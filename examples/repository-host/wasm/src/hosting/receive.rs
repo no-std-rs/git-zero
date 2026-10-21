@@ -5,11 +5,11 @@ use core::cell::UnsafeCell;
 use git_zero::{
     Error, ObjectFormat, ObjectId, ObjectKind, Result,
     http::{
-        receive::{Capabilities, ControlDecoder, ControlEvent, Limits},
+        receive::{Capabilities, Command, ControlDecoder, ControlEvent, Limits},
         stored,
     },
     io::Write,
-    pack::{DecodeLimits, DecodeStatus, Decoder, EntryKind},
+    pack::{DecodeLimits, DecodeStatus, Decoder, EntryHeader, EntryKind},
     zlib::{InflateLimits, WINDOW_SIZE},
 };
 
@@ -189,15 +189,7 @@ impl Receive {
             }
             ControlEvent::Command(command) => {
                 let branch = validate_name(self.format, command.new, command.name)?;
-                frame.id(0, command.old);
-                frame.id(1, command.new);
-                frame.word(
-                    12,
-                    u32::from(branch)
-                        | (u32::from(command.old.is_zero()) << 1)
-                        | (u32::from(command.new.is_zero()) << 2),
-                );
-                frame.data(command.name)?;
+                frame.receive_command(command, branch)?;
                 self.commands += 1;
                 (3, command.name.len())
             }
@@ -251,21 +243,7 @@ impl Receive {
             }
             DecodeStatus::EntryStart(header) => {
                 self.blob = matches!(header.kind, EntryKind::Object(ObjectKind::Blob));
-                frame.wide(16, header.offset);
-                frame.wide(24, header.size);
-                frame.wide(32, decoder.position());
-                let kind = match header.kind {
-                    EntryKind::Object(kind) => kind as u32,
-                    EntryKind::OffsetDelta { base_offset } => {
-                        frame.wide(40, base_offset);
-                        6
-                    }
-                    EntryKind::ReferenceDelta { base_id } => {
-                        frame.id(0, base_id);
-                        7
-                    }
-                };
-                frame.word(12, kind);
+                frame.receive_entry(header, decoder.position());
                 8
             }
             DecodeStatus::EntryEnd {
@@ -273,14 +251,7 @@ impl Receive {
                 crc32,
                 object_id,
             } => {
-                frame.wide(16, end_offset);
-                frame.word(24, crc32);
-                if let Some(id) = object_id {
-                    frame.id(0, id);
-                    // A verified plain blob has no links to scan. This remains
-                    // provisional until the complete pack and transport EOF.
-                    frame.word(12, 1 | (u32::from(self.blob) << 1));
-                }
+                frame.receive_entry_end(end_offset, crc32, object_id, self.blob);
                 10
             }
             DecodeStatus::Finished(id) => {
@@ -290,6 +261,50 @@ impl Receive {
             }
         };
         Ok(frame.finish(tag, progress.consumed, progress.written))
+    }
+}
+
+// Encode typed receive events separately from decoder ownership and phases.
+impl Frame<'_> {
+    fn receive_command(&mut self, command: Command<'_>, branch: bool) -> Result<()> {
+        self.id(0, command.old);
+        self.id(1, command.new);
+        self.word(
+            12,
+            u32::from(branch)
+                | (u32::from(command.old.is_zero()) << 1)
+                | (u32::from(command.new.is_zero()) << 2),
+        );
+        self.data(command.name)
+    }
+
+    fn receive_entry(&mut self, header: EntryHeader, position: u64) {
+        self.wide(16, header.offset);
+        self.wide(24, header.size);
+        self.wide(32, position);
+        let kind = match header.kind {
+            EntryKind::Object(kind) => kind as u32,
+            EntryKind::OffsetDelta { base_offset } => {
+                self.wide(40, base_offset);
+                6
+            }
+            EntryKind::ReferenceDelta { base_id } => {
+                self.id(0, base_id);
+                7
+            }
+        };
+        self.word(12, kind);
+    }
+
+    fn receive_entry_end(&mut self, offset: u64, crc32: u32, id: Option<ObjectId>, blob: bool) {
+        self.wide(16, offset);
+        self.word(24, crc32);
+        if let Some(id) = id {
+            self.id(0, id);
+            // A verified plain blob has no links to scan. This remains
+            // provisional until the complete pack and transport EOF.
+            self.word(12, 1 | (u32::from(blob) << 1));
+        }
     }
 }
 
