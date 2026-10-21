@@ -90,7 +90,7 @@ const SCHEMA = [
   // before OR IGNORE can discard them; this also protects existing schemas.
   "CREATE TRIGGER IF NOT EXISTS stage_edge_kind BEFORE INSERT ON stage_edges WHEN EXISTS(SELECT 1 FROM stage_edges WHERE stage=NEW.stage AND node=NEW.node AND relation=NEW.relation AND dst=NEW.dst AND kind<>NEW.kind) BEGIN SELECT RAISE(ABORT,'conflicting graph target kinds'); END",
   "CREATE TABLE IF NOT EXISTS stage_names (stage TEXT NOT NULL, node INTEGER NOT NULL, name BLOB NOT NULL, mode INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, PRIMARY KEY(stage,node,name)) WITHOUT ROWID",
-  "CREATE TABLE IF NOT EXISTS stage_blob_checks (stage TEXT NOT NULL, oid TEXT NOT NULL, PRIMARY KEY(stage,oid)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS stage_blob_checks (stage TEXT NOT NULL, oid TEXT NOT NULL, checks INTEGER NOT NULL DEFAULT 2, PRIMARY KEY(stage,oid)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS temp_chunks (stage TEXT NOT NULL, object TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,object,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS temp_chunk_offsets ON temp_chunks(stage,object,start)",
   "CREATE TABLE IF NOT EXISTS temp_objects (stage TEXT NOT NULL, object TEXT NOT NULL, oid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(stage,object)) WITHOUT ROWID",
@@ -116,6 +116,8 @@ export class Store {
     this.usage = { sqlCalls: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2Puts: 0, r2Deletes: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
     this.sqlKnown = true;
     for (const statement of SCHEMA) this.exec(statement);
+    // Earlier pending checks selected attributes only. Preserve that meaning.
+    if (!this.exec("PRAGMA table_info(stage_blob_checks)").some((column) => column.name === "checks")) this.exec("ALTER TABLE stage_blob_checks ADD COLUMN checks INTEGER NOT NULL DEFAULT 2");
     // Older stages have unknown entry kinds; conservatively disable raw OFS reuse.
     if (!this.exec("PRAGMA table_info(stages)").some((column) => column.name === "has_ofs")) this.exec("ALTER TABLE stages ADD COLUMN has_ofs INTEGER NOT NULL DEFAULT 1");
     if (!this.exec("PRAGMA table_info(stages)").some((column) => column.name === "reusable")) this.exec("ALTER TABLE stages ADD COLUMN reusable INTEGER NOT NULL DEFAULT 0");

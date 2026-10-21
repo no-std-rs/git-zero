@@ -125,20 +125,20 @@ export class Intake {
     // A newly received tree can designate a blob from an older published pack.
     // The work queue is keyed by canonical ID, independent of physical stages.
     for (;;) {
-      const rows = this.store.exec("SELECT oid FROM stage_blob_checks WHERE stage=? ORDER BY oid LIMIT 128", this.stage);
+      const rows = this.store.exec("SELECT oid,checks FROM stage_blob_checks WHERE stage=? ORDER BY oid LIMIT 128", this.stage);
       if (!rows.length) break;
-      for (const { oid } of rows) {
+      for (const { oid, checks } of rows) {
         const row = this.store.object(this.stage, oid);
-        if (!row || row.kind !== 3) throw new Error("designated attributes target is not a blob");
+        if (!row || row.kind !== 3) throw new Error("designated target is not a blob");
         // Reject an oversized designated blob before warming or reading it.
-        this.source.beginScan(row, false, 2);
+        this.source.beginScan(row, false, checks);
         const cached = this.source.canonical.get(oid);
         if (cached) {
           this.codec.charge(0, row.size); this.codec.charge(1, row.size);
-          if (this.source.scanCaptured(row, cached, false) !== oid) throw new Error("attributes object hash differs");
+          if (this.source.scanCaptured(row, cached, false) !== oid) throw new Error("designated object hash differs");
         } else {
           if (row.wire_kind >= 5) await this.source.warm(this.source.base(row));
-          await this.source.process(row, false, 2);
+          await this.source.process(row, false, checks);
         }
         this.store.exec("DELETE FROM stage_blob_checks WHERE stage=? AND oid=?", this.stage, oid);
       }

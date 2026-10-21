@@ -2,7 +2,7 @@ use super::{Frame, Shared, code, finish, format, input, kind, output, u32_at, u6
 use core::cell::UnsafeCell;
 use git_zero::{
     Error, ObjectDigest, ObjectInfo, ObjectKind,
-    http::receive::{FsckAttributes, FsckHeaders, check_tree_entry},
+    http::receive::{FsckAttributes, FsckHeaders, FsckModules, check_tree_entry},
     object::{LinkDecoder, LinkLimits, LinkRelation, LinkStatus},
 };
 
@@ -13,6 +13,7 @@ struct Session {
     digest: ObjectDigest,
     headers: Option<FsckHeaders>,
     attributes: Option<FsckAttributes>,
+    modules: Option<FsckModules>,
     strict: bool,
 }
 
@@ -26,7 +27,7 @@ pub extern "C" fn host_graph_cancel() {
 
 /// Init (40 bytes): format/kind u32@0/4; size u64@8; max bytes/links
 /// u64@16/24; name scratch capacity u32@32 (two names, at most 131072),
-/// policy bits u32@36: strict headers/trees=1, designated attributes blob=4.
+/// policy bits u32@36: strict headers/trees=1, modules blob=2, attributes blob=4.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_graph_init(length: usize) -> i32 {
     host_graph_cancel();
@@ -60,7 +61,7 @@ fn initialize(length: usize) -> git_zero::Result<i32> {
     };
     let capacity = u32_at(bytes, 32)? as usize;
     let strict = u32_at(bytes, 36)?;
-    if strict & !5 != 0 || (strict & 4 != 0 && info.kind != ObjectKind::Blob) {
+    if strict & !7 != 0 || (strict & 6 != 0 && info.kind != ObjectKind::Blob) {
         return Err(Error::InvalidRequest);
     }
     if capacity > 131072 {
@@ -88,6 +89,11 @@ fn initialize(length: usize) -> git_zero::Result<i32> {
             } else {
                 None
             },
+            modules: if strict & 2 != 0 {
+                Some(FsckModules::new(info.size))
+            } else {
+                None
+            },
             strict: strict & 1 != 0,
         });
     }
@@ -112,6 +118,9 @@ fn feed(length: usize, end_of_input: u32) -> git_zero::Result<i32> {
     }
     if let Some(attributes) = &mut session.attributes {
         attributes.update(&bytes[..consumed])?;
+    }
+    if let Some(modules) = &mut session.modules {
+        modules.update(&bytes[..consumed])?;
     }
     session.digest.update(&bytes[..consumed])?;
     let mut frame = Frame::new(output());
@@ -162,6 +171,9 @@ fn feed(length: usize, end_of_input: u32) -> git_zero::Result<i32> {
             }
             if let Some(attributes) = &session.attributes {
                 attributes.finish()?;
+            }
+            if let Some(modules) = &mut session.modules {
+                modules.finish()?;
             }
             frame.id(0, session.digest.finish()?);
             (33, 0)

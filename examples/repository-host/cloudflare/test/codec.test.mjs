@@ -10,6 +10,7 @@ import { ObjectSource } from "../src/source.mjs";
 import { PAGE_BYTES } from "../src/storage.mjs";
 
 const module = await WebAssembly.compile(await readFile(new URL("../build/git_zero_host_wasm.wasm", import.meta.url)));
+const modulesReference = JSON.parse(await readFile(new URL("./fixtures/gitmodules.json", import.meta.url), "utf8"));
 const empty = new Uint8Array();
 const objectId = (format, kind, body) => createHash(format === 0 ? "sha1" : "sha256").update(`${kind} ${body.length}\0`).update(body).digest();
 const packet = (bytes) => { bytes = Buffer.from(bytes); return Buffer.concat([Buffer.from((bytes.length + 4).toString(16).padStart(4, "0")), bytes]); };
@@ -368,6 +369,43 @@ test("designated attributes checks bound size before reading and stream line bou
         codec.graphInit({ kind: 3, size: body.length }, { checks: 2 });
         const scan = () => { for (let at = 0; at < body.length; at += chunk) graph(codec, body.subarray(at, at + chunk), at + chunk >= body.length); };
         if (accepted) scan(); else assert.throws(scan, (error) => error.code === -7);
+      }
+    }
+  }
+});
+
+test("designated modules and attributes policies compose over fragmented blob bytes", () => {
+  const cases = [
+    [Buffer.from('[submodule "ok"]\nurl = https://example.test/r\n'), 1, true],
+    [Buffer.from('[submodule "ok"]\nurl = -bad\n'), 1, false],
+    [Buffer.from('[broken\n[submodule "ok"]\nurl = -bad\n'), 1, true],
+    [Buffer.from('[submodule "ok"]\nurl = -bad\n'), 3, false],
+    [Buffer.alloc(2048, 120), 1, true], [Buffer.alloc(2048, 120), 3, false],
+  ];
+  for (const format of [0, 1]) {
+    const codec = new Codec(module, format);
+    for (const [body, checks, accepted] of cases) for (const chunk of [1, 7, 64, body.length]) {
+      codec.graphInit({ kind: 3, size: body.length }, { checks });
+      const scan = () => { for (let at=0; at<body.length; at+=chunk) graph(codec,body.subarray(at,at+chunk),at+chunk>=body.length); };
+      if (accepted) scan(); else assert.throws(scan,(error)=>error.code===-7);
+    }
+    assert.throws(()=>codec.graphInit({kind:1,size:0},{checks:1}),(error)=>error.code===-3);
+  }
+});
+
+test("gitmodules Wasm acceptance matches the saved configured-native-Git corpus", () => {
+  for (const format of [0, 1]) {
+    const codec = new Codec(module, format);
+    for (const row of modulesReference.cases) {
+      const body = row.hex ? Buffer.from(row.hex, "hex") : Buffer.from(row.body);
+      for (const chunk of [1, 2, 7, Math.max(1, body.length)]) {
+        codec.graphInit({ kind: 3, size: body.length }, { checks: 1 });
+        const scan = () => {
+          if (!body.length) return graph(codec, body, true);
+          for (let at = 0; at < body.length; at += chunk) graph(codec, body.subarray(at, at + chunk), at + chunk >= body.length);
+        };
+        if (row.accepted) assert.doesNotThrow(scan, row.case);
+        else assert.throws(scan, (error) => error instanceof CodecError && error.code === -7, row.case);
       }
     }
   }

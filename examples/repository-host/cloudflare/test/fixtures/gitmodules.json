@@ -1,0 +1,765 @@
+{
+  "reference": {
+    "git": "2.53.0",
+    "platform": "Linux x86_64",
+    "operation": "receive-pack --stateless-rpc",
+    "config": {
+      "receive.fsckObjects": true,
+      "receive.denyNonFastForwards": true,
+      "receive.unpackLimit": 0
+    },
+    "formats": [
+      "sha1",
+      "sha256"
+    ],
+    "result": "acceptance of a commit whose tree designates the provided blob as .gitmodules; malformed config warnings are preserved",
+    "sourceSHA256": "950edff75dedd8f3136a17cfd1ca583f3a6ea569ab46e2d108f24b253e52ac67"
+  },
+  "cases": [
+    {
+      "case": "name:'':url = safe",
+      "body": "[submodule \"\"]\nurl = safe\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'':dummy",
+      "body": "[submodule \"\"]\ndummy\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'..':url = safe",
+      "body": "[submodule \"..\"]\nurl = safe\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'..':dummy",
+      "body": "[submodule \"..\"]\ndummy\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'../bad':url = safe",
+      "body": "[submodule \"../bad\"]\nurl = safe\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'../bad':dummy",
+      "body": "[submodule \"../bad\"]\ndummy\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'bad/../x':url = safe",
+      "body": "[submodule \"bad/../x\"]\nurl = safe\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'bad/../x':dummy",
+      "body": "[submodule \"bad/../x\"]\ndummy\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'bad\\\\..\\\\x':url = safe",
+      "body": "[submodule \"bad\\\\..\\\\x\"]\nurl = safe\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'bad\\\\..\\\\x':dummy",
+      "body": "[submodule \"bad\\\\..\\\\x\"]\ndummy\n",
+      "accepted": false
+    },
+    {
+      "case": "name:'foo':url = safe",
+      "body": "[submodule \"foo\"]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "name:'foo':dummy",
+      "body": "[submodule \"foo\"]\ndummy\n",
+      "accepted": true
+    },
+    {
+      "case": "name:'.':url = safe",
+      "body": "[submodule \".\"]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "name:'.':dummy",
+      "body": "[submodule \".\"]\ndummy\n",
+      "accepted": true
+    },
+    {
+      "case": "name:'foo..bar':url = safe",
+      "body": "[submodule \"foo..bar\"]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "name:'foo..bar':dummy",
+      "body": "[submodule \"foo..bar\"]\ndummy\n",
+      "accepted": true
+    },
+    {
+      "case": "name:'foo/.':url = safe",
+      "body": "[submodule \"foo/.\"]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "name:'foo/.':dummy",
+      "body": "[submodule \"foo/.\"]\ndummy\n",
+      "accepted": true
+    },
+    {
+      "case": "name:'foo//bar':url = safe",
+      "body": "[submodule \"foo//bar\"]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "name:'foo//bar':dummy",
+      "body": "[submodule \"foo//bar\"]\ndummy\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'-bad'",
+      "body": "[submodule \"ok\"]\nurl = -bad\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'\"-bad\"'",
+      "body": "[submodule \"ok\"]\nurl = \"-bad\"\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'\" -bad\"'",
+      "body": "[submodule \"ok\"]\nurl = \" -bad\"\n",
+      "accepted": true
+    },
+    {
+      "case": "url:\"'-bad'\"",
+      "body": "[submodule \"ok\"]\nurl = '-bad'\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'safe'",
+      "body": "[submodule \"ok\"]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'./-okay'",
+      "body": "[submodule \"ok\"]\nurl = ./-okay\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'../:bad'",
+      "body": "[submodule \"ok\"]\nurl = ../:bad\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'..//bad'",
+      "body": "[submodule \"ok\"]\nurl = ..//bad\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'./.././:bad'",
+      "body": "[submodule \"ok\"]\nurl = ./.././:bad\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'./:okay'",
+      "body": "[submodule \"ok\"]\nurl = ./:okay\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'../okay'",
+      "body": "[submodule \"ok\"]\nurl = ../okay\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'git://host/%0a'",
+      "body": "[submodule \"ok\"]\nurl = git://host/%0a\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'git://host/%zz'",
+      "body": "[submodule \"ok\"]\nurl = git://host/%zz\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'https://host/%0a'",
+      "body": "[submodule \"ok\"]\nurl = https://host/%0a\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'https://host/%zz'",
+      "body": "[submodule \"ok\"]\nurl = https://host/%zz\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'HTTP://host/%0a'",
+      "body": "[submodule \"ok\"]\nurl = HTTP://host/%0a\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'ssh://host/%0a'",
+      "body": "[submodule \"ok\"]\nurl = ssh://host/%0a\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'ext::sh -c bad'",
+      "body": "[submodule \"ok\"]\nurl = ext::sh -c bad\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'http::https://host'",
+      "body": "[submodule \"ok\"]\nurl = http::https://host\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'http::ssh://host'",
+      "body": "[submodule \"ok\"]\nurl = http::ssh://host\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'http::bad'",
+      "body": "[submodule \"ok\"]\nurl = http::bad\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'http:///bad'",
+      "body": "[submodule \"ok\"]\nurl = http:///bad\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'http://'",
+      "body": "[submodule \"ok\"]\nurl = http://\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'file:///okay'",
+      "body": "[submodule \"ok\"]\nurl = file:///okay\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'http::file:///okay'",
+      "body": "[submodule \"ok\"]\nurl = http::file:///okay\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'https://host:0'",
+      "body": "[submodule \"ok\"]\nurl = https://host:0\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'https://host:65535'",
+      "body": "[submodule \"ok\"]\nurl = https://host:65535\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'https://host:65536'",
+      "body": "[submodule \"ok\"]\nurl = https://host:65536\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'https://host:'",
+      "body": "[submodule \"ok\"]\nurl = https://host:\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'https://user%0a@host'",
+      "body": "[submodule \"ok\"]\nurl = https://user%0a@host\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'https://user%zz@host'",
+      "body": "[submodule \"ok\"]\nurl = https://user%zz@host\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'https://host/%2e%2e/x'",
+      "body": "[submodule \"ok\"]\nurl = https://host/%2e%2e/x\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'https://host/a/%2e%2e/x'",
+      "body": "[submodule \"ok\"]\nurl = https://host/a/%2e%2e/x\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'https://host//../x'",
+      "body": "[submodule \"ok\"]\nurl = https://host//../x\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'https://host/%250a'",
+      "body": "[submodule \"ok\"]\nurl = https://host/%250a\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'https://host/?q=%0a'",
+      "body": "[submodule \"ok\"]\nurl = https://host/?q=%0a\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'https://host/?q=%00bad'",
+      "body": "[submodule \"ok\"]\nurl = https://host/?q=%00bad\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'\"./line\\\\nnext\"'",
+      "body": "[submodule \"ok\"]\nurl = \"./line\\nnext\"\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'\"ssh://line\\\\nnext\"'",
+      "body": "[submodule \"ok\"]\nurl = \"ssh://line\\nnext\"\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'\"-bad'",
+      "body": "[submodule \"ok\"]\nurl = \"-bad\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'-bad\\\\q'",
+      "body": "[submodule \"ok\"]\nurl = -bad\\q\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'\\\\-bad'",
+      "body": "[submodule \"ok\"]\nurl = \\-bad\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'-bad\\\\'",
+      "body": "[submodule \"ok\"]\nurl = -bad\\\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'-bad # comment'",
+      "body": "[submodule \"ok\"]\nurl = -bad # comment\n",
+      "accepted": false
+    },
+    {
+      "case": "url:'safe;comment'",
+      "body": "[submodule \"ok\"]\nurl = safe;comment\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'\"#-bad\"'",
+      "body": "[submodule \"ok\"]\nurl = \"#-bad\"\n",
+      "accepted": true
+    },
+    {
+      "case": "url:'\"https://host\\x00/%0a\"'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host\u0000/%0a\"\n",
+      "accepted": true
+    },
+    {
+      "case": "path:'-bad'",
+      "body": "[submodule \"ok\"]\npath = -bad\n",
+      "accepted": false
+    },
+    {
+      "case": "path:'\"-bad\"'",
+      "body": "[submodule \"ok\"]\npath = \"-bad\"\n",
+      "accepted": false
+    },
+    {
+      "case": "path:'!bad'",
+      "body": "[submodule \"ok\"]\npath = !bad\n",
+      "accepted": true
+    },
+    {
+      "case": "path:'\"!bad\"'",
+      "body": "[submodule \"ok\"]\npath = \"!bad\"\n",
+      "accepted": true
+    },
+    {
+      "case": "path:'\" !bad\"'",
+      "body": "[submodule \"ok\"]\npath = \" !bad\"\n",
+      "accepted": true
+    },
+    {
+      "case": "path:'safe'",
+      "body": "[submodule \"ok\"]\npath = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "path:'\"-bad'",
+      "body": "[submodule \"ok\"]\npath = \"-bad\n",
+      "accepted": true
+    },
+    {
+      "case": "path:'-bad\\\\q'",
+      "body": "[submodule \"ok\"]\npath = -bad\\q\n",
+      "accepted": true
+    },
+    {
+      "case": "path:''",
+      "body": "[submodule \"ok\"]\npath = \n",
+      "accepted": true
+    },
+    {
+      "case": "update:'-bad'",
+      "body": "[submodule \"ok\"]\nupdate = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "update:'\"-bad\"'",
+      "body": "[submodule \"ok\"]\nupdate = \"-bad\"\n",
+      "accepted": true
+    },
+    {
+      "case": "update:'!bad'",
+      "body": "[submodule \"ok\"]\nupdate = !bad\n",
+      "accepted": false
+    },
+    {
+      "case": "update:'\"!bad\"'",
+      "body": "[submodule \"ok\"]\nupdate = \"!bad\"\n",
+      "accepted": false
+    },
+    {
+      "case": "update:'\" !bad\"'",
+      "body": "[submodule \"ok\"]\nupdate = \" !bad\"\n",
+      "accepted": true
+    },
+    {
+      "case": "update:'safe'",
+      "body": "[submodule \"ok\"]\nupdate = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "update:'\"-bad'",
+      "body": "[submodule \"ok\"]\nupdate = \"-bad\n",
+      "accepted": true
+    },
+    {
+      "case": "update:'-bad\\\\q'",
+      "body": "[submodule \"ok\"]\nupdate = -bad\\q\n",
+      "accepted": true
+    },
+    {
+      "case": "update:''",
+      "body": "[submodule \"ok\"]\nupdate = \n",
+      "accepted": true
+    },
+    {
+      "case": "empty-section",
+      "body": "[submodule \"../bad\"]\n",
+      "accepted": true
+    },
+    {
+      "case": "bool-valid",
+      "body": "[submodule \"ok\"]\nurl\n",
+      "accepted": true
+    },
+    {
+      "case": "bool-bad-name",
+      "body": "[submodule \"../bad\"]\nurl\n",
+      "accepted": false
+    },
+    {
+      "case": "syntax-before",
+      "body": "[broken\n[submodule \"ok\"]\nurl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "syntax-after",
+      "body": "[submodule \"ok\"]\nurl = -bad\n[broken\n",
+      "accepted": false
+    },
+    {
+      "case": "unknown-before",
+      "body": "bad.key = x\n[submodule \"ok\"]\nurl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "include-ignored",
+      "body": "[include]\npath = /nonexistent\n[submodule \"ok\"]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "legacy-bad",
+      "body": "[Submodule.../bad]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "legacy-good",
+      "body": "[Submodule.Ok]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-after-legacy",
+      "body": "[submodule.foo \"bar\"]\nurl = -bad\n",
+      "accepted": false
+    },
+    {
+      "case": "bom",
+      "body": "\ufeff[submodule \"ok\"]\nurl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "partial-bom",
+      "body": "\u00ef[submodule \"ok\"]\nurl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "crlf",
+      "body": "[submodule \"ok\"]\r\nurl = -bad\r\n",
+      "accepted": false
+    },
+    {
+      "case": "lone-cr",
+      "body": "[submodule \"ok\"]\n\rurl = -bad\n",
+      "accepted": false
+    },
+    {
+      "case": "continued",
+      "body": "[submodule \"ok\"]\nurl = -\\\nbad\n",
+      "accepted": false
+    },
+    {
+      "case": "quoted-continued",
+      "body": "[submodule \"ok\"]\nurl = \"-\\\nbad\"\n",
+      "accepted": false
+    },
+    {
+      "case": "name-nul",
+      "body": "[submodule \"ok\u0000bad\"]\nurl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "name-dot-nul",
+      "body": "[submodule \"../bad.x\u0000bad\"]\nurl = safe\n",
+      "accepted": false
+    },
+    {
+      "case": "name-nul-first",
+      "body": "[submodule \"\u0000\"]\nurl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "value-nul",
+      "body": "[submodule \"ok\"]\nurl = safe\u0000-bad\n",
+      "accepted": true
+    },
+    {
+      "case": "unsafe-value-nul",
+      "body": "[submodule \"ok\"]\nurl = -bad\u0000safe\n",
+      "accepted": false
+    },
+    {
+      "case": "nul-before",
+      "body": "\u0000[submodule \"ok\"]\nurl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "no-final-newline",
+      "body": "[submodule \"ok\"]\nurl = -bad",
+      "accepted": false
+    },
+    {
+      "case": "backslash-eof",
+      "body": "[submodule \"ok\"]\nurl = -bad\\",
+      "accepted": false
+    },
+    {
+      "case": "extended-url:'http://foo:bar:80'",
+      "body": "[submodule \"ok\"]\nurl = \"http://foo:bar:80\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'http://foo:bar'",
+      "body": "[submodule \"ok\"]\nurl = \"http://foo:bar\"\n",
+      "accepted": false
+    },
+    {
+      "case": "extended-url:'http://[::1]'",
+      "body": "[submodule \"ok\"]\nurl = \"http://[::1]\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'http://[::1]:80'",
+      "body": "[submodule \"ok\"]\nurl = \"http://[::1]:80\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'http://[::1]:'",
+      "body": "[submodule \"ok\"]\nurl = \"http://[::1]:\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'http://[::1'",
+      "body": "[submodule \"ok\"]\nurl = \"http://[::1\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'http::file://:123'",
+      "body": "[submodule \"ok\"]\nurl = \"http::file://:123\"\n",
+      "accepted": false
+    },
+    {
+      "case": "extended-url:'http::file://host:123'",
+      "body": "[submodule \"ok\"]\nurl = \"http::file://host:123\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'https://host/a%0a/..'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host/a%0a/..\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'https://host/a%0a/../x'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host/a%0a/../x\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'https://host/a/%0a/../../x'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host/a/%0a/../../x\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'https://host/a%0a/b/..'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host/a%0a/b/..\"\n",
+      "accepted": false
+    },
+    {
+      "case": "extended-url:'https://host/a%0a/../b%0a/..'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host/a%0a/../b%0a/..\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'https://host/a%0a/./..'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host/a%0a/./..\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'https://host/a/%2E./..'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host/a/%2E./..\"\n",
+      "accepted": false
+    },
+    {
+      "case": "extended-url:'https://host/a%00%0a/..'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host/a%00%0a/..\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'https://user%00%0a@host'",
+      "body": "[submodule \"ok\"]\nurl = \"https://user%00%0a@host\"\n",
+      "accepted": false
+    },
+    {
+      "case": "extended-url:'./path%0a:rest'",
+      "body": "[submodule \"ok\"]\nurl = \"./path%0a:rest\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'./path%0a'",
+      "body": "[submodule \"ok\"]\nurl = \"./path%0a\"\n",
+      "accepted": false
+    },
+    {
+      "case": "extended-url:'git://host/%0%0a'",
+      "body": "[submodule \"ok\"]\nurl = \"git://host/%0%0a\"\n",
+      "accepted": false
+    },
+    {
+      "case": "extended-url:'git://host/%0a:later'",
+      "body": "[submodule \"ok\"]\nurl = \"git://host/%0a:later\"\n",
+      "accepted": false
+    },
+    {
+      "case": "extended-url:'./x%0a%00:later'",
+      "body": "[submodule \"ok\"]\nurl = \"./x%0a%00:later\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'https://host/a\\n/..'",
+      "body": "[submodule \"ok\"]\nurl = \"https://host/a\\n/..\"\n",
+      "accepted": true
+    },
+    {
+      "case": "extended-url:'./a\\n:later'",
+      "body": "[submodule \"ok\"]\nurl = \"./a\\n:later\"\n",
+      "accepted": false
+    },
+    {
+      "case": "main-control:'\\x0b'",
+      "body": "[submodule \"ok\"]\n\u000burl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "value-control:'\\x0b'",
+      "body": "[submodule \"ok\"]\nurl = \u000b-bad\n",
+      "accepted": true
+    },
+    {
+      "case": "main-control:'\\x0c'",
+      "body": "[submodule \"ok\"]\n\furl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "value-control:'\\x0c'",
+      "body": "[submodule \"ok\"]\nurl = \f-bad\n",
+      "accepted": true
+    },
+    {
+      "case": "hidden-key:name.url",
+      "body": "[submodule \"name.url\u0000hidden\"]\nupdate = !bad\n",
+      "accepted": true
+    },
+    {
+      "case": "hidden-key:name.update",
+      "body": "[submodule \"name.update\u0000hidden\"]\nurl = !bad\n",
+      "accepted": false
+    },
+    {
+      "case": "hidden-key:name.UPDATE",
+      "body": "[submodule \"name.UPDATE\u0000hidden\"]\nurl = !bad\n",
+      "accepted": true
+    },
+    {
+      "case": "hidden-key:..",
+      "body": "[submodule \"..\u0000hidden\"]\nurl = -bad\n",
+      "accepted": true
+    },
+    {
+      "case": "hidden-key:bad/..",
+      "body": "[submodule \"bad/..\u0000hidden\"]\nurl = safe\n",
+      "accepted": true
+    },
+    {
+      "case": "ff-before",
+      "hex": "ff5b7375626d6f64756c6520226f6b225d0a75726c3d2d6261640a",
+      "accepted": true
+    },
+    {
+      "case": "ff-value",
+      "hex": "5b7375626d6f64756c6520226f6b225d0a75726c3d68747470733a2f2f686f7374ff2f2530610a",
+      "accepted": true
+    },
+    {
+      "case": "ff-quoted",
+      "hex": "5b7375626d6f64756c6520226f6b225d0a75726c3d222d626164ff220a",
+      "accepted": true
+    },
+    {
+      "case": "ff-name",
+      "hex": "5b7375626d6f64756c6520222e2e2f626164ff225d0a75726c3d736166650a",
+      "accepted": true
+    },
+    {
+      "case": "ff-cr",
+      "hex": "5b7375626d6f64756c6520226f6b225d0a75726c3d2d6261640dff0a",
+      "accepted": false
+    },
+    {
+      "case": "ff-escape",
+      "hex": "5b7375626d6f64756c6520226f6b225d0a75726c3d2d6261645cff736166650a",
+      "accepted": false
+    },
+    {
+      "case": "partial-bom-raw",
+      "hex": "efbb5b7375626d6f64756c6520226f6b225d0a75726c3d2d6261640a",
+      "accepted": true
+    }
+  ]
+}

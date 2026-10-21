@@ -207,7 +207,8 @@ export class ObjectSource {
       consumed += event.consumed;
       if (scan && event.tag === 31) this.edge(row, hex(event.id), event.flags, integer(event.a));
       if (scan && event.tag === 32) {
-        if (event.flags & 2048) this.store.exec("INSERT OR IGNORE INTO stage_blob_checks(stage,oid) VALUES(?,?)", this.stage, hex(event.id));
+        const checks = event.flags >>> 10 & 3;
+        if (checks) this.store.exec("INSERT INTO stage_blob_checks(stage,oid,checks) VALUES(?,?,?) ON CONFLICT(stage,oid) DO UPDATE SET checks=stage_blob_checks.checks|excluded.checks WHERE (stage_blob_checks.checks&excluded.checks)<>excluded.checks", this.stage, hex(event.id), checks);
         this.namesStaged = true;
         const kind = event.flags & 255;
         // A database uniqueness constraint checks aliases even when they are

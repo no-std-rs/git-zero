@@ -323,6 +323,92 @@ fn attributes_fsck_bounds_lines_files_and_sticky_errors_without_allocations() {
     }
 }
 
+#[test]
+fn gitmodules_fsck_matches_configured_git_across_fragments() {
+    use git_zero::http::receive::FsckModules;
+    let cases: &[(&[u8], bool)] = &[
+        (
+            b"[submodule \"ok\"]\nurl = https://example.test/r\npath = sub\n",
+            true,
+        ),
+        (b"[submodule \"../bad\"]\nurl = safe\n", false),
+        (b"[submodule \"ok\"]\nurl = \"-bad\"\n", false),
+        (b"[submodule \"ok\"]\npath = -bad\n", false),
+        (b"[submodule \"ok\"]\nupdate = !echo bad\n", false),
+        (b"[submodule \"ok\"]\nurl = \"-bad\n", true),
+        (b"[broken\n[submodule \"ok\"]\nurl=-bad\n", true),
+        (b"[submodule \"ok\"]\nurl=-bad\n[broken\n", false),
+        (b"[submodule \"../bad\"]\n", true),
+        (b"[submodule \"../bad\"]\nboolean\n", false),
+        (b"[submodule \"ok\"]\nurl = ssh://host/%0a\n", true),
+        (b"[submodule \"ok\"]\nurl = git://host/%0a\n", false),
+        (b"[submodule \"ok\"]\nurl = git://host/%zz\n", true),
+        (b"[submodule \"ok\"]\nurl = https://host/%zz\n", false),
+        (b"[submodule \"ok\"]\nurl = https://host:65536\n", false),
+        (b"[submodule \"ok\"]\nurl = https://host/a%0a/..\n", true),
+        (b"[submodule \"ok\"]\nurl = https://host/a%0a/b/..\n", false),
+        (b"[submodule \"ok\"]\nurl = ./a%0a:rest\n", true),
+        (b"[submodule \"ok\"]\nurl = ./a%0a\n", false),
+        (b"[submodule \"ok\"]\r\nurl = -\\\r\nbad\r\n", false),
+        (b"[submodule \"ok\"]\nurl = -bad\\q\n", true),
+        (b"[submodule \"ok\"]\nurl = -bad\\", false),
+        (b"[submodule \"name.update\0hidden\"]\nurl = !bad\n", false),
+        (b"[submodule \"name.UPDATE\0hidden\"]\nurl = !bad\n", true),
+        (b"[submodule \"ok\"]\nurl = safe\0-bad\n", true),
+        (b"[submodule \"ok\"]\nurl = -bad\0safe\n", false),
+        (b"\xef\xbb\xbf[submodule \"ok\"]\nurl=-bad\n", true),
+        (b"[submodule \"ok\"]\nurl=https://host\xff/%0a\n", true),
+        (b"[submodule \"ok\"]\n\x0burl=-bad\n", true),
+    ];
+    for &(body, accepted) in cases {
+        for chunk in [1, 2, 7, body.len()] {
+            allocations::without_allocations(|| {
+                let mut policy = FsckModules::new(body.len() as u64);
+                let result = body
+                    .chunks(chunk)
+                    .try_for_each(|bytes| policy.update(bytes));
+                assert_eq!(
+                    result.and_then(|()| policy.finish()).is_ok(),
+                    accepted,
+                    "{body:?}"
+                );
+                if result.is_err() {
+                    assert_eq!(policy.update(b""), Err(Error::InvalidObject));
+                    assert_eq!(policy.finish(), Err(Error::InvalidObject));
+                }
+            });
+        }
+    }
+}
+
+#[test]
+fn gitmodules_policy_streams_large_names_and_values_without_retaining_them() {
+    use git_zero::http::receive::FsckModules;
+    let prefix = b"[submodule \"";
+    let middle = b"\"]\nurl = https://example.test/";
+    let suffix = b"/ok\n";
+    let large = 1024 * 4096;
+    allocations::without_allocations(|| {
+        let mut policy =
+            FsckModules::new((prefix.len() + middle.len() + suffix.len() + 2 * large) as u64);
+        policy.update(prefix).unwrap();
+        for _ in 0..1024 {
+            policy.update(&[b'x'; 4096]).unwrap();
+        }
+        policy.update(middle).unwrap();
+        for _ in 0..1024 {
+            policy.update(&[b'x'; 4096]).unwrap();
+        }
+        policy.update(suffix).unwrap();
+        policy.finish().unwrap();
+        policy.finish().unwrap();
+        assert_eq!(policy.update(b"x"), Err(Error::InvalidObject));
+        let mut incomplete = FsckModules::new(1);
+        assert_eq!(incomplete.finish(), Err(Error::InvalidObject));
+        assert_eq!(incomplete.update(b"x"), Err(Error::InvalidObject));
+    });
+}
+
 fn command(old: ObjectId, new: ObjectId, name: &[u8], caps: Option<&[u8]>) -> Vec<u8> {
     let mut line = Vec::new();
     line.extend_from_slice(old.to_hex().as_bytes());

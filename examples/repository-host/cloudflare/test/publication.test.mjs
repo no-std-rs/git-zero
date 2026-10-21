@@ -19,8 +19,9 @@ test("publication transaction failures await private-pack reclamation", async ()
   assert.deepEqual(events, ["rollback", "verified-private-stage", "reclaimed"]);
 });
 
-function verifiedStage(name) {
+function verifiedStage(name, legacyBlobChecks = false) {
   const database = new DatabaseSync(":memory:");
+  if (legacyBlobChecks) database.exec("CREATE TABLE stage_blob_checks(stage TEXT NOT NULL,oid TEXT NOT NULL,PRIMARY KEY(stage,oid)) WITHOUT ROWID; INSERT INTO stage_blob_checks VALUES('legacy','pending-attributes')");
   const storage = {
     sql: { exec(statement, ...bindings) {
       const rows = database.prepare(statement).all(...bindings.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value));
@@ -40,6 +41,14 @@ function verifiedStage(name) {
   store.exec("INSERT INTO stage_commands(stage,seq,name,old_oid,new_oid,branch,creation,deletion) VALUES(?,0,?,?,?,0,1,0)", stage, Buffer.from(name), "0".repeat(40), oid);
   return { database, store, stage, oid };
 }
+
+test("pending attributes checks retain their policy when the durable schema upgrades", () => {
+  const { database, store } = verifiedStage("refs/tags/migration", true);
+  try {
+    const rows=store.exec("SELECT stage,oid,checks FROM stage_blob_checks");
+    assert.deepEqual(rows.map((row)=>({...row})),[{stage:"legacy",oid:"pending-attributes",checks:2}]);
+  } finally { database.close(); }
+});
 
 test("branch ancestry follows merge parents in paged, deduplicated storage", async () => {
   const { database, store, stage, oid } = verifiedStage("refs/heads/main");
