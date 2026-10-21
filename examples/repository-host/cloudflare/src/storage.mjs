@@ -197,11 +197,15 @@ export class Store {
   peeled(oid, stage = null) {
     const find = (id) => stage ? this.object(stage, id) : this.published(id);
     let row = find(oid);
-    for (let depth = 0; row?.kind === 4; depth++) {
-      if (depth >= 128) throw new Error("tag peeling budget exceeded");
+    // Brent's cycle detection keeps constant scratch space without imposing
+    // a semantic depth limit on an already verified immutable tag chain.
+    let checkpoint = oid, power = 1, length = 0;
+    while (row?.kind === 4) {
       const edge = this.exec("SELECT dst FROM stage_edges WHERE stage=? AND node=? AND relation=2 LIMIT 1", this.edgeStage(row.stage), row.node)[0];
       if (!edge) throw new Error("stored tag has no target");
       row = find(edge.dst);
+      if (row?.oid === checkpoint) throw new Error("stored tag cycle");
+      if (++length === power) { checkpoint = row?.oid; power *= 2; length = 0; }
     }
     if (!row) throw new Error("tag target is absent");
     return row.oid === oid ? null : row.oid;

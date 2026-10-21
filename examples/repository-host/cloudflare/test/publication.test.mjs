@@ -177,3 +177,18 @@ test("repeated nested-tag targets share one publication peel", async (t) => {
     t.diagnostic(`${commands} refs / ${depth} nested tags: ${calls} publication SQL calls`);
   } finally { database.close(); }
 });
+
+test("tag peeling detects corrupt cycles with a prefix and shared targets", () => {
+  for (const links of [[0], [1, 0], [1, 2, 1]]) {
+    const { database, store, stage } = verifiedStage("refs/tags/corrupt");
+    try {
+      const ids = links.map((_, index) => (index + 2).toString(16).padStart(40, "0"));
+      for (let index = 0; index < links.length; index++) {
+        const node = 100 + index;
+        store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,end_offset,oid,kind,size,depth,verified,scanned) VALUES(?,?,4,1,?,?,?,4,0,0,1,1)", stage, node, node + 1, node + 2, ids[index]);
+        store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,2)", store.edgeStage(stage), node, ids[links[index]], 4);
+      }
+      assert.throws(() => store.peeled(ids[0], stage), /stored tag cycle/);
+    } finally { database.close(); }
+  }
+});
