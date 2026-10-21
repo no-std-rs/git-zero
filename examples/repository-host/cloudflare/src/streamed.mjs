@@ -38,7 +38,10 @@ function authorized(request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === "/health") return json({ ready: true, runtime: "workerd", codec: "no_std Wasm", durableStorage: "R2 and SQLite", gitReceive: true, gitFetch: true });
+    if (url.pathname === "/health") {
+      const ready = !!env.HOST_TOKEN;
+      return json({ ready, runtime: "workerd", codec: "no_std Wasm", durableStorage: "R2 and SQLite", gitReceive: ready, gitFetch: ready }, ready ? 200 : 503);
+    }
     if (!authorized(request, env)) return new Response("authentication required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="git-zero"' } });
     const parts = url.pathname.split("/");
     const test = env.TEST_MODE === "true" && parts[1] === "_test";

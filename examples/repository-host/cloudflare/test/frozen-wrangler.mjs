@@ -3,10 +3,10 @@
 import { unstable_startWorker } from "wrangler";
 import { TOKEN } from "./wrangler.mjs";
 
-const [config, persistTo] = process.argv.slice(2);
+const [config, persistTo, hostToken = TOKEN] = process.argv.slice(2);
 const worker = await unstable_startWorker({
   config,
-  bindings: { HOST_TOKEN: { type: "plain_text", value: TOKEN }, TEST_MODE: { type: "plain_text", value: "true" } },
+  bindings: { ...(hostToken ? { HOST_TOKEN: { type: "plain_text", value: hostToken } } : {}), TEST_MODE: { type: "plain_text", value: "true" } },
   dev: { watch: false, registry: undefined, remote: false, persist: persistTo, inspector: false, server: { hostname: "127.0.0.1", port: 0 } },
 });
 await worker.ready;
