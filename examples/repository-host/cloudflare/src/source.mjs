@@ -282,7 +282,9 @@ export class ObjectSource {
       this.rememberTemporary(rowKey(row), { oid: digest, size: row.size });
     }
     if (scan) {
-      this.store.exec("UPDATE stage_objects SET oid=?,verified=1,scanned=1 WHERE stage=? AND node=?", digest, this.stage, row.node);
+      // Publish derived metadata to the private index only with its verified
+      // digest. One update avoids rewriting the global OID/depth index twice.
+      this.store.exec("UPDATE stage_objects SET oid=?,kind=?,size=?,depth=?,base_stage=?,base_node=?,base_oid=?,verified=1,scanned=1 WHERE stage=? AND node=?", digest, row.kind, row.size, row.depth, row.base_stage, row.base_node, row.base_oid, this.stage, row.node);
       this.finishScan(row);
     }
     if (captured) this.canonical.put(digest, captured);

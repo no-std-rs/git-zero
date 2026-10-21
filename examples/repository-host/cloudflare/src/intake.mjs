@@ -131,7 +131,6 @@ export class Intake {
     const header = this.codec.deltaHeader(prefix, { size: base.size, depth: base.depth });
     row.kind = base.kind; row.size = integer(header.b); row.depth = integer(header.c);
     row.base_stage = base.stage; row.base_node = base.node; row.base_oid = base.oid;
-    this.store.exec("UPDATE stage_objects SET kind=?,size=?,depth=?,base_stage=?,base_node=?,base_oid=? WHERE stage=? AND node=?", row.kind, row.size, row.depth, row.base_stage, row.base_node, row.base_oid, this.stage, row.node);
     await this.source.warm(base);
     const id = await this.source.process(row, true);
     // Indexed dependency updates avoid repeatedly scanning all unresolved
