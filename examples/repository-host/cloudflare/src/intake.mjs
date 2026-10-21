@@ -15,7 +15,7 @@ export class Intake {
     this.source = new ObjectSource(store, codec, stage, { ownedBuffers: true });
     this.writer = null; this.inPack = false; this.pack = null;
     this.commands = 0; this.options = 0; this.objects = 0; this.expected = 0;
-    this.pendingObjects = []; this.hasOfs = false;
+    this.pendingObjects = []; this.hasOfs = false; this.hasRefs = false;
     this.current = null; this.lastEnd = 12; this.eof = false;
   }
   flushObjects() {
@@ -51,6 +51,7 @@ export class Intake {
         const node = integer(event.a), size = integer(event.b), kind = event.flags;
         if (kind < 5) this.codec.charge(0, size);
         this.hasOfs ||= kind === 6;
+        this.hasRefs ||= kind === 7;
         this.current = { node, size, kind, structural: kind < 5 && kind !== 3, digest: null, written: 0, body: size <= REPRESENTATION_LIMIT ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
         if (this.current.structural) this.source.beginScan(this.current);
         this.objects++; break;
@@ -135,8 +136,10 @@ export class Intake {
     const id = await this.source.process(row, true);
     // Indexed dependency updates avoid repeatedly scanning all unresolved
     // objects when a pack uses forward reference-delta chains.
-    this.store.exec("UPDATE stage_objects INDEXED BY stage_offset_dependencies SET ready=1 WHERE stage=? AND wire_base_offset=? AND verified=0", this.stage, row.node);
-    this.store.exec("UPDATE stage_objects INDEXED BY stage_id_dependencies SET ready=1 WHERE stage=? AND wire_base_id=? AND verified=0", this.stage, id);
+    // After decoding the complete pack, an absent wire kind has no dependents.
+    // Validation of preexisting staged records still updates both indexes.
+    if (!this.eof || this.hasOfs) this.store.exec("UPDATE stage_objects INDEXED BY stage_offset_dependencies SET ready=1 WHERE stage=? AND wire_base_offset=? AND verified=0", this.stage, row.node);
+    if (!this.eof || this.hasRefs) this.store.exec("UPDATE stage_objects INDEXED BY stage_id_dependencies SET ready=1 WHERE stage=? AND wire_base_id=? AND verified=0", this.stage, id);
   }
 
   async run(request) {

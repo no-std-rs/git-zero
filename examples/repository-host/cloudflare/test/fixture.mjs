@@ -44,11 +44,13 @@ export function wire(format, packed, newId, name = "refs/tags/value") {
   return Buffer.concat([packet(command), Buffer.from("0000"), packet("ci.skip"), packet(""), Buffer.from("0000"), packed]);
 }
 
-export function deltas(format, forward = false) {
+export function deltas(format, layout = "mixed") {
+  assert.ok(["mixed", "forward", "offsets"].includes(layout));
+  const forward = layout === "forward";
   const objects = ["hello", "hello!", "hello!?"].map((body) => object(format, 3, body));
   const plain = entry(3, objects[0].body);
   const middle = entry(forward ? 7 : 6, Buffer.from([5, 6, 0x90, 5, 1, 33]), forward ? objects[0].id : Buffer.from([plain.length]));
-  const last = entry(7, Buffer.from([6, 7, 0x90, 6, 1, 63]), objects[1].id);
+  const last = entry(layout === "offsets" ? 6 : 7, Buffer.from([6, 7, 0x90, 6, 1, 63]), layout === "offsets" ? Buffer.from([middle.length]) : objects[1].id);
   const packed = pack(format, forward ? [last, middle, plain] : [plain, middle, last]);
   return { objects, pack: packed, wire: wire(format, packed, objects[2].id), root: objects[2] };
 }

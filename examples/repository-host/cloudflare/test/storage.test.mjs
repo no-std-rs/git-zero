@@ -93,9 +93,9 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     const aliasState = await responseJson(await fetch(`${server.origin}/_test/${aliasNamespace}/state`, { headers: headers() }));
     assert.deepEqual(aliasState.stages, [], "aliases separated across metadata batches must reject and reclaim");
     for (const format of [0, 1]) {
-      for (const forward of [false, true]) {
-        const namespace = `delta-${format}-${forward}-${randomUUID()}`;
-        const fixture = deltas(format, forward);
+      for (const layout of ["mixed", "forward", "offsets"]) {
+        const namespace = `delta-${format}-${layout}-${randomUUID()}`;
+        const fixture = deltas(format, layout);
         const result = await upload(server, namespace, fixture, format);
         assert.equal(result.quarantine, true);
         assert.equal(result.refsUpdated, 0);
