@@ -79,3 +79,26 @@ test("published stages discard request controls while retaining objects and ref 
     assert.equal(store.exec("SELECT oid FROM refs")[0].oid, oid);
   } finally { database.close(); }
 });
+
+test("repeated nested-tag targets share one publication peel", async (t) => {
+  const { database, store, stage, oid } = verifiedStage("refs/tags/repeated-0");
+  const commands = 256, depth = 32;
+  try {
+    let target = oid;
+    for (let index = 0; index < depth; index++) {
+      const id = (index + 2).toString(16).padStart(40, "0"), node = 1000 + index;
+      store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,end_offset,oid,kind,size,depth,verified,scanned) VALUES(?,?,4,1,?,?,?,4,0,0,1,1)", stage, node, node + 1, node + 2, id);
+      store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,2)", stage, node, target, index ? 4 : 1);
+      target = id;
+    }
+    store.exec("UPDATE stages SET expected=? WHERE id=?", depth + 1, stage);
+    store.exec("UPDATE stage_commands SET new_oid=? WHERE stage=?", target, stage);
+    for (let index = 1; index < commands; index++) store.exec("INSERT INTO stage_commands(stage,seq,name,old_oid,new_oid,branch,creation,deletion) VALUES(?,?,?,?,?,0,1,0)", stage, index, Buffer.from(`refs/tags/repeated-${index}`), "0".repeat(40), target);
+    const before = store.usage.sqlCalls;
+    const outcomes = await publish(store, stage), calls = store.usage.sqlCalls - before;
+    assert.equal(outcomes.length, commands); assert.ok(outcomes.every((item) => item.error === null));
+    assert.equal(store.exec("SELECT COUNT(*) AS count FROM refs WHERE oid=? AND peeled=?", target, oid)[0].count, commands);
+    assert.ok(calls < commands * 8 + 128, `repeated nested tag used ${calls} publication SQL calls`);
+    t.diagnostic(`${commands} refs / ${depth} nested tags: ${calls} publication SQL calls`);
+  } finally { database.close(); }
+});
