@@ -1,12 +1,11 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { promisify } from "node:util";
-import { test } from "node:test";
-import { headers, start, TOKEN } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers, TOKEN } from "./wrangler.mjs";
 
 const execute = promisify(execFile);
 async function git(cwd, ...args) {
@@ -16,7 +15,7 @@ async function git(cwd, ...args) {
   return result.stdout.trim();
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} supports ordinary tree-filter clones and lazy checkout`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} supports ordinary tree-filter clones and lazy checkout", { timeout: 120000 }, async (serve) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-tree-clients-")); let server;
   try {
     server = await serve(join(root, "state"));

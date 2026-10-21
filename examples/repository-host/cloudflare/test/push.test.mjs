@@ -1,3 +1,4 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -5,10 +6,8 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { test } from "node:test";
 import { entry, object, packet, pack, project, wire } from "./fixture.mjs";
-import { headers, start, TOKEN } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers, TOKEN } from "./wrangler.mjs";
 
 async function git(directory, ...args) {
   const child = spawn("git", ["-c", "user.name=Worker test", "-c", "user.email=worker@example.test", "-c", "http.followRedirects=false", "-c", "http.extraHeader=Authorization: Bearer " + TOKEN, ...args], {
@@ -27,7 +26,7 @@ function request(format, commands, atomic = true, packed = pack(format, [])) {
   return Buffer.concat([...commands.map((command, i) => packet(Buffer.concat([Buffer.from(`${command.old} ${command.new} `), Buffer.from(command.name), Buffer.from(`${i ? "" : `\0${caps}`}\n`)]))), Buffer.from("0000"), packed]);
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`ordinary Git pushes, clones and fetches interoperate with ${runtime}`, { timeout: 120000 }, async () => {
+testRuntimes("ordinary Git pushes, clones and fetches interoperate with {runtime}", { timeout: 120000 }, async (serve) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-push-"));
   let server;
   try {

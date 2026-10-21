@@ -1,14 +1,13 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { entry, object, pack, receiveReport, wire } from "./fixture.mjs";
-import { headers, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers } from "./wrangler.mjs";
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} validates designated attributes including previously published blobs`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} validates designated attributes including previously published blobs", { timeout: 120000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-fsck-attributes-"));
   let server;
   try {

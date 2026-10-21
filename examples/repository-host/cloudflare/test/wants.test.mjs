@@ -1,12 +1,11 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { project, packet, receiveReport, object, entry, pack, wire } from "./fixture.mjs";
-import { headers, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers } from "./wrangler.mjs";
 
 const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
 function git(args, input, version) {
@@ -43,7 +42,7 @@ function inventory(directory, format, bytes) {
   return git(["--git-dir", directory, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"]).toString().trim().split("\n").filter(Boolean).sort();
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} preserves explicitly wanted tree closures despite common commits`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} preserves explicitly wanted tree closures despite common commits", { timeout: 120000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-wanted-tree-")); let server;
   try {
     server = await serve(join(directory, "state"));

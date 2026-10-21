@@ -1,16 +1,15 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { packet, project, receiveReport } from "./fixture.mjs";
-import { headers, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers } from "./wrangler.mjs";
 
 const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} accepts acknowledgement modes and spacing from independent clients`, { timeout: 60000 }, async () => {
+testRuntimes("{runtime} accepts acknowledgement modes and spacing from independent clients", { timeout: 60000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-dual-ack-"));
   let server;
   try {

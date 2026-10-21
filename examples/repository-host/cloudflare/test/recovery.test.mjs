@@ -1,3 +1,4 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
@@ -6,10 +7,8 @@ import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { test } from "node:test";
 import { entry, object, pack, packet, wire } from "./fixture.mjs";
-import { startStandalone } from "./standalone.mjs";
-import { headers, start } from "./wrangler.mjs";
+import { headers } from "./wrangler.mjs";
 
 const TABLES = ["fetch_wants", "fetch_haves", "fetch_shallow", "fetch_probe", "fetch_common", "fetch_selected"];
 
@@ -44,7 +43,7 @@ async function pausedFetch(server, namespace) {
   return { client, response };
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} reclaims fetch frontiers after a hard process crash`, { timeout: 60000 }, async () => {
+testRuntimes("{runtime} reclaims fetch frontiers after a hard process crash", { timeout: 60000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-fetch-recovery-"));
   let server, client, response;
   try {
@@ -63,7 +62,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
   } finally { response?.destroy(); client?.destroy(); await server?.stop(); await rm(directory, { recursive: true, force: true }); }
 });
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} releases a repository held by an idle response reader`, { timeout: 90000 }, async () => {
+testRuntimes("{runtime} releases a repository held by an idle response reader", { timeout: 90000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-idle-response-"));
   let server, client, response;
   try {

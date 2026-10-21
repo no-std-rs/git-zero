@@ -1,11 +1,10 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { project, receiveReport } from "./fixture.mjs";
-import { headers, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers } from "./wrangler.mjs";
 
 import { run, git, request, inventory } from "./upload-oracle.mjs";
 
@@ -19,7 +18,7 @@ const cases = [
   ["18446744073709551616", null], ["18014398509481984K", null], ["0x10000000000000000", null],
 ];
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} matches native blob-filter number syntax and exact thresholds`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} matches native blob-filter number syntax and exact thresholds", { timeout: 120000 }, async (serve) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-filter-numbers-")); let server;
   try {
     server = await serve(join(root, "state"));

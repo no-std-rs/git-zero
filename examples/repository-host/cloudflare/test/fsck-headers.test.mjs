@@ -1,14 +1,13 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { promisify } from "node:util";
 import { entry, object, pack, project, receiveReport, wire } from "./fixture.mjs";
-import { headers, start, TOKEN } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers, TOKEN } from "./wrangler.mjs";
 
 const git = promisify(execFile);
 
@@ -26,7 +25,7 @@ function literalDelta(base, result) {
   return Buffer.concat(bytes);
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} enforces strict receive identities for plain and thin-delta objects`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} enforces strict receive identities for plain and thin-delta objects", { timeout: 120000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-fsck-headers-"));
   let server;
   try {

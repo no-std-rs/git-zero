@@ -1,12 +1,11 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { entry, object, pack, project } from "./fixture.mjs";
-import { headers, start, TOKEN } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers, TOKEN } from "./wrangler.mjs";
 
 async function git(args, input) {
   // Wait for native housekeeping before fsck inspects its pack files. Detached
@@ -21,7 +20,7 @@ async function git(args, input) {
   assert.equal(status, 0, stderr); return stdout.trim();
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} pushes and fetches valid tag chains beyond 128 levels`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} pushes and fetches valid tag chains beyond 128 levels", { timeout: 120000 }, async (serve) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-deep-tags-")), persist = join(root, "state"); let server;
   try {
     server = await serve(persist);

@@ -1,12 +1,11 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { object, entry, pack, wire, receiveReport } from "./fixture.mjs";
 import { run, git, request, inventory } from "./upload-oracle.mjs";
-import { headers, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers } from "./wrangler.mjs";
 
 function graph(format) {
   const objects = [], add = (kind, body) => { const o = object(format, kind, body); objects.push(o); return o; };
@@ -28,7 +27,7 @@ function profiles(fixture) {
   ];
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} matches native tree-depth filters across shared paths and history`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} matches native tree-depth filters across shared paths and history", { timeout: 120000 }, async (serve) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-tree-depths-")); let server;
   try {
     server = await serve(join(root, "state"));

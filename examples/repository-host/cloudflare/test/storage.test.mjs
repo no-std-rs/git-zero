@@ -1,13 +1,12 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { CHUNK_BYTES } from "../src/storage.mjs";
 import { deltas, entry, object, pack, packet, project, wire } from "./fixture.mjs";
-import { chunked, headers, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { chunked, headers } from "./wrangler.mjs";
 
 async function responseJson(response) {
   const text = await response.text();
@@ -29,7 +28,7 @@ async function canonical(server, namespace, result, row, expected) {
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), expected.body);
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} persists verified packs and reclaims failed quarantine`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} persists verified packs and reclaims failed quarantine", { timeout: 120000 }, async (serve) => {
   const persist = await mkdtemp(join(tmpdir(), "git-zero-own-worker-"));
   let server;
   const restart = [];

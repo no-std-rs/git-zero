@@ -1,12 +1,11 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { entry, object, pack, wire } from "./fixture.mjs";
-import { headers, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers } from "./wrangler.mjs";
 
 const SIZE = 9 * 1024 * 1024;
 function variable(value) {
@@ -15,7 +14,7 @@ function variable(value) {
   return Buffer.from(bytes);
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} bounds reconstruction across a complete request`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} bounds reconstruction across a complete request", { timeout: 120000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-reconstruction-budget-"));
   let server;
   try {

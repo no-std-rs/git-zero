@@ -1,10 +1,10 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { headers, start, TOKEN } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers, TOKEN } from "./wrangler.mjs";
 import { gateway } from "./host.mjs";
 
 test("health refuses readiness without the required authentication secret", async () => {
@@ -17,7 +17,7 @@ test("health refuses readiness without the required authentication secret", asyn
   assert.equal(response.status, 200); assert.equal((await response.json()).ready, true);
 });
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} requires authentication configuration before reporting readiness`, { timeout: 30000 }, async () => {
+testRuntimes("{runtime} requires authentication configuration before reporting readiness", { timeout: 30000 }, async (serve) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-health-")); let server;
   try {
     for (const hostToken of [null, TOKEN]) {

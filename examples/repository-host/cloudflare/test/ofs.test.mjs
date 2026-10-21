@@ -1,14 +1,13 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { inflateSync } from "node:zlib";
 import { digest, entry, object, pack, packet, wire } from "./fixture.mjs";
-import { headers, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers } from "./wrangler.mjs";
 
 // Parse the wire independently of the server's pack codec.
 function kinds(packed, format) {
@@ -45,7 +44,7 @@ function git(directory, ...args) {
   const result = spawnSync("git", args, { cwd: directory, encoding: "utf8", timeout: 10000, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
   assert.equal(result.status, 0, `${args.join(" ")}\n${result.stderr}`); return result.stdout.trim();
 }
-for (const [runtime, serve] of [["Wrangler R2/SQLite", (persist) => start(persist, { frozen: true })], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} negotiates offset delta reuse`, { timeout: 60000 }, async () => {
+testRuntimes("{runtime} negotiates offset delta reuse", { timeout: 60000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-ofs-")); let server;
   try {
     server = await serve(join(directory, "state"));
@@ -94,4 +93,4 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", (persist) => start(persis
       }
     }
   } finally { await server?.stop(); await rm(directory, { recursive: true, force: true }); }
-});
+}, { frozen: true });

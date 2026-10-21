@@ -1,14 +1,13 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { promisify } from "node:util";
 import { entry, object, pack, project, receiveReport, wire } from "./fixture.mjs";
-import { headers, start, TOKEN } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers, TOKEN } from "./wrangler.mjs";
 
 const git = promisify(execFile);
 async function state(server, namespace) {
@@ -21,7 +20,7 @@ async function report(response) {
   return receiveReport(await response.arrayBuffer());
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} scans plain structural objects before discarding decoded bytes`, { timeout: 120000 }, async (t) => {
+testRuntimes("{runtime} scans plain structural objects before discarding decoded bytes", { timeout: 120000 }, async (serve, t, runtime) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-plain-intake-"));
   let server;
   try {

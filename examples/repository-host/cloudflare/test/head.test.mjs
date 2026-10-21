@@ -1,13 +1,12 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { packet, pack, project, receiveReport } from "./fixture.mjs";
-import { headers, start, TOKEN } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers, TOKEN } from "./wrangler.mjs";
 
 const execute = promisify(execFile);
 async function git(...args) {
@@ -22,7 +21,7 @@ function request(format, old, value, name) {
   return Buffer.concat([packet(`${old} ${value} ${name}\0${caps}\n`), Buffer.from("0000"), /^0+$/.test(value) ? Buffer.alloc(0) : pack(format, [])]);
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} clones a surviving branch after deleting HEAD`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} clones a surviving branch after deleting HEAD", { timeout: 120000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-head-"));
   let server;
   try {

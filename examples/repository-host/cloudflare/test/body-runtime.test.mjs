@@ -1,3 +1,4 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
@@ -5,9 +6,7 @@ import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { test } from "node:test";
-import { startStandalone } from "./standalone.mjs";
-import { headers, start } from "./wrangler.mjs";
+import { headers } from "./wrangler.mjs";
 
 async function entered(directory, namespace) {
   for (const file of await readdir(directory, { withFileTypes: true })) {
@@ -38,7 +37,7 @@ async function waitForHandler(directory, namespace, transport, server) {
   assert.fail(`partial POST never entered ${namespace}\n${server.logs()}`);
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", (persist) => start(persist, { frozen: true })], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} releases queues held by idle request bodies`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} releases queues held by idle request bodies", { timeout: 120000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-idle-body-"));
   const clients = []; let server;
   try {
@@ -62,4 +61,4 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", (persist) => start(persis
       assert.equal(state.refs, 0); assert.equal(state.objects, 0); assert.deepEqual(state.stages, []);
     }));
   } finally { for (const client of clients) client.destroy(); await server?.stop(); await rm(directory, { recursive: true, force: true }); }
-});
+}, { frozen: true });

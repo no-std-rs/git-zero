@@ -1,13 +1,12 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { test } from "node:test";
 import { packet } from "./fixture.mjs";
-import { headers, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers } from "./wrangler.mjs";
 
 function git(args, input) {
   const result = spawnSync("git", ["-c", "core.fsync=none", ...args], {
@@ -28,7 +27,7 @@ function controls(format, length) {
   parts.push(Buffer.from("0000")); return Buffer.concat(parts);
 }
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} matches native unborn ls-refs and accepts gzip framing at the decoded control limit`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} matches native unborn ls-refs and accepts gzip framing at the decoded control limit", { timeout: 120000 }, async (serve) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-lsrefs-coding-")); let server;
   try {
     server = await serve(join(root, "state"));

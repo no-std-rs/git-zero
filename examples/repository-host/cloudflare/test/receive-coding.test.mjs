@@ -1,14 +1,13 @@
+import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { project, receiveReport } from "./fixture.mjs";
-import { headers, chunked, start } from "./wrangler.mjs";
-import { startStandalone } from "./standalone.mjs";
+import { headers, chunked } from "./wrangler.mjs";
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} receives HTTP gzip streams and rejects corrupt transport trailers before publication`, { timeout: 120000 }, async () => {
+testRuntimes("{runtime} receives HTTP gzip streams and rejects corrupt transport trailers before publication", { timeout: 120000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-receive-coding-")); let server;
   try {
     server = await serve(directory);
