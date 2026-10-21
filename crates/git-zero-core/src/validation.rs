@@ -16,6 +16,8 @@ pub struct ValidationMetadata {
     reached: bool,
     checked: bool,
     excluded: bool,
+    forced: bool,
+    wanted: bool,
     depth: u32,
     client_shallow: bool,
     shallow: bool,
@@ -27,6 +29,8 @@ impl ValidationMetadata {
         self.checked = false;
         self.depth = u32::MAX;
         self.shallow = false;
+        self.forced = false;
+        self.wanted = false;
     }
 
     /// A reached commit at a requested history boundary (including root commits).
@@ -335,11 +339,11 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
         };
         let history = fetch.history(has_shallow, nearest)?;
         selection.walk_wants(roots, history)?;
-        filter_blobs(selection.work, roots, fetch.filter);
+        filter_blobs(selection.work, fetch.filter);
         if include_tags {
             selection.include_matching_tags()?;
             selection.walk(history)?;
-            filter_blobs(selection.work, roots, fetch.filter);
+            filter_blobs(selection.work, fetch.filter);
         }
         let mut length = 0;
         for (index, slot) in selection.work.iter().enumerate() {
@@ -448,11 +452,14 @@ impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
         let work = &mut *self.work;
         for &id in roots {
             let index = find(work, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
-            reach(
+            work[index].as_mut().expect("validated metadata").wanted = true;
+            reach_at(
                 work,
                 self.repository.by_id,
                 id,
                 metadata(work, index).info.kind,
+                1,
+                true,
             )?;
         }
         self.walk(history)
@@ -476,6 +483,7 @@ impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
                     id,
                     ObjectKind::Tag,
                     metadata(work, index).depth,
+                    false,
                 )?;
             }
         }
@@ -483,19 +491,13 @@ impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
     }
 }
 
-fn filter_blobs(
-    objects: &mut [Option<ValidationMetadata>],
-    roots: &[ObjectId],
-    filter: BlobFilter,
-) {
+fn filter_blobs(objects: &mut [Option<ValidationMetadata>], filter: BlobFilter) {
     if matches!(filter, BlobFilter::All) {
         return;
     }
     for slot in objects {
         let object = slot.as_mut().expect("validated metadata");
-        if object.info.kind == ObjectKind::Blob
-            && !filter.includes(object.info, roots.contains(&object.id))
-        {
+        if object.info.kind == ObjectKind::Blob && !filter.includes(object.info, object.wanted) {
             object.reached = false;
         }
     }
@@ -576,6 +578,8 @@ fn initialize_index(
             reached: false,
             checked: false,
             excluded: false,
+            forced: false,
+            wanted: false,
             depth: u32::MAX,
             client_shallow: false,
             shallow: false,
@@ -626,11 +630,19 @@ fn walk(
                     .expect("initialized metadata")
                     .shallow = stop;
             }
-            ObjectKind::Tree => validate_tree(&mut body, parse_scratch, objects, by_id)?,
-            ObjectKind::Blob => {}
-            ObjectKind::Tag => {
-                validate_tag(&mut body, parse_scratch, objects, by_id, object.depth)?
+            ObjectKind::Tree => {
+                validate_tree(&mut body, parse_scratch, objects, by_id, object.forced)?
             }
+            ObjectKind::Blob => {}
+            ObjectKind::Tag => validate_tag(
+                &mut body,
+                parse_scratch,
+                objects,
+                by_id,
+                object.depth,
+                object.forced,
+                object.wanted,
+            )?,
         }
     }
     Ok(())
@@ -715,7 +727,7 @@ fn reach(
     id: ObjectId,
     kind: ObjectKind,
 ) -> Result<()> {
-    reach_at(objects, by_id, id, kind, 1)
+    reach_at(objects, by_id, id, kind, 1, false)
 }
 
 fn reach_at(
@@ -724,6 +736,7 @@ fn reach_at(
     id: ObjectId,
     kind: ObjectKind,
     depth: u32,
+    forced: bool,
 ) -> Result<()> {
     if id.is_zero() {
         return Err(Error::InvalidObject);
@@ -733,10 +746,18 @@ fn reach_at(
     if object.info.kind != kind {
         return Err(Error::InvalidObject);
     }
+    // Explicit non-commit wants retain their tree/tag closure even when a
+    // reported commit references it. Common commits still cut tag history.
+    let forced = forced && kind != ObjectKind::Commit;
+    let newly_forced = forced && !object.forced;
+    object.forced |= forced;
+    if forced {
+        object.excluded = false;
+    }
     if !object.excluded {
         object.reached = true;
-        if depth < object.depth {
-            object.depth = depth;
+        if depth < object.depth || newly_forced {
+            object.depth = object.depth.min(depth);
             object.checked = false;
         }
     }
@@ -865,7 +886,7 @@ fn validate_commit(
     while line.starts_with(b"parent ") {
         let id = link(line, b"parent ", format)?;
         if let Some(depth) = parent_depth {
-            reach_at(objects, by_id, id, ObjectKind::Commit, depth)?;
+            reach_at(objects, by_id, id, ObjectKind::Commit, depth, false)?;
         }
         line = body.line(scratch)?;
     }
@@ -902,9 +923,15 @@ fn validate_tag(
     objects: &mut [Option<ValidationMetadata>],
     by_id: &[usize],
     depth: u32,
+    forced: bool,
+    wanted: bool,
 ) -> Result<()> {
     let (id, kind) = tag_target(body, scratch)?;
-    reach_at(objects, by_id, id, kind, depth)?;
+    reach_at(objects, by_id, id, kind, depth, forced)?;
+    if wanted {
+        let index = find(objects, by_id, id).ok_or(Error::ObjectNotFound)?;
+        objects[index].as_mut().expect("validated metadata").wanted = true;
+    }
     let line = body.line(scratch)?;
     if !line.starts_with(b"tag ") || line.len() == b"tag ".len() {
         return Err(Error::InvalidObject);
@@ -983,6 +1010,7 @@ fn validate_tree(
     scratch: &mut [u8],
     objects: &mut [Option<ValidationMetadata>],
     by_id: &[usize],
+    forced: bool,
 ) -> Result<()> {
     let capacity = scratch.len() / 2;
     let (previous, rest) = scratch.split_at_mut(capacity);
@@ -1006,7 +1034,7 @@ fn validate_tree(
             }
         }
         if kind != ObjectKind::Commit {
-            reach(objects, by_id, id, kind)?;
+            reach_at(objects, by_id, id, kind, 1, forced)?;
         }
         // A file "foo", file "foo.bar", directory "foo" is sorted but
         // still duplicates a name. Reread earlier entries instead of keeping

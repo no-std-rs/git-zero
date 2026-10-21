@@ -58,6 +58,178 @@ fn expected(ids: &[Option<ObjectId>]) -> Vec<ObjectId> {
 }
 
 #[test]
+fn explicit_non_commit_objects_override_common_snapshots() {
+    let mut graph = Graph::new();
+    let ids = graph.ids;
+    let common = ids.base.unwrap();
+    for _ in 0..2 {
+        for (wanted, filter, expected) in [
+            (
+                ids.shared.unwrap(),
+                BlobFilter::All,
+                expected(&[ids.shared]),
+            ),
+            (
+                ids.shared.unwrap(),
+                BlobFilter::None,
+                expected(&[ids.shared]),
+            ),
+            (
+                ids.base_tree.unwrap(),
+                BlobFilter::All,
+                expected(&[ids.base_tree, ids.base_blob, ids.shared]),
+            ),
+            (
+                ids.base_tree.unwrap(),
+                BlobFilter::None,
+                expected(&[ids.base_tree]),
+            ),
+        ] {
+            assert_eq!(
+                select(
+                    &graph,
+                    &[wanted],
+                    &[common],
+                    &[],
+                    FetchOptions {
+                        filter,
+                        ..FetchOptions::default()
+                    },
+                    false,
+                )
+                .0,
+                expected,
+                "{wanted} {filter:?}",
+            );
+        }
+        graph.objects.reverse();
+    }
+}
+
+#[test]
+fn explicit_non_commit_tags_retain_peeled_blob_filter_exceptions() {
+    let mut graph = Graph::new();
+    let ids = graph.ids;
+    let blob = ids.shared.unwrap();
+    let tree = ids.base_tree.unwrap();
+    let blob_tag = annotation(&mut graph.objects, blob, "blob", "blob-target");
+    let tree_tag = annotation(&mut graph.objects, tree, "tree", "tree-target");
+    let nested = annotation(&mut graph.objects, tree_tag, "tag", "nested-tree");
+    for (name, id, peeled) in [
+        ("refs/tags/z-blob-target", blob_tag, blob),
+        ("refs/tags/z-tree-target", tree_tag, tree),
+        ("refs/tags/z-nested-tree", nested, tree),
+    ] {
+        graph.refs.push(Reference {
+            name,
+            id,
+            symbolic_target: None,
+            peeled: Some(peeled),
+        });
+    }
+    graph.refs.sort_unstable_by_key(|reference| reference.name);
+    for _ in 0..2 {
+        assert_eq!(
+            select(
+                &graph,
+                &[blob_tag],
+                &[],
+                &[],
+                FetchOptions {
+                    filter: BlobFilter::None,
+                    ..FetchOptions::default()
+                },
+                false,
+            )
+            .0,
+            sorted(vec![blob_tag, blob]),
+        );
+        for (wanted, common, filter, expected) in [
+            (
+                blob_tag,
+                ids.base.unwrap(),
+                BlobFilter::None,
+                sorted(vec![blob_tag, blob]),
+            ),
+            (
+                tree_tag,
+                ids.base.unwrap(),
+                BlobFilter::All,
+                sorted(vec![tree_tag, tree, blob, ids.base_blob.unwrap()]),
+            ),
+            (
+                nested,
+                ids.base.unwrap(),
+                BlobFilter::None,
+                sorted(vec![nested, tree_tag, tree]),
+            ),
+            (
+                ids.tag.unwrap(),
+                ids.side.unwrap(),
+                BlobFilter::All,
+                expected(&[ids.tag]),
+            ),
+        ] {
+            assert_eq!(
+                select(
+                    &graph,
+                    &[wanted],
+                    &[common],
+                    &[],
+                    FetchOptions {
+                        filter,
+                        ..FetchOptions::default()
+                    },
+                    false,
+                )
+                .0,
+                expected,
+                "{wanted} {filter:?}",
+            );
+        }
+        graph.objects.reverse();
+    }
+}
+
+#[test]
+fn explicit_non_commit_tags_reopen_trees_already_walked_from_a_commit() {
+    let mut graph = Graph::new();
+    let ids = graph.ids;
+    let tree = ids.main_tree.unwrap();
+    let tagged = annotation(&mut graph.objects, tree, "tree", "main-tree");
+    graph.refs.push(Reference {
+        name: "refs/tags/z-main-tree",
+        id: tagged,
+        symbolic_target: None,
+        peeled: Some(tree),
+    });
+    graph.refs.sort_unstable_by_key(|reference| reference.name);
+    for _ in 0..2 {
+        for roots in [[ids.main.unwrap(), tagged], [tagged, ids.main.unwrap()]] {
+            assert_eq!(
+                select(
+                    &graph,
+                    &roots,
+                    &[ids.base.unwrap()],
+                    &[],
+                    FetchOptions::default(),
+                    false
+                )
+                .0,
+                sorted(vec![
+                    tagged,
+                    tree,
+                    ids.main.unwrap(),
+                    ids.main_blob.unwrap(),
+                    ids.shared.unwrap()
+                ]),
+            );
+        }
+        graph.objects.reverse();
+    }
+}
+
+#[test]
 fn depth_one_keeps_only_the_merge_tip_and_its_tree_closure() {
     let graph = Graph::new();
     let ids = graph.ids;
