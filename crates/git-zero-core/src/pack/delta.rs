@@ -23,15 +23,39 @@ enum State {
     Base,
     Size,
     Opcode,
-    Copy {
-        flags: u8,
-        index: u8,
-        offset: u32,
-        length: u32,
-    },
+    Copy(CopyFields),
     Insert(u8),
     Done,
     Failed(Error),
+}
+
+#[derive(Clone, Copy)]
+struct CopyFields {
+    flags: u8,
+    index: u8,
+    offset: u32,
+    length: u32,
+}
+
+impl CopyFields {
+    fn read(&mut self, input: &[u8]) -> (usize, bool) {
+        let mut consumed = 0;
+        while self.index < 7 {
+            if self.flags & (1 << self.index) != 0 {
+                let Some(&byte) = input.get(consumed) else {
+                    return (consumed, false);
+                };
+                consumed += 1;
+                if self.index < 4 {
+                    self.offset |= u32::from(byte) << (self.index * 8);
+                } else {
+                    self.length |= u32::from(byte) << ((self.index - 4) * 8);
+                }
+            }
+            self.index += 1;
+        }
+        (consumed, true)
+    }
 }
 
 /// Parse fragmented, already inflated delta bytes with fixed inline state.
@@ -125,25 +149,18 @@ impl DeltaDecoder {
                         Some(DeltaStatus::NeedInput)
                     }
                 }
-                State::Copy {
-                    index: 7,
-                    offset,
-                    length,
-                    ..
-                } => Some(self.copy(offset, length)?),
-                State::Copy {
-                    flags,
-                    index,
-                    offset,
-                    length,
-                } if flags & (1 << index) == 0 => {
-                    self.state = State::Copy {
-                        flags,
-                        index: index + 1,
-                        offset,
-                        length,
-                    };
-                    None
+                State::Copy(mut fields) => {
+                    let (read, complete) = fields.read(&input[consumed..]);
+                    consumed += read;
+                    if complete {
+                        Some(self.copy(fields.offset, fields.length)?)
+                    } else {
+                        self.state = State::Copy(fields);
+                        if eof {
+                            return Err(Error::CorruptPack);
+                        }
+                        Some(DeltaStatus::NeedInput)
+                    }
                 }
                 _ if consumed == input.len() => {
                     if eof {
@@ -159,27 +176,6 @@ impl DeltaDecoder {
                 State::Opcode => {
                     self.opcode(input[consumed])?;
                     consumed += 1;
-                    None
-                }
-                State::Copy {
-                    flags,
-                    index,
-                    mut offset,
-                    mut length,
-                } => {
-                    let byte = u32::from(input[consumed]);
-                    consumed += 1;
-                    if index < 4 {
-                        offset |= byte << (index * 8);
-                    } else {
-                        length |= byte << ((index - 4) * 8);
-                    }
-                    self.state = State::Copy {
-                        flags,
-                        index: index + 1,
-                        offset,
-                        length,
-                    };
                     None
                 }
                 State::Insert(remaining) => {
@@ -244,12 +240,12 @@ impl DeltaDecoder {
                 }
                 State::Insert(opcode)
             }
-            _ => State::Copy {
+            _ => State::Copy(CopyFields {
                 flags: opcode,
                 index: 0,
                 offset: 0,
                 length: 0,
-            },
+            }),
         };
         Ok(())
     }
