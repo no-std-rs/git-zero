@@ -2,6 +2,7 @@ import { hex, integer } from "./codec.mjs";
 import { ChunkWriter, blob } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
 import { requestBody, decodedBody } from "./body.mjs";
+import { RequestError } from "./errors.mjs";
 
 const EMPTY = new Uint8Array();
 const REPRESENTATION_LIMIT = 1024 * 1024;
@@ -96,7 +97,7 @@ export class Intake {
       }
     }
     for (let attempts = 0; !this.eof && attempts < 128; attempts++) await this.event(this.codec.receiveStep(EMPTY, true), EMPTY);
-    if (!this.eof || this.current || this.objects !== this.expected) throw new Error("intake did not close exactly");
+    if (!this.eof || this.current || this.objects !== this.expected) throw new RequestError("intake did not close exactly");
     this.flushObjects();
     const bytes = this.writer ? await this.writer.finish() : 0;
     if (this.writer && (!this.pack || bytes !== this.lastEnd + this.codec.idBytes)) throw new Error("stored pack extent differs");
@@ -121,10 +122,10 @@ export class Intake {
       if (!rows.length) break;
       for (const row of rows) await this.delta(row);
     }
-    if (this.store.exec("SELECT node FROM stage_objects WHERE stage=? AND (verified=0 OR scanned=0) LIMIT 1", this.stage).length) throw new Error("unresolved or cyclic delta base");
+    if (this.store.exec("SELECT node FROM stage_objects WHERE stage=? AND (verified=0 OR scanned=0) LIMIT 1", this.stage).length) throw new RequestError("unresolved or cyclic delta base");
     const target = this.store.edgeTargetSQL("e.dst");
     const missing = this.store.exec(`SELECT ${target} AS dst,e.kind FROM stage_edges e WHERE e.stage=? AND NOT EXISTS(SELECT 1 FROM stage_objects t INDEXED BY stage_object_ids WHERE t.stage=? AND t.oid=${target} AND t.verified=1 AND t.kind=e.kind) AND NOT EXISTS(SELECT 1 FROM stage_objects t JOIN stages p ON p.id=t.stage WHERE t.oid=${target} AND t.kind=e.kind AND p.phase='published') LIMIT 1`, this.store.edgeStage(this.stage), this.stage)[0];
-    if (missing) throw new Error("object link target is missing or has the wrong kind");
+    if (missing) throw new RequestError("object link target is missing or has the wrong kind");
     // A newly received tree can designate a blob from an older published pack.
     // The work queue is keyed by canonical ID, independent of physical stages.
     for (;;) {
@@ -132,7 +133,7 @@ export class Intake {
       if (!rows.length) break;
       for (const { oid, checks } of rows) {
         const row = this.store.object(this.stage, oid);
-        if (!row || row.kind !== 3) throw new Error("designated target is not a blob");
+        if (!row || row.kind !== 3) throw new RequestError("designated target is not a blob");
         // Reject an oversized designated blob before warming or reading it.
         this.source.beginScan(row, false, checks);
         const cached = this.source.canonical.get(oid);
@@ -183,7 +184,7 @@ export class Intake {
       console.error(JSON.stringify({ event: "receive-rejected", stage: this.stage, phase: this.inPack ? "pack" : this.eof ? "validation" : "controls", objects: this.objects, expected: this.expected, lastEnd: this.lastEnd, queries: this.source.queries, error: String(error.message ?? error), codecError: error.code ?? null }));
       error.commands = this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", this.stage);
       error.selected = this.store.exec("SELECT selected FROM stages WHERE id=?", this.stage)[0]?.selected ?? 0;
-      await this.store.abandon(this.stage);
+      await this.store.abandon(this.stage, { defer: true });
       throw error;
     } finally {
       this.codec.receiveCancel(); this.codec.sourceCancel(); this.codec.rangeCancel(); this.codec.graphCancel();

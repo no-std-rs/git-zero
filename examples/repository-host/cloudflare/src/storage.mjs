@@ -1,6 +1,7 @@
 // Durable storage for opaque codec records and authenticated byte chunks.
 import { bucket } from "./r2-s3.mjs";
 import { hex } from "./codec.mjs";
+import { RequestError, storageFailure } from "./errors.mjs";
 export const CHUNK_BYTES = 1024 * 1024;
 const MAX_STORED_CHUNK_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 65536;
@@ -11,7 +12,7 @@ async function retryStorage(operation, usage) {
     try { return await operation(); }
     catch (error) {
       const transient = error?.retryable === true || /network connection lost|network error|fetch failed|ECONNRESET|ETIMEDOUT/i.test(String(error?.message ?? error));
-      if (!transient || attempt === 2) throw error;
+      if (!transient || attempt === 2) throw storageFailure(error);
       usage.r2Retries++;
       await new Promise((resolve) => setTimeout(resolve, 100 * 4 ** attempt));
     }
@@ -150,18 +151,22 @@ export class Store {
     if (this.exec("SELECT namespace FROM host_identity WHERE id=1")[0].namespace !== namespace) throw new Error("stored repository identity differs");
   }
   exec(statement, ...bindings) {
-    const cursor = this.ctx.storage.sql.exec(statement, ...bindings);
-    const rows = cursor.toArray();
-    this.usage.sqlCalls++;
-    if (typeof cursor.rowsRead === "number" && typeof cursor.rowsWritten === "number") {
-      this.usage.sqlRowsRead += cursor.rowsRead; this.usage.sqlRowsWritten += cursor.rowsWritten;
-    } else this.sqlKnown = false;
-    return rows;
+    try {
+      const cursor = this.ctx.storage.sql.exec(statement, ...bindings);
+      const rows = cursor.toArray();
+      this.usage.sqlCalls++;
+      if (typeof cursor.rowsRead === "number" && typeof cursor.rowsWritten === "number") {
+        this.usage.sqlRowsRead += cursor.rowsRead; this.usage.sqlRowsWritten += cursor.rowsWritten;
+      } else this.sqlKnown = false;
+      return rows;
+    } catch (error) {
+      throw storageFailure(error);
+    }
   }
   initialize(format) {
     if (format !== 0 && format !== 1) throw new RangeError("unsupported object format");
     const current = this.exec("SELECT * FROM repository WHERE id=1")[0];
-    if (current && current.format !== format) throw new Error("repository object format differs");
+    if (current && current.format !== format) throw new RequestError("repository object format differs");
     if (!current) this.exec("INSERT INTO repository(id,format,generation,head) VALUES(1,?,0,?)", format, blob(new TextEncoder().encode("refs/heads/main")));
   }
   stage(format, retained = false) {
@@ -269,7 +274,7 @@ export class Store {
       return new Uint8Array(await object.arrayBuffer());
     }, this.usage);
     this.usage.r2ReadBytes += data.byteLength;
-    if (await sha256(data) !== chunk.sha) throw new Error("stored chunk hash differs");
+    if (await sha256(data) !== chunk.sha) throw storageFailure(new Error("stored chunk hash differs"));
     cache.put(chunk.key, data); return data;
   }
   async clearTemporary(stage, { defer = false } = {}) {
@@ -284,7 +289,7 @@ export class Store {
     this.exec("DELETE FROM temp_objects WHERE stage=?", stage);
     return true;
     } catch (error) {
-      await this.ctx.storage.setAlarm(Date.now() + 60000);
+      await this.scheduleRecovery();
       if (!defer) throw error;
       // Ownership rows remain durable until deletion succeeds. Only defer
       // after the recovery alarm has itself been scheduled successfully.
@@ -292,7 +297,7 @@ export class Store {
       return false;
     }
   }
-  async abandon(stage) {
+  async abandon(stage, { defer = false } = {}) {
     try {
     const current = this.exec("SELECT phase FROM stages WHERE id=?", stage)[0];
     if (!current) return;
@@ -323,9 +328,14 @@ export class Store {
       }
       this.exec("DELETE FROM stages WHERE id=? AND phase='failed'", stage);
     } catch (error) {
-      await this.ctx.storage.setAlarm(Date.now() + 60000);
-      throw error;
+      await this.scheduleRecovery();
+      if (!defer) throw error;
+      console.error(JSON.stringify({ event: "cleanup-deferred", stage, error: String(error.message ?? error) }));
     }
+  }
+  async scheduleRecovery() {
+    try { await this.ctx.storage.setAlarm(Date.now() + 60000); }
+    catch (error) { throw storageFailure(error); }
   }
   async recover() {
     // Fetch frontiers belong to a single request. A crashed stream cannot run

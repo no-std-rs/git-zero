@@ -1,5 +1,5 @@
 import module from "../build/git_zero_host_wasm.wasm";
-import { Codec } from "./codec.mjs";
+import { Codec, CodecError } from "./codec.mjs";
 import { Intake } from "./intake.mjs";
 import { ObjectSource } from "./source.mjs";
 import { Store } from "./storage.mjs";
@@ -7,6 +7,7 @@ import { bytes } from "./storage.mjs";
 import { publish } from "./publication.mjs";
 import { FetchJob } from "./fetch.mjs";
 import { streamResponse } from "./response.mjs";
+import { RequestError, isStorageFailure } from "./errors.mjs";
 
 const REPOSITORY = /^[A-Za-z0-9_-]{1,80}$/;
 const UUID = /^[0-9a-f-]{36}$/;
@@ -16,6 +17,12 @@ const fromHex = (value) => Uint8Array.from(value.match(/../g), (pair) => Number.
 // Advertise only host-backed receive features. Push options are staged until
 // publication; this host has no application hooks that consume them.
 const RECEIVE_CAPABILITIES = 255;
+
+function testFormat(request, fallback = 0) {
+  const format = Number(request.headers.get("x-test-format") ?? fallback);
+  if (format !== 0 && format !== 1) throw new RequestError("unsupported object format");
+  return format;
+}
 
 function authorized(request, env) {
   if (!env.HOST_TOKEN) return false;
@@ -90,10 +97,12 @@ export class OwnRepository {
     try {
       await new Intake(this.store, codec, stage).run(request);
     } catch (error) {
+      if (isStorageFailure(error)) throw error;
       const selected = error.selected ?? 0;
       if (!selected) return json({ error: "invalid receive request" }, 400);
       const names = error.commands ?? this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", stage);
-      await this.store.abandon(stage);
+      // Intake has already reclaimed the stage or scheduled its recovery.
+      // Report the original validation failure without retrying cleanup here.
       const outcomes = names.map((row) => ({ ...row, error: "unpacker error" }));
       return this.stream(this.report(codec, selected, outcomes, true), "application/x-git-receive-pack-result");
     }
@@ -118,7 +127,10 @@ export class OwnRepository {
       if (!authorized(request, this.env)) return json({ error: "unknown route" }, 404);
       const namespace = request.headers.get("x-git-zero-namespace");
       if (!REPOSITORY.test(namespace ?? "")) return json({ error: "invalid repository" }, 400);
-      if (!this.store) { this.store = new Store(this.ctx, this.env, namespace); await this.store.recover(); }
+      if (!this.store) {
+        const store = new Store(this.ctx, this.env, namespace);
+        await store.recover(); this.store = store;
+      }
       if (this.store.namespace !== namespace) throw new Error("repository identity differs");
       const url = new URL(request.url), parts = url.pathname.split("/");
       if (parts[1] !== "_test") {
@@ -140,10 +152,10 @@ export class OwnRepository {
       }
       if (this.env.TEST_MODE !== "true") return json({ error: "unknown route" }, 404);
       if (request.method === "GET" && parts[3] === "state") return json({ ...this.store.statistics(), epoch: this.epoch });
-      if (request.method === "POST" && parts[3] === "initialize") { this.store.initialize(Number(request.headers.get("x-test-format") ?? 0)); return json({ ready: true }); }
+      if (request.method === "POST" && parts[3] === "initialize") { this.store.initialize(testFormat(request)); return json({ ready: true }); }
       if (request.method === "GET" && parts[3] === "refs") return json({ refs: this.store.exec("SELECT name,oid FROM refs ORDER BY name").map((row) => ({ name: Array.from(bytes(row.name)), oid: row.oid })) });
       if (request.method === "POST" && parts[3] === "intake") {
-        const format = Number(request.headers.get("x-test-format") ?? this.env.REPO_FORMAT ?? 0);
+        const format = testFormat(request, this.env.REPO_FORMAT ?? 0);
         const limits = { capabilities: 255 };
         for (const [name, field] of [["canonical", "maxCanonicalBytes"], ["work", "maxTotalWorkBytes"], ["temporary", "maxTemporaryBytes"]]) {
           const value = request.headers.get(`x-test-${name}-bytes`);
@@ -187,7 +199,7 @@ export class OwnRepository {
       }
       return json({ error: "unknown route" }, 404);
     } catch (error) {
-      return json({ error: String(error.message ?? error), codecError: error.code ?? null }, 400);
+      return json({ error: String(error.message ?? error), codecError: error.code ?? null }, error instanceof RequestError || error instanceof CodecError ? 400 : 500);
     }
   }
 }

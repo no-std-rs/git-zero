@@ -1,5 +1,6 @@
 import { hex, integer } from "./codec.mjs";
 import { ByteCache, CacheBuffers, ChunkWriter, PAGE_BYTES } from "./storage.mjs";
+import { RequestError } from "./errors.mjs";
 
 const CANONICAL_ENTRY_BYTES = 8 * 1024 * 1024;
 const REPRESENTATION_ENTRY_BYTES = 1024 * 1024;
@@ -189,13 +190,21 @@ export class ObjectSource {
   }
 
   flushMetadata() {
-    if (this.names.length) {
-      this.store.exec(`INSERT INTO stage_names(stage,node,name,mode,dst,kind) VALUES${Array(this.names.length).fill("(?,?,?,?,?,?)").join(",")}`, ...this.names.flat());
-      this.names.length = 0;
-    }
-    if (this.edges.length) {
-      this.store.exec(`INSERT OR IGNORE INTO stage_edges(stage,node,dst,kind,relation) VALUES${Array(this.edges.length).fill("(?,?,?,?,?)").join(",")}`, ...this.edges.flat());
-      this.edges.length = 0;
+    try {
+      if (this.names.length) {
+        this.store.exec(`INSERT INTO stage_names(stage,node,name,mode,dst,kind) VALUES${Array(this.names.length).fill("(?,?,?,?,?,?)").join(",")}`, ...this.names.flat());
+        this.names.length = 0;
+      }
+      if (this.edges.length) {
+        this.store.exec(`INSERT OR IGNORE INTO stage_edges(stage,node,dst,kind,relation) VALUES${Array(this.edges.length).fill("(?,?,?,?,?)").join(",")}`, ...this.edges.flat());
+        this.edges.length = 0;
+      }
+    } catch (error) {
+      // These two schema constraints validate the incoming tree across batches.
+      // Keep known input violations distinct from unrelated SQLite failures.
+      const message = String(error.message ?? error);
+      if (message.includes("UNIQUE constraint failed: stage_names.") || message.includes("conflicting graph target kinds")) throw new RequestError(message, { cause: error });
+      throw error;
     }
   }
 

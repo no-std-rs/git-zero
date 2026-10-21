@@ -2,6 +2,7 @@ import { hex, integer } from "./codec.mjs";
 import { bytes, FETCH_TABLES, PAGE_BYTES } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
 import { requestBody, decodedBody } from "./body.mjs";
+import { RequestError } from "./errors.mjs";
 
 const encode = (value) => new TextEncoder().encode(value);
 const fromHex = (value) => Uint8Array.from(value.match(/../g), (pair) => Number.parseInt(pair, 16));
@@ -16,7 +17,7 @@ export class FetchJob {
     this.steps = 0; this.allCommitWants = true;
   }
   reset() { for (const table of FETCH_TABLES) this.store.exec(`DELETE FROM ${table}`); }
-  tick() { if (++this.steps > this.codec.limits.maxObjects) throw new Error("fetch graph work budget exceeded"); }
+  tick() { if (++this.steps > this.codec.limits.maxObjects) throw new RequestError("fetch graph work budget exceeded"); }
   async *references(v2 = false) {
     this.codec.uploadInit(this.version);
     yield* this.refRows(v2);
@@ -57,7 +58,7 @@ export class FetchJob {
         const object = this.store.published(id);
         // HOST_TOKEN grants the complete published catalog, as does full-pack
         // reuse. Indexed lookup never exposes private/quarantined objects.
-        if (!object) throw new Error("want is not published");
+        if (!object) throw new RequestError("want is not published");
         if (object.kind !== 1) this.allCommitWants = false;
         this.store.exec("INSERT OR IGNORE INTO fetch_wants(oid) VALUES(?)", id);
         // Git treats a wanted tag's peeled object as explicitly wanted too,
@@ -68,7 +69,7 @@ export class FetchJob {
         if (this.store.published(id)?.kind === 1) this.store.exec("INSERT OR IGNORE INTO fetch_haves(oid) VALUES(?)", id);
       } else if (event.tag === 73) {
         if (this.store.exec("SELECT 1 FROM fetch_shallow WHERE oid=?", id).length) continue;
-        if (this.store.published(id)?.kind !== 1) throw new Error("shallow ID is not a published commit");
+        if (this.store.published(id)?.kind !== 1) throw new RequestError("shallow ID is not a published commit");
         this.store.exec("INSERT OR IGNORE INTO fetch_shallow(oid) VALUES(?)", id);
       } else throw new Error("unknown upload control event");
     }
@@ -86,7 +87,7 @@ export class FetchJob {
     const repository = this.store.exec("SELECT object_count FROM repository WHERE id=1")[0];
     if (!sources.count || sources.objects !== repository.object_count) return false;
     const length = sources.bytes - (sources.count - 1) * (12 + this.codec.idBytes);
-    if (!Number.isSafeInteger(length) || length > this.codec.limits.maxPackBytes || sources.objects > this.codec.limits.maxObjects) throw new Error("full pack exceeds resource limits");
+    if (!Number.isSafeInteger(length) || length > this.codec.limits.maxPackBytes || sources.objects > this.codec.limits.maxObjects) throw new RequestError("full pack exceeds resource limits");
     this.rawSources = sources; return true;
   }
   walk(table, { excludeCommon = false, snapshots = false, nonCommit = false } = {}) {
