@@ -476,3 +476,26 @@ test("offset delta permission survives the bounded upload ABI", () => {
     codec.uploadCancel();
   }
 });
+
+
+test("tree-filter frontier events retain provided-root depth without changing history", () => {
+  for (const format of [0, 1]) for (const version of [0, 1, 2]) {
+    const codec = new Codec(module, format), wanted = Buffer.alloc(format ? 32 : 20, 1);
+    const capability = `object-format=${format ? "sha256" : "sha1"}`;
+    const lines = version === 2 ? [packet("command=fetch\n"), packet(capability), Buffer.from("0001")] : [];
+    lines.push(packet(`want ${hex(wanted)}${version === 2 ? "" : ` filter ${capability}`}\n`), packet("filter tree:2\n"));
+    if (version !== 2) lines.push(Buffer.from("0000"));
+    lines.push(packet("done\n")); if (version === 2) lines.push(Buffer.from("0000"));
+    codec.uploadInit(version); codec.uploadAppend(Buffer.concat(lines));
+    const parsed = codec.uploadParse(); assert.ok(parsed.flags & (1 << 23)); assert.equal(parsed.b, 2n);
+    assert.equal(codec.uploadHistory(false).flags, 0);
+    const tree = { kind: 2, size: 20 };
+    assert.equal(codec.uploadSelect(tree, 2).b, 3n);
+    assert.equal(codec.uploadSelect(tree, 1, { wanted: true, providedTree: true }).b, 1n);
+    assert.equal(codec.uploadSelect(tree, 3).flags, 18);
+    assert.equal(codec.uploadSelect({ kind: 3, size: 10 }, 3).flags & 1, 0);
+    assert.equal(codec.uploadSelect({ kind: 3, size: 10 }, 3, { wanted: true }).flags & 1, 1);
+    assert.equal(codec.uploadSelect({ kind: 1, size: 100 }, 2).flags, 3);
+    codec.uploadCancel();
+  }
+});

@@ -77,20 +77,25 @@ fn filter(value: &[u8]) -> Result<BlobFilter> {
             _ => return Err(Error::InvalidRequest),
         }));
     }
+    if let Some(value) = value.strip_prefix(b"tree:") {
+        return scaled_filter_number(value).map(BlobFilter::TreeDepth);
+    }
     let value = value
         .strip_prefix(b"blob:limit=")
         .ok_or(Error::Unsupported)?;
+    scaled_filter_number(value).map(BlobFilter::Limit)
+}
+
+fn scaled_filter_number(value: &[u8]) -> Result<u64> {
     let (digits, multiplier) = match value.last() {
         Some(b'k' | b'K') => (&value[..value.len() - 1], 1024),
         Some(b'm' | b'M') => (&value[..value.len() - 1], 1024 * 1024),
         Some(b'g' | b'G') => (&value[..value.len() - 1], 1024 * 1024 * 1024),
         _ => (value, 1),
     };
-    Ok(BlobFilter::Limit(
-        filter_number(digits)?
-            .checked_mul(multiplier)
-            .ok_or(Error::InvalidRequest)?,
-    ))
+    filter_number(digits)?
+        .checked_mul(multiplier)
+        .ok_or(Error::InvalidRequest)
 }
 
 fn filter_number(mut value: &[u8]) -> Result<u64> {
@@ -162,6 +167,12 @@ mod tests {
                 Ok(BlobFilter::Limit(expected)),
                 "{wire}"
             );
+            let tree = wire.replace("blob:limit=", "tree:");
+            assert_eq!(
+                filter(tree.as_bytes()),
+                Ok(BlobFilter::TreeDepth(expected)),
+                "{tree}"
+            );
         }
         assert_eq!(filter(b"blob:none"), Ok(BlobFilter::None));
     }
@@ -198,6 +209,12 @@ mod tests {
                 filter(wire.as_bytes()),
                 Err(Error::InvalidRequest),
                 "{wire}"
+            );
+            let tree = wire.replace("blob:limit=", "tree:");
+            assert_eq!(
+                filter(tree.as_bytes()),
+                Err(Error::InvalidRequest),
+                "{tree}"
             );
         }
     }

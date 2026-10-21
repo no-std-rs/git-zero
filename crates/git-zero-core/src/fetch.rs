@@ -10,11 +10,25 @@ pub enum BlobFilter {
     Limit(u64),
     /// Omit every other kind, retaining explicitly wanted objects.
     Type(ObjectKind),
+    /// Omit trees and blobs at this depth or deeper, from each root tree.
+    TreeDepth(u64),
 }
 
 impl BlobFilter {
-    /// Keep explicitly wanted objects; apply the requested policy to the rest.
+    /// Apply the policy at root-tree depth zero. Use `includes_at` when an
+    /// object is reached below a root tree.
     pub const fn includes(self, info: ObjectInfo, explicitly_wanted: bool) -> bool {
+        self.includes_at(info, explicitly_wanted, 0)
+    }
+
+    /// Apply the policy at the minimum zero-based tree distance. Explicitly
+    /// requested objects bypass filtering; commits and tags have no tree depth.
+    pub const fn includes_at(
+        self,
+        info: ObjectInfo,
+        explicitly_wanted: bool,
+        tree_depth: u32,
+    ) -> bool {
         if explicitly_wanted {
             return true;
         }
@@ -23,6 +37,19 @@ impl BlobFilter {
             Self::None => !matches!(info.kind, ObjectKind::Blob),
             Self::Limit(limit) => !matches!(info.kind, ObjectKind::Blob) || info.size < limit,
             Self::Type(kind) => info.kind as u8 == kind as u8,
+            Self::TreeDepth(limit) => {
+                !matches!(info.kind, ObjectKind::Tree | ObjectKind::Blob)
+                    || (tree_depth as u64) < limit
+            }
+        }
+    }
+
+    /// A tree at the exclusion depth contributes no children, including when
+    /// the tree itself is retained as an explicit want.
+    pub const fn follows_tree(self, tree_depth: u32) -> bool {
+        match self {
+            Self::TreeDepth(limit) => (tree_depth as u64) < limit,
+            _ => true,
         }
     }
 }

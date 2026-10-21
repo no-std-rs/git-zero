@@ -102,3 +102,29 @@ fn blob_filters_keep_explicit_wants_and_exact_size_boundaries() {
         }
     });
 }
+
+#[test]
+fn tree_filter_thresholds_use_zero_based_distances_and_full_width_limits() {
+    allocations::without_allocations(|| {
+        for kind in [
+            ObjectKind::Commit,
+            ObjectKind::Tree,
+            ObjectKind::Blob,
+            ObjectKind::Tag,
+        ] {
+            let info = ObjectInfo { kind, size: 0 };
+            for depth in [0, 1, 2, u32::MAX] {
+                for limit in [0, 1, 2, u64::MAX] {
+                    let filter = BlobFilter::TreeDepth(limit);
+                    assert_eq!(
+                        filter.includes_at(info, false, depth),
+                        !matches!(kind, ObjectKind::Tree | ObjectKind::Blob)
+                            || u64::from(depth) < limit
+                    );
+                    assert!(filter.includes_at(info, true, depth));
+                    assert_eq!(filter.follows_tree(depth), u64::from(depth) < limit);
+                }
+            }
+        }
+    });
+}

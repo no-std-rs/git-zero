@@ -65,6 +65,7 @@ export class FetchJob {
     this.done = !!(parsed.flags & (1 << 16));
     this.includeTags = !!(parsed.flags & (1 << 17));
     this.ofsDelta = !!(parsed.flags & (1 << 21));
+    this.treeFiltered = !!(parsed.flags & (1 << 23));
     if (this.command !== 2) return;
     for (;;) {
       const event = this.codec.uploadNext(); if (event.tag === 74) break;
@@ -113,18 +114,19 @@ export class FetchJob {
   }
   historyWalk(table, probe = false) {
     const exclude = !(this.history & 1) && !probe;
-    const target = this.store.edgeTargetSQL("e.dst");
+    const target = this.store.edgeTargetSQL("e.dst"), provided = this.treeFiltered && !probe;
     for (;;) {
-      const rows = this.store.exec(`SELECT f.oid,f.depth,s.oid IS NOT NULL AS boundary,w.oid IS NOT NULL AS wanted FROM ${table} f LEFT JOIN fetch_shallow s ON s.oid=f.oid LEFT JOIN fetch_wants w ON w.oid=f.oid WHERE f.walked=0 AND f.depth=(SELECT MIN(depth) FROM ${table} WHERE walked=0) ORDER BY f.oid LIMIT 128`);
+      const rows = this.store.exec(`SELECT f.oid,f.depth,s.oid IS NOT NULL AS boundary,w.oid IS NOT NULL AS wanted,${provided ? "p.oid IS NOT NULL" : "0"} AS provided FROM ${table} f LEFT JOIN fetch_shallow s ON s.oid=f.oid LEFT JOIN fetch_wants w ON w.oid=f.oid${provided ? " LEFT JOIN fetch_probe p ON p.oid=f.oid" : ""} WHERE f.walked=0 AND f.depth=(SELECT MIN(depth) FROM ${table} WHERE walked=0) ORDER BY f.oid LIMIT 128`);
       if (!rows.length) return;
       for (const item of rows) {
         this.tick();
         const row = this.store.published(item.oid);
         if (!row) throw new Error("published closure is incomplete");
-        const step = this.codec.uploadSelect(row, item.depth, { clientBoundary: !!item.boundary, wanted: !!item.wanted, probe });
+        const step = this.codec.uploadSelect(row, item.depth, { clientBoundary: !!item.boundary, wanted: !!item.wanted, probe, providedTree: !!item.provided && row.kind === 2 });
         this.store.exec(`UPDATE ${table} SET walked=1,stage=?,node=? WHERE oid=?`, row.stage, row.node, row.oid);
         if (!probe) this.store.exec("UPDATE fetch_selected SET included=?,shallow=?,unshallow=? WHERE oid=?", step.flags & 1, (step.flags >> 2) & 1, (step.flags >> 3) & 1, row.oid);
-        this.store.exec(`INSERT INTO ${table}(oid,depth) SELECT ${target},CASE WHEN e.relation=1 THEN ? ELSE ? END FROM stage_edges e WHERE e.stage=? AND e.node=? AND (e.relation<>1 OR ?)${probe ? " AND e.kind IN (1,4)" : ""}${exclude ? ` AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=${target})` : ""} ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<${table}.depth`, integer(step.a), item.depth, this.store.edgeStage(row.stage), row.node, (step.flags >> 1) & 1);
+        const edgeDepth = this.treeFiltered ? "CASE WHEN e.relation=0 THEN 1 ELSE ? END" : "?";
+        this.store.exec(`INSERT INTO ${table}(oid,depth) SELECT ${target},CASE WHEN e.relation=1 THEN ? ELSE ${edgeDepth} END FROM stage_edges e WHERE e.stage=? AND e.node=? AND (e.relation<>1 OR ?) AND ?${probe ? " AND e.kind IN (1,4)" : ""}${exclude ? ` AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=${target})` : ""} ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<${table}.depth`, integer(step.a), this.treeFiltered ? integer(step.b) : item.depth, this.store.edgeStage(row.stage), row.node, (step.flags >> 1) & 1, (step.flags & 16) ? 0 : 1);
       }
     }
   }
@@ -151,6 +153,12 @@ export class FetchJob {
       this.walk("fetch_probe", { nonCommit: true });
       this.store.exec("DELETE FROM fetch_common WHERE oid IN(SELECT oid FROM fetch_probe)");
       this.store.exec("DELETE FROM fetch_probe");
+    }
+    if (this.treeFiltered) {
+      // Distance probing and common overrides are complete. Reuse their table
+      // to freeze provided roots before include-tag adds implicit tag targets.
+      this.store.exec("DELETE FROM fetch_probe");
+      this.store.exec("INSERT INTO fetch_probe(oid) SELECT oid FROM fetch_wants");
     }
     this.store.exec("INSERT INTO fetch_selected(oid) SELECT w.oid FROM fetch_wants w WHERE NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=w.oid) OR EXISTS(SELECT 1 FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE o.oid=w.oid AND o.kind=3 AND s.phase='published')");
     this.historyWalk("fetch_selected");

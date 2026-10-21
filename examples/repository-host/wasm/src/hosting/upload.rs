@@ -87,9 +87,10 @@ pub extern "C" fn host_upload_history_init(length: usize) -> i32 {
     result(value)
 }
 
-/// Input: kind u32@0, flags u32@4 (client boundary=1, explicit want=2),
+/// Input: kind u32@0, flags u32@4 (client boundary=1, wanted=2, provided tree=4),
 /// size u64@8, shortest commit distance u32@16. Flags: include=1,
-/// follow parents=2, shallow=4, unshallow=8; next parent distance u64@16.
+/// follow parents=2, shallow=4, unshallow=8, skip tree=16; next parent
+/// distance u64@16 and next tree/tag distance u64@24 for tree filters.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_upload_select(length: usize, probe: u32) -> i32 {
     let value = select(length, probe);
@@ -342,6 +343,10 @@ fn parse() -> Result<usize> {
         match options.filter {
             BlobFilter::All => {}
             BlobFilter::None => flags |= 1 << 19,
+            BlobFilter::TreeDepth(limit) => {
+                flags |= 1 << 23;
+                frame.wide(24, limit);
+            }
             BlobFilter::Type(kind) => {
                 flags |= 1 << 22;
                 frame.wide(24, kind as u64);
@@ -417,7 +422,7 @@ fn select(length: usize, probe: u32) -> Result<usize> {
     }
     let flags = u32_at(bytes, 4)?;
     let depth = u32_at(bytes, 16)?;
-    if flags > 3 || depth == 0 {
+    if flags > 7 || depth == 0 {
         return Err(Error::InvalidRequest);
     }
     let info = ObjectInfo {
@@ -437,16 +442,30 @@ fn select(length: usize, probe: u32) -> Result<usize> {
     let options = session.request()?.options().ok_or(Error::InvalidRequest)?;
     let boundary = flags & 1 != 0;
     let stop = info.kind == ObjectKind::Commit && !history.follows_parents(depth, boundary);
-    let include = options.filter.includes(info, flags & 2 != 0);
+    let include = options.filter.includes_at(info, flags & 2 != 0, depth - 1);
     let mut frame = Frame::new(output());
     frame.word(
         12,
         u32::from(include)
             | (u32::from(!stop) << 1)
             | (u32::from(stop) << 2)
-            | (u32::from(info.kind == ObjectKind::Commit && boundary && !stop) << 3),
+            | (u32::from(info.kind == ObjectKind::Commit && boundary && !stop) << 3)
+            | (u32::from(info.kind == ObjectKind::Tree && !options.filter.follows_tree(depth - 1))
+                << 4),
     );
     frame.wide(16, u64::from(history.parent_depth(depth)));
+    if matches!(options.filter, BlobFilter::TreeDepth(_)) {
+        frame.wide(
+            24,
+            u64::from(if info.kind == ObjectKind::Tree && flags & 4 != 0 {
+                1
+            } else if info.kind == ObjectKind::Tree {
+                depth.saturating_add(1)
+            } else {
+                depth
+            }),
+        );
+    }
     Ok(frame.finish(76, 0, 0) as usize)
 }
 
