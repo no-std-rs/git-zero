@@ -90,6 +90,7 @@ export class FetchJob {
     this.rawSources = sources; return true;
   }
   walk(table, { excludeCommon = false, snapshots = false, nonCommit = false } = {}) {
+    const target = this.store.edgeTargetSQL("e.dst");
     for (;;) {
       const pending = this.store.exec(`SELECT oid FROM ${table} WHERE walked=0 ORDER BY oid LIMIT 128`);
       if (!pending.length) break;
@@ -98,12 +99,13 @@ export class FetchJob {
         const row = this.store.published(item.oid);
         if (!row) throw new Error("published closure is incomplete");
         this.store.exec(`UPDATE ${table} SET stage=?,node=?,walked=1 WHERE oid=?`, row.stage, row.node, row.oid);
-        this.store.exec(`INSERT OR IGNORE INTO ${table}(oid) SELECT e.dst FROM stage_edges e WHERE e.stage=? AND e.node=?${snapshots ? " AND e.relation<>1" : ""}${nonCommit ? " AND e.kind<>1" : ""}${excludeCommon ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""}`, this.store.edgeStage(row.stage), row.node);
+        this.store.exec(`INSERT OR IGNORE INTO ${table}(oid) SELECT ${target} FROM stage_edges e WHERE e.stage=? AND e.node=?${snapshots ? " AND e.relation<>1" : ""}${nonCommit ? " AND e.kind<>1" : ""}${excludeCommon ? ` AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=${target})` : ""}`, this.store.edgeStage(row.stage), row.node);
       }
     }
   }
   historyWalk(table, probe = false) {
     const exclude = !(this.history & 1) && !probe;
+    const target = this.store.edgeTargetSQL("e.dst");
     for (;;) {
       const rows = this.store.exec(`SELECT f.oid,f.depth,s.oid IS NOT NULL AS boundary,w.oid IS NOT NULL AS wanted FROM ${table} f LEFT JOIN fetch_shallow s ON s.oid=f.oid LEFT JOIN fetch_wants w ON w.oid=f.oid WHERE f.walked=0 AND f.depth=(SELECT MIN(depth) FROM ${table} WHERE walked=0) ORDER BY f.oid LIMIT 128`);
       if (!rows.length) return;
@@ -114,7 +116,7 @@ export class FetchJob {
         const step = this.codec.uploadSelect(row, item.depth, { clientBoundary: !!item.boundary, wanted: !!item.wanted, probe });
         this.store.exec(`UPDATE ${table} SET walked=1,stage=?,node=? WHERE oid=?`, row.stage, row.node, row.oid);
         if (!probe) this.store.exec("UPDATE fetch_selected SET included=?,shallow=?,unshallow=? WHERE oid=?", step.flags & 1, (step.flags >> 2) & 1, (step.flags >> 3) & 1, row.oid);
-        this.store.exec(`INSERT INTO ${table}(oid,depth) SELECT e.dst,CASE WHEN e.relation=1 THEN ? ELSE ? END FROM stage_edges e WHERE e.stage=? AND e.node=? AND (e.relation<>1 OR ?)${probe ? " AND e.kind IN (1,4)" : ""}${exclude ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""} ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<${table}.depth`, integer(step.a), item.depth, this.store.edgeStage(row.stage), row.node, (step.flags >> 1) & 1);
+        this.store.exec(`INSERT INTO ${table}(oid,depth) SELECT ${target},CASE WHEN e.relation=1 THEN ? ELSE ? END FROM stage_edges e WHERE e.stage=? AND e.node=? AND (e.relation<>1 OR ?)${probe ? " AND e.kind IN (1,4)" : ""}${exclude ? ` AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=${target})` : ""} ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<${table}.depth`, integer(step.a), item.depth, this.store.edgeStage(row.stage), row.node, (step.flags >> 1) & 1);
       }
     }
   }

@@ -85,7 +85,7 @@ const SCHEMA = [
   "CREATE INDEX IF NOT EXISTS stage_ready_work ON stage_objects(stage,node) WHERE verified=0 AND ready=1",
   "CREATE INDEX IF NOT EXISTS stage_offset_dependencies ON stage_objects(stage,wire_base_offset) WHERE verified=0 AND wire_base_offset IS NOT NULL",
   "CREATE INDEX IF NOT EXISTS stage_id_dependencies ON stage_objects(stage,wire_base_id) WHERE verified=0 AND wire_base_id IS NOT NULL",
-  "CREATE TABLE IF NOT EXISTS stage_edges (stage INTEGER NOT NULL, node INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, relation INTEGER NOT NULL, PRIMARY KEY(stage,node,relation,dst)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS stage_edges (stage INTEGER NOT NULL, node INTEGER NOT NULL, dst BLOB NOT NULL, kind INTEGER NOT NULL, relation INTEGER NOT NULL, PRIMARY KEY(stage,node,relation,dst)) WITHOUT ROWID",
   // One immutable target cannot satisfy two expected kinds. Check conflicts
   // before OR IGNORE can discard them; this also protects existing schemas.
   "CREATE TRIGGER IF NOT EXISTS stage_edge_kind BEFORE INSERT ON stage_edges WHEN EXISTS(SELECT 1 FROM stage_edges WHERE stage=NEW.stage AND node=NEW.node AND relation=NEW.relation AND dst=NEW.dst AND kind<>NEW.kind) BEGIN SELECT RAISE(ABORT,'conflicting graph target kinds'); END",
@@ -119,11 +119,14 @@ export class Store {
     for (const statement of SCHEMA) this.exec(statement);
     // Existing text catalogs retain their layout. Fresh catalogs intern the
     // opaque stage handle once instead of repeating its UUID in every edge.
-    this.compactEdges = this.exec("PRAGMA table_info(stage_edges)").find((column) => column.name === "stage").type === "INTEGER";
+    const edges = this.exec("PRAGMA table_info(stage_edges)");
+    this.compactEdges = edges.find((column) => column.name === "stage").type === "INTEGER";
+    this.binaryEdges = edges.find((column) => column.name === "dst").type === "BLOB";
     if (this.compactEdges) {
       this.exec("CREATE TABLE IF NOT EXISTS edge_stages(id INTEGER PRIMARY KEY,stage TEXT NOT NULL UNIQUE)");
       this.exec("CREATE TRIGGER IF NOT EXISTS stage_edge_owner BEFORE INSERT ON stage_edges WHEN typeof(NEW.stage)<>'integer' BEGIN SELECT RAISE(ABORT,'graph stage ID is invalid'); END");
     }
+    if (this.binaryEdges) this.exec("CREATE TRIGGER IF NOT EXISTS stage_edge_id BEFORE INSERT ON stage_edges WHEN typeof(NEW.dst)<>'blob' OR length(NEW.dst) NOT IN (20,32) BEGIN SELECT RAISE(ABORT,'graph object ID is invalid'); END");
     // Earlier pending checks selected attributes only. Preserve that meaning.
     if (!this.exec("PRAGMA table_info(stage_blob_checks)").some((column) => column.name === "checks")) this.exec("ALTER TABLE stage_blob_checks ADD COLUMN checks INTEGER NOT NULL DEFAULT 2");
     // Older stages have unknown entry kinds; conservatively disable raw OFS reuse.
@@ -186,6 +189,12 @@ export class Store {
     this.rememberEdgeStage(stage, row.id);
     return row.id;
   }
+  edgeTarget(oid) {
+    return this.binaryEdges ? Uint8Array.from(oid.match(/../g), (pair) => Number.parseInt(pair, 16)).buffer : oid;
+  }
+  edgeTargetSQL(column = "dst") {
+    return this.binaryEdges ? `lower(hex(${column}))` : column;
+  }
   node(stage, node) { return this.exec("SELECT * FROM stage_objects WHERE stage=? AND node=?", stage, node)[0]; }
   object(stage, oid) {
     return this.exec("SELECT * FROM stage_objects INDEXED BY stage_object_ids WHERE stage=? AND oid=? AND verified=1 LIMIT 1", stage, oid)[0]
@@ -201,7 +210,7 @@ export class Store {
     // a semantic depth limit on an already verified immutable tag chain.
     let checkpoint = oid, power = 1, length = 0;
     while (row?.kind === 4) {
-      const edge = this.exec("SELECT dst FROM stage_edges WHERE stage=? AND node=? AND relation=2 LIMIT 1", this.edgeStage(row.stage), row.node)[0];
+      const edge = this.exec(`SELECT ${this.edgeTargetSQL()} AS dst FROM stage_edges WHERE stage=? AND node=? AND relation=2 LIMIT 1`, this.edgeStage(row.stage), row.node)[0];
       if (!edge) throw new Error("stored tag has no target");
       row = find(edge.dst);
       if (row?.oid === checkpoint) throw new Error("stored tag cycle");

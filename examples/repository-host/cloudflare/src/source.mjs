@@ -200,7 +200,7 @@ export class ObjectSource {
   }
 
   edge(row, id, kind, relation) {
-    this.edges.push([this.graphStage ??= this.store.edgeStage(this.stage), row.node, id, kind, relation]);
+    this.edges.push([this.graphStage ??= this.store.edgeStage(this.stage), row.node, this.store.edgeTarget(id), kind, relation]);
     if (this.edges.length === METADATA_BATCH) this.flushMetadata();
   }
 

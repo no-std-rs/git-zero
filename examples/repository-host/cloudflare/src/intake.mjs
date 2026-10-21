@@ -122,7 +122,8 @@ export class Intake {
       for (const row of rows) await this.delta(row);
     }
     if (this.store.exec("SELECT node FROM stage_objects WHERE stage=? AND (verified=0 OR scanned=0) LIMIT 1", this.stage).length) throw new Error("unresolved or cyclic delta base");
-    const missing = this.store.exec("SELECT e.dst,e.kind FROM stage_edges e WHERE e.stage=? AND NOT EXISTS(SELECT 1 FROM stage_objects t INDEXED BY stage_object_ids WHERE t.stage=? AND t.oid=e.dst AND t.verified=1 AND t.kind=e.kind) AND NOT EXISTS(SELECT 1 FROM stage_objects t JOIN stages p ON p.id=t.stage WHERE t.oid=e.dst AND t.kind=e.kind AND p.phase='published') LIMIT 1", this.store.edgeStage(this.stage), this.stage)[0];
+    const target = this.store.edgeTargetSQL("e.dst");
+    const missing = this.store.exec(`SELECT ${target} AS dst,e.kind FROM stage_edges e WHERE e.stage=? AND NOT EXISTS(SELECT 1 FROM stage_objects t INDEXED BY stage_object_ids WHERE t.stage=? AND t.oid=${target} AND t.verified=1 AND t.kind=e.kind) AND NOT EXISTS(SELECT 1 FROM stage_objects t JOIN stages p ON p.id=t.stage WHERE t.oid=${target} AND t.kind=e.kind AND p.phase='published') LIMIT 1`, this.store.edgeStage(this.stage), this.stage)[0];
     if (missing) throw new Error("object link target is missing or has the wrong kind");
     // A newly received tree can designate a blob from an older published pack.
     // The work queue is keyed by canonical ID, independent of physical stages.

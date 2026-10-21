@@ -101,11 +101,13 @@ repository metadata and runtime belong in the server's disk budget.
 New opaque chunks are 1 MiB, keeping more physical ranges in the fixed-size
 read cache when delta reconstruction jumps between bases. Existing chunks up to
 8 MiB remain readable; no stored pack or object offsets need migration.
-Fresh catalogs store a numeric stage key in graph edges and keep each opaque
-stage UUID once in a separate lookup table. Existing text-key catalogs remain
-readable and writable without migration. The 100,000-edge SQLite fixture uses
-about 38% less space for its complete catalog with numeric keys; this does not
-establish the storage reduction for the full Linux repository.
+Fresh catalogs store raw object-ID bytes and a numeric stage key in graph edges,
+keeping each opaque stage UUID once in a separate lookup table. Existing
+UUID/text and numeric/text catalogs remain readable and writable without
+migration. In complete 100,000-edge SQLite fixtures, binary object IDs reduce
+the numeric/text layout from 6,692,864 to 4,411,392 bytes for SHA-1 and from
+9,703,424 to 5,795,840 bytes for SHA-256, with indexed reads retained. These
+fixtures do not establish the full Linux storage reduction or hosting cost.
 Each request also caches at most 256 aliases for verified delta-base metadata.
 Missing and unresolved bases are looked up again as validation advances; the
 metadata cache is released with the request's byte caches.

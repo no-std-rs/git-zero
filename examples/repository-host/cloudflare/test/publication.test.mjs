@@ -71,7 +71,7 @@ test("branch ancestry follows merge parents in paged, deduplicated storage", asy
     store.exec("INSERT INTO refs(name,oid) VALUES(?,?)", Buffer.from("refs/heads/main"), oid);
     for (const [node, id] of [[13, tip], [14, other]]) store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,oid,kind,size,depth,verified,scanned) VALUES(?,?,1,1,1,?,1,0,0,1,1)", stage, node, id);
     // Old tip is a second merge parent; a shared ancestor must be queued once.
-    for (const [node, dst] of [[13, other], [13, oid], [14, oid]]) store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,1,1)", store.edgeStage(stage), node, dst);
+    for (const [node, dst] of [[13, other], [13, oid], [14, oid]]) store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,1,1)", store.edgeStage(stage), node, store.edgeTarget(dst));
     store.exec("UPDATE stages SET expected=3 WHERE id=?", stage);
     const outcomes = await publish(store, stage, codec);
     assert.equal(outcomes[0].error, null);
@@ -86,7 +86,7 @@ test("ancestry budget exhaustion rejects the update without leaving queue state"
     const old = "2".repeat(40);
     store.exec("UPDATE stage_commands SET branch=1,creation=0,old_oid=? WHERE stage=?", old, stage);
     store.exec("INSERT INTO refs(name,oid) VALUES(?,?)", Buffer.from("refs/heads/main"), old);
-    store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,12,?,1,1)", store.edgeStage(stage), old);
+    store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,12,?,1,1)", store.edgeStage(stage), store.edgeTarget(old));
     store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,oid,kind,size,depth,verified,scanned) VALUES(?,13,1,1,1,?,1,0,0,1,1)", stage, old);
     const outcomes = await publish(store, stage, new Codec(module, 0, { maxLinks: 1 }));
     assert.equal(outcomes[0].error, "ancestry traversal limit exceeded");
@@ -163,7 +163,7 @@ test("repeated nested-tag targets share one publication peel", async (t) => {
     for (let index = 0; index < depth; index++) {
       const id = (index + 2).toString(16).padStart(40, "0"), node = 1000 + index;
       store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,end_offset,oid,kind,size,depth,verified,scanned) VALUES(?,?,4,1,?,?,?,4,0,0,1,1)", stage, node, node + 1, node + 2, id);
-      store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,2)", store.edgeStage(stage), node, target, index ? 4 : 1);
+      store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,2)", store.edgeStage(stage), node, store.edgeTarget(target), index ? 4 : 1);
       target = id;
     }
     store.exec("UPDATE stages SET expected=? WHERE id=?", depth + 1, stage);
@@ -186,7 +186,7 @@ test("tag peeling detects corrupt cycles with a prefix and shared targets", () =
       for (let index = 0; index < links.length; index++) {
         const node = 100 + index;
         store.exec("INSERT INTO stage_objects(stage,node,wire_kind,packed_size,compressed_offset,end_offset,oid,kind,size,depth,verified,scanned) VALUES(?,?,4,1,?,?,?,4,0,0,1,1)", stage, node, node + 1, node + 2, ids[index]);
-        store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,2)", store.edgeStage(stage), node, ids[links[index]], 4);
+        store.exec("INSERT INTO stage_edges(stage,node,dst,kind,relation) VALUES(?,?,?,?,2)", store.edgeStage(stage), node, store.edgeTarget(ids[links[index]]), 4);
       }
       assert.throws(() => store.peeled(ids[0], stage), /stored tag cycle/);
     } finally { database.close(); }
