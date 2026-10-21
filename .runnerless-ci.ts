@@ -75,6 +75,7 @@ function reportRatio(details: Value): void {
 // Runnerless compiles this program to Wasm using its versioned SDK.
 // Pull requests execute the trusted base revision of the program.
 export function configure(): void {
+  configuration.titlePolicy();
   badges.define(new BadgeSpec("badge", "medium", "slowest-job"));
   program.configure();
   configuration.workflow("crate-publishing", ["workflow_run", "runnerless_completion"]);
