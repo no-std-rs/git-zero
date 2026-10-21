@@ -34,6 +34,7 @@ pub struct FsckModules {
     normalized: u64,
     pending_cr: bool,
     eof_seen: bool,
+    limited: bool,
     phase: Phase,
     base_seen: bool,
     section: Section,
@@ -49,6 +50,7 @@ impl FsckModules {
             normalized: 0,
             pending_cr: false,
             eof_seen: false,
+            limited: false,
             phase: Phase::Main,
             base_seen: false,
             section: Section::new(),
@@ -74,7 +76,7 @@ impl FsckModules {
             .checked_sub(bytes.len() as u64)
             .ok_or(Error::InvalidObject)?;
         for &byte in bytes {
-            if matches!(self.phase, Phase::Halted) {
+            if self.limited || matches!(self.phase, Phase::Halted) {
                 break;
             }
             if self.pending_cr {
@@ -97,6 +99,9 @@ impl FsckModules {
         Ok(())
     }
     fn character(&mut self, byte: u8) -> Result<()> {
+        if self.limited {
+            return Ok(());
+        }
         // Match Git's memory-backed config source: on the reference targets
         // 0xff is returned as EOF, and non-ASCII leading bytes (including a
         // UTF-8 BOM) are syntax warnings rather than file-style BOM handling.
@@ -105,10 +110,17 @@ impl FsckModules {
             return self.consume(b'\n');
         }
         self.normalized += 1;
-        // Git config stops on the synthetic parse error after INT_MAX
-        // normalized input characters, rather than overflowing its counters.
+        // Native config supplies NUL after INT_MAX until EOF. An unquoted
+        // value still invokes its callback with the visible prefix; discarding
+        // it here could suppress an unsafe setting parsed before the limit.
         if self.normalized > i32::MAX as u64 {
-            self.phase = Phase::Halted;
+            self.limited = true;
+            self.eof_seen = true;
+            if matches!(self.phase, Phase::Value) {
+                self.consume(0)?;
+            } else {
+                self.phase = Phase::Halted;
+            }
             return Ok(());
         }
         self.consume(byte)

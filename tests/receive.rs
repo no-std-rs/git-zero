@@ -409,6 +409,26 @@ fn gitmodules_policy_streams_large_names_and_values_without_retaining_them() {
     });
 }
 
+#[test]
+fn config_character_limit_does_not_discard_an_unsafe_pending_value() {
+    use git_zero::http::receive::FsckModules;
+    let prefix = b"[submodule \"ok\"]\nurl=-";
+    let total = i32::MAX as u64 + 64;
+    let block = [b'x'; 65536];
+    allocations::without_allocations(|| {
+        let mut policy = FsckModules::new(total);
+        policy.update(prefix).unwrap();
+        let mut left = total - prefix.len() as u64;
+        while left != 0 {
+            let length = left.min(block.len() as u64) as usize;
+            policy.update(&block[..length]).unwrap();
+            left -= length as u64;
+        }
+        assert_eq!(policy.finish(), Err(Error::InvalidObject));
+        assert_eq!(policy.update(b""), Err(Error::InvalidObject));
+    });
+}
+
 fn command(old: ObjectId, new: ObjectId, name: &[u8], caps: Option<&[u8]>) -> Vec<u8> {
     let mut line = Vec::new();
     line.extend_from_slice(old.to_hex().as_bytes());
