@@ -9,7 +9,9 @@ import { headers, start, TOKEN } from "./wrangler.mjs";
 import { startStandalone } from "./standalone.mjs";
 
 async function git(args, input) {
-  const child = spawn("git", ["-c", "core.fsync=none", "-c", "user.name=Tag test", "-c", "user.email=tag@example.test", "-c", `http.extraHeader=Authorization: Bearer ${TOKEN}`, ...args], {
+  // Wait for native housekeeping before fsck inspects its pack files. Detached
+  // repacking can rename an index while the integrity check is reading it.
+  const child = spawn("git", ["-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false", "-c", "core.fsync=none", "-c", "user.name=Tag test", "-c", "user.email=tag@example.test", "-c", `http.extraHeader=Authorization: Bearer ${TOKEN}`, ...args], {
     timeout: 30000, killSignal: "SIGKILL", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
   });
   let stdout = "", stderr = "";
