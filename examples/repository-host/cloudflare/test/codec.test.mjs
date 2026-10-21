@@ -228,6 +228,40 @@ test("hosting Wasm has fixed memory, no imports and no allocator", () => {
   assert.ok(codec.memory.byteLength <= 96 * 65536, "hosting state plus 4 MiB frozen controls exceeds its 6 MiB linear-memory budget");
 });
 
+test("fixed ABI frames reject wrong lengths even when valid trailing bytes remain in input", () => {
+  function upload(codec) {
+    codec.uploadInit(0);
+    codec.uploadAppend(Buffer.concat([
+      packet(`want ${"01".repeat(codec.idBytes)} object-format=${codec.format ? "sha256" : "sha1"}\n`),
+      Buffer.from("0000"), packet("done\n"),
+    ]));
+    codec.uploadParse();
+  }
+  const range = (codec) => codec.rangeInit({ staged: 12 });
+  const compose = (codec) => codec.packStart(1, 0);
+  const history = (codec) => { upload(codec); codec.uploadHistory(false); };
+  const cases = [
+    ["host_receive_init", 72, (codec) => codec.receiveInit()],
+    ["host_range_init", 104, range],
+    ["host_source_init", 64, (codec) => codec.sourceInit({ offset: 12, maxBytes: 1024 }, { offset: 0, length: 0 })],
+    ["host_graph_init", 40, (codec) => codec.graphInit({ kind: 3, size: 0 })],
+    ["host_range_describe", 96, (codec) => { range(codec); codec.rangeDescribe({ info: { kind: 3, size: 0 } }); }, range],
+    ["host_pack_entry", 88, (codec) => { compose(codec); codec.packEntry({ kind: 3, id: Buffer.alloc(codec.idBytes, 1), size: 0, compressedSize: 11 }); }, compose],
+    ["host_upload_history_init", 8, history, upload],
+    ["host_upload_select", 20, (codec) => { history(codec); codec.uploadSelect({ kind: 3, size: 0 }, 1); }, history, [0]],
+  ];
+  for (const format of [0, 1]) for (const [operation, size, prepare, reset = () => {}, args = []] of cases) {
+    const codec = new Codec(module, format);
+    prepare(codec); // Prove that the saved input describes a valid operation.
+    const frame = new Uint8Array(codec.memory, codec.exports.host_input_ptr(), size).slice();
+    for (const length of [...Array(size).keys(), size + 1, 65537]) {
+      reset(codec); codec.stage(frame);
+      assert.equal(codec.exports[operation](length, ...args), length > 65536 ? -1 : -3, `${operation} format=${format} length=${length}`);
+    }
+    prepare(codec); // A correct frame must still reinitialize after rejection.
+  }
+});
+
 test("streamed receive validates compressed plain/OFS/REF intake in both formats", () => {
   for (const format of [0, 1]) {
     const input = fixture(format);
