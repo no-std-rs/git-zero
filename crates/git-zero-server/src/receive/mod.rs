@@ -5,12 +5,14 @@ use git_zero_core::{Error, ObjectFormat, Result, io::Write};
 
 mod advertisement;
 mod ancestry;
+mod attributes;
 mod control;
 mod headers;
 mod report;
 mod tree;
 pub use advertisement::{Advertisement, write_advertisement};
 pub use ancestry::Ancestry;
+pub use attributes::FsckAttributes;
 pub use control::{Command, ControlDecoder, ControlEvent, ControlProgress, Limits};
 pub use headers::FsckHeaders;
 pub use report::{Report, Status, write_progress};

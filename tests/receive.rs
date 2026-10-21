@@ -276,6 +276,53 @@ fn strict_tree_policy_classifies_platform_aliases_without_allocations() {
     );
 }
 
+#[test]
+fn attributes_fsck_bounds_lines_files_and_sticky_errors_without_allocations() {
+    use git_zero::http::receive::FsckAttributes;
+    for length in [0, 1, 2047, 2048, 2049] {
+        let body = vec![b'x'; length];
+        for chunk in [1, 7, 2048] {
+            allocations::without_allocations(|| {
+                let mut policy = FsckAttributes::new(body.len() as u64).unwrap();
+                let result = body
+                    .chunks(chunk)
+                    .try_for_each(|bytes| policy.update(bytes));
+                assert_eq!(result.and_then(|()| policy.finish()).is_ok(), length < 2048);
+                if result.is_err() {
+                    assert_eq!(policy.update(b""), Err(Error::InvalidObject));
+                    assert_eq!(policy.finish(), Err(Error::InvalidObject));
+                }
+            });
+        }
+    }
+    allocations::without_allocations(|| {
+        assert!(FsckAttributes::new(100 * 1024 * 1024).is_ok());
+        assert!(matches!(
+            FsckAttributes::new(100 * 1024 * 1024 + 1),
+            Err(Error::InvalidObject)
+        ));
+        assert!(matches!(
+            FsckAttributes::new(u64::MAX),
+            Err(Error::InvalidObject)
+        ));
+        let mut policy = FsckAttributes::new(0).unwrap();
+        assert_eq!(policy.update(b"x"), Err(Error::InvalidObject));
+        assert_eq!(policy.finish(), Err(Error::InvalidObject));
+        let mut policy = FsckAttributes::new(1).unwrap();
+        assert_eq!(policy.finish(), Err(Error::InvalidObject));
+        policy.update(b"\n").unwrap();
+        policy.finish().unwrap();
+    });
+    let body = [b"short\n\0".as_slice(), &[b'x'; 4096]].concat();
+    for chunk in [1, 7, body.len()] {
+        let mut policy = FsckAttributes::new(body.len() as u64).unwrap();
+        for bytes in body.chunks(chunk) {
+            policy.update(bytes).unwrap();
+        }
+        policy.finish().unwrap();
+    }
+}
+
 fn command(old: ObjectId, new: ObjectId, name: &[u8], caps: Option<&[u8]>) -> Vec<u8> {
     let mut line = Vec::new();
     line.extend_from_slice(old.to_hex().as_bytes());

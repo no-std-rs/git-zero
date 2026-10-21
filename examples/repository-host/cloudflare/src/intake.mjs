@@ -122,6 +122,27 @@ export class Intake {
     if (this.store.exec("SELECT node FROM stage_objects WHERE stage=? AND (verified=0 OR scanned=0) LIMIT 1", this.stage).length) throw new Error("unresolved or cyclic delta base");
     const missing = this.store.exec("SELECT e.dst,e.kind FROM stage_edges e WHERE e.stage=? AND NOT EXISTS(SELECT 1 FROM stage_objects t INDEXED BY stage_object_ids WHERE t.stage=e.stage AND t.oid=e.dst AND t.verified=1 AND t.kind=e.kind) AND NOT EXISTS(SELECT 1 FROM stage_objects t JOIN stages p ON p.id=t.stage WHERE t.oid=e.dst AND t.kind=e.kind AND p.phase='published') LIMIT 1", this.stage)[0];
     if (missing) throw new Error("object link target is missing or has the wrong kind");
+    // A newly received tree can designate a blob from an older published pack.
+    // The work queue is keyed by canonical ID, independent of physical stages.
+    for (;;) {
+      const rows = this.store.exec("SELECT oid FROM stage_blob_checks WHERE stage=? ORDER BY oid LIMIT 128", this.stage);
+      if (!rows.length) break;
+      for (const { oid } of rows) {
+        const row = this.store.object(this.stage, oid);
+        if (!row || row.kind !== 3) throw new Error("designated attributes target is not a blob");
+        // Reject an oversized designated blob before warming or reading it.
+        this.source.beginScan(row, false, 2);
+        const cached = this.source.canonical.get(oid);
+        if (cached) {
+          this.codec.charge(0, row.size); this.codec.charge(1, row.size);
+          if (this.source.scanCaptured(row, cached, false) !== oid) throw new Error("attributes object hash differs");
+        } else {
+          if (row.wire_kind >= 5) await this.source.warm(this.source.base(row));
+          await this.source.process(row, false, 2);
+        }
+        this.store.exec("DELETE FROM stage_blob_checks WHERE stage=? AND oid=?", this.stage, oid);
+      }
+    }
     this.store.exec("UPDATE stages SET phase='verified' WHERE id=?", this.stage);
   }
 

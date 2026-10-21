@@ -358,6 +358,21 @@ test("strict receive header policy is opt-in and survives fragmented identities"
   }
 });
 
+test("designated attributes checks bound size before reading and stream line boundaries", () => {
+  for (const format of [0, 1]) {
+    const codec = new Codec(module, format);
+    codec.graphInit({ kind: 3, size: 100 * 1024 * 1024 }, { checks: 2 }); codec.graphCancel();
+    assert.throws(() => codec.graphInit({ kind: 3, size: 100 * 1024 * 1024 + 1 }, { checks: 2 }), (error) => error.code === -7);
+    for (const [body, accepted] of [[Buffer.alloc(2047, 120), true], [Buffer.alloc(2048, 120), false], [Buffer.concat([Buffer.from("\0"), Buffer.alloc(4096, 120)]), true]]) {
+      for (const chunk of [1, 7, body.length]) {
+        codec.graphInit({ kind: 3, size: body.length }, { checks: 2 });
+        const scan = () => { for (let at = 0; at < body.length; at += chunk) graph(codec, body.subarray(at, at + chunk), at + chunk >= body.length); };
+        if (accepted) scan(); else assert.throws(scan, (error) => error.code === -7);
+      }
+    }
+  }
+});
+
 test("malformed intake is terminal and a fresh session clears old scratch", () => {
   const codec = new Codec(module, 0, { capabilities: 255 });
   const input = fixture(0);

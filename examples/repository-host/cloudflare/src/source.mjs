@@ -187,10 +187,10 @@ export class ObjectSource {
     if (this.edges.length === METADATA_BATCH) this.flushMetadata();
   }
 
-  beginScan(row, strict = true) {
+  beginScan(row, strict = true, checks = 0) {
     this.namesStaged = false;
     this.names.length = 0; this.edges.length = 0;
-    this.codec.graphInit(info(row), { strict });
+    this.codec.graphInit(info(row), { strict, checks });
   }
 
   finishScan(row) {
@@ -207,6 +207,7 @@ export class ObjectSource {
       consumed += event.consumed;
       if (scan && event.tag === 31) this.edge(row, hex(event.id), event.flags, integer(event.a));
       if (scan && event.tag === 32) {
+        if (event.flags & 2048) this.store.exec("INSERT OR IGNORE INTO stage_blob_checks(stage,oid) VALUES(?,?)", this.stage, hex(event.id));
         this.namesStaged = true;
         const kind = event.flags & 255;
         // A database uniqueness constraint checks aliases even when they are
@@ -236,7 +237,7 @@ export class ObjectSource {
     return digest;
   }
 
-  async process(row, scan = true) {
+  async process(row, scan = true, checks = 0) {
     this.queries++;
     this.codec.charge(0, row.size);
     if (row.size > CANONICAL_ENTRY_BYTES) this.codec.charge(2, row.size);
@@ -246,7 +247,7 @@ export class ObjectSource {
     this.queryKeys = new Map(); this.queryRows = [];
     const rootKey = this.key(row);
     const descriptor = this.descriptor(row);
-    this.codec.rangeInit(rootKey); this.beginScan(row, scan);
+    this.codec.rangeInit(rootKey); this.beginScan(row, scan, checks);
     const captured = row.size <= CANONICAL_ENTRY_BYTES ? new Uint8Array(row.size) : null;
     const temporary = captured === null ? new ChunkWriter(this.store, this.stage, rowKey(row)) : null;
     let written = 0, digest, request = this.codec.rangeRequest();

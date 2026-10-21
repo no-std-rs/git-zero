@@ -90,6 +90,7 @@ const SCHEMA = [
   // before OR IGNORE can discard them; this also protects existing schemas.
   "CREATE TRIGGER IF NOT EXISTS stage_edge_kind BEFORE INSERT ON stage_edges WHEN EXISTS(SELECT 1 FROM stage_edges WHERE stage=NEW.stage AND node=NEW.node AND relation=NEW.relation AND dst=NEW.dst AND kind<>NEW.kind) BEGIN SELECT RAISE(ABORT,'conflicting graph target kinds'); END",
   "CREATE TABLE IF NOT EXISTS stage_names (stage TEXT NOT NULL, node INTEGER NOT NULL, name BLOB NOT NULL, mode INTEGER NOT NULL, dst TEXT NOT NULL, kind INTEGER NOT NULL, PRIMARY KEY(stage,node,name)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS stage_blob_checks (stage TEXT NOT NULL, oid TEXT NOT NULL, PRIMARY KEY(stage,oid)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS temp_chunks (stage TEXT NOT NULL, object TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,object,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS temp_chunk_offsets ON temp_chunks(stage,object,start)",
   "CREATE TABLE IF NOT EXISTS temp_objects (stage TEXT NOT NULL, object TEXT NOT NULL, oid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(stage,object)) WITHOUT ROWID",
@@ -107,7 +108,7 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS fetch_selected (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0, stage TEXT, node INTEGER, depth INTEGER NOT NULL DEFAULT 1, included INTEGER NOT NULL DEFAULT 1, shallow INTEGER NOT NULL DEFAULT 0, unshallow INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS fetch_selected_physical ON fetch_selected(stage,node)",
 ];
-const STAGE_METADATA = ["stage_objects", "stage_edges", "stage_names", "stage_commands", "stage_options", "stage_shallow"];
+const STAGE_METADATA = ["stage_objects", "stage_edges", "stage_names", "stage_blob_checks", "stage_commands", "stage_options", "stage_shallow"];
 
 export class Store {
   constructor(ctx, env, namespace) {
