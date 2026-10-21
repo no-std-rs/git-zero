@@ -19,10 +19,12 @@ const RECEIVE_CAPABILITIES = 255;
 
 function authorized(request, env) {
   if (!env.HOST_TOKEN) return false;
-  const header = request.headers.get("authorization") ?? "";
-  if (header === `Bearer ${env.HOST_TOKEN}`) return true;
-  if (!header.startsWith("Basic ")) return false;
-  try { const decoded = atob(header.slice(6)); const split = decoded.indexOf(":"); return split >= 0 && decoded.slice(split + 1) === env.HOST_TOKEN; }
+  const authorization = /^([^ ]+) +(.+)$/.exec(request.headers.get("authorization") ?? "");
+  if (!authorization) return false;
+  const scheme = authorization[1].toLowerCase(), credentials = authorization[2];
+  if (scheme === "bearer") return credentials === env.HOST_TOKEN;
+  if (scheme !== "basic") return false;
+  try { const decoded = atob(credentials); const split = decoded.indexOf(":"); return split >= 0 && decoded.slice(split + 1) === env.HOST_TOKEN; }
   catch { return false; }
 }
 
@@ -126,8 +128,9 @@ export class OwnRepository {
         if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-receive-pack") return this.stream(this.advertise(codec), "application/x-git-receive-pack-advertisement");
         const version = codec.uploadVersion(request.headers.get("git-protocol"));
         if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-upload-pack") return this.stream(this.uploadAdvertisement(codec, version), "application/x-git-upload-pack-advertisement");
-        if (request.method === "POST" && parts[2] === "git-receive-pack" && parts.length === 3 && request.headers.get("content-type")?.split(";")[0].trim() === "application/x-git-receive-pack-request") return await this.receive(request, codec);
-        if (request.method === "POST" && parts[2] === "git-upload-pack" && parts.length === 3 && request.headers.get("content-type")?.split(";")[0].trim() === "application/x-git-upload-pack-request") {
+        const contentType = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+        if (request.method === "POST" && parts[2] === "git-receive-pack" && parts.length === 3 && contentType === "application/x-git-receive-pack-request") return await this.receive(request, codec);
+        if (request.method === "POST" && parts[2] === "git-upload-pack" && parts.length === 3 && contentType === "application/x-git-upload-pack-request") {
           const fetch = new FetchJob(this.store, codec, version);
           try { await fetch.decode(request); }
           catch (error) { codec.uploadCancel(); fetch.reset(); throw error; }
