@@ -1,3 +1,4 @@
+import { combinations } from "./combinations.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -64,7 +65,7 @@ test("a small wanted closure remains fetchable when the retained catalog exceeds
         assert.equal(result.status, 200); assert.match(receiveReport(result.body), /ok refs\/heads\//);
       }
       assert.equal(repository.store.statistics().objects, 6);
-      for (const version of [0, 1, 2]) for (const limits of [{ maxObjects: 3 }, { maxPackBytes: 1800 }]) {
+      for (const [version, limits] of combinations([0, 1, 2], [{ maxObjects: 3 }, { maxPackBytes: 1800 }])) {
         const codec = new Codec(module, format, limits), fetch = new FetchJob(repository.store, codec, version);
         const capability = `object-format=${format ? "sha256" : "sha1"}`;
         const controls = [packet(`want ${first.root.id.toString("hex")}${version === 2 ? "" : ` ${capability}`}\n`), ...(version === 2 ? [] : [Buffer.from("0000")]), packet("done\n"), ...(version === 2 ? [Buffer.from("0000")] : [])];

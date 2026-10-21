@@ -1,3 +1,4 @@
+import { combinations } from "./combinations.mjs";
 import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -12,7 +13,7 @@ testRuntimes("{runtime} validates designated attributes including previously pub
   let server;
   try {
     server = await serve(join(directory, "state"));
-    for (const format of [0, 1]) for (const source of ["packed", "published", "delta"]) for (const length of [2047, 2048]) {
+    for (const [format, source, length] of combinations([0, 1], ["packed", "published", "delta"], [2047, 2048])) {
       const published = source !== "packed";
       const namespace = `attributes-${format}-${randomUUID()}`;
       const init = await fetch(`${server.origin}/_test/${namespace}/initialize`, { method: "POST", headers: headers(format) });

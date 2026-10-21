@@ -1,3 +1,4 @@
+import { combinations } from "./combinations.mjs";
 import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -38,7 +39,7 @@ testRuntimes("{runtime} validates designated gitmodules from current and earlier
       ['x'.repeat(2048), false, true],
       ['[submodule "ok"]\nurl=safe\n', true, true],
     ];
-    for (const format of [0, 1]) for (const source of ["packed", "published", "delta"]) for (const [body, accepted, both] of cases) {
+    for (const [format, source] of combinations([0, 1], ["packed", "published", "delta"])) for (const [body, accepted, both] of cases) {
       const namespace = `modules-${format}-${randomUUID()}`, published = source !== "packed";
       const value = object(format, 3, body), base = source === "delta" ? object(format, 3, '[submodule "base"]\nurl=safe\n') : value;
       const init = await fetch(`${server.origin}/_test/${namespace}/initialize`, { method: "POST", headers: headers(format) });

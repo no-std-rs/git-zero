@@ -1,3 +1,4 @@
+import { combinations } from "./combinations.mjs";
 import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -24,7 +25,7 @@ testRuntimes("{runtime} accepts acknowledgement modes and spacing from independe
       const repository = join(directory, `reference-${format}`);
       const initializedGit = spawnSync("git", ["init", "--bare", `--object-format=${format ? "sha256" : "sha1"}`, repository], { encoding: "utf8", env: gitEnv });
       assert.equal(initializedGit.status, 0, initializedGit.stderr);
-      for (const version of [0, 1]) for (const modes of ["multi_ack multi_ack_detailed", "multi_ack_detailed multi_ack", "multi_ack_detailed ofs-delta ", " multi_ack  multi_ack_detailed  "]) {
+      for (const [version, modes] of combinations([0, 1], ["multi_ack multi_ack_detailed", "multi_ack_detailed multi_ack", "multi_ack_detailed ofs-delta ", " multi_ack  multi_ack_detailed  "])) {
         const http = { ...headers(), "content-type": "application/x-git-upload-pack-request", "git-protocol": `version=${version}` };
         // Dulwich sends duplicate wants for HEAD and its target branch.
         const wants = Buffer.concat([packet(`want ${id} ${modes}\n`), packet(`want ${id}\n`), Buffer.from("0000")]);

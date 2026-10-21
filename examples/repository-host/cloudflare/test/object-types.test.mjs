@@ -1,3 +1,4 @@
+import { combinations } from "./combinations.mjs";
 import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -34,7 +35,7 @@ testRuntimes("{runtime} matches native object-type filters and explicit tagged w
       let response = await fetch(`${server.origin}/_test/${namespace}/initialize`, { method: "POST", headers: headers(format) }); assert.equal(response.status, 200); await response.arrayBuffer();
       response = await fetch(`${server.origin}/${namespace}.git/git-receive-pack`, { method: "POST", headers: headers(), body: fixture.wire }); assert.equal(response.status, 200); assert.match(receiveReport(await response.arrayBuffer()), /ok refs/);
       let index = 0;
-      for (const version of [0, 1, 2]) for (const value of cases) for (const target of fixture.objects) for (const includeTags of [false, true]) {
+      for (const [version, value, target, includeTags] of combinations([0, 1, 2], cases, fixture.objects, [false, true])) {
         const wanted = target.id.toString("hex");
         const body = request(format, version, wanted, `object:type=${value}`, { includeTags }), native = run(["upload-pack", "--stateless-rpc", source], body, version), label = `${format}/${version}/${JSON.stringify(value)}/want-${target.kind}-${wanted}/tags-${includeTags}`;
         const actual = await fetch(`${server.origin}/${namespace}.git/git-upload-pack`, { method: "POST", headers: { ...headers(), "content-type": "application/x-git-upload-pack-request", "git-protocol": `version=${version}` }, body });

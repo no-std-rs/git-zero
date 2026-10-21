@@ -1,3 +1,4 @@
+import { combinations } from "./combinations.mjs";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm, stat } from "node:fs/promises";
@@ -18,7 +19,7 @@ const blobs = { async delete() {} };
 function store(database) { return new Store(sqliteContext(database), { BLOBS: blobs }, "catalog"); }
 
 test("all graph layouts retain both object formats across reopen and cleanup", async () => {
-  for (const format of [0, 1]) for (const layout of layouts) {
+  for (const [format, layout] of combinations([0, 1], layouts)) {
     const database = new DatabaseSync(":memory:");
     try {
       if (layout.schema) database.exec(layout.schema);

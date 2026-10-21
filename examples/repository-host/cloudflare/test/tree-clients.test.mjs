@@ -1,3 +1,4 @@
+import { combinations } from "./combinations.mjs";
 import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -27,7 +28,7 @@ testRuntimes("{runtime} supports ordinary tree-filter clones and lazy checkout",
       for (const name of paths) { await mkdir(dirname(join(source, name)), { recursive: true }); await writeFile(join(source, name), name === "root.txt" ? "root data\n" : "shared leaf\n"); }
       await git(source, "add", "."); await git(source, "commit", "-q", "-m", "tree-filter fixture");
       await git(source, "push", "--atomic", remote, "HEAD:refs/heads/main");
-      for (const version of [0, 1, 2]) for (const depth of [0, 1, 2]) {
+      for (const [version, depth] of combinations([0, 1, 2], [0, 1, 2])) {
         const filter = `tree:${depth}`, clone = join(root, `clone-${format}-${version}-${depth}`);
         await git(root, "-c", `protocol.version=${version}`, "clone", "-q", "--no-checkout", "--single-branch", "--no-tags", `--filter=${filter}`, remote, clone);
         assert.equal(await git(clone, "config", "remote.origin.partialclonefilter"), filter);

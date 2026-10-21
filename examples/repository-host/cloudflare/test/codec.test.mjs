@@ -1,3 +1,4 @@
+import { combinations } from "./combinations.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -46,7 +47,7 @@ test("canonical capture scans whole pages across tiny delta copies", async () =>
 });
 
 test("duplicate commit haves and shallow markers consult the catalog once", async () => {
-  for (const format of [0, 1]) for (const version of [0, 1, 2]) {
+  for (const [format, version] of combinations([0, 1], [0, 1, 2])) {
     const codec = new Codec(module, format), wanted = Buffer.alloc(codec.idBytes, 1), have = Buffer.alloc(codec.idBytes, 2), shallow = Buffer.alloc(codec.idBytes, 3);
     const sets = new Map(), lookups = [];
     const store = {
@@ -76,7 +77,7 @@ test("duplicate commit haves and shallow markers consult the catalog once", asyn
 });
 
 test("paged shallow changes retain frozen controls and exact protocol framing", () => {
-  for (const format of [0, 1]) for (const version of [0, 1, 2]) for (const done of [false, true]) {
+  for (const [format, version, done] of combinations([0, 1], [0, 1, 2], [false, true])) {
     const codec = new Codec(module, format);
     const wanted = Buffer.alloc(format ? 32 : 20, 1), previous = Buffer.alloc(wanted.length, 2);
     const capability = `object-format=${format ? "sha256" : "sha1"}`;
@@ -101,7 +102,7 @@ test("paged shallow changes retain frozen controls and exact protocol framing", 
 });
 
 test("external frontier decisions use Rust history and blob-filter rules", () => {
-  for (const format of [0, 1]) for (const version of [0, 1, 2]) {
+  for (const [format, version] of combinations([0, 1], [0, 1, 2])) {
     const codec = new Codec(module, format), wanted = Buffer.alloc(format ? 32 : 20, 1);
     const capability = `object-format=${format ? "sha256" : "sha1"}`;
     const prepare = (relative = false, filtered = true, depth = 2) => {
@@ -463,7 +464,7 @@ test("compressed fetch controls enforce transport and decoded byte budgets", asy
 
 
 test("offset delta permission survives the bounded upload ABI", () => {
-  for (const format of [0, 1]) for (const version of [0, 1, 2]) for (const ofs of [false, true]) {
+  for (const [format, version, ofs] of combinations([0, 1], [0, 1, 2], [false, true])) {
     const codec = new Codec(module, format), id = Buffer.alloc(format ? 32 : 20, 1).toString("hex");
     const capability = `object-format=${format ? "sha256" : "sha1"}`;
     const lines = version === 2 ? [packet("command=fetch\n"), packet(capability), Buffer.from("0001")] : [];
@@ -479,7 +480,7 @@ test("offset delta permission survives the bounded upload ABI", () => {
 
 
 test("tree-filter frontier events retain provided-root depth without changing history", () => {
-  for (const format of [0, 1]) for (const version of [0, 1, 2]) {
+  for (const [format, version] of combinations([0, 1], [0, 1, 2])) {
     const codec = new Codec(module, format), wanted = Buffer.alloc(format ? 32 : 20, 1);
     const capability = `object-format=${format ? "sha256" : "sha1"}`;
     const lines = version === 2 ? [packet("command=fetch\n"), packet(capability), Buffer.from("0001")] : [];

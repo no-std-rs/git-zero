@@ -1,3 +1,4 @@
+import { combinations } from "./combinations.mjs";
 import { testRuntimes } from "./runtimes.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -47,7 +48,7 @@ testRuntimes("{runtime} matches native tree-depth filters across shared paths an
       const cases = profiles(fixture).flatMap((profile) => ["0", "1", "2", "3"].map((limit) => ({ ...profile, limit })));
       for (const limit of ["016", "+0x2", "1K", "18446744073709551615", "08", "-1", "++1", "18446744073709551616"]) cases.push({ wanted: fixture.main, limit });
       let index = 0;
-      for (const version of [0, 1, 2]) for (const profile of cases) {
+      for (const [version, profile] of combinations([0, 1, 2], cases)) {
         const wanted = profile.wanted.id.toString("hex"), opts = { ...profile, have: profile.have?.id.toString("hex") ?? null };
         const body = request(format, version, wanted, `tree:${profile.limit}`, opts), label = `${format}/${version}/${index}/${profile.limit}`;
         const native = run(["upload-pack", "--stateless-rpc", source], body, version);
