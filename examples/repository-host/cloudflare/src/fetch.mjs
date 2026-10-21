@@ -39,7 +39,7 @@ export class FetchJob {
   async decode(request) {
     this.reset(); this.codec.uploadInit(this.version);
     let stream = request.body;
-    const coding = request.headers.get("content-encoding");
+    const coding = request.headers.get("content-encoding")?.toLowerCase();
     if (coding && coding !== "identity") {
       if (coding !== "gzip" || !stream) throw new Error("unsupported HTTP content coding");
       let encoded = 0;
