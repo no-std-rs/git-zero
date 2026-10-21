@@ -56,6 +56,7 @@ fn scan(
                 name,
                 kind,
                 canonical_mode,
+                ..
             } => events.push(Event::Tree(id, mode, name.to_vec(), kind, canonical_mode)),
             LinkStatus::NeedInput => assert_eq!(offset, end),
             LinkStatus::Finished => {
@@ -193,6 +194,29 @@ fn final_newline_headers_do_not_require_a_blank_message_separator() {
                 decoder.finish().unwrap();
             });
         }
+    }
+}
+
+#[test]
+fn tree_events_distinguish_zero_padding_from_historical_permissions() {
+    let format = ObjectFormat::Sha1;
+    for (mode, padded) in [(b"100664".as_slice(), false), (b"0100664".as_slice(), true)] {
+        let body = tree(&[(mode, b"file", id(format, 1))]);
+        let mut scratch = [0; 32];
+        let mut decoder = LinkDecoder::new(
+            ObjectInfo {
+                kind: ObjectKind::Tree,
+                size: body.len() as u64,
+            },
+            format,
+            &mut scratch,
+            LIMITS,
+        )
+        .unwrap();
+        let event = decoder.update(&body, true).unwrap();
+        assert!(
+            matches!(event.status, LinkStatus::TreeEntry { zero_padded, canonical_mode: false, .. } if zero_padded == padded)
+        );
     }
 }
 

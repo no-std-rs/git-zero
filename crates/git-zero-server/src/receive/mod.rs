@@ -8,11 +8,13 @@ mod ancestry;
 mod control;
 mod headers;
 mod report;
+mod tree;
 pub use advertisement::{Advertisement, write_advertisement};
 pub use ancestry::Ancestry;
 pub use control::{Command, ControlDecoder, ControlEvent, ControlProgress, Limits};
 pub use headers::FsckHeaders;
 pub use report::{Report, Status, write_progress};
+pub use tree::{BlobChecks, check_tree_entry};
 
 const FLAGS: &[(&[u8], u16)] = &[
     (b"report-status", 1),

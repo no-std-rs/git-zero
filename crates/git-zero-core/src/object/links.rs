@@ -28,6 +28,7 @@ pub enum LinkStatus<'name> {
         name: &'name [u8],
         kind: Option<ObjectKind>,
         canonical_mode: bool,
+        zero_padded: bool,
     },
     Finished,
 }
@@ -228,6 +229,7 @@ impl State {
                                 kind: tree_kind(self.previous_mode)?,
                                 canonical_mode: !self.padded_mode
                                     && canonical_mode(self.previous_mode),
+                                zero_padded: self.padded_mode,
                             },
                         });
                     }

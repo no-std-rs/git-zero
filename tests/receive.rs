@@ -190,6 +190,92 @@ fn strict_receive_headers_preserve_historical_taggers_and_stream_long_names() {
     }
 }
 
+#[test]
+fn strict_tree_policy_classifies_platform_aliases_without_allocations() {
+    use git_zero::http::receive::check_tree_entry;
+    for name in [
+        b".git".as_slice(),
+        b".git. ",
+        b"GIT~1",
+        b".git:stream",
+        b"a\\.git\\payload",
+        ".gi\u{200c}t".as_bytes(),
+        b".git\xff",
+    ] {
+        allocations::without_allocations(|| {
+            assert_eq!(
+                check_tree_entry(name, 0o100644, false),
+                Err(Error::InvalidFileName)
+            )
+        });
+    }
+    for name in [
+        b".gitmodules".as_slice(),
+        b".GITMODULES. ",
+        b"gitmod~1",
+        b"gitmod~4",
+        b"GI7EBA~1",
+        b"GI7EB~10",
+        b".gitmodules:stream",
+        b"a\\.gitmodules",
+        ".gi\u{200c}tmodules".as_bytes(),
+    ] {
+        allocations::without_allocations(|| {
+            assert_eq!(check_tree_entry(name, 0o100664, false).unwrap().bits(), 1);
+            assert_eq!(
+                check_tree_entry(name, 0o120000, false),
+                Err(Error::InvalidObject)
+            );
+            assert_eq!(
+                check_tree_entry(name, 0o040000, false),
+                Err(Error::InvalidObject)
+            );
+        });
+    }
+    for name in [
+        b".gitattributes".as_slice(),
+        b"gitatt~1",
+        b"GI7D29~1",
+        ".gi\u{200c}tattributes".as_bytes(),
+    ] {
+        assert_eq!(check_tree_entry(name, 0o100644, false).unwrap().bits(), 2);
+        assert_eq!(
+            check_tree_entry(name, 0o040000, false),
+            Err(Error::InvalidObject)
+        );
+        assert_eq!(check_tree_entry(name, 0o120000, false).unwrap().bits(), 0);
+    }
+    for name in [
+        b"gitmod~5".as_slice(),
+        b".gitmodulesx",
+        b"a\\.gitmodules\\z",
+        b"a\\.gitattributes",
+        ".git\u{100}".as_bytes(),
+    ] {
+        assert_eq!(check_tree_entry(name, 0o100644, false).unwrap().bits(), 0);
+    }
+    for name in [b"gi~12345".as_slice(), b"~1234567"] {
+        assert_eq!(check_tree_entry(name, 0o100644, false).unwrap().bits(), 3);
+    }
+    assert_eq!(
+        check_tree_entry(b"file", 0o100664, false).unwrap().bits(),
+        0
+    );
+    assert_eq!(
+        check_tree_entry(b"file", 0o100644, true),
+        Err(Error::InvalidObject)
+    );
+    assert_eq!(
+        check_tree_entry(b"file", 0o100664, true),
+        Err(Error::InvalidObject)
+    );
+    assert!(check_tree_entry(&[b'x'; 4096], 0o100644, false).is_ok());
+    assert_eq!(
+        check_tree_entry(&[b'x'; 4097], 0o100644, false),
+        Err(Error::InvalidFileName)
+    );
+}
+
 fn command(old: ObjectId, new: ObjectId, name: &[u8], caps: Option<&[u8]>) -> Vec<u8> {
     let mut line = Vec::new();
     line.extend_from_slice(old.to_hex().as_bytes());

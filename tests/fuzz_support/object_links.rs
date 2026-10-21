@@ -89,6 +89,7 @@ fn hash_link(digest: &mut Sha1, event: LinkStatus<'_>) {
             name,
             kind,
             canonical_mode,
+            ..
         } => {
             assert!(name.len() <= 256);
             digest.update([

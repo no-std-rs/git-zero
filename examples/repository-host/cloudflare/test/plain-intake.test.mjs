@@ -61,7 +61,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       assert.equal(clean.refs, 0); assert.equal(clean.objects, 0);
       assert.equal(clean.treeNameScratchRows, 0); assert.deepEqual(clean.stages, []);
 
-      for (const name of [".git", ".GiT"]) {
+      for (const name of [".git", ".GiT", ".git. ", "GIT~1", ".git:stream", "a\\.git\\payload", ".gi\u200ct"]) {
         const reserved = `plain-reserved-${format}-${randomUUID()}`;
         const blob = fixture.objects[0];
         const tree = object(format, 2, Buffer.concat([Buffer.from(`100644 ${name}\0`), blob.id]));
