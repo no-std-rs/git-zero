@@ -59,6 +59,9 @@ export class FetchJob {
         if (!object) throw new Error("want is not published");
         if (object.kind !== 1) this.allCommitWants = false;
         this.store.exec("INSERT OR IGNORE INTO fetch_wants(oid) VALUES(?)", id);
+        // Git treats a wanted tag's peeled object as explicitly wanted too,
+        // including a blob that would otherwise be removed by a blob filter.
+        if (object.kind === 4) this.store.exec("INSERT OR IGNORE INTO fetch_wants(oid) VALUES(?)", this.store.peeled(id));
       } else if (event.tag === 72) {
         if (this.store.exec("SELECT 1 FROM fetch_haves WHERE oid=?", id).length) continue;
         if (this.store.published(id)?.kind === 1) this.store.exec("INSERT OR IGNORE INTO fetch_haves(oid) VALUES(?)", id);
@@ -85,7 +88,7 @@ export class FetchJob {
     if (!Number.isSafeInteger(length) || length > this.codec.limits.maxPackBytes || sources.objects > this.codec.limits.maxObjects) throw new Error("full pack exceeds resource limits");
     this.rawSources = sources; return true;
   }
-  walk(table, excludeCommon = false, snapshots = false) {
+  walk(table, { excludeCommon = false, snapshots = false, nonCommit = false } = {}) {
     for (;;) {
       const pending = this.store.exec(`SELECT oid FROM ${table} WHERE walked=0 ORDER BY oid LIMIT 128`);
       if (!pending.length) break;
@@ -94,7 +97,7 @@ export class FetchJob {
         const row = this.store.published(item.oid);
         if (!row) throw new Error("published closure is incomplete");
         this.store.exec(`UPDATE ${table} SET stage=?,node=?,walked=1 WHERE oid=?`, row.stage, row.node, row.oid);
-        this.store.exec(`INSERT OR IGNORE INTO ${table}(oid) SELECT e.dst FROM stage_edges e WHERE e.stage=? AND e.node=?${snapshots ? " AND e.relation<>1" : ""}${excludeCommon ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""}`, this.store.edgeStage(row.stage), row.node);
+        this.store.exec(`INSERT OR IGNORE INTO ${table}(oid) SELECT e.dst FROM stage_edges e WHERE e.stage=? AND e.node=?${snapshots ? " AND e.relation<>1" : ""}${nonCommit ? " AND e.kind<>1" : ""}${excludeCommon ? " AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=e.dst)" : ""}`, this.store.edgeStage(row.stage), row.node);
       }
     }
   }
@@ -121,13 +124,22 @@ export class FetchJob {
     // this is a valid full pack and never assumes an absent object is present.
     if (!(this.history & 1)) {
       this.store.exec("INSERT OR IGNORE INTO fetch_common(oid) SELECT oid FROM fetch_haves");
-      this.walk("fetch_common", false, true);
+      this.walk("fetch_common", { snapshots: true });
     }
     if (this.history & 2) {
       this.store.exec("INSERT INTO fetch_probe(oid) SELECT oid FROM fetch_wants");
       this.historyWalk("fetch_probe", true);
       const nearest = this.store.exec("SELECT MIN(p.depth) AS depth FROM fetch_probe p JOIN fetch_shallow s ON s.oid=p.oid")[0].depth;
       this.history = this.codec.uploadHistory(this.hasBoundaries, nearest ?? 0).flags;
+    }
+    if (!this.allCommitWants && !(this.history & 1)) {
+      // Explicit trees and tags need their non-commit closure even when a
+      // reported commit references it. Common commits still cut tag history.
+      this.store.exec("DELETE FROM fetch_probe");
+      this.store.exec("INSERT INTO fetch_probe(oid) SELECT w.oid FROM fetch_wants w WHERE EXISTS(SELECT 1 FROM stage_objects o INDEXED BY published_object_ids JOIN stages s ON s.id=o.stage WHERE o.oid=w.oid AND o.kind<>1 AND s.phase='published')");
+      this.walk("fetch_probe", { nonCommit: true });
+      this.store.exec("DELETE FROM fetch_common WHERE oid IN(SELECT oid FROM fetch_probe)");
+      this.store.exec("DELETE FROM fetch_probe");
     }
     this.store.exec("INSERT INTO fetch_selected(oid) SELECT w.oid FROM fetch_wants w WHERE NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=w.oid) OR EXISTS(SELECT 1 FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE o.oid=w.oid AND o.kind=3 AND s.phase='published')");
     this.historyWalk("fetch_selected");

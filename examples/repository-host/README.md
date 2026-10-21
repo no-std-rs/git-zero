@@ -46,6 +46,10 @@ tags, concurrent stale updates and durable recovery. Depth-limited clones,
 relative deepening, unshallowing, `blob:none`/`blob:limit` filters, and ordinary
 lazy checkout work in both formats and all three protocol versions. Time-based
 and exclusion-based deepening and tree/sparse/combine filters remain unsupported.
+Push and fetch accept streamed `gzip`/`x-gzip` request bodies; transport trailer
+validation completes before received objects are published. Explicit tree and
+tag wants retain their required non-commit closure when a client reports a
+common commit, including the native blob-filter exceptions for peeled wants.
 Protocol v2 ref selection indexes up to 256 disjoint byte prefixes; duplicate
 and contained prefixes reuse slots. Request bodies have a 60-second input idle
 deadline that excludes chunk processing. Response readers have a 60-second idle
