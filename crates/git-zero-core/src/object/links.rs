@@ -410,7 +410,7 @@ impl State {
                 })
             }
             Phase::TagName => {
-                if !line.starts_with(b"tag ") || line.len() == 4 {
+                if !line.starts_with(b"tag ") {
                     return Err(Error::InvalidObject);
                 }
                 self.phase = Phase::TagHeaders;

@@ -220,6 +220,26 @@ fn tree_events_distinguish_zero_padding_from_historical_permissions() {
     }
 }
 
+#[test]
+fn empty_annotated_tag_names_remain_warning_only_syntax() {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let target = id(format, 1);
+        for tail in ["tagger A <a@b> 0 +0000\n\nmessage\n", "\nmessage\n", ""] {
+            let body = format!("object {target}\ntype commit\ntag \n{tail}");
+            for chunk in [1, 2, 7, body.len()] {
+                assert_eq!(
+                    scan(body.as_bytes(), ObjectKind::Tag, format, chunk, 0, LIMITS).unwrap(),
+                    vec![Event::Link(
+                        target,
+                        ObjectKind::Commit,
+                        LinkRelation::TagTarget
+                    )]
+                );
+            }
+        }
+    }
+}
+
 fn tree(entries: &[(&[u8], &[u8], ObjectId)]) -> Vec<u8> {
     let mut body = Vec::new();
     for &(mode, name, id) in entries {
@@ -454,11 +474,7 @@ fn truncation_header_shape_and_independent_limits() {
             Err(Error::InvalidObject)
         );
     }
-    for suffix in [
-        "type unknown\ntag v1\n\n",
-        "type blob\ntag \n\n",
-        "type blob\nwrong v1\n\n",
-    ] {
+    for suffix in ["type unknown\ntag v1\n\n", "type blob\nwrong v1\n\n"] {
         let body = format!("object {target}\n{suffix}");
         assert_eq!(
             scan(body.as_bytes(), ObjectKind::Tag, format, 1, 0, LIMITS),

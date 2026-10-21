@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 import { entry, object, pack, project, receiveReport, wire } from "./fixture.mjs";
-import { headers, start } from "./wrangler.mjs";
+import { headers, start, TOKEN } from "./wrangler.mjs";
 import { startStandalone } from "./standalone.mjs";
+
+const git = promisify(execFile);
 
 function size(value) {
   const bytes = [];
@@ -60,6 +64,18 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
         const truncated = object(format, value.kind, value.body.subarray(0, -1));
         assert.match(await send(truncated, pack(format, [entry(value.kind, truncated.body)]), "refs/tags/truncated"), /unpack invalid/);
       }
+      for (const tail of ["tagger A <a@b> 0 +0000\n\nmessage\n", "\nmessage\n", ""]) {
+        const legacy = object(format, 4, `object ${commit.id.toString("hex")}\ntype commit\ntag \n${tail}`);
+        assert.match(await send(legacy, pack(format, [entry(4, legacy.body)]), `refs/tags/legacy-${randomUUID()}`), /unpack ok/);
+      }
+      for (const tail of ["tag \ntagger x\n\nmessage\n", "\nmessage\n"]) {
+        const invalid = object(format, 4, `object ${commit.id.toString("hex")}\ntype commit\n${tail}`);
+        assert.match(await send(invalid, pack(format, [entry(4, invalid.body)]), `refs/tags/invalid-${randomUUID()}`), /unpack invalid/);
+      }
+      const clone = join(directory, `clone-${format}.git`);
+      const options = { timeout: 30000, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" } };
+      await git("git", ["-c", `http.extraHeader=Authorization: Bearer ${TOKEN}`, "clone", "--mirror", `${server.origin}/${namespace}.git`, clone], options);
+      await git("git", ["-C", clone, "fsck", "--full", "--strict"], options);
     }
   } finally { await server?.stop(); await rm(directory, { recursive: true, force: true }); }
 });
