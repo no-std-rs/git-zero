@@ -10,7 +10,7 @@ import { startStandalone } from "./standalone.mjs";
 
 const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
 
-for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} accepts both acknowledgement modes selected by independent clients`, { timeout: 60000 }, async () => {
+for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd with S3/SQLite", startStandalone]]) test(`${runtime} accepts acknowledgement modes and spacing from independent clients`, { timeout: 60000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-dual-ack-"));
   let server;
   try {
@@ -25,7 +25,7 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const repository = join(directory, `reference-${format}`);
       const initializedGit = spawnSync("git", ["init", "--bare", `--object-format=${format ? "sha256" : "sha1"}`, repository], { encoding: "utf8", env: gitEnv });
       assert.equal(initializedGit.status, 0, initializedGit.stderr);
-      for (const version of [0, 1]) for (const modes of ["multi_ack multi_ack_detailed", "multi_ack_detailed multi_ack"]) {
+      for (const version of [0, 1]) for (const modes of ["multi_ack multi_ack_detailed", "multi_ack_detailed multi_ack", "multi_ack_detailed ofs-delta ", " multi_ack  multi_ack_detailed  "]) {
         const http = { ...headers(), "content-type": "application/x-git-upload-pack-request", "git-protocol": `version=${version}` };
         // Dulwich sends duplicate wants for HEAD and its target branch.
         const wants = Buffer.concat([packet(`want ${id} ${modes}\n`), packet(`want ${id}\n`), Buffer.from("0000")]);

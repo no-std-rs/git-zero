@@ -48,6 +48,8 @@ fn have_metadata_failures_propagate_in_every_ack_mode_before_pack_writers_run() 
         " multi_ack_detailed",
         " multi_ack multi_ack_detailed",
         " multi_ack_detailed multi_ack",
+        " multi_ack ",
+        "  multi_ack_detailed  ",
     ] {
         for done in [false, true] {
             let body = body(snapshot.head(), caps, &[snapshot.head()], done);
@@ -128,6 +130,9 @@ fn stateless_ack_modes_ignore_unknown_and_non_commit_haves_without_allocating() 
             (" multi_ack_detailed", " common"),
             (" multi_ack multi_ack_detailed", " common"),
             (" multi_ack_detailed multi_ack", " common"),
+            (" multi_ack ", " continue"),
+            ("  multi_ack_detailed  ", " common"),
+            (" multi_ack  multi_ack_detailed ", " common"),
         ] {
             check_ack_round(snapshot, caps, status, false);
             check_ack_round(snapshot, caps, status, true);
@@ -218,7 +223,7 @@ fn parser_rejects_phase_errors_conflicting_caps_and_truncations_before_output() 
         " multi_ack_detailed multi_ack_detailed",
         " side-band side-band-64k",
         " no-progress no-progress",
-        " multi_ack ",
+        " multi_ack\t",
         " filter",
         " no-done",
         " include-tag",

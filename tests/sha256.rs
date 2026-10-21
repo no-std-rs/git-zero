@@ -392,7 +392,13 @@ fn format_negotiation_rejects_mismatch_and_malformed_requests_before_output() {
     let (mut trees, mut commit) = ([0; 4], [0; 512]);
     let snapshot =
         Snapshot::from_entries_with_format(&[], &mut trees, &mut commit, FORMAT).unwrap();
-    for capability in ["", " object-format=sha256"] {
+    for capability in [
+        "",
+        " ",
+        " object-format=sha256",
+        " object-format=sha256 ",
+        "  object-format=sha256  ",
+    ] {
         let body = upload(snapshot.head(), capability, "");
         let mut storage = [0; 1024];
         let mut output = SliceWriter::new(&mut storage);
@@ -404,8 +410,8 @@ fn format_negotiation_rejects_mismatch_and_malformed_requests_before_output() {
         " object-format=sha1",
         " object-format=unknown",
         " object-format=sha256 object-format=sha256",
-        " ",
-        " object-format=sha256 ",
+        " object-format=sha256  unknown",
+        " object-format=sha256\t",
         " filter",
     ] {
         invalid.push(upload(snapshot.head(), capability, ""));

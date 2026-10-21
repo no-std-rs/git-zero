@@ -47,7 +47,11 @@ fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u16> {
 impl Capabilities {
     fn parse(bytes: &[u8], format: ObjectFormat) -> Result<Self> {
         let mut seen = 0_u16;
-        for capability in bytes.split(|&byte| byte == b' ') {
+        // libgit2 can leave a trailing separator; empty fields select nothing.
+        for capability in bytes
+            .split(|&byte| byte == b' ')
+            .filter(|part| !part.is_empty())
+        {
             let flag = capability_flag(capability, format)?;
             if seen & flag != 0 {
                 return Err(Error::InvalidRequest);
