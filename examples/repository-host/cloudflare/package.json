@@ -7,7 +7,7 @@
     "dev": "wrangler dev --local --ip 127.0.0.1 --show-interactive-dev-session=false",
     "build:streamed": "node scripts/build.mjs",
     "serve:standalone": "node scripts/serve.mjs",
-    "test:streamed": "npm run build:streamed && node --test test/*.test.mjs"
+    "test:streamed": "npm run build:streamed && node --test --test-concurrency=2 test/*.test.mjs"
   },
   "devDependencies": {
     "wrangler": "4.151.3"
