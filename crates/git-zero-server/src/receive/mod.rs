@@ -6,10 +6,12 @@ use git_zero_core::{Error, ObjectFormat, Result, io::Write};
 mod advertisement;
 mod ancestry;
 mod control;
+mod headers;
 mod report;
 pub use advertisement::{Advertisement, write_advertisement};
 pub use ancestry::Ancestry;
 pub use control::{Command, ControlDecoder, ControlEvent, ControlProgress, Limits};
+pub use headers::FsckHeaders;
 pub use report::{Report, Status, write_progress};
 
 const FLAGS: &[(&[u8], u16)] = &[

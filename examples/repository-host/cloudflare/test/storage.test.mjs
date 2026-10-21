@@ -179,7 +179,9 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
     assert.equal(retained.oid, value.id.toString("hex"), "shared first chunk must remain readable after failed intake cleanup");
 
     const failedNamespace = `reclaim-${randomUUID()}`;
-    const invalidCommit = object(0, 1, `tree ${"1".repeat(40)}\n\nmissing target\n`);
+    // Keep headers valid so failure follows delta reconstruction and exercises
+    // reclamation of both large temporary canonical bodies.
+    const invalidCommit = object(0, 1, `tree ${"1".repeat(40)}\nauthor A <a@b> 0 +0000\ncommitter A <a@b> 0 +0000\n\nmissing target\n`);
     const invalidPack = pack(0, [plainEntry, deltaEntry, entry(1, invalidCommit.body)]);
     const invalid = await fetch(`${server.origin}/_test/${failedNamespace}/intake`, { method: "POST", headers: headers(), body: chunked(wire(0, invalidPack, invalidCommit.id), 65536), duplex: "half" });
     assert.equal(invalid.status, 400); await invalid.text();

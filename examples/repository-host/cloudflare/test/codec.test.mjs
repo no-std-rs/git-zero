@@ -341,6 +341,23 @@ test("graph events retain tree names, historical modes and typed commit parents"
   }
 });
 
+test("strict receive header policy is opt-in and survives fragmented identities", () => {
+  for (const format of [0, 1]) {
+    const codec = new Codec(module, format), target = "1".repeat(codec.idBytes * 2);
+    for (const [identity, accepted] of [["A <a@b> 0 +0000", true], [" <a@b> 1 -9999", true], ["A <a@b> \t1 +9999", true], ["x", false], ["<a@b> 1 +0000", false], ["A <a@b> 01 +0000", false], ["A <a@b> 0\t+0000", false], ["A <a@b> 9223372036854775808 +0000", false]]) {
+      const body = Buffer.from(`tree ${target}\nauthor ${identity}\ncommitter A <a@b> 0 +0000\n\nmessage`);
+      for (const chunk of [1, 7, body.length]) {
+        codec.graphInit({ kind: 1, size: body.length }, { strict: true });
+        const scan = () => { for (let at = 0; at < body.length; at += chunk) graph(codec, body.subarray(at, at + chunk), at + chunk >= body.length); };
+        if (accepted) scan();
+        else assert.throws(scan, (error) => error instanceof CodecError && error.code === -7);
+      }
+      codec.graphInit({ kind: 1, size: body.length });
+      assert.equal(hex(graph(codec, body, true).id), hex(objectId(format, "commit", body)));
+    }
+  }
+});
+
 test("malformed intake is terminal and a fresh session clears old scratch", () => {
   const codec = new Codec(module, 0, { capabilities: 255 });
   const input = fixture(0);

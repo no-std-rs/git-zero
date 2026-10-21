@@ -219,10 +219,11 @@ export class Codec {
   rangeFeed(bytes, capacity = INPUT) { return this.event("host_range_feed", bytes, capacity); }
   rangeCancel() { this.invoke("host_range_cancel"); }
 
-  graphInit(info) {
+  graphInit(info, { strict = false } = {}) {
     const f = fields(40), l = this.limits;
     f.word(0, this.format); f.word(4, info.kind); f.wide(8, info.size);
     f.wide(16, l.maxObjectBytes); f.wide(24, l.maxLinks); f.word(32, l.nameScratch);
+    f.word(36, Number(strict));
     this.stage(f.bytes); this.invoke("host_graph_init", f.bytes.length);
   }
   graphFeed(bytes, eof = false) { return this.event("host_graph_feed", bytes, Number(eof)); }

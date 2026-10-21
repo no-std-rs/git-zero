@@ -1,7 +1,8 @@
 use super::{Frame, Shared, code, finish, format, input, kind, output, u32_at, u64_at};
 use core::cell::UnsafeCell;
 use git_zero::{
-    Error, ObjectDigest, ObjectInfo,
+    Error, ObjectDigest, ObjectInfo, ObjectKind,
+    http::receive::FsckHeaders,
     object::{LinkDecoder, LinkLimits, LinkRelation, LinkStatus},
 };
 
@@ -10,6 +11,7 @@ static GRAPH: Shared<Option<Session>> = Shared(UnsafeCell::new(None));
 struct Session {
     decoder: LinkDecoder<'static>,
     digest: ObjectDigest,
+    headers: Option<FsckHeaders>,
 }
 
 #[unsafe(no_mangle)]
@@ -21,7 +23,8 @@ pub extern "C" fn host_graph_cancel() {
 }
 
 /// Init (40 bytes): format/kind u32@0/4; size u64@8; max bytes/links
-/// u64@16/24; name scratch capacity u32@32 (two names, at most 131072).
+/// u64@16/24; name scratch capacity u32@32 (two names, at most 131072),
+/// strict receive header policy u32@36 (0 or 1).
 #[unsafe(no_mangle)]
 pub extern "C" fn host_graph_init(length: usize) -> i32 {
     host_graph_cancel();
@@ -53,6 +56,10 @@ fn initialize(length: usize) -> git_zero::Result<i32> {
         max_links: u64_at(bytes, 24)?,
     };
     let capacity = u32_at(bytes, 32)? as usize;
+    let strict = u32_at(bytes, 36)?;
+    if strict > 1 {
+        return Err(Error::InvalidRequest);
+    }
     if capacity > 131072 {
         return Err(Error::BufferTooSmall);
     }
@@ -67,6 +74,11 @@ fn initialize(length: usize) -> git_zero::Result<i32> {
                 limits,
             )?,
             digest: ObjectDigest::new(info, format),
+            headers: if strict == 1 && matches!(info.kind, ObjectKind::Commit | ObjectKind::Tag) {
+                Some(FsckHeaders::new(info.kind)?)
+            } else {
+                None
+            },
         });
     }
     Ok(0)
@@ -85,6 +97,9 @@ fn feed(length: usize, end_of_input: u32) -> git_zero::Result<i32> {
     };
     let step = session.decoder.update(bytes, end_of_input != 0)?;
     let consumed = step.consumed;
+    if let Some(headers) = &mut session.headers {
+        headers.update(&bytes[..consumed])?;
+    }
     session.digest.update(&bytes[..consumed])?;
     let mut frame = Frame::new(output());
     let (tag, written) = match step.status {
@@ -120,6 +135,9 @@ fn feed(length: usize, end_of_input: u32) -> git_zero::Result<i32> {
         }
         LinkStatus::Finished => {
             session.decoder.finish()?;
+            if let Some(headers) = &session.headers {
+                headers.finish()?;
+            }
             frame.id(0, session.digest.finish()?);
             (33, 0)
         }

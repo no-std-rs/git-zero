@@ -187,10 +187,10 @@ export class ObjectSource {
     if (this.edges.length === METADATA_BATCH) this.flushMetadata();
   }
 
-  beginScan(row) {
+  beginScan(row, strict = true) {
     this.namesStaged = false;
     this.names.length = 0; this.edges.length = 0;
-    this.codec.graphInit(info(row));
+    this.codec.graphInit(info(row), { strict });
   }
 
   finishScan(row) {
@@ -246,7 +246,7 @@ export class ObjectSource {
     this.queryKeys = new Map(); this.queryRows = [];
     const rootKey = this.key(row);
     const descriptor = this.descriptor(row);
-    this.codec.rangeInit(rootKey); this.beginScan(row);
+    this.codec.rangeInit(rootKey); this.beginScan(row, scan);
     const captured = row.size <= CANONICAL_ENTRY_BYTES ? new Uint8Array(row.size) : null;
     const temporary = captured === null ? new ChunkWriter(this.store, this.stage, rowKey(row)) : null;
     let written = 0, digest, request = this.codec.rangeRequest();

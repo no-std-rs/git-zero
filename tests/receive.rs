@@ -78,6 +78,118 @@ fn ancestry_requires_commits_and_shares_a_finite_budget_between_updates() {
     }
 }
 
+#[test]
+fn strict_receive_identity_rules_match_configured_git_at_chunk_boundaries() {
+    use git_zero::{ObjectKind, http::receive::FsckHeaders};
+    let cases = [
+        ("A <a@b> 0 +0000", true),
+        (" <a@b> 0 +0000", true),
+        ("<a@b> 0 +0000", false),
+        ("x", false),
+        ("A<a@b> 0 +0000", false),
+        ("A >x <a@b> 0 +0000", false),
+        ("A <a<b> 0 +0000", false),
+        ("A <a@b>0 +0000", false),
+        ("A <a@b> 00 +0000", false),
+        ("A <a@b> 01 +0000", false),
+        ("A <a@b> 0\t+0000", false),
+        ("A <a@b> \t1 +9999", true),
+        ("A <a@b> 9223372036854775807 +0000", true),
+        ("A <a@b> 9223372036854775808 +0000", false),
+        ("A <> 1 -9999", true),
+        ("A <a@b> -1 +0000", false),
+        ("A <a@b> 1 +00000", false),
+    ];
+    for (identity, accepted) in cases {
+        for (kind, body) in [
+            (
+                ObjectKind::Commit,
+                format!(
+                    "tree {}\nauthor {identity}\ncommitter A <a@b> 0 +0000\n\nx\n",
+                    "1".repeat(40)
+                ),
+            ),
+            (
+                ObjectKind::Commit,
+                format!(
+                    "tree {}\nauthor A <a@b> 0 +0000\ncommitter {identity}\n\nx\n",
+                    "1".repeat(40)
+                ),
+            ),
+            (
+                ObjectKind::Tag,
+                format!(
+                    "object {}\ntype blob\ntag v1\ntagger {identity}\n\nx\n",
+                    "1".repeat(40)
+                ),
+            ),
+        ] {
+            for chunk in [1, 2, 7, 64, body.len()] {
+                allocations::without_allocations(|| {
+                    let mut policy = FsckHeaders::new(kind).unwrap();
+                    let result = body
+                        .as_bytes()
+                        .chunks(chunk)
+                        .try_for_each(|bytes| policy.update(bytes));
+                    assert_eq!(
+                        result.and_then(|()| policy.finish()).is_ok(),
+                        accepted,
+                        "{identity}"
+                    );
+                    if result.is_err() {
+                        assert_eq!(policy.update(b""), Err(Error::InvalidObject));
+                        assert_eq!(policy.finish(), Err(Error::InvalidObject));
+                    }
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn strict_receive_headers_preserve_historical_taggers_and_stream_long_names() {
+    use git_zero::{ObjectKind, http::receive::FsckHeaders};
+    let prefix = format!("tree {}\nauthor ", "1".repeat(40));
+    allocations::without_allocations(|| {
+        let mut policy = FsckHeaders::new(ObjectKind::Commit).unwrap();
+        policy.update(prefix.as_bytes()).unwrap();
+        for _ in 0..1024 {
+            policy.update(&[b'x'; 4096]).unwrap();
+        }
+        policy
+            .update(b" <a@b> 1 +0000\ncommitter A <a@b> 0 +0000\n\nmessage")
+            .unwrap();
+        policy.finish().unwrap();
+        assert_eq!(policy.update(b"\0"), Err(Error::InvalidObject));
+    });
+    for body in [
+        b"object 1\ntype blob\ntag old\n\nmessage\0".as_slice(),
+        b"object 1\ntype blob\ntag old\n",
+    ] {
+        let mut policy = FsckHeaders::new(ObjectKind::Tag).unwrap();
+        for byte in body {
+            policy.update(core::slice::from_ref(byte)).unwrap();
+        }
+        policy.finish().unwrap();
+    }
+    for body in [
+        b"tree 1\nauthor x\ncommitter x\n\nx".as_slice(),
+        b"tree 1\nauthor A <a@b> 0 +0000\nauthor A <a@b> 0 +0000\n\nx",
+        b"object 1\ntype blob\ntag old\ntagger A <a@b> 0 +0000",
+    ] {
+        let kind = if body.starts_with(b"tree") {
+            ObjectKind::Commit
+        } else {
+            ObjectKind::Tag
+        };
+        let mut policy = FsckHeaders::new(kind).unwrap();
+        assert_eq!(
+            policy.update(body).and_then(|()| policy.finish()),
+            Err(Error::InvalidObject)
+        );
+    }
+}
+
 fn command(old: ObjectId, new: ObjectId, name: &[u8], caps: Option<&[u8]>) -> Vec<u8> {
     let mut line = Vec::new();
     line.extend_from_slice(old.to_hex().as_bytes());
