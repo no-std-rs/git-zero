@@ -339,7 +339,12 @@ impl State {
 
     fn tree_entry(&mut self, names: &mut Names<'_>) -> Result<()> {
         let name = &names.current[..self.current_len];
-        if name.is_empty() || name == b"." || name == b".." || name.contains(&b'/') {
+        if name.is_empty()
+            || name == b"."
+            || name == b".."
+            || name.eq_ignore_ascii_case(b".git")
+            || name.contains(&b'/')
+        {
             return Err(Error::InvalidFileName);
         }
         if self.has_previous

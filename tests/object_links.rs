@@ -234,7 +234,15 @@ fn tree_order_and_framing_failures_are_terminal() {
             Err(Error::InvalidObject)
         );
     }
-    for name in [b"".as_slice(), b".", b"..", b"a/b"] {
+    for name in [
+        b"".as_slice(),
+        b".",
+        b"..",
+        b"a/b",
+        b".git",
+        b".GiT",
+        b".GIT",
+    ] {
         assert_eq!(
             scan(
                 &tree(&[(b"100644", name, target)]),

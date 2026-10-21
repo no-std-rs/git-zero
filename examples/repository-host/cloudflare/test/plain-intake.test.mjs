@@ -69,6 +69,18 @@ for (const [runtime, serve] of [["Wrangler R2/SQLite", start], ["direct workerd 
       const clean = await state(server, rejected);
       assert.equal(clean.refs, 0); assert.equal(clean.objects, 0);
       assert.equal(clean.treeNameScratchRows, 0); assert.deepEqual(clean.stages, []);
+
+      for (const name of [".git", ".GiT"]) {
+        const reserved = `plain-reserved-${format}-${randomUUID()}`;
+        const blob = fixture.objects[0];
+        const tree = object(format, 2, Buffer.concat([Buffer.from(`100644 ${name}\0`), blob.id]));
+        const packed = pack(format, [entry(3, blob.body), entry(2, tree.body)]);
+        const response = await fetch(`${server.origin}/_test/${reserved}/intake`, { method: "POST", headers: headers(format), body: wire(format, packed, tree.id) });
+        assert.equal(response.status, 400); assert.equal((await response.json()).codecError, -9);
+        const clean = await state(server, reserved);
+        assert.equal(clean.refs, 0); assert.equal(clean.objects, 0); assert.equal(clean.stagedChunks, 0);
+        assert.equal(clean.treeNameScratchRows, 0); assert.deepEqual(clean.stages, []);
+      }
     }
   } finally { await server?.stop(); await rm(directory, { recursive: true, force: true }); }
 });
