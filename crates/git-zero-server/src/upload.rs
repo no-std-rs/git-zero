@@ -54,7 +54,7 @@ impl Capabilities {
             }
             seen |= flag;
         }
-        if seen & 3 == 3 || seen & 12 == 12 {
+        if seen & 12 == 12 {
             return Err(Error::InvalidRequest);
         }
         Ok(Self(seen))
@@ -73,7 +73,12 @@ impl Capabilities {
     }
 
     fn ack(self) -> u8 {
-        (self.0 & 3) as u8
+        // Clients can select both advertised modes; detailed takes precedence.
+        if self.0 & 2 != 0 {
+            2
+        } else {
+            (self.0 & 1) as u8
+        }
     }
     fn band(self) -> u8 {
         ((self.0 >> 2) & 3) as u8
