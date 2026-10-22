@@ -17,13 +17,21 @@ comparison.comment = ArtifactComment.generated("comment.md", "publication.json",
 
 const program = workflow().releasePlease().publishArtifacts("complexity", comparison);
 const ratioPrefix = "LM-CC/token data: `";
-const publisherPrefix = "<!-- codex-review-artifact-publisher -->\n<!-- ci-toolkit:complexity -->\n";
+const publisherMarker = "<!-- codex-review-artifact-publisher -->";
+const comparisonMarker = "<!-- ci-toolkit:complexity -->";
 // The same My Toolkit bot that publishes the verified comparison envelope.
 const publisherActorId: i64 = 317265358;
 
 function waitingForRatio(): void {
   checks.report("LM-CC/token", false,
     "Waiting for verified LM-CC/token data for the current PR head and base.");
+}
+
+function comparisonComment(body: string): bool {
+  const first = body.indexOf("\n");
+  if (first < 0 || body.substring(0, first).trim() != publisherMarker) return false;
+  const second = body.indexOf("\n", first + 1);
+  return body.substring(first + 1, second < 0 ? body.length : second).trim() == comparisonMarker;
 }
 
 function reportPullChecks(details: Value): void {
@@ -40,9 +48,14 @@ function reportPullChecks(details: Value): void {
       const comment = page.items[i];
       if (comment.get("actorId").integer() != publisherActorId) continue;
       const body = comment.get("body").string();
-      if (!body.startsWith(publisherPrefix)) continue;
+      if (!comparisonComment(body)) continue;
       const start = body.indexOf(ratioPrefix);
-      if (start < 0) continue;
+      // Pending publisher placeholders have the same markers but no envelope.
+      // Markdown may add two spaces before each marker's line break.
+      if (start < 0) {
+        waitingForRatio();
+        return;
+      }
       const first = start + ratioPrefix.length;
       const end = body.indexOf("`", first);
       if (end < 0) continue;

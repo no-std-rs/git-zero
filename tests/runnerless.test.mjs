@@ -84,9 +84,22 @@ test("a stale canonical report fails closed without scanning review history", ()
   }
 });
 
+test("pending publisher comments stop history scans with plain or Markdown line breaks", () => {
+  for (const spacing of ["", "  "]) {
+    const pending = { actorId: 317265358, body: `<!-- codex-review-artifact-publisher -->${spacing}\n<!-- ci-toolkit:complexity -->${spacing}\n## Build artifact\nPublication: pending` };
+    const result = execute({ pages: [[pending], [envelope()]] });
+    assert.equal(result.validations, 1);
+    assert.deepEqual(result.requestedPages, [1]);
+    assert.deepEqual(result.reads, []);
+    assert.equal(result.reports[0].passed, false);
+    assert.match(result.reports[0].summary, /Waiting for verified/);
+  }
+});
+
 test("publisher authentication and repository, PR and schema identities remain mandatory", () => {
   const ignored = [
     { ...envelope(), actorId: 1 },
+    { ...envelope(), body: envelope().body.replace("ci-toolkit:complexity", "ci-toolkit:other") },
     envelope({}, { repository: "other/repository" }),
     envelope({}, { pr_number: 999 }),
     envelope({ schema_version: 2 }),
