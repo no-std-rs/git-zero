@@ -29,7 +29,9 @@ function envelope(changes = {}, identity = {}) {
   return { actorId: 317265358, body: `${prefix}LM-CC/token data: \`${JSON.stringify(data)}\`` };
 }
 
-function execute({ event = "status", state = "open", number = pull.number, comment = envelope(), publication = {}, changedProducer, lookupError } = {}) {
+function execute({ event = "status", state = "open", number = pull.number, comment = envelope(), publication = {}, files = {},
+  lookup = () => new Value(JSON.stringify({ state: "available", head: pull.head, base: pull.base, comment, ...publication })),
+} = {}) {
   const reports = [], reads = [], lookups = [];
   let validations = 0, recipes = 0;
   class Spec {
@@ -48,11 +50,10 @@ function execute({ event = "status", state = "open", number = pull.number, comme
     pulls: { get: () => ({ ...pull, state }) },
     policies: { validate() { validations++; } },
     checks: { report(name, passed, summary) { reports.push({ name, passed, summary }); } },
-    repo: { readText(path, ref) { reads.push({ path, ref }); return path === changedProducer && ref === "head" ? "changed" : "trusted"; } },
+    repo: { readText(path, ref) { reads.push({ path, ref }); return files[path]?.[ref] ?? "trusted"; } },
     comments: { artifact(publisher) {
       lookups.push(publisher);
-      if (lookupError) throw lookupError;
-      return new Value(JSON.stringify({ state: "available", head: pull.head, base: pull.base, comment, ...publication }));
+      return lookup();
     }, list() { assert.fail("comparison checks must never enumerate comment history"); } },
     jobs: { lookup: () => ({ ok: false }) },
   });
@@ -109,7 +110,7 @@ for (const [name, cases] of [
 
 test("a changed comparison producer cannot supply a passing ratio", () => {
   for (const changedProducer of ["buildbuddy.yaml", "scripts/llm-cc-ratio.py"]) {
-    const result = execute({ changedProducer });
+    const result = execute({ files: { [changedProducer]: { head: "changed" } } });
     assert.equal(result.reports[0].passed, false);
     assert.ok(result.reports[0].summary.includes(changedProducer));
   }
@@ -138,5 +139,5 @@ test("closed PRs and default-branch deliveries do not emit PR policies", () => {
 });
 
 test("an index/backend failure remains an error rather than a missing measurement", () => {
-  assert.throws(() => execute({ lookupError: new Error("host_failure") }), /host_failure/);
+  assert.throws(() => execute({ lookup() { throw new Error("host_failure"); } }), /host_failure/);
 });
