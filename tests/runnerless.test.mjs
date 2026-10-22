@@ -127,15 +127,13 @@ test("a changed comparison producer cannot supply a passing ratio", () => {
 });
 
 test("regressions, incomplete reports and invalid ratios fail closed", () => {
-  for (const changes of [
-    { head_ratio: 0.11 }, { status: "pending" },
-    { base_ratio: null }, { head_ratio: null },
-    { base_ratio: -1 }, { head_ratio: -1 },
+  for (const [changes, passed] of [
+    [{ head_ratio: 0.11 }, false], [{ status: "pending" }, false],
+    [{ base_ratio: null }, false], [{ head_ratio: null }, false],
+    [{ base_ratio: -1 }, false], [{ head_ratio: -1 }, false],
+    [{ head_ratio: 0.1 }, true], [{ base_ratio: 0, head_ratio: 0 }, true],
   ]) {
-    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, false);
-  }
-  for (const changes of [{ head_ratio: 0.1 }, { base_ratio: 0, head_ratio: 0 }]) {
-    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, true);
+    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, passed);
   }
 });
 
