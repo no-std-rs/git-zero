@@ -8,6 +8,9 @@ use crate::{
     repository::validate_refs,
 };
 
+mod revision;
+pub use revision::{RevisionLimits, RevisionOptions, RevisionState, ShallowChange};
+
 /// Cached identity and size of a validated object, in enumeration order.
 #[derive(Clone, Copy, Debug)]
 pub struct ValidationMetadata {

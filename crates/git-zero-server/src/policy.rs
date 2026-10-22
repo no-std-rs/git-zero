@@ -48,7 +48,7 @@ impl WantOptions {
 pub(crate) const REACHABLE: &[u8] = b" allow-reachable-sha1-in-want";
 
 #[cfg(feature = "read")]
-struct Discard;
+pub(crate) struct Discard;
 #[cfg(feature = "read")]
 impl Write for Discard {
     fn write_all(&mut self, _: &[u8]) -> Result<()> {

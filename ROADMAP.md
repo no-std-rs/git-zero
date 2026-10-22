@@ -28,8 +28,8 @@ Authentication, authorization and deployment policy belong to hosts.
 
 ## Next delivery order
 
-1. Complete shallow fetch with time/exclusion deepening, retaining the real-Git
-   checkout and history comparisons for explicitly authorized promised objects.
+1. Extend the opt-in time/exclusion deepening API to Worker hosts and finish
+   cross-host shallow coverage, retaining checkout/history comparisons and limits.
 2. Publish packed dumb HTTP repositories and extend requested-closure caches to
    async hosts, retaining immutable refs/pack/index consistency.
 3. Finish native header policy, request deadlines, HTTP framing and independent
@@ -92,8 +92,14 @@ host filesystem/name policies extend beyond core graph validation.
   hidden/dangling/unauthorized and mixed wants are rejected before output.
   Real-Git native/Worker cases cover v0/v1/v2, both formats and all object kinds;
   duplicate-counting want limits and policy-aware packet preflight are bounded.
-- [ ] Time/exclusion deepening (`deepen-since`/`deepen-not`), including merges,
-  combined options, malformed inputs, boundary reset and shared traversal budgets.
+- [x] Opt-in core/native time/exclusion deepening (`deepen-since`/`deepen-not`),
+  including merges, combined options, malformed inputs, boundary reset and shared
+  traversal budgets. Caller-owned revision state keeps boundary announcements
+  separate from pack membership. Native Git HTTP comparisons cover clone/fetch,
+  checkouts and strict fsck in v0/v1/v2 and both formats.
+- [ ] Enable time/exclusion deepening in the Worker ABI/host with explicit revision
+  storage/work limits and matching cross-host oracle and fixed-memory tests.
+  Combining revision cuts with tree-depth/object-type filters remains rejected.
 - [ ] Decide scope and rejection rules for further filters (tree/sparse/combine)
   and optional negotiation extensions before advertising them.
 

@@ -95,3 +95,7 @@ all-features = true
 
 [lints]
 workspace = true
+
+[[test]]
+name = "revision_http"
+required-features = ["cli"]

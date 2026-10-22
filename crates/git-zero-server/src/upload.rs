@@ -27,6 +27,8 @@ const CAPABILITY_FLAGS: &[(&[u8], u16)] = &[
     (b"deepen-relative", 256),
     (b"ofs-delta", 512),
     (b"include-tag", 1024),
+    (b"deepen-since", 2048),
+    (b"deepen-not", 4096),
 ];
 
 fn capability_flag(capability: &[u8], format: ObjectFormat) -> Result<u16> {
@@ -147,7 +149,11 @@ fn parse_wants(
             if extended {
                 return Err(Error::InvalidRequest);
             }
-            want(capabilities.want(value, !wanted, format)?)?;
+            let id = capabilities.want(value, !wanted, format)?;
+            if !extensions.revisions_enabled && capabilities.0 & 6144 != 0 {
+                return Err(Error::Unsupported);
+            }
+            want(id)?;
             wanted = true;
         } else if wanted {
             extensions.argument(line, format)?;
@@ -182,12 +188,22 @@ fn parse_haves(mut bytes: &[u8], format: ObjectFormat) -> Result<bool> {
 
 impl<'a> UploadRequest<'a> {
     pub fn parse(
-        mut bytes: &'a [u8],
+        bytes: &'a [u8],
         format: ObjectFormat,
         version: crate::route::Version,
         want: impl FnMut(ObjectId) -> Result<()>,
     ) -> Result<Self> {
-        let mut extensions = crate::fetch::Extensions::default();
+        Self::parse_mode(bytes, format, version, false, want)
+    }
+
+    fn parse_mode(
+        mut bytes: &'a [u8],
+        format: ObjectFormat,
+        version: crate::route::Version,
+        revisions_enabled: bool,
+        want: impl FnMut(ObjectId) -> Result<()>,
+    ) -> Result<Self> {
+        let mut extensions = crate::fetch::Extensions::new(revisions_enabled);
         #[cfg(feature = "read")]
         let shallow_body = bytes;
         if version == crate::route::Version::V2 {
@@ -196,6 +212,7 @@ impl<'a> UploadRequest<'a> {
                 return Err(Error::InvalidRequest);
             }
             let fetch = crate::v2::Fetch::parse(command.args, format, want, &mut extensions)?;
+            extensions.validate()?;
             return Ok(Self {
                 done: fetch.done,
                 capabilities: Capabilities(u16::from(fetch.ofs_delta) * 512),
@@ -209,6 +226,7 @@ impl<'a> UploadRequest<'a> {
             });
         }
         let capabilities = parse_wants(&mut bytes, format, want, &mut extensions)?;
+        extensions.validate()?;
         Ok(Self {
             done: parse_haves(bytes, format)?,
             capabilities,
@@ -230,10 +248,101 @@ impl<'a> UploadRequest<'a> {
     pub fn require_complete(&self) -> Result<()> {
         // A caller-supplied complete pack cannot promise follow-tag selection.
         // Only the graph-backed API advertises include-tag.
-        if self.extensions.active() || self.capabilities.0 & (192 | 1024) != 0 {
+        if self.extensions.active() || self.capabilities.0 & (192 | 1024 | 6144) != 0 {
             return Err(Error::Unsupported);
         }
         Ok(())
+    }
+
+    #[cfg(feature = "read")]
+    pub(crate) fn requires_revision(&self) -> bool {
+        self.extensions.revision() || self.capabilities.0 & 6144 != 0
+    }
+
+    #[cfg(feature = "read")]
+    fn exclusions(&self) -> impl Iterator<Item = &'a [u8]> + '_ {
+        let mut bytes = self.shallow_body;
+        core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten()).filter_map(|packet| {
+            let Packet::Data(value) = packet else {
+                return None;
+            };
+            request_line(value).strip_prefix(b"deepen-not ")
+        })
+    }
+
+    #[cfg(feature = "read")]
+    pub(crate) fn exclusion_ids<'r>(
+        &'r self,
+        repository: &'r impl Repository,
+    ) -> impl Iterator<Item = Result<ObjectId>> + 'r {
+        self.exclusions()
+            .map(move |name| exclusion_ref(repository, name))
+    }
+
+    #[cfg(feature = "read")]
+    pub(crate) fn reserve_resolution(
+        &self,
+        repository: &impl Repository,
+        state: &mut git_zero_core::RevisionState<'_>,
+    ) -> Result<()> {
+        if self.extensions.exclusions > state.max_exclusions() {
+            return Err(Error::LimitExceeded);
+        }
+        // Initial complete request parsing is bounded by the caller's body/want
+        // capacities, independently of this optional revision budget. Reserve
+        // before subsequent packet reparsing, shallow/have index validation and
+        // ACK generation. Six scans conservatively cover every preparation and
+        // response path; each byte reserves an index-search bound plus parsing.
+        let lookup = u64::from(usize::BITS - repository.object_count().leading_zeros()) + 1;
+        let scans = (self.shallow_body.len() as u64)
+            .checked_mul(6)
+            .and_then(|bytes| bytes.checked_mul(lookup + 4))
+            .ok_or(Error::LimitExceeded)?;
+        state.charge_work(scans)?;
+        let mut names = 4_u64; // virtual HEAD
+        for index in 0..repository.reference_count() {
+            state.charge_work(1)?;
+            let length = repository
+                .reference_name(index)
+                .ok_or(Error::InvalidReference)?
+                .len() as u64;
+            names = names.checked_add(length).ok_or(Error::LimitExceeded)?;
+        }
+        let refs = (repository.reference_count() as u64)
+            .checked_add(1)
+            .ok_or(Error::LimitExceeded)?;
+        for name in self.exclusions() {
+            // Six bounded DWIM comparisons per visible name, plus argument and
+            // separator comparisons. Reserve before the iterator resolves refs.
+            let cost = (name.len() as u64)
+                .checked_add(2)
+                .and_then(|length| length.checked_mul(refs))
+                .and_then(|cost| cost.checked_add(names))
+                .and_then(|cost| cost.checked_mul(6))
+                .ok_or(Error::LimitExceeded)?;
+            state.charge_work(cost)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "read")]
+    pub(crate) fn revision_info(
+        &self,
+        format: ObjectFormat,
+        changes: impl Iterator<Item = git_zero_core::ShallowChange>,
+        output: &mut impl Write,
+    ) -> Result<()> {
+        let mut updates = ShallowUpdates::new(self, format);
+        if updates.enabled {
+            for change in changes {
+                let (id, unshallow) = match change {
+                    git_zero_core::ShallowChange::Shallow(id) => (id, false),
+                    git_zero_core::ShallowChange::Unshallow(id) => (id, true),
+                };
+                updates.change(id, unshallow, output)?;
+            }
+        }
+        updates.finish(output)
     }
 
     #[cfg(feature = "read")]
@@ -259,24 +368,31 @@ impl<'a> UploadRequest<'a> {
         version: crate::route::Version,
         wants: &mut [ObjectId],
         options: crate::WantOptions,
+        revisions_enabled: bool,
     ) -> Result<(Self, usize)> {
         let mut count = 0;
         let mut remaining = options.max_want_lines;
-        let upload = Self::parse(body, repository.object_format(), version, |id| {
-            remaining = remaining.checked_sub(1).ok_or(Error::LimitExceeded)?;
-            let allowed = match options.policy {
-                crate::WantPolicy::AdvertisedOnly => crate::advertised(repository, id),
-                crate::WantPolicy::AllVisibleReachable => repository.find_index(id).is_some(),
-            };
-            if !allowed {
-                return Err(Error::InvalidRequest);
-            }
-            if !wants[..count].contains(&id) {
-                *wants.get_mut(count).ok_or(Error::BufferTooSmall)? = id;
-                count += 1;
-            }
-            Ok(())
-        })?;
+        let upload = Self::parse_mode(
+            body,
+            repository.object_format(),
+            version,
+            revisions_enabled,
+            |id| {
+                remaining = remaining.checked_sub(1).ok_or(Error::LimitExceeded)?;
+                let allowed = match options.policy {
+                    crate::WantPolicy::AdvertisedOnly => crate::advertised(repository, id),
+                    crate::WantPolicy::AllVisibleReachable => repository.find_index(id).is_some(),
+                };
+                if !allowed {
+                    return Err(Error::InvalidRequest);
+                }
+                if !wants[..count].contains(&id) {
+                    *wants.get_mut(count).ok_or(Error::BufferTooSmall)? = id;
+                    count += 1;
+                }
+                Ok(())
+            },
+        )?;
         Ok((upload, count))
     }
 
@@ -341,6 +457,47 @@ impl<'a> UploadRequest<'a> {
         // V2 always frames its packfile section on sideband channel 1.
         if self.v2 { 2 } else { self.capabilities.band() }
     }
+}
+
+#[cfg(feature = "read")]
+fn exclusion_ref(repository: &impl Repository, name: &[u8]) -> Result<ObjectId> {
+    let mut found = if name == b"HEAD" {
+        repository.head_state().id()
+    } else {
+        None
+    };
+    for index in 0..repository.reference_count() {
+        let full = repository
+            .reference_name(index)
+            .ok_or(Error::InvalidReference)?
+            .as_bytes();
+        let matched = [
+            (b"".as_slice(), b"".as_slice()),
+            (b"refs/", b""),
+            (b"refs/tags/", b""),
+            (b"refs/heads/", b""),
+            (b"refs/remotes/", b""),
+            (b"refs/remotes/", b"/HEAD"),
+        ]
+        .iter()
+        .any(|&(prefix, suffix)| {
+            full.strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix(suffix))
+                == Some(name)
+        });
+        if matched {
+            if found.is_some() {
+                return Err(Error::InvalidRequest);
+            }
+            // Validation already authenticated symbolic aliases and their final ID.
+            found = Some(
+                repository
+                    .reference_id(index)
+                    .ok_or(Error::InvalidReference)?,
+            );
+        }
+    }
+    found.ok_or(Error::InvalidRequest)
 }
 
 #[cfg(feature = "read")]
@@ -458,7 +615,7 @@ impl ShallowUpdates {
         Self {
             format,
             v2: request.v2,
-            enabled: request.extensions.options.depth.is_some() && (!request.v2 || request.done),
+            enabled: request.extensions.history() && (!request.v2 || request.done),
             started: false,
             finished: false,
             failure: None,
@@ -532,9 +689,7 @@ impl Acknowledgments {
             v2: request.v2,
             done: request.done,
             mode: request.capabilities.ack(),
-            suppress: !request.v2
-                && request.extensions.options.depth.is_some()
-                && request.haves.is_empty(),
+            suppress: !request.v2 && request.extensions.history() && request.haves.is_empty(),
             last: None,
             started: false,
             finished: false,

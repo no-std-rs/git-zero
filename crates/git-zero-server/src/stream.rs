@@ -196,8 +196,61 @@ impl<'a> ResponseEncoder<'a> {
         let Plan::Upload(version) = plan else {
             return Self::ordinary_response(repository, plan, output.finish());
         };
-        let selected =
-            crate::prepare_fetch(repository, request, version, storage, options, &mut output)?;
+        let selected = crate::prepare_fetch(
+            repository,
+            request,
+            version,
+            storage,
+            options,
+            None,
+            &mut output,
+        )?;
+        let mut encoder = Self::buffered(upload_response(), output.finish());
+        if let Some(indices) = selected.indices {
+            encoder.body = Body::Pack(pack::Encoder::new(repository, Some(indices))?);
+            encoder.band = selected.upload.band();
+        }
+        Ok(encoder)
+    }
+
+    /// Opt in to time/exclusion deepening. Boundary state is temporary; only
+    /// selected indices and prepared control bytes survive in the response.
+    #[cfg(feature = "read")]
+    pub fn with_revisions<R: Repository + ?Sized>(
+        repository: &git_zero_core::ValidatedRepository<'_, '_, R>,
+        request: Request<'_>,
+        storage: &'a mut crate::RevisionStorage<'_>,
+        control: &'a mut [u8],
+    ) -> Result<Self> {
+        Self::with_revision_storage(repository, request, storage.reborrow(), control)
+    }
+
+    #[cfg(feature = "read")]
+    pub fn with_revision_storage<R: Repository + ?Sized>(
+        repository: &git_zero_core::ValidatedRepository<'_, '_, R>,
+        request: Request<'_>,
+        storage: crate::RevisionStorage<'a>,
+        control: &'a mut [u8],
+    ) -> Result<Self> {
+        let mut output = SliceWriter::new(control);
+        let route = route::validate(request)?;
+        if route.rejection.is_none() && request.method == "GET" && route.path == "info/refs" {
+            let response = crate::serve_revision_info_refs(repository, &route, &mut output)?;
+            return Ok(Self::buffered(response, output.finish()));
+        }
+        let plan = Self::ordinary(repository, request, &mut output, true)?;
+        let Plan::Upload(version) = plan else {
+            return Self::ordinary_response(repository, plan, output.finish());
+        };
+        let selected = crate::prepare_fetch(
+            repository,
+            request,
+            version,
+            storage.selection,
+            crate::WantOptions::STRICT,
+            Some((storage.state, storage.limits)),
+            &mut output,
+        )?;
         let mut encoder = Self::buffered(upload_response(), output.finish());
         if let Some(indices) = selected.indices {
             encoder.body = Body::Pack(pack::Encoder::new(repository, Some(indices))?);

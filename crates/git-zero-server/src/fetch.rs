@@ -2,12 +2,21 @@
 use git_zero_core::{BlobFilter, Error, FetchOptions, ObjectFormat, ObjectKind, Result};
 #[derive(Default)]
 pub(crate) struct Extensions {
+    pub revisions_enabled: bool,
     pub options: FetchOptions,
+    pub since: Option<u64>,
+    pub exclusions: usize,
     has_shallow: bool,
     filtered: bool,
 }
 
 impl Extensions {
+    pub fn new(revisions_enabled: bool) -> Self {
+        Self {
+            revisions_enabled,
+            ..Default::default()
+        }
+    }
     pub fn argument(&mut self, line: &[u8], format: ObjectFormat) -> Result<()> {
         match argument_parts(line) {
             (b"shallow", Some(value)) => {
@@ -23,6 +32,12 @@ impl Extensions {
                     return Err(Error::InvalidRequest);
                 }
                 self.options.depth = Some(depth as u32);
+            }
+            (b"deepen-since", Some(value)) if self.revisions_enabled => {
+                self.since = Some(timestamp(value)?)
+            }
+            (b"deepen-not", Some(_)) if self.revisions_enabled => {
+                self.exclusions = self.exclusions.checked_add(1).ok_or(Error::LimitExceeded)?;
             }
             (b"filter", Some(value)) => {
                 if self.filtered {
@@ -48,7 +63,77 @@ impl Extensions {
             || self.options.depth.is_some()
             || self.options.deepen_relative
             || self.filtered
+            || self.revision()
     }
+
+    pub fn revision(&self) -> bool {
+        self.since.is_some() || self.exclusions != 0
+    }
+
+    pub fn history(&self) -> bool {
+        self.options.depth.is_some() || self.revision()
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.revision() && self.options.depth.is_some() {
+            return Err(Error::InvalidRequest);
+        }
+        Ok(())
+    }
+}
+
+// Deterministic unsigned base-zero conversion, matching the pinned Linux Git
+// 2.53/2.55 oracles, including their C23 binary prefix. Some older C libraries
+// reject that prefix; canonical Git clients send decimal. MAX is Git's sentinel.
+fn timestamp(input: &[u8]) -> Result<u64> {
+    if input.is_empty() {
+        return Ok(0);
+    }
+    let mut value = input;
+    while value.first().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[1..];
+    }
+    let negative = value.first() == Some(&b'-');
+    if negative || value.first() == Some(&b'+') {
+        value = &value[1..];
+    }
+    let base = if value.starts_with(b"0x") || value.starts_with(b"0X") {
+        value = &value[2..];
+        16
+    } else if value.starts_with(b"0b") || value.starts_with(b"0B") {
+        value = &value[2..];
+        2
+    } else if value.starts_with(b"0") {
+        8
+    } else {
+        10
+    };
+    if value.is_empty() {
+        return Err(Error::InvalidRequest);
+    }
+    let mut number = 0_u64;
+    for &byte in value {
+        let digit = match byte {
+            b'0'..=b'9' => u64::from(byte - b'0'),
+            b'a'..=b'f' => u64::from(byte - b'a' + 10),
+            b'A'..=b'F' => u64::from(byte - b'A' + 10),
+            _ => return Err(Error::InvalidRequest),
+        };
+        if digit >= base {
+            return Err(Error::InvalidRequest);
+        }
+        number = number
+            .checked_mul(base)
+            .and_then(|number| number.checked_add(digit))
+            .ok_or(Error::InvalidRequest)?;
+    }
+    if negative {
+        number = number.wrapping_neg();
+    }
+    if number == u64::MAX {
+        return Err(Error::InvalidRequest);
+    }
+    Ok(number)
 }
 
 pub(crate) fn argument_parts(line: &[u8]) -> (&[u8], Option<&[u8]>) {
@@ -126,6 +211,62 @@ fn filter_number(mut value: &[u8]) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn since_numbers_match_pinned_unsigned_base_zero_oracles() {
+        for (wire, expected) in [
+            ("", 0),
+            ("0", 0),
+            ("00", 0),
+            ("010", 8),
+            ("0x0", 0),
+            ("0b10", 2),
+            ("+0", 0),
+            ("-0", 0),
+            ("+1700000200", 1700000200),
+            ("-2", u64::MAX - 1),
+            ("18446744073709551614", u64::MAX - 1),
+            ("-18446744073709551614", 2),
+            ("-18446744073709551615", 1),
+            (" 1700000200", 1700000200),
+            ("\t1700000200", 1700000200),
+            ("0x6553f1c8", 1700000200),
+            ("0X6553F1C8", 1700000200),
+        ] {
+            assert_eq!(timestamp(wire.as_bytes()), Ok(expected), "{wire:?}");
+        }
+        for wire in [
+            "08",
+            "09",
+            "0x",
+            "0b",
+            "0b2",
+            "-1",
+            "18446744073709551615",
+            "18446744073709551616",
+            "-18446744073709551616",
+            "1700000200 ",
+            "1700000200suffix",
+            "+",
+            "-",
+            " ",
+            "\0",
+        ] {
+            assert_eq!(
+                timestamp(wire.as_bytes()),
+                Err(Error::InvalidRequest),
+                "{wire:?}"
+            );
+        }
+        let mut extensions = Extensions::new(true);
+        for wire in [
+            b"deepen-since 1700000400".as_slice(),
+            b"deepen-since 1700000200",
+        ] {
+            extensions.argument(wire, ObjectFormat::Sha1).unwrap();
+        }
+        assert_eq!(extensions.since, Some(1700000200));
+    }
 
     #[test]
     fn blob_limits_preserve_full_width_and_scaled_integer_boundaries() {
