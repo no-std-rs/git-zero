@@ -46,8 +46,8 @@ the total while reducing complexity per token.
 total token count against the PR's merge base. Equal or lower ratios pass; any
 increase fails. Missing, incomplete, non-finite, zero-token, or stale measurements
 fail. `scripts/llm-cc-ratio.py` adds full-precision ratios from `report.json` to the
-published comment and refreshes its checksum envelope. Runnerless reads only the
-verified comparison publisher's bot comment, matching its repository, PR, head,
+published comment and refreshes its checksum envelope. Runnerless performs one indexed lookup for the current comparison publisher's
+bot comment, without enumerating PR comment history. It matches repository, PR, head,
 and target commit before comparing ratios; it does not use rounded table values.
 The gate also requires `buildbuddy.yaml` and the ratio script to match the trusted
 base revision. Python runs with `-I` so files in the PR cannot shadow its standard
@@ -101,6 +101,12 @@ the My Toolkit GitHub App publishes `Runnerless / Program execution`,
 regenerated on status and completion deliveries too, so a recovered PR delivery
 can fill missing contexts. A stale canonical comparison fails the ratio gate
 immediately while waiting for its publisher to update the same comment.
+The native title declaration and trusted `.ci-toolkit.yml` commit policy also
+publish `ci-toolkit/pull-request-title` and `ci-toolkit/commit-messages` independently
+of the repository program, so a failed comparison lookup cannot starve them.
+The program retains its legacy policy checks for existing protection compatibility.
+The indexed lookup requires the Runnerless host released by my-infra PR #296;
+unknown legacy comment bindings remain unavailable until the publisher refreshes them.
 Rust builds and real Git interoperability tests
 run in the existing GitHub Actions workflow.
 

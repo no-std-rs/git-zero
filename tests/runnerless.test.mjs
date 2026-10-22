@@ -17,7 +17,7 @@ class Value {
   get(key) { return new Value(JSON.stringify(this.value?.[key] ?? null)); }
   isNull() { return this.value === null; }
   integer() { return this.value; }
-  string() { return this.value; }
+  string() { return typeof this.value === "string" ? this.value : ""; }
 }
 
 function envelope(changes = {}, identity = {}) {
@@ -29,8 +29,8 @@ function envelope(changes = {}, identity = {}) {
   return { actorId: 317265358, body: `${prefix}LM-CC/token data: \`${JSON.stringify(data)}\`` };
 }
 
-function execute({ event = "status", state = "open", number = pull.number, pages = [[envelope()]], changedProducer } = {}) {
-  const reports = [], reads = [], requestedPages = [];
+function execute({ event = "status", state = "open", number = pull.number, comment = envelope(), publication = {}, changedProducer, lookupError } = {}) {
+  const reports = [], reads = [], lookups = [];
   let validations = 0, recipes = 0;
   class Spec {
     file() { return this; }
@@ -49,18 +49,16 @@ function execute({ event = "status", state = "open", number = pull.number, pages
     policies: { validate() { validations++; } },
     checks: { report(name, passed, summary) { reports.push({ name, passed, summary }); } },
     repo: { readText(path, ref) { reads.push({ path, ref }); return path === changedProducer && ref === "head" ? "changed" : "trusted"; } },
-    PageRequest: class { constructor(page, size) { this.page = page; this.size = size; } },
-    comments: { list(request) {
-      assert.equal(request.size, 20, "Runnerless caps comment pages at 20");
-      requestedPages.push(request.page);
-      assert.ok(request.page <= pages.length, "must not scan beyond the supplied history");
-      return { items: pages[request.page - 1].map(row => new Value(JSON.stringify(row))), nextPage: request.page < pages.length ? request.page + 1 : 0 };
-    } },
+    comments: { artifact(publisher) {
+      lookups.push(publisher);
+      if (lookupError) throw lookupError;
+      return new Value(JSON.stringify({ state: "available", head: pull.head, base: pull.base, comment, ...publication }));
+    }, list() { assert.fail("comparison checks must never enumerate comment history"); } },
     jobs: { lookup: () => ({ ok: false }) },
   });
   runInContext(source, context);
   runInContext("run()", context);
-  return { reports, reads, requestedPages, validations, recipes };
+  return { reports, reads, lookups, validations, recipes };
 }
 
 test("PR and recovery deliveries regenerate required title and commit policies", () => {
@@ -73,23 +71,23 @@ test("PR and recovery deliveries regenerate required title and commit policies",
   }
 });
 
-test("a stale canonical report fails closed without scanning review history", () => {
+test("a stale canonical report fails closed through one indexed lookup", () => {
   for (const identity of [{ head_sha: "previous-head" }, { target_sha: "previous-base" }]) {
-    const result = execute({ pages: [[envelope({}, identity)], [envelope()]] });
+    const result = execute({ comment: envelope({}, identity) });
     assert.equal(result.validations, 1);
-    assert.deepEqual(result.requestedPages, [1]);
+    assert.deepEqual(result.lookups, ["complexity"]);
     assert.deepEqual(result.reads, []);
     assert.equal(result.reports[0].passed, false);
     assert.match(result.reports[0].summary, /Waiting for verified/);
   }
 });
 
-test("pending publisher comments stop history scans with plain or Markdown line breaks", () => {
+test("pending publisher comments fail closed with plain or Markdown line breaks", () => {
   for (const spacing of ["", "  "]) {
     const pending = { actorId: 317265358, body: `<!-- codex-review-artifact-publisher -->${spacing}\n<!-- ci-toolkit:complexity -->${spacing}\n## Build artifact\nPublication: pending` };
-    const result = execute({ pages: [[pending], [envelope()]] });
+    const result = execute({ comment: pending });
     assert.equal(result.validations, 1);
-    assert.deepEqual(result.requestedPages, [1]);
+    assert.deepEqual(result.lookups, ["complexity"]);
     assert.deepEqual(result.reads, []);
     assert.equal(result.reports[0].passed, false);
     assert.match(result.reports[0].summary, /Waiting for verified/);
@@ -104,13 +102,16 @@ test("publisher authentication and repository, PR and schema identities remain m
     envelope({}, { pr_number: 999 }),
     envelope({ schema_version: 2 }),
   ];
-  const result = execute({ pages: [ignored, [envelope()]] });
-  assert.deepEqual(result.requestedPages, [1, 2]);
-  assert.equal(result.reports[0].passed, true);
+  for (const comment of ignored) {
+    const result = execute({ comment });
+    assert.deepEqual(result.lookups, ["complexity"]);
+    assert.equal(result.reports[0].passed, false);
+    assert.deepEqual(result.reads, []);
+  }
 });
 
 test("absent measurements stay failing while required policies are regenerated", () => {
-  const result = execute({ pages: [[]] });
+  const result = execute({ comment: null });
   assert.equal(result.validations, 1);
   assert.equal(result.reports[0].passed, false);
   assert.match(result.reports[0].summary, /Waiting for verified/);
@@ -130,10 +131,10 @@ test("regressions, incomplete reports and invalid ratios fail closed", () => {
     { base_ratio: null }, { head_ratio: null },
     { base_ratio: -1 }, { head_ratio: -1 },
   ]) {
-    assert.equal(execute({ pages: [[envelope(changes)]] }).reports[0].passed, false);
+    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, false);
   }
   for (const changes of [{ head_ratio: 0.1 }, { base_ratio: 0, head_ratio: 0 }]) {
-    assert.equal(execute({ pages: [[envelope(changes)]] }).reports[0].passed, true);
+    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, true);
   }
 });
 
@@ -141,7 +142,26 @@ test("closed PRs and default-branch deliveries do not emit PR policies", () => {
   for (const options of [{ state: "closed" }, { number: null }]) {
     const result = execute(options);
     assert.equal(result.validations, 0);
-    assert.deepEqual(result.requestedPages, []);
+    assert.deepEqual(result.lookups, []);
     assert.deepEqual(result.reports, []);
   }
+});
+
+
+test("non-current or unavailable publication sets never supply a ratio", () => {
+  for (const publication of [
+    { state: "missing" }, { state: "pending" }, { state: "expired" }, { state: "unavailable" },
+    { head: "previous-head" }, { base: "previous-base" }, { comment: null },
+  ]) {
+    const result = execute({ publication });
+    assert.equal(result.validations, 1);
+    assert.deepEqual(result.lookups, ["complexity"]);
+    assert.deepEqual(result.reads, []);
+    assert.equal(result.reports[0].passed, false);
+    assert.match(result.reports[0].summary, /Waiting for verified/);
+  }
+});
+
+test("an index/backend failure remains an error rather than a missing measurement", () => {
+  assert.throws(() => execute({ lookupError: new Error("host_failure") }), /host_failure/);
 });
