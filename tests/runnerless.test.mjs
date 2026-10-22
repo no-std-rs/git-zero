@@ -63,12 +63,11 @@ function execute({ event = "status", state = "open", number = pull.number, comme
 }
 
 function assertWaiting(options) {
-  const result = execute(options);
-  assert.equal(result.validations, 1);
-  assert.deepEqual(result.lookups, ["complexity"]);
-  assert.deepEqual(result.reads, []);
-  assert.equal(result.reports[0].passed, false);
-  assert.match(result.reports[0].summary, /Waiting for verified/);
+  assert.deepEqual(execute(options), {
+    reports: [{ name: "LM-CC/token", passed: false,
+      summary: "Waiting for verified LM-CC/token data for the current PR head and base." }],
+    reads: [], lookups: ["complexity"], validations: 1, recipes: 1,
+  });
 }
 
 test("PR and recovery deliveries regenerate required title and commit policies", () => {
@@ -89,7 +88,7 @@ for (const [name, cases] of [
       .map(identity => ({ comment: envelope({}, identity) }))],
   ["pending publisher comments fail closed with plain or Markdown line breaks",
     ["", "  "].map(spacing => ({ comment: { actorId: 317265358,
-      body: `<!-- codex-review-artifact-publisher -->${spacing}\n<!-- ci-toolkit:complexity -->${spacing}\n## Build artifact\nPublication: pending` } }))],
+      body: prefix.replaceAll("\n", spacing + "\n") + "## Build artifact\nPublication: pending" } }))],
   ["publisher authentication and repository, PR and schema identities remain mandatory", [
     { ...envelope(), actorId: 1 },
     { ...envelope(), body: envelope().body.replace("ci-toolkit:complexity", "ci-toolkit:other") },
