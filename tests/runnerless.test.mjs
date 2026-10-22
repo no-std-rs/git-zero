@@ -115,11 +115,23 @@ test("publisher authentication and repository, PR and schema identities remain m
   }
 });
 
-test("absent measurements stay failing while required policies are regenerated", () => {
+test("missing publication data fails checks while backend failures remain errors", () => {
   const result = execute({ comment: null });
   assert.equal(result.validations, 1);
   assert.equal(result.reports[0].passed, false);
   assert.match(result.reports[0].summary, /Waiting for verified/);
+  for (const publication of [
+    { state: "missing" }, { state: "pending" }, { state: "expired" }, { state: "unavailable" },
+    { head: "previous-head" }, { base: "previous-base" }, { comment: null },
+  ]) {
+    const result = execute({ publication });
+    assert.equal(result.validations, 1);
+    assert.deepEqual(result.lookups, ["complexity"]);
+    assert.deepEqual(result.reads, []);
+    assert.equal(result.reports[0].passed, false);
+    assert.match(result.reports[0].summary, /Waiting for verified/);
+  }
+  assert.throws(() => execute({ commentHost: { artifact() { throw new Error("host_failure"); } } }), /host_failure/);
 });
 
 test("a changed comparison producer cannot supply a passing ratio", () => {
@@ -152,20 +164,3 @@ test("closed PRs and default-branch deliveries do not emit PR policies", () => {
   }
 });
 
-test("non-current or unavailable publication sets never supply a ratio", () => {
-  for (const publication of [
-    { state: "missing" }, { state: "pending" }, { state: "expired" }, { state: "unavailable" },
-    { head: "previous-head" }, { base: "previous-base" }, { comment: null },
-  ]) {
-    const result = execute({ publication });
-    assert.equal(result.validations, 1);
-    assert.deepEqual(result.lookups, ["complexity"]);
-    assert.deepEqual(result.reads, []);
-    assert.equal(result.reports[0].passed, false);
-    assert.match(result.reports[0].summary, /Waiting for verified/);
-  }
-});
-
-test("an index/backend failure remains an error rather than a missing measurement", () => {
-  assert.throws(() => execute({ commentHost: { artifact() { throw new Error("host_failure"); } } }), /host_failure/);
-});
