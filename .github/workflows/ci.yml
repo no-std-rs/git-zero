@@ -321,6 +321,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: examples/cloudflare-worker/package-lock.json
+      - name: Runnerless policy recovery and report validation
+        run: node --test tests/runnerless.test.mjs
+        working-directory: .
       - run: npm ci
       - run: npm test
       - run: cargo clippy -p git-zero-worker-wasm --target wasm32-unknown-unknown --release --locked -- -D warnings
