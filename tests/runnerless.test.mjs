@@ -29,25 +29,23 @@ function envelope(changes = {}, identity = {}) {
   return { actorId: 317265358, body: `${prefix}LM-CC/token data: \`${JSON.stringify(data)}\`` };
 }
 
-class Spec {
-  file() { return this; }
-  releasePlease() { return this; }
-  publishArtifacts() { return this; }
-}
-
 function execute({ event = "status", state = "open", number = pull.number, comment = envelope(), publication = {}, files = {},
   lookup = () => new Value(JSON.stringify({ state: "available", head: pull.head, base: pull.base, comment, ...publication })),
 } = {}) {
   const reports = [], reads = [], lookups = [];
   let validations = 0, recipes = 0;
-  const program = new Spec();
-  program.run = () => { recipes++; };
+  class Spec {
+    file() { return this; }
+    releasePlease() { return this; }
+    publishArtifacts() { return this; }
+    run() { recipes++; }
+  }
   const context = createContext({
     Value, F64: { parseFloat }, isFinite,
     ArtifactSpec: Spec, ArtifactStatus: Spec,
     ArtifactComment: { generated() { return {}; } },
     OperationRef: Spec,
-    workflow: () => program,
+    workflow: () => new Spec(),
     event: { isMerge: () => false, details: () => new Value(JSON.stringify({ event, pullNumber: number, fullName: "no-std-rs/git-zero" })) },
     pulls: { get: () => ({ ...pull, state }) },
     policies: { validate() { validations++; } },
@@ -70,7 +68,13 @@ test("PR and recovery deliveries regenerate required title and commit policies",
     assert.equal(result.validations, 1, event);
     assert.equal(result.recipes, 1, event);
     assert.equal(result.reports[0].passed, true, event);
-    assert.equal(result.reads.length, 4, "both producers must match head and base");
+    assert.deepEqual(result.lookups, ["complexity"], "successful comparisons also use exactly one lookup");
+    assert.deepEqual(result.reads, [
+      { path: "buildbuddy.yaml", ref: "head" },
+      { path: "buildbuddy.yaml", ref: "base" },
+      { path: "scripts/llm-cc-ratio.py", ref: "head" },
+      { path: "scripts/llm-cc-ratio.py", ref: "base" },
+    ], "verify the exact trusted producers at both revisions");
   }
 });
 
@@ -129,13 +133,15 @@ test("a changed comparison producer cannot supply a passing ratio", () => {
 });
 
 test("regressions, incomplete reports and invalid ratios fail closed", () => {
-  for (const [changes, passed] of [
-    [{ head_ratio: 0.11 }, false], [{ status: "pending" }, false],
-    [{ base_ratio: null }, false], [{ head_ratio: null }, false],
-    [{ base_ratio: -1 }, false], [{ head_ratio: -1 }, false],
-    [{ head_ratio: 0.1 }, true], [{ base_ratio: 0, head_ratio: 0 }, true],
+  for (const changes of [
+    { head_ratio: 0.11 }, { status: "pending" },
+    { base_ratio: null }, { head_ratio: null },
+    { base_ratio: -1 }, { head_ratio: -1 },
   ]) {
-    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, passed);
+    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, false);
+  }
+  for (const changes of [{ head_ratio: 0.1 }, { base_ratio: 0, head_ratio: 0 }]) {
+    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, true);
   }
 });
 
