@@ -46,7 +46,7 @@ function execute({ event = "status", state = "open", number = pull.number, comme
     ArtifactComment: { generated() { return {}; } },
     OperationRef: Spec,
     workflow: () => new Spec(),
-    event: { isMerge: () => false, details: () => new Value(JSON.stringify({ event, pullNumber: number, fullName: "no-std-rs/git-zero", ...(event === "pull_request" ? { state } : {}) })) },
+    event: { isMerge: () => false, details: () => new Value(JSON.stringify({ event, pullNumber: number, fullName: "no-std-rs/git-zero" })) },
     pulls: { get: () => ({ ...pull, state }) },
     policies: { validate() { validations++; } },
     checks: { report(name, passed, summary) { reports.push({ name, passed, summary }); } },
