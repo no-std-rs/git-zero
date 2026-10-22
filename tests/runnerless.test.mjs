@@ -80,35 +80,32 @@ test("PR and recovery deliveries regenerate required title and commit policies",
   }
 });
 
-test("a stale canonical report fails closed through one indexed lookup", () => {
-  for (const identity of [{ head_sha: "previous-head" }, { target_sha: "previous-base" }]) {
-    assertWaiting({ comment: envelope({}, identity) });
-  }
-});
-
-test("pending publisher comments fail closed with plain or Markdown line breaks", () => {
-  for (const spacing of ["", "  "]) {
-    const pending = { actorId: 317265358, body: `<!-- codex-review-artifact-publisher -->${spacing}\n<!-- ci-toolkit:complexity -->${spacing}\n## Build artifact\nPublication: pending` };
-    assertWaiting({ comment: pending });
-  }
-});
-
-test("publisher authentication and repository, PR and schema identities remain mandatory", () => {
-  const ignored = [
+// These cases share the same contract: one lookup, no producer reads, a
+// failing measurement, and required policies still regenerated.
+for (const [name, cases] of [
+  ["a stale canonical report fails closed through one indexed lookup",
+    [{ head_sha: "previous-head" }, { target_sha: "previous-base" }]
+      .map(identity => ({ comment: envelope({}, identity) }))],
+  ["pending publisher comments fail closed with plain or Markdown line breaks",
+    ["", "  "].map(spacing => ({ comment: { actorId: 317265358,
+      body: `<!-- codex-review-artifact-publisher -->${spacing}\n<!-- ci-toolkit:complexity -->${spacing}\n## Build artifact\nPublication: pending` } }))],
+  ["publisher authentication and repository, PR and schema identities remain mandatory", [
     { ...envelope(), actorId: 1 },
     { ...envelope(), body: envelope().body.replace("ci-toolkit:complexity", "ci-toolkit:other") },
     envelope({}, { repository: "other/repository" }),
     envelope({}, { pr_number: 999 }),
     envelope({ schema_version: 2 }),
-  ];
-  for (const comment of ignored) {
-    assertWaiting({ comment });
-  }
-});
-
-test("absent measurements stay failing while required policies are regenerated", () => {
-  assertWaiting({ comment: null });
-});
+  ].map(comment => ({ comment }))],
+  ["absent measurements stay failing while required policies are regenerated", [{ comment: null }]],
+  ["non-current or unavailable publication sets never supply a ratio", [
+    { state: "missing" }, { state: "pending" }, { state: "expired" }, { state: "unavailable" },
+    { head: "previous-head" }, { base: "previous-base" }, { comment: null },
+  ].map(publication => ({ publication }))],
+]) {
+  test(name, () => {
+    for (const options of cases) assertWaiting(options);
+  });
+}
 
 test("a changed comparison producer cannot supply a passing ratio", () => {
   for (const changedProducer of ["buildbuddy.yaml", "scripts/llm-cc-ratio.py"]) {
@@ -137,15 +134,6 @@ test("closed PRs and default-branch deliveries do not emit PR policies", () => {
     assert.equal(result.validations, 0);
     assert.deepEqual(result.lookups, []);
     assert.deepEqual(result.reports, []);
-  }
-});
-
-test("non-current or unavailable publication sets never supply a ratio", () => {
-  for (const publication of [
-    { state: "missing" }, { state: "pending" }, { state: "expired" }, { state: "unavailable" },
-    { head: "previous-head" }, { base: "previous-base" }, { comment: null },
-  ]) {
-    assertWaiting({ publication });
   }
 });
 
