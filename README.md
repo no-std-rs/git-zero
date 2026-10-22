@@ -15,9 +15,15 @@ runs natively and as a Cloudflare Workers Wasm module.
 - Transport-independent fetching, zlib/pack decoding, and delta resolution.
 - Caller-owned selected-pack caches and a native disk backend.
 - Native file/socket adapters and a Cloudflare metadata repository demo.
+- Durable Cloudflare hosting with authenticated push, clone and fetch, atomic
+  ref updates, compressed packs, thin pushes and cold-start recovery.
 
-The library server is read-only today. Its encoder emits stored DEFLATE blocks
-without compression or new deltas; it is not yet a general Git hosting server.
+Snapshot HTTP APIs serve caller-provided read-only repositories. The separate
+[repository host](examples/repository-host/README.md) accepts pushes through our
+own `no_std` Rust Wasm codec and stores data in Cloudflare R2 and SQLite Durable
+Objects. Its local tests use actual Wrangler bindings and ordinary Git clients.
+Full Linux-scale hosting and deployed resource costs remain unverified; the
+host guide records the platform limits and remaining compatibility gaps.
 
 ## Try it locally
 

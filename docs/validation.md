@@ -21,6 +21,12 @@ through the actual Wasm module with real Git over both HTTP protocols. See
 Git upstream test runner. CI also checks the core against a bare-metal target,
 which has neither `std` nor an allocator.
 
+With Node 22.13 or newer, run `node --test tests/runnerless.test.mjs` from the
+repository root to check policy recovery and authenticated comparison reports.
+The hosting suite runs separately with `npm ci` and `npm run test:streamed` in
+`examples/repository-host/cloudflare`; it exercises local Wrangler R2/SQLite and
+direct workerd fault-injection fixtures with ordinary Git clients.
+
 Protocol references: [Git HTTP](https://git-scm.com/docs/http-protocol),
 [Git pack format](https://git-scm.com/docs/pack-format),
 [Cloudflare Wasm](https://developers.cloudflare.com/workers/runtime-apis/webassembly/).

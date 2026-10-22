@@ -5,7 +5,7 @@ title and each commit, for example `feat(client): decode pack objects` or
 `fix(http): reject truncated requests`. Squash merging uses the PR title.
 
 The default branch requires successful `rust` and `worker` GitHub Actions checks,
-`Runnerless`, `Runnerless / PR title`, and `Runnerless / Commit messages`. Review
+`Runnerless / PR title`, and `Runnerless / Commit messages`. Review
 conversations must be resolved, and history must be linear. Force pushes and
 branch deletion are disabled. See [tests/README.md](tests/README.md) for local
 validation and the parallel interoperability matrix.
@@ -54,11 +54,11 @@ base revision. Python runs with `-I` so files in the PR cannot shadow its standa
 library imports. Changes to these producer files require a separate trusted
 rollout; a PR cannot change the producer and pass its own measurement gate.
 
-Runnerless executes the trusted base program. The new gate starts on PRs whose
-base contains this policy; this PR validates the program and report handoff
-locally. After the policy lands, apply the recorded ruleset to require
-`Runnerless / LM-CC/token` from My Toolkit (`4602759`). Adding the required context
-before the base program supports it would leave PRs waiting for a missing check.
+Runnerless executes the trusted base program. Apply the recorded ruleset only
+after its additional `Runnerless / Program execution` and `Runnerless / LM-CC/token`
+contexts have been verified on an open PR. Both belong to My Toolkit (`4602759`).
+Requiring a context before the base program supports it leaves PRs waiting for
+a missing check. The obsolete bare `Runnerless` context is not emitted.
 Apply the recorded strict status-check setting at the same time. If the target
 branch advances, GitHub requires the PR branch to be updated before merging,
 which gives the new head a fresh comparison rather than accepting an older pass.
@@ -96,8 +96,12 @@ Runnerless ratio check supplies the merge decision.
 [.runnerless-ci.ts](.runnerless-ci.ts) uses the versioned `runnerless/v1` SDK,
 following the Runnerless setup in `pawelchcki/my-infra`. It compiles to Wasm and
 checks open PR titles and commit messages. This repository is connected, and
-the My Toolkit GitHub App publishes `Runnerless`, `Runnerless / PR title`, and
-`Runnerless / Commit messages`. Rust builds and real Git interoperability tests
+the My Toolkit GitHub App publishes `Runnerless / Program execution`,
+`Runnerless / PR title`, and `Runnerless / Commit messages`. Policy checks are
+regenerated on status and completion deliveries too, so a recovered PR delivery
+can fill missing contexts. A stale canonical comparison fails the ratio gate
+immediately while waiting for its publisher to update the same comment.
+Rust builds and real Git interoperability tests
 run in the existing GitHub Actions workflow.
 
 An organization owner or admin connects `no-std-rs/git-zero` in
@@ -122,3 +126,5 @@ Run `python3 scripts/check-features.py` to compile each feature combination
 independently; a workspace-wide build can unify features and hide missing gates.
 Run `python3 scripts/check-public-packages.py` to verify publishable metadata and
 dependency ordering. Release helper tests run with the existing Python suite.
+See the [release guide](docs/releases.md) for the initial history boundary and
+the publishing lifecycle.

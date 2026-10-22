@@ -3,9 +3,12 @@
 Build a Git HTTP client/server library with an allocation-free `no_std` core,
 stable repository identities, bounded packing/caching, and native and Wasm hosts.
 
-The current priority is **read-only HTTP server parity**. Complete section 6
-before further client features, kernel-client extensions or receive-pack work.
-Existing client and kernel examples remain supported by regression tests.
+The read-only repository APIs still have the parity gaps listed below. The
+separate durable Cloudflare host now supports receive-pack, compressed intake
+and ordinary Git push/clone/fetch through our own `no_std` codec. Its remaining
+priority is Linux-scale storage and Cloudflare ingress/resource limits; see the
+[host guide](examples/repository-host/README.md). Existing client and kernel
+examples remain supported by regression tests.
 
 Checked items describe merged implementation with local/CI evidence. An unchecked
 item is a remaining deliverable, even when some prerequisites already work.
@@ -247,23 +250,31 @@ peaks and double-count shared mappings. Whole-isolate accounting remains open.
 - [ ] Capability/limit/host contracts match the implementation; unsupported and
   optional extensions remain explicit, with no untested advertised capability.
 
-Compression and delta generation can follow the valid stored-pack baseline.
-Start further client and write-server features only after this gate passes.
+Compression and delta generation remain optional improvements to the snapshot
+encoder. The durable host below already ingests and reuses compressed packs.
 
-## 7. Read/write server support — deferred until server parity
+## 7. Durable Cloudflare read/write hosting
 
-- [ ] Host-owned writable object storage and ref transactions with durability,
+These completed items describe the separate Cloudflare repository host and its
+local Wrangler/direct-workerd acceptance suite, rather than a mutable extension
+to every read-only repository adapter.
+
+- [x] Host-owned writable object storage and ref transactions with durability,
   locking and old/new-ID compare-and-swap semantics.
-- [ ] `receive-pack` discovery, bounded commands/capabilities, pack ingestion and
+- [x] `receive-pack` discovery, bounded commands/capabilities, pack ingestion and
   accurate status/error responses.
-- [ ] Quarantine objects until checksums, canonical IDs, delta bases, graph
+- [x] Quarantine objects until checksums, canonical IDs, delta bases, graph
   connectivity and requested ref updates pass bounded validation.
-- [ ] Authorized branch/tag creation/update/deletion, explicit fast-forward/force
+- [x] Authorized branch/tag creation/update/deletion, explicit fast-forward/force
   policy, and atomic advertisement only when the full ref transaction is atomic.
-- [ ] Real-Git push comparisons: initial/incremental pushes, tags, deletions,
+- [x] Real-Git push comparisons: initial/incremental pushes, tags, deletions,
   stale IDs, multiple refs, force policy and atomic failures.
-- [ ] Corrupt/truncated/disconnected input, denied updates, storage failure,
+- [x] Corrupt/truncated/disconnected input, denied updates, storage failure,
   concurrent writers, interruption and exact resource limits.
+- [ ] Complete a full Linux push, clone, incremental fetch and strict fsck through
+  Wrangler, and resolve the documented managed-Cloudflare ingress, isolate and
+  SQLite catalog limits before claiming deployed Linux-scale compatibility.
+- [ ] Establish measured production resource usage and total hosting cost.
 
 Acceptance: push then clone/fetch passes strict Git verification. Failed pushes
 preserve promised object/ref visibility; retries retain old-ID checks. Each host
