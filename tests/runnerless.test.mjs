@@ -163,4 +163,3 @@ test("closed PRs and default-branch deliveries do not emit PR policies", () => {
     assert.deepEqual(result.reports, []);
   }
 });
-
