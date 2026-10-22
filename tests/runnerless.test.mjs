@@ -29,9 +29,7 @@ function envelope(changes = {}, identity = {}) {
   return { actorId: 317265358, body: `${prefix}LM-CC/token data: \`${JSON.stringify(data)}\`` };
 }
 
-function execute({ event = "status", state = "open", number = pull.number, comment = envelope(), publication = {}, files = {},
-  lookup = () => new Value(JSON.stringify({ state: "available", head: pull.head, base: pull.base, comment, ...publication })),
-} = {}) {
+function execute({ event = "status", state = "open", number = pull.number, comment = envelope(), publication = {}, files = {}, commentHost = {} } = {}) {
   const reports = [], reads = [], lookups = [];
   let validations = 0, recipes = 0;
   class Spec {
@@ -53,8 +51,8 @@ function execute({ event = "status", state = "open", number = pull.number, comme
     repo: { readText(path, ref) { reads.push({ path, ref }); return files[path]?.[ref] ?? "trusted"; } },
     comments: { artifact(publisher) {
       lookups.push(publisher);
-      return lookup();
-    }, list() { assert.fail("comparison checks must never enumerate comment history"); } },
+      return new Value(JSON.stringify({ state: "available", head: pull.head, base: pull.base, comment, ...publication }));
+    }, list() { assert.fail("comparison checks must never enumerate comment history"); }, ...commentHost },
     jobs: { lookup: () => ({ ok: false }) },
   });
   runInContext(source, context);
@@ -169,5 +167,5 @@ test("non-current or unavailable publication sets never supply a ratio", () => {
 });
 
 test("an index/backend failure remains an error rather than a missing measurement", () => {
-  assert.throws(() => execute({ lookup() { throw new Error("host_failure"); } }), /host_failure/);
+  assert.throws(() => execute({ commentHost: { artifact() { throw new Error("host_failure"); } } }), /host_failure/);
 });
