@@ -14,13 +14,6 @@ const CLIENT_SHALLOW: u8 = 64;
 pub struct RevisionLimits {
     /// Maximum exclusion arguments, counting duplicate arguments too.
     pub max_exclusions: usize,
-    /// Shared logical-work units, including host ref resolution. Metadata scans
-    /// charge their full capacity, index lookups their binary-search upper bound,
-    /// and commit-header parsing one unit per byte. Shared payload traversal
-    /// charges `(index lookup bound + 8)` per structural byte, including read-ahead
-    /// and rereads. Boundary setup/restoration charges one unit per object.
-    /// This conservative accounting bounds work independently of structural reads.
-    pub work_limit: u64,
 }
 
 /// Revision history, separate from absolute/relative depth. Zero is an active
@@ -43,7 +36,6 @@ pub enum ShallowChange {
 pub struct RevisionState<'a> {
     states: &'a mut [u8],
     limits: RevisionLimits,
-    remaining: u64,
     count: usize,
 }
 
@@ -52,20 +44,10 @@ impl<'a> RevisionState<'a> {
         Self {
             states,
             limits,
-            remaining: limits.work_limit,
             count: 0,
         }
     }
 
-    /// Charge before host-side resolution/comparison work. Sharing this counter
-    /// with selection prevents many duplicate names from bypassing graph limits.
-    pub fn charge_work(&mut self, units: u64) -> Result<()> {
-        charge(&mut self.remaining, units)
-    }
-
-    pub fn remaining_work(&self) -> u64 {
-        self.remaining
-    }
     pub fn max_exclusions(&self) -> usize {
         self.limits.max_exclusions
     }
@@ -102,6 +84,9 @@ impl<R: Repository + ?Sized> ValidatedRepository<'_, '_, R> {
     /// trees/tags with the existing validated graph contract. No blob body is read.
     /// Existing shallow commits are known, and unshallow transitions seed parents;
     /// common haves outside candidate history cannot hide newly requested history.
+    /// Metadata scans are bounded by object capacity (quadratic worst case), and
+    /// exclusion count is capped independently. Total preparation CPU accounting
+    /// is a separate host concern, as with ordinary bounded selection.
     pub fn select_revision_fetch<'selected>(
         &self,
         roots: &[ObjectId],
@@ -128,7 +113,7 @@ impl<R: Repository + ?Sized> ValidatedRepository<'_, '_, R> {
         if work.len() < count || selected.len() < count || revision.states.len() < count {
             return Err(Error::BufferTooSmall);
         }
-        revision.charge_work((count as u64).checked_mul(3).ok_or(Error::LimitExceeded)?)?;
+
         let work = &mut work[..count];
         work.copy_from_slice(self.objects);
         revision.states[..count].fill(0);
@@ -146,20 +131,19 @@ impl<R: Repository + ?Sized> ValidatedRepository<'_, '_, R> {
             read,
             parse,
             bytes: selection.graph_read_limit,
-            work: &mut revision.remaining,
         };
         walk.client_boundaries(shallow)?;
         walk.exclude(excluded, revision.limits.max_exclusions)?;
         walk.candidates(roots, options.since)?;
         walk.exclude_common(common)?;
         walk.wanted_payload(roots)?;
-        walk.filter(fetch.filter)?;
+        filter_objects(walk.objects, fetch.filter);
         if selection.include_tags {
             walk.include_tags()?;
             walk.objects()?;
-            walk.filter(fetch.filter)?;
+            filter_objects(walk.objects, fetch.filter);
         }
-        let length = walk.selected_indices(selected)?;
+        let length = walk.selected_indices(selected);
         revision.count = count;
         Ok(&selected[..length])
     }
@@ -179,7 +163,6 @@ struct Walker<'a, 'b, 'index, 'repo, R: Repository + ?Sized> {
     read: &'b mut [u8],
     parse: &'b mut [u8],
     bytes: u64,
-    work: &'b mut u64,
 }
 
 impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
@@ -213,7 +196,6 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         limit: usize,
     ) -> Result<()> {
         for (position, id) in excluded.into_iter().enumerate() {
-            charge(self.work, 1)?;
             if position >= limit {
                 return Err(Error::LimitExceeded);
             }
@@ -232,20 +214,18 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
             }
         }
         self.ancestry(since.filter(|&value| value != 0), CANDIDATE)?;
-        charge(self.work, self.states.len() as u64)?;
+
         if !self.states.iter().any(|state| state & CANDIDATE != 0) {
             return Err(Error::InvalidRequest);
         }
         // Freeze candidate membership before marking borders: a merge border
         // may stop another candidate from appearing in the eventual payload.
         for index in 0..self.states.len() {
-            charge(self.work, 1)?;
             if self.states[index] & CANDIDATE != 0 {
                 self.commit(index, Parents::Boundary)?;
             }
         }
         for index in 0..self.states.len() {
-            charge(self.work, 1)?;
             if metadata(self.objects, index).client_shallow
                 && self.states[index] & (CANDIDATE | BORDER) == CANDIDATE
             {
@@ -267,7 +247,6 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         }
         self.objects()?;
         for index in 0..self.objects.len() {
-            charge(self.work, 1)?;
             let object = self.objects[index].as_mut().expect("validated metadata");
             object.excluded = object.reached || self.states[index] & UNSHALLOW != 0;
             object.reset_walk();
@@ -282,7 +261,7 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
                 .as_mut()
                 .expect("validated metadata")
                 .wanted = true;
-            charge(self.work, self.lookup_cost())?;
+
             reach_at(
                 self.objects,
                 self.repository.by_id,
@@ -293,7 +272,6 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
             )?;
         }
         for index in 0..self.states.len() {
-            charge(self.work, 1)?;
             if self.states[index] & UNSHALLOW != 0 {
                 self.commit(index, Parents::Seed)?;
             }
@@ -301,19 +279,7 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         self.objects()
     }
 
-    fn filter(&mut self, filter: BlobFilter) -> Result<()> {
-        charge(self.work, self.objects.len() as u64)?;
-        filter_objects(self.objects, filter);
-        Ok(())
-    }
-
     fn include_tags(&mut self) -> Result<()> {
-        charge(
-            self.work,
-            (self.repository.reference_count() as u64)
-                .checked_mul(2 * self.lookup_cost() + 1)
-                .ok_or(Error::LimitExceeded)?,
-        )?;
         Selection {
             repository: self.repository,
             work: self.objects,
@@ -324,8 +290,7 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         .include_matching_tags()
     }
 
-    fn selected_indices(&mut self, selected: &mut [usize]) -> Result<usize> {
-        charge(self.work, self.objects.len() as u64)?;
+    fn selected_indices(&self, selected: &mut [usize]) -> usize {
         let mut length = 0;
         for (index, object) in self.objects.iter().enumerate() {
             if object.expect("validated metadata").reached {
@@ -333,40 +298,31 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
                 length += 1;
             }
         }
-        Ok(length)
+        length
     }
 
-    fn lookup_cost(&self) -> u64 {
-        lookup_cost(self.objects.len())
-    }
-    fn find(&mut self, id: ObjectId) -> Result<usize> {
-        charge(self.work, self.lookup_cost())?;
+    fn find(&self, id: ObjectId) -> Result<usize> {
         find(self.objects, self.repository.by_id, id).ok_or(Error::ObjectNotFound)
     }
     fn peel(&mut self, mut index: usize) -> Result<usize> {
         for _ in 0..self.objects.len() {
-            charge(self.work, 1)?;
             if metadata(self.objects, index).info.kind != ObjectKind::Tag {
                 return Ok(index);
             }
             let mut body =
                 Body::budgeted(self.repository, index, self.read, Some(&mut self.bytes))?;
-            let line = line(&mut body, self.parse, self.work)?;
+            let line = body.line(self.parse)?;
             let id = link(line, b"object ", self.repository.object_format())?;
             index = self.find(id)?;
         }
         Err(Error::InvalidObject)
     }
     fn ancestry(&mut self, since: Option<u64>, flag: u8) -> Result<()> {
-        loop {
-            charge(self.work, self.states.len() as u64)?;
-            let Some(index) = self
-                .states
-                .iter()
-                .position(|state| state & (PENDING | DONE) == PENDING)
-            else {
-                break;
-            };
+        while let Some(index) = self
+            .states
+            .iter()
+            .position(|state| state & (PENDING | DONE) == PENDING)
+        {
             self.states[index] |= DONE;
             if metadata(self.objects, index).info.kind != ObjectKind::Commit {
                 let peeled = self.peel(index)?;
@@ -386,22 +342,20 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
             self.states[index] |= flag;
             self.commit(index, Parents::Pending)?;
         }
-        charge(self.work, self.states.len() as u64)?;
+
         for state in self.states.iter_mut() {
             *state &= !(PENDING | DONE);
         }
         Ok(())
     }
     fn commit(&mut self, index: usize, action: Parents) -> Result<u64> {
-        let lookup = self.lookup_cost();
         let format = self.repository.object_format();
         let mut body = Body::budgeted(self.repository, index, self.read, Some(&mut self.bytes))?;
-        link(line(&mut body, self.parse, self.work)?, b"tree ", format)?;
-        let mut value = line(&mut body, self.parse, self.work)?;
+        link(body.line(self.parse)?, b"tree ", format)?;
+        let mut value = body.line(self.parse)?;
         while value.starts_with(b"parent ") {
             let id = link(value, b"parent ", format)?;
             if !matches!(action, Parents::Date) {
-                charge(self.work, lookup)?;
                 let parent =
                     find(self.objects, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
                 match action {
@@ -419,12 +373,12 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
                     _ => {}
                 }
             }
-            value = line(&mut body, self.parse, self.work)?;
+            value = body.line(self.parse)?;
         }
         if !value.starts_with(b"author ") {
             return Err(Error::InvalidObject);
         }
-        let committer = line(&mut body, self.parse, self.work)?;
+        let committer = body.line(self.parse)?;
         if !committer.starts_with(b"committer ") {
             return Err(Error::InvalidObject);
         }
@@ -434,56 +388,28 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         // Temporarily add revision borders to the ordinary walk's client stops.
         // Original client markers remain in state so PACK membership and wire
         // boundary announcements can be computed independently.
-        self.payload_boundaries(false)?;
+        self.payload_boundaries(false);
         super::walk(
             self.repository,
             self.objects,
             self.repository.by_id,
             (self.read, self.parse),
-            (Some(&mut self.bytes), Some(self.work)),
+            Some(&mut self.bytes),
             History {
                 client: true,
                 ..History::default()
             },
             BlobFilter::All,
         )?;
-        self.payload_boundaries(true)
+        self.payload_boundaries(true);
+        Ok(())
     }
 
-    fn payload_boundaries(&mut self, restore: bool) -> Result<()> {
-        charge(self.work, self.objects.len() as u64)?;
+    fn payload_boundaries(&mut self, restore: bool) {
         for (object, &state) in self.objects.iter_mut().zip(self.states.iter()) {
             object.as_mut().expect("validated metadata").client_shallow =
                 state & CLIENT_SHALLOW != 0 || (!restore && state & BORDER != 0);
         }
-        Ok(())
-    }
-}
-
-fn lookup_cost(count: usize) -> u64 {
-    u64::from(usize::BITS - count.leading_zeros()) + 1
-}
-fn charge(remaining: &mut u64, units: u64) -> Result<()> {
-    *remaining = remaining.checked_sub(units).ok_or(Error::LimitExceeded)?;
-    Ok(())
-}
-fn line<'a, R: Repository + ?Sized>(
-    body: &mut Body<'_, '_, R>,
-    output: &'a mut [u8],
-    work: &mut u64,
-) -> Result<&'a [u8]> {
-    let mut length = 0;
-    loop {
-        charge(work, 1)?;
-        let byte = body.byte()?.ok_or(Error::InvalidObject)?;
-        if byte == b'\n' {
-            return Ok(&output[..length]);
-        }
-        if byte == 0 {
-            return Err(Error::InvalidObject);
-        }
-        *output.get_mut(length).ok_or(Error::BufferTooSmall)? = byte;
-        length += 1;
     }
 }
 

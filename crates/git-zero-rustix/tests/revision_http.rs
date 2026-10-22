@@ -77,13 +77,7 @@ fn serve<R: Repository + ?Sized>(
             http::stream::ResponseEncoder::with_revision_storage(
                 repository,
                 request,
-                buffers.storage(
-                    1_048_576,
-                    RevisionLimits {
-                        max_exclusions: 8,
-                        work_limit: 16_777_216,
-                    },
-                ),
+                buffers.storage(1_048_576, RevisionLimits { max_exclusions: 8 }),
                 &mut control,
             )
         });

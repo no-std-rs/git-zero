@@ -255,11 +255,6 @@ impl<'a> UploadRequest<'a> {
     }
 
     #[cfg(feature = "read")]
-    pub(crate) fn requires_revision(&self) -> bool {
-        self.extensions.revision() || self.capabilities.0 & 6144 != 0
-    }
-
-    #[cfg(feature = "read")]
     fn exclusions(&self) -> impl Iterator<Item = &'a [u8]> + '_ {
         let mut bytes = self.shallow_body;
         core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten()).filter_map(|packet| {
@@ -277,52 +272,6 @@ impl<'a> UploadRequest<'a> {
     ) -> impl Iterator<Item = Result<ObjectId>> + 'r {
         self.exclusions()
             .map(move |name| exclusion_ref(repository, name))
-    }
-
-    #[cfg(feature = "read")]
-    pub(crate) fn reserve_resolution(
-        &self,
-        repository: &impl Repository,
-        state: &mut git_zero_core::RevisionState<'_>,
-    ) -> Result<()> {
-        if self.extensions.exclusions > state.max_exclusions() {
-            return Err(Error::LimitExceeded);
-        }
-        // Initial complete request parsing is bounded by the caller's body/want
-        // capacities, independently of this optional revision budget. Reserve
-        // before subsequent packet reparsing, shallow/have index validation and
-        // ACK generation. Six scans conservatively cover every preparation and
-        // response path; each byte reserves an index-search bound plus parsing.
-        let lookup = u64::from(usize::BITS - repository.object_count().leading_zeros()) + 1;
-        let scans = (self.shallow_body.len() as u64)
-            .checked_mul(6)
-            .and_then(|bytes| bytes.checked_mul(lookup + 4))
-            .ok_or(Error::LimitExceeded)?;
-        state.charge_work(scans)?;
-        let mut names = 4_u64; // virtual HEAD
-        for index in 0..repository.reference_count() {
-            state.charge_work(1)?;
-            let length = repository
-                .reference_name(index)
-                .ok_or(Error::InvalidReference)?
-                .len() as u64;
-            names = names.checked_add(length).ok_or(Error::LimitExceeded)?;
-        }
-        let refs = (repository.reference_count() as u64)
-            .checked_add(1)
-            .ok_or(Error::LimitExceeded)?;
-        for name in self.exclusions() {
-            // Six bounded DWIM comparisons per visible name, plus argument and
-            // separator comparisons. Reserve before the iterator resolves refs.
-            let cost = (name.len() as u64)
-                .checked_add(2)
-                .and_then(|length| length.checked_mul(refs))
-                .and_then(|cost| cost.checked_add(names))
-                .and_then(|cost| cost.checked_mul(6))
-                .ok_or(Error::LimitExceeded)?;
-            state.charge_work(cost)?;
-        }
-        Ok(())
     }
 
     #[cfg(feature = "read")]

@@ -135,7 +135,7 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             objects,
             by_id,
             (read_scratch, parse_scratch),
-            (None, None),
+            None,
             History::default(),
             BlobFilter::All,
         )?;
@@ -380,7 +380,7 @@ impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
             self.work,
             self.repository.by_id,
             (&mut *self.scratch.0, &mut *self.scratch.1),
-            (Some(&mut self.remaining), None),
+            Some(&mut self.remaining),
             history,
             self.filter,
         )
@@ -614,25 +614,15 @@ fn walk(
     objects: &mut [Option<ValidationMetadata>],
     by_id: &[usize],
     scratch: (&mut [u8], &mut [u8]),
-    budgets: (Option<&mut u64>, Option<&mut u64>),
+    mut budget: Option<&mut u64>,
     history: History,
     filter: BlobFilter,
 ) -> Result<()> {
     let (read_scratch, parse_scratch) = scratch;
-    let (mut budget, mut work) = budgets;
-    let factor = u64::from(usize::BITS - objects.len().leading_zeros()) + 9;
-    loop {
-        if let Some(remaining) = work.as_deref_mut() {
-            *remaining = remaining
-                .checked_sub(objects.len() as u64)
-                .ok_or(Error::LimitExceeded)?;
-        }
-        let Some(index) = objects.iter().position(|slot| {
-            let object = slot.expect("initialized metadata");
-            object.reached && !object.checked
-        }) else {
-            return Ok(());
-        };
+    while let Some(index) = objects.iter().position(|slot| {
+        let object = slot.expect("initialized metadata");
+        object.reached && !object.checked
+    }) {
         objects[index]
             .as_mut()
             .expect("initialized metadata")
@@ -644,7 +634,6 @@ fn walk(
             continue;
         }
         let mut body = Body::budgeted(repository, index, read_scratch, budget.as_deref_mut())?;
-        body.work = work.as_deref_mut().map(|remaining| (remaining, factor));
         match object.info.kind {
             ObjectKind::Commit => {
                 let stop = !history.follows_parents(object.depth, object.client_shallow);
@@ -689,6 +678,7 @@ fn walk(
             )?,
         }
     }
+    Ok(())
 }
 
 fn validate_reference_target(
@@ -815,7 +805,6 @@ struct Body<'scratch, 'repo, R: Repository + ?Sized> {
     position: usize,
     length: usize,
     budget: Option<&'scratch mut u64>,
-    work: Option<(&'scratch mut u64, u64)>,
 }
 
 impl<'scratch, 'repo, R: Repository + ?Sized> Body<'scratch, 'repo, R> {
@@ -834,7 +823,6 @@ impl<'scratch, 'repo, R: Repository + ?Sized> Body<'scratch, 'repo, R> {
             position: 0,
             length: 0,
             budget,
-            work: None,
         })
     }
     fn offset(&self) -> u64 {
@@ -859,19 +847,7 @@ impl<'scratch, 'repo, R: Repository + ?Sized> Body<'scratch, 'repo, R> {
                         .len()
                         .min(usize::try_from(*remaining).unwrap_or(usize::MAX))
                 });
-            let capacity = match &self.work {
-                Some((remaining, factor)) => {
-                    capacity.min(usize::try_from(**remaining / factor).unwrap_or(usize::MAX))
-                }
-                None => capacity,
-            };
-            if capacity == 0 && self.work.is_some() && self.reader.remaining() != 0 {
-                return Err(Error::LimitExceeded);
-            }
             self.length = self.reader.read(&mut self.scratch[..capacity])?;
-            if let Some((remaining, factor)) = self.work.as_mut() {
-                **remaining -= self.length as u64 * *factor;
-            }
             if let Some(remaining) = self.budget.as_deref_mut() {
                 *remaining -= self.length as u64;
             }

@@ -19,10 +19,7 @@ fn validate<'a>(
 }
 
 fn limits() -> RevisionLimits {
-    RevisionLimits {
-        max_exclusions: 8,
-        work_limit: 1_000_000,
-    }
+    RevisionLimits { max_exclusions: 8 }
 }
 fn sorted(mut values: Vec<ObjectId>) -> Vec<ObjectId> {
     values.sort_unstable();
@@ -91,10 +88,7 @@ fn run_selection<'a>(
     )
 }
 
-fn select(
-    fixture: &Fixture,
-    selection: &Selection,
-) -> (Vec<ObjectId>, Vec<ShallowChange>, u64, u64) {
+fn select(fixture: &Fixture, selection: &Selection) -> (Vec<ObjectId>, Vec<ShallowChange>, u64) {
     let mut metadata = [None; N];
     let mut by_id = [0; N];
     let repository = validate(fixture, &mut metadata, &mut by_id);
@@ -122,12 +116,7 @@ fn select(
             .collect(),
     );
     let changes = revision.changes(&work).collect();
-    (
-        ids,
-        changes,
-        fixture.bytes.get(),
-        limits().work_limit - revision.remaining_work(),
-    )
+    (ids, changes, fixture.bytes.get())
 }
 
 fn check(
@@ -137,7 +126,7 @@ fn check(
     boundaries: &[usize],
     unshallow: &[usize],
 ) {
-    let (actual, changes, _, _) = select(fixture, selection);
+    let (actual, changes, _) = select(fixture, selection);
     assert_eq!(
         actual,
         sorted(objects.iter().map(|&index| fixture.ids[index]).collect())
@@ -531,16 +520,8 @@ fn invalid_refs_conflicts_limits_and_disabled_paths_produce_no_output_or_body_re
             assert!(output.is_empty());
             assert_eq!(fixture.bytes.get(), 0);
         }
-        for limit in [
-            RevisionLimits {
-                max_exclusions: 0,
-                ..limits()
-            },
-            RevisionLimits {
-                work_limit: 0,
-                ..limits()
-            },
-        ] {
+        {
+            let limit = RevisionLimits { max_exclusions: 0 };
             let body = body(&fixture, version, &["deepen-not cutoff"], true);
             let mut buffers = RevisionBuffers::<8, N, 1, 256>::new();
             let mut bytes = [0; 4096];
@@ -578,11 +559,11 @@ fn invalid_refs_conflicts_limits_and_disabled_paths_produce_no_output_or_body_re
 }
 
 #[test]
-fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
+fn shared_byte_budget_capacity_failures_and_fresh_retries_are_bounded() {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let fixture = Fixture::new(format);
         let selection = Selection::since(D, 1700000200);
-        let (_, _, required_bytes, required_work) = select(&fixture, &selection);
+        let (_, _, bytes) = select(&fixture, &selection);
         let mut metadata = [None; N];
         let mut by_id = [0; N];
         let repository = validate(&fixture, &mut metadata, &mut by_id);
@@ -592,20 +573,10 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
         let mut states = [0xa5; N];
         let mut read = [0; 1];
         let mut parse = [0; 256];
-        for (bytes, work, state_len, object_len, index_len, read_len, parse_len, expected) in [
+        for (byte_limit, state_len, object_len, index_len, read_len, parse_len, expected) in [
+            (bytes, count, count, count, 1, 256, Ok(())),
             (
-                required_bytes,
-                required_work,
-                count,
-                count,
-                count,
-                1,
-                256,
-                Ok(()),
-            ),
-            (
-                required_bytes - 1,
-                required_work,
+                bytes - 1,
                 count,
                 count,
                 count,
@@ -614,18 +585,7 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
                 Err(Error::LimitExceeded),
             ),
             (
-                required_bytes,
-                required_work - 1,
-                count,
-                count,
-                count,
-                1,
-                256,
-                Err(Error::LimitExceeded),
-            ),
-            (
-                required_bytes,
-                required_work,
+                bytes,
                 count - 1,
                 count,
                 count,
@@ -634,8 +594,7 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
                 Err(Error::BufferTooSmall),
             ),
             (
-                required_bytes,
-                required_work,
+                bytes,
                 count,
                 count - 1,
                 count,
@@ -644,8 +603,7 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
                 Err(Error::BufferTooSmall),
             ),
             (
-                required_bytes,
-                required_work,
+                bytes,
                 count,
                 count,
                 count - 1,
@@ -654,8 +612,7 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
                 Err(Error::BufferTooSmall),
             ),
             (
-                required_bytes,
-                required_work,
+                bytes,
                 count,
                 count,
                 count,
@@ -663,34 +620,10 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
                 256,
                 Err(Error::BufferTooSmall),
             ),
-            (
-                required_bytes,
-                required_work,
-                count,
-                count,
-                count,
-                1,
-                0,
-                Err(Error::BufferTooSmall),
-            ),
-            (
-                required_bytes,
-                required_work,
-                count,
-                count,
-                count,
-                1,
-                256,
-                Ok(()),
-            ),
+            (bytes, count, count, count, 1, 0, Err(Error::BufferTooSmall)),
+            (bytes, count, count, count, 1, 256, Ok(())),
         ] {
-            let mut revision = RevisionState::new(
-                &mut states[..state_len],
-                RevisionLimits {
-                    work_limit: work,
-                    ..limits()
-                },
-            );
+            let mut revision = RevisionState::new(&mut states[..state_len], limits());
             let result = allocations::without_allocations(|| {
                 run_selection(
                     &fixture,
@@ -702,7 +635,7 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
                         &mut parse[..parse_len],
                         &mut revision,
                     ),
-                    bytes,
+                    byte_limit,
                 )
             });
             assert_eq!(result.map(|_| ()), expected);
@@ -722,7 +655,7 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
                 &selection,
                 (&mut objects, &mut indices),
                 (&mut read, &mut parse, &mut revision),
-                100_000
+                bytes
             )
             .map(|_| ()),
             Err(Error::Backend)
@@ -763,13 +696,7 @@ fn probes_end_at_boundary_flush_and_ordinary_acks_need_no_revision_storage() {
         http::serve_with_revisions(
             &repository,
             request(&body, version),
-            &mut buffers.storage(
-                0,
-                RevisionLimits {
-                    work_limit: 0,
-                    max_exclusions: 0,
-                },
-            ),
+            &mut buffers.storage(0, RevisionLimits { max_exclusions: 0 }),
             &mut output,
         )
         .unwrap();
@@ -778,92 +705,34 @@ fn probes_end_at_boundary_flush_and_ordinary_acks_need_no_revision_storage() {
 }
 
 #[test]
-fn matching_tag_work_reserves_both_searches_and_exact_limits() {
+fn matching_tags_use_selected_targets_after_blob_filtering() {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let fixture = Fixture::new(format);
         let mut selection = Selection::since(D, 1700000200);
         selection.filter = BlobFilter::None;
-        let (_, _, _, ordinary_work) = select(&fixture, &selection);
         selection.tags = true;
-        let (selected, _, bytes, tag_work) = select(&fixture, &selection);
+        let (selected, _, _) = select(&fixture, &selection);
         assert!(selected.contains(&fixture.ids[TAG]));
         assert!(!selected.contains(&fixture.ids[BLOB_TAG]));
-        let count = fixture.object_count() as u64;
-        let lookup = u64::from(usize::BITS - fixture.object_count().leading_zeros()) + 1;
-        let header = fixture.objects[TAG]
-            .2
-            .windows(2)
-            .position(|pair| pair == b"\n\n")
-            .unwrap()
-            + 2;
-        // Independently account the two validated index searches per ref,
-        // one tag-header parse, two object scans and the repeated filter scan.
-        assert_eq!(
-            tag_work - ordinary_work,
-            (fixture.reference_count() as u64) * (2 * lookup + 1)
-                + (header as u64) * (lookup + 8)
-                + 5 * count
-        );
-        let mut metadata = [None; N];
-        let mut by_id = [0; N];
-        let repository = validate(&fixture, &mut metadata, &mut by_id);
-        for (work, expected) in [
-            (tag_work, Ok(())),
-            (tag_work - 1, Err(Error::LimitExceeded)),
-        ] {
-            let mut objects = [None; N];
-            let mut indices = [0; N];
-            let mut states = [0; N];
-            let mut revision = RevisionState::new(
-                &mut states,
-                RevisionLimits {
-                    work_limit: work,
-                    ..limits()
-                },
-            );
-            let result = run_selection(
-                &fixture,
-                &repository,
-                &selection,
-                (&mut objects, &mut indices),
-                (&mut [0; 1], &mut [0; 256], &mut revision),
-                bytes,
-            );
-            assert_eq!(result.map(|_| ()), expected);
-        }
     }
 }
 
 #[test]
-fn boundary_emission_scan_is_reserved_before_any_control_output() {
+fn insufficient_control_storage_cannot_prepare_a_success_response() {
     let fixture = Fixture::new(ObjectFormat::Sha1);
-    let selection = Selection::since(D, 1700000200);
-    let (_, _, _, core_work) = select(&fixture, &selection);
-    let body = body(&fixture, 0, &["deepen-since 1700000200"], true);
-    let lookup = u64::from(usize::BITS - fixture.object_count().leading_zeros()) + 1;
-    let server_work = (body.len() as u64) * 6 * (lookup + 4) + fixture.reference_count() as u64;
-    let exact = server_work + core_work + fixture.object_count() as u64;
     let mut metadata = [None; N];
     let mut by_id = [0; N];
     let repository = validate(&fixture, &mut metadata, &mut by_id);
-    for (work, expected) in [(exact - 1, Err(Error::LimitExceeded)), (exact, Ok(()))] {
+    for version in [0, 1, 2] {
+        let body = body(&fixture, version, &["deepen-since 1700000200"], true);
         let mut buffers = RevisionBuffers::<8, N, 1, 256>::new();
-        let mut storage = [0; 4096];
-        let mut output = SliceWriter::new(&mut storage);
-        let result = http::serve_with_revisions(
+        let result = http::stream::ResponseEncoder::with_revision_storage(
             &repository,
-            request(&body, 0),
-            &mut buffers.storage(
-                100_000,
-                RevisionLimits {
-                    work_limit: work,
-                    ..limits()
-                },
-            ),
-            &mut output,
+            request(&body, version),
+            buffers.storage(100_000, limits()),
+            &mut [],
         );
-        assert_eq!(result.map(|_| ()), expected);
-        assert_eq!(output.is_empty(), expected.is_err());
+        assert!(matches!(result, Err(Error::BufferTooSmall)));
     }
 }
 
@@ -876,7 +745,7 @@ fn exclusions_dates_common_history_unshallow_and_tags_share_one_byte_budget() {
     selection.common = vec![D];
     selection.tags = true;
     selection.filter = BlobFilter::None;
-    let (_, _, bytes, work) = select(&fixture, &selection);
+    let (_, _, bytes) = select(&fixture, &selection);
     let mut metadata = [None; N];
     let mut by_id = [0; N];
     let repository = validate(&fixture, &mut metadata, &mut by_id);
@@ -884,13 +753,7 @@ fn exclusions_dates_common_history_unshallow_and_tags_share_one_byte_budget() {
         let mut objects = [None; N];
         let mut indices = [0; N];
         let mut states = [0; N];
-        let mut revision = RevisionState::new(
-            &mut states,
-            RevisionLimits {
-                work_limit: work,
-                ..limits()
-            },
-        );
+        let mut revision = RevisionState::new(&mut states, limits());
         fixture.bytes.set(0);
         let result = allocations::without_allocations(|| {
             run_selection(

@@ -98,7 +98,7 @@ host filesystem/name policies extend beyond core graph validation.
   separate from pack membership. Native Git HTTP comparisons cover clone/fetch,
   checkouts and strict fsck in v0/v1/v2 and both formats.
 - [ ] Enable time/exclusion deepening in the Worker ABI/host with explicit revision
-  storage/work limits and matching cross-host oracle and fixed-memory tests.
+  storage/exclusion limits and matching cross-host oracle and fixed-memory tests.
   Combining revision cuts with tree-depth/object-type filters remains rejected.
 - [ ] Decide scope and rejection rules for further filters (tree/sparse/combine)
   and optional negotiation extensions before advertising them.

@@ -163,7 +163,7 @@ Enable `read` and explicitly supply `RevisionStorage` to `serve_with_revisions`,
 `ResponseEncoder::with_revisions`, or `with_revision_storage`. The convenience
 `RevisionBuffers<WANTS, OBJECTS, READ, PARSE>` owns ordinary selection storage
 plus exactly one state byte per object. `storage(graph_read_limit, limits)`
-accepts `RevisionLimits { max_exclusions, work_limit }`. Keep separate buffers
+accepts `RevisionLimits { max_exclusions }`. Keep separate buffers
 for overlapping requests. These APIs keep the strict advertised-ID want policy;
 they do not enable promised-object wants or selected-pack cache hooks.
 
@@ -190,14 +190,16 @@ as an invalid sentinel. The last repeated `deepen-since` wins. Canonical Git
 clients send decimal; acceptance of binary prefixes in reference Git depends on
 its C library. Historical committer dates use Git's tolerant decimal-prefix rule.
 
-The graph-byte limit covers every structural read and reread. The additional
-work limit reserves metadata scans, binary lookups, commit-header bytes,
-packet reparsing, ref-name comparisons and boundary emission before those
-operations. Exclusion limits count duplicate wire arguments. Initial packet
-parsing remains bounded by caller request/want capacities, separately from this
-revision-work budget. Successful selection returns ascending provider indices;
-failures invalidate all output. Stream preparation returns no successful response
-on exhausted limits; failures after sending headers require transport abort.
+The graph-byte limit covers every structural read and reread across exclusions,
+date probing, boundary detection, common history, wanted closure and included
+tags. Exclusion limits count duplicate wire arguments before ref lookup. The
+caller bounds request bytes, want storage, object/index slots and read/parse
+scratch. Metadata scans have the same object-capacity bound as ordinary selection
+(quadratic worst case); ref resolution is bounded by the exclusion count and
+visible ref names. This API does not implement a total request-preparation CPU
+budget. Successful selection returns ascending provider indices; failures
+invalidate all output. Stream preparation returns no successful response on
+exhausted limits; failures after sending headers require transport abort.
 
 Native tests compare real Git with `http-backend` for both hashes and v0/v1/v2.
 The Worker example does not opt into revision storage yet.

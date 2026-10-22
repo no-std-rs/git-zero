@@ -171,7 +171,7 @@ pub fn serve_with_selected_pack_policy<R: Repository + ?Sized, W: Write>(
     Ok(upload_response())
 }
 
-/// Serve time/exclusion deepening with explicit caller storage and work limits.
+/// Serve time/exclusion deepening with explicit caller storage and exclusion limits.
 /// This also supports all existing selected fetch modes. Only this opt-in path
 /// advertises v0/v1 deepen-since/deepen-not. Successful output is invalidated by
 /// any later error; a streaming host must abort on provider/transport failure.
@@ -238,13 +238,10 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
         options,
         revision.is_some(),
     )?;
-    if revision.is_none() && upload.requires_revision() {
-        return Err(Error::Unsupported);
-    }
     let mut revision =
         revision.map(|(state, limits)| git_zero_core::RevisionState::new(state, limits));
-    if upload.extensions.revision() {
-        upload.reserve_resolution(repository, revision.as_mut().ok_or(Error::Unsupported)?)?;
+    if upload.extensions.exclusions > revision.as_ref().map_or(0, |state| state.max_exclusions()) {
+        return Err(Error::LimitExceeded);
     }
     let boundary_probe = version != Version::V2 && !upload.done && upload.extensions.history();
     let select_boundaries = boundary_probe
@@ -300,12 +297,6 @@ fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
     };
     if indices.is_some() {
         if upload.extensions.revision() {
-            // Boundary membership is separate from PACK membership; reserve the
-            // complete result scan before writing any boundary/control packet.
-            revision
-                .as_mut()
-                .ok_or(Error::Unsupported)?
-                .charge_work(repository.object_count() as u64)?;
             upload.revision_info(
                 repository.object_format(),
                 revision
