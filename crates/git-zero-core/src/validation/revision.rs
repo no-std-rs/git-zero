@@ -7,6 +7,7 @@ const PENDING: u8 = 4;
 const DONE: u8 = 8;
 const BORDER: u8 = 16;
 const UNSHALLOW: u8 = 32;
+const CLIENT_SHALLOW: u8 = 64;
 
 /// Additional limits for an explicitly enabled revision-history request.
 #[derive(Clone, Copy, Debug)]
@@ -15,10 +16,10 @@ pub struct RevisionLimits {
     pub max_exclusions: usize,
     /// Shared logical-work units, including host ref resolution. Metadata scans
     /// charge their full capacity, index lookups their binary-search upper bound,
-    /// and commit-header parsing one unit per byte. Tree/tag traversal reserves
-    /// `(index lookup bound + 8)` per permitted structural byte, including rereads.
-    /// Unread reservation is released when that operation finishes. This deliberately
-    /// conservative accounting bounds work independently of structural reads.
+    /// and commit-header parsing one unit per byte. Shared payload traversal
+    /// charges `(index lookup bound + 8)` per structural byte, including read-ahead
+    /// and rereads. Boundary setup/restoration charges one unit per object.
+    /// This conservative accounting bounds work independently of structural reads.
     pub work_limit: u64,
 }
 
@@ -81,7 +82,7 @@ impl<'a> RevisionState<'a> {
             .take(self.count)
             .filter_map(|(&state, object)| {
                 let object = object.as_ref()?;
-                if state & BORDER != 0 && !object.client_shallow {
+                if state & BORDER != 0 && state & CLIENT_SHALLOW == 0 {
                     Some(ShallowChange::Shallow(object.id))
                 } else if state & UNSHALLOW != 0 {
                     Some(ShallowChange::Unshallow(object.id))
@@ -168,7 +169,6 @@ enum Parents {
     Pending,
     Boundary,
     Seed,
-    Payload(bool),
     Date,
 }
 
@@ -202,6 +202,7 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
                 .as_mut()
                 .expect("validated metadata")
                 .client_shallow = true;
+            self.states[index] |= CLIENT_SHALLOW;
         }
         Ok(())
     }
@@ -395,11 +396,7 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         let lookup = self.lookup_cost();
         let format = self.repository.object_format();
         let mut body = Body::budgeted(self.repository, index, self.read, Some(&mut self.bytes))?;
-        let tree = link(line(&mut body, self.parse, self.work)?, b"tree ", format)?;
-        if matches!(action, Parents::Payload(_)) {
-            charge(self.work, lookup)?;
-            reach(self.objects, self.repository.by_id, tree, ObjectKind::Tree)?;
-        }
+        link(line(&mut body, self.parse, self.work)?, b"tree ", format)?;
         let mut value = line(&mut body, self.parse, self.work)?;
         while value.starts_with(b"parent ") {
             let id = link(value, b"parent ", format)?;
@@ -412,7 +409,7 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
                     Parents::Boundary if self.states[parent] & CANDIDATE == 0 => {
                         self.states[index] |= BORDER
                     }
-                    Parents::Seed | Parents::Payload(false) => {
+                    Parents::Seed => {
                         let object = self.objects[parent].as_mut().expect("validated metadata");
                         if !object.excluded {
                             object.reached = true;
@@ -434,59 +431,32 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         Ok(commit_date(committer))
     }
     fn objects(&mut self) -> Result<()> {
-        loop {
-            charge(self.work, self.objects.len() as u64)?;
-            let Some(index) = self.objects.iter().position(|slot| {
-                let object = slot.expect("validated metadata");
-                object.reached && !object.checked
-            }) else {
-                return Ok(());
-            };
-            self.objects[index]
-                .as_mut()
-                .expect("validated metadata")
-                .checked = true;
-            let object = *metadata(self.objects, index);
-            match object.info.kind {
-                ObjectKind::Commit => {
-                    let stop = object.client_shallow || self.states[index] & BORDER != 0;
-                    self.commit(index, Parents::Payload(stop))?;
-                }
-                ObjectKind::Blob => {}
-                kind => {
-                    let factor = self.lookup_cost() + 8;
-                    let allowance = self.bytes.min(*self.work / factor);
-                    let reservation = allowance * factor;
-                    charge(self.work, reservation)?;
-                    let mut remaining = allowance;
-                    let mut body =
-                        Body::budgeted(self.repository, index, self.read, Some(&mut remaining))?;
-                    let result = if kind == ObjectKind::Tree {
-                        validate_tree(
-                            &mut body,
-                            self.parse,
-                            self.objects,
-                            self.repository.by_id,
-                            object.forced,
-                            1,
-                        )
-                    } else {
-                        validate_tag(
-                            &mut body,
-                            self.parse,
-                            self.objects,
-                            self.repository.by_id,
-                            1,
-                            object.forced,
-                            object.wanted,
-                        )
-                    };
-                    self.bytes -= allowance - remaining;
-                    *self.work += remaining * factor;
-                    result?;
-                }
-            }
+        // Temporarily add revision borders to the ordinary walk's client stops.
+        // Original client markers remain in state so PACK membership and wire
+        // boundary announcements can be computed independently.
+        self.payload_boundaries(false)?;
+        super::walk(
+            self.repository,
+            self.objects,
+            self.repository.by_id,
+            (self.read, self.parse),
+            (Some(&mut self.bytes), Some(self.work)),
+            History {
+                client: true,
+                ..History::default()
+            },
+            BlobFilter::All,
+        )?;
+        self.payload_boundaries(true)
+    }
+
+    fn payload_boundaries(&mut self, restore: bool) -> Result<()> {
+        charge(self.work, self.objects.len() as u64)?;
+        for (object, &state) in self.objects.iter_mut().zip(self.states.iter()) {
+            object.as_mut().expect("validated metadata").client_shallow =
+                state & CLIENT_SHALLOW != 0 || (!restore && state & BORDER != 0);
         }
+        Ok(())
     }
 }
 

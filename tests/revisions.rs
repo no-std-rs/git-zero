@@ -53,6 +53,44 @@ impl Selection {
     }
 }
 
+fn run_selection<'a>(
+    fixture: &Fixture,
+    repository: &ValidatedRepository<'_, '_, Fixture>,
+    selection: &Selection,
+    arrays: (&mut [Option<git_zero::ValidationMetadata>], &'a mut [usize]),
+    scratch: (&mut [u8], &mut [u8], &mut RevisionState<'_>),
+    bytes: u64,
+) -> git_zero::Result<&'a [usize]> {
+    let mut roots = [ObjectId::Sha1([0; 20]); N];
+    for (slot, &index) in roots.iter_mut().zip(&selection.wants) {
+        *slot = fixture.ids[index];
+    }
+    repository.select_revision_fetch(
+        &roots[..selection.wants.len()],
+        (
+            selection.common.iter().map(|&i| Ok(fixture.ids[i])),
+            selection.shallow.iter().map(|&i| Ok(fixture.ids[i])),
+            selection.excluded.iter().map(|&i| Ok(fixture.ids[i])),
+        ),
+        arrays.0,
+        arrays.1,
+        scratch,
+        (
+            SelectionOptions {
+                graph_read_limit: bytes,
+                include_tags: selection.tags,
+            },
+            FetchOptions {
+                filter: selection.filter,
+                ..Default::default()
+            },
+            RevisionOptions {
+                since: selection.since,
+            },
+        ),
+    )
+}
+
 fn select(
     fixture: &Fixture,
     selection: &Selection,
@@ -64,42 +102,15 @@ fn select(
     let mut selected = [0; N];
     let mut state = [0; N];
     let mut revision = RevisionState::new(&mut state, limits());
-    let roots: Vec<_> = selection
-        .wants
-        .iter()
-        .map(|&index| fixture.ids[index])
-        .collect();
     fixture.bytes.set(0);
     let indices = allocations::without_allocations(|| {
-        repository.select_revision_fetch(
-            &roots,
-            (
-                selection.common.iter().map(|&index| Ok(fixture.ids[index])),
-                selection
-                    .shallow
-                    .iter()
-                    .map(|&index| Ok(fixture.ids[index])),
-                selection
-                    .excluded
-                    .iter()
-                    .map(|&index| Ok(fixture.ids[index])),
-            ),
-            &mut work,
-            &mut selected,
+        run_selection(
+            fixture,
+            &repository,
+            selection,
+            (&mut work, &mut selected),
             (&mut [0; 1], &mut [0; 256], &mut revision),
-            (
-                SelectionOptions {
-                    graph_read_limit: 1_000_000,
-                    include_tags: selection.tags,
-                },
-                FetchOptions {
-                    filter: selection.filter,
-                    ..Default::default()
-                },
-                RevisionOptions {
-                    since: selection.since,
-                },
-            ),
+            1_000_000,
         )
     })
     .unwrap();
@@ -681,30 +692,17 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
                 },
             );
             let result = allocations::without_allocations(|| {
-                repository.select_revision_fetch(
-                    &[fixture.ids[D]],
-                    (
-                        core::iter::empty(),
-                        core::iter::empty(),
-                        core::iter::empty(),
-                    ),
-                    &mut objects[..object_len],
-                    &mut indices[..index_len],
+                run_selection(
+                    &fixture,
+                    &repository,
+                    &selection,
+                    (&mut objects[..object_len], &mut indices[..index_len]),
                     (
                         &mut read[..read_len],
                         &mut parse[..parse_len],
                         &mut revision,
                     ),
-                    (
-                        SelectionOptions {
-                            graph_read_limit: bytes,
-                            include_tags: false,
-                        },
-                        FetchOptions::default(),
-                        RevisionOptions {
-                            since: selection.since,
-                        },
-                    ),
+                    bytes,
                 )
             });
             assert_eq!(result.map(|_| ()), expected);
@@ -718,29 +716,15 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
         fixture.failed.set(true);
         let mut revision = RevisionState::new(&mut states, limits());
         assert_eq!(
-            repository
-                .select_revision_fetch(
-                    &[fixture.ids[D]],
-                    (
-                        core::iter::empty(),
-                        core::iter::empty(),
-                        core::iter::empty()
-                    ),
-                    &mut objects,
-                    &mut indices,
-                    (&mut read, &mut parse, &mut revision),
-                    (
-                        SelectionOptions {
-                            graph_read_limit: 100_000,
-                            include_tags: false
-                        },
-                        FetchOptions::default(),
-                        RevisionOptions {
-                            since: selection.since
-                        }
-                    )
-                )
-                .map(|_| ()),
+            run_selection(
+                &fixture,
+                &repository,
+                &selection,
+                (&mut objects, &mut indices),
+                (&mut read, &mut parse, &mut revision),
+                100_000
+            )
+            .map(|_| ()),
             Err(Error::Backend)
         );
         assert_eq!(revision.changes(&objects).count(), 0);
@@ -818,7 +802,7 @@ fn matching_tag_work_reserves_both_searches_and_exact_limits() {
             tag_work - ordinary_work,
             (fixture.reference_count() as u64) * (2 * lookup + 1)
                 + (header as u64) * (lookup + 8)
-                + 3 * count
+                + 5 * count
         );
         let mut metadata = [None; N];
         let mut by_id = [0; N];
@@ -837,29 +821,13 @@ fn matching_tag_work_reserves_both_searches_and_exact_limits() {
                     ..limits()
                 },
             );
-            let result = repository.select_revision_fetch(
-                &[fixture.ids[D]],
-                (
-                    core::iter::empty(),
-                    core::iter::empty(),
-                    core::iter::empty(),
-                ),
-                &mut objects,
-                &mut indices,
+            let result = run_selection(
+                &fixture,
+                &repository,
+                &selection,
+                (&mut objects, &mut indices),
                 (&mut [0; 1], &mut [0; 256], &mut revision),
-                (
-                    SelectionOptions {
-                        graph_read_limit: bytes,
-                        include_tags: true,
-                    },
-                    FetchOptions {
-                        filter: BlobFilter::None,
-                        ..Default::default()
-                    },
-                    RevisionOptions {
-                        since: selection.since,
-                    },
-                ),
+                bytes,
             );
             assert_eq!(result.map(|_| ()), expected);
         }
@@ -925,29 +893,13 @@ fn exclusions_dates_common_history_unshallow_and_tags_share_one_byte_budget() {
         );
         fixture.bytes.set(0);
         let result = allocations::without_allocations(|| {
-            repository.select_revision_fetch(
-                &[fixture.ids[D]],
-                (
-                    [Ok(fixture.ids[D])],
-                    [Ok(fixture.ids[D])],
-                    [Ok(fixture.ids[B])],
-                ),
-                &mut objects,
-                &mut indices,
+            run_selection(
+                &fixture,
+                &repository,
+                &selection,
+                (&mut objects, &mut indices),
                 (&mut [0; 1], &mut [0; 256], &mut revision),
-                (
-                    SelectionOptions {
-                        graph_read_limit: limit,
-                        include_tags: true,
-                    },
-                    FetchOptions {
-                        filter: BlobFilter::None,
-                        ..Default::default()
-                    },
-                    RevisionOptions {
-                        since: selection.since,
-                    },
-                ),
+                limit,
             )
         });
         assert_eq!(result.map(|_| ()), expected);

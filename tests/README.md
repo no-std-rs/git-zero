@@ -1022,3 +1022,20 @@ membership, combined blob filters, common haves, output-free errors, exact share
 byte/work budgets, state capacity/retry, allocation denial, one-byte pulls,
 cancellation, and exact capability-packet limits. Worker revision history remains
 a separate delivery item.
+
+
+The 2026-10-22 shared-walker regression check compared `origin/main` (`b1c7e25`)
+and the revision implementation with Rust 1.97.1 `--release`, Git 2.53.0,
+`--zero-selection --files 64 --blob-bytes 16384 --commits 16 --samples 21
+--warmup 3 --jobs 1`, using the smart clone/fetch cases. All three retained runs
+(base, candidate, repeated base) had the same 111 objects / 1,341,030 raw bytes
+and raw SHA-256 `f6e1fb6370807832825a9e9b191a24e54a6e20f836f8a9287d5b5d19ba99e4a1`.
+
+Clone median server CPU was 1.992 / 1.838 / 1.829 ms; fetch was 0.028 / 0.031 /
+0.026 ms. Clone wall time was 27.957 / 29.068 / 26.303 ms; Git's control also
+moved from 35.433 / 37.950 / 34.047 ms. Fetch wall time was 8.983 / 8.243 /
+8.319 ms. Candidate frontend peak RSS was 3,988 KiB for clone and 4,008 KiB for
+fetch; the corresponding baseline observations were 3,932 KiB and 3,608–3,820 KiB.
+These short warm loopback runs show host/client timing variation and do not
+establish a speedup or a kernel-scale/WAN or memory performance guarantee. Raw
+reports were retained locally as `/tmp/git-zero-deepening-benchmark-{base,head,base-repeat}.json`.
