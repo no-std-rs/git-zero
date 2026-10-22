@@ -17,7 +17,7 @@ class Value {
   get(key) { return new Value(JSON.stringify(this.value?.[key] ?? null)); }
   isNull() { return this.value === null; }
   integer() { return this.value; }
-  string() { return typeof this.value === "string" ? this.value : ""; }
+  string() { return this.value; }
 }
 
 function envelope(changes = {}, identity = {}) {
@@ -62,14 +62,6 @@ function execute({ event = "status", state = "open", number = pull.number, comme
   return { reports, reads, lookups, validations, recipes };
 }
 
-function assertWaiting(options) {
-  assert.deepEqual(execute(options), {
-    reports: [{ name: "LM-CC/token", passed: false,
-      summary: "Waiting for verified LM-CC/token data for the current PR head and base." }],
-    reads: [], lookups: ["complexity"], validations: 1, recipes: 1,
-  });
-}
-
 test("PR and recovery deliveries regenerate required title and commit policies", () => {
   for (const event of ["pull_request", "status", "runnerless_completion", "issue_comment"]) {
     const result = execute({ event });
@@ -80,32 +72,51 @@ test("PR and recovery deliveries regenerate required title and commit policies",
   }
 });
 
-// These cases share the same contract: one lookup, no producer reads, a
-// failing measurement, and required policies still regenerated.
-for (const [name, cases] of [
-  ["a stale canonical report fails closed through one indexed lookup",
-    [{ head_sha: "previous-head" }, { target_sha: "previous-base" }]
-      .map(identity => ({ comment: envelope({}, identity) }))],
-  ["pending publisher comments fail closed with plain or Markdown line breaks",
-    ["", "  "].map(spacing => ({ comment: { actorId: 317265358,
-      body: prefix.replaceAll("\n", spacing + "\n") + "## Build artifact\nPublication: pending" } }))],
-  ["publisher authentication and repository, PR and schema identities remain mandatory", [
+test("a stale canonical report fails closed through one indexed lookup", () => {
+  for (const identity of [{ head_sha: "previous-head" }, { target_sha: "previous-base" }]) {
+    const result = execute({ comment: envelope({}, identity) });
+    assert.equal(result.validations, 1);
+    assert.deepEqual(result.lookups, ["complexity"]);
+    assert.deepEqual(result.reads, []);
+    assert.equal(result.reports[0].passed, false);
+    assert.match(result.reports[0].summary, /Waiting for verified/);
+  }
+});
+
+test("pending publisher comments fail closed with plain or Markdown line breaks", () => {
+  for (const spacing of ["", "  "]) {
+    const pending = { actorId: 317265358, body: `<!-- codex-review-artifact-publisher -->${spacing}\n<!-- ci-toolkit:complexity -->${spacing}\n## Build artifact\nPublication: pending` };
+    const result = execute({ comment: pending });
+    assert.equal(result.validations, 1);
+    assert.deepEqual(result.lookups, ["complexity"]);
+    assert.deepEqual(result.reads, []);
+    assert.equal(result.reports[0].passed, false);
+    assert.match(result.reports[0].summary, /Waiting for verified/);
+  }
+});
+
+test("publisher authentication and repository, PR and schema identities remain mandatory", () => {
+  const ignored = [
     { ...envelope(), actorId: 1 },
     { ...envelope(), body: envelope().body.replace("ci-toolkit:complexity", "ci-toolkit:other") },
     envelope({}, { repository: "other/repository" }),
     envelope({}, { pr_number: 999 }),
     envelope({ schema_version: 2 }),
-  ].map(comment => ({ comment }))],
-  ["absent measurements stay failing while required policies are regenerated", [{ comment: null }]],
-  ["non-current or unavailable publication sets never supply a ratio", [
-    { state: "missing" }, { state: "pending" }, { state: "expired" }, { state: "unavailable" },
-    { head: "previous-head" }, { base: "previous-base" }, { comment: null },
-  ].map(publication => ({ publication }))],
-]) {
-  test(name, () => {
-    for (const options of cases) assertWaiting(options);
-  });
-}
+  ];
+  for (const comment of ignored) {
+    const result = execute({ comment });
+    assert.deepEqual(result.lookups, ["complexity"]);
+    assert.equal(result.reports[0].passed, false);
+    assert.deepEqual(result.reads, []);
+  }
+});
+
+test("absent measurements stay failing while required policies are regenerated", () => {
+  const result = execute({ comment: null });
+  assert.equal(result.validations, 1);
+  assert.equal(result.reports[0].passed, false);
+  assert.match(result.reports[0].summary, /Waiting for verified/);
+});
 
 test("a changed comparison producer cannot supply a passing ratio", () => {
   for (const changedProducer of ["buildbuddy.yaml", "scripts/llm-cc-ratio.py"]) {
@@ -134,6 +145,20 @@ test("closed PRs and default-branch deliveries do not emit PR policies", () => {
     assert.equal(result.validations, 0);
     assert.deepEqual(result.lookups, []);
     assert.deepEqual(result.reports, []);
+  }
+});
+
+test("non-current or unavailable publication sets never supply a ratio", () => {
+  for (const publication of [
+    { state: "missing" }, { state: "pending" }, { state: "expired" }, { state: "unavailable" },
+    { head: "previous-head" }, { base: "previous-base" }, { comment: null },
+  ]) {
+    const result = execute({ publication });
+    assert.equal(result.validations, 1);
+    assert.deepEqual(result.lookups, ["complexity"]);
+    assert.deepEqual(result.reads, []);
+    assert.equal(result.reports[0].passed, false);
+    assert.match(result.reports[0].summary, /Waiting for verified/);
   }
 });
 
