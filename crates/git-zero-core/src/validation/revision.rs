@@ -147,135 +147,18 @@ impl<R: Repository + ?Sized> ValidatedRepository<'_, '_, R> {
             bytes: selection.graph_read_limit,
             work: &mut revision.remaining,
         };
-        for id in shallow {
-            let index = walk.find(id?).map_err(|error| {
-                if error == Error::ObjectNotFound {
-                    Error::InvalidRequest
-                } else {
-                    error
-                }
-            })?;
-            if metadata(walk.objects, index).info.kind != ObjectKind::Commit {
-                return Err(Error::InvalidRequest);
-            }
-            walk.objects[index]
-                .as_mut()
-                .expect("validated metadata")
-                .client_shallow = true;
-        }
-        for (position, id) in excluded.into_iter().enumerate() {
-            charge(walk.work, 1)?;
-            if position >= revision.limits.max_exclusions {
-                return Err(Error::LimitExceeded);
-            }
-            let index = walk.find(id?)?;
-            walk.states[index] |= PENDING;
-        }
-        walk.ancestry(None, EXCLUDED)?;
-        for id in roots {
-            let index = walk.find(*id)?;
-            let index = walk.peel(index)?;
-            if metadata(walk.objects, index).info.kind == ObjectKind::Commit {
-                walk.states[index] |= PENDING;
-            }
-        }
-        walk.ancestry(options.since.filter(|&value| value != 0), CANDIDATE)?;
-        charge(walk.work, count as u64)?;
-        if !walk.states.iter().any(|state| state & CANDIDATE != 0) {
-            return Err(Error::InvalidRequest);
-        }
-        for index in 0..count {
-            charge(walk.work, 1)?;
-            if walk.states[index] & CANDIDATE != 0 {
-                walk.commit(index, Parents::Boundary)?;
-            }
-        }
-        for index in 0..count {
-            charge(walk.work, 1)?;
-            if metadata(walk.objects, index).client_shallow
-                && walk.states[index] & (CANDIDATE | BORDER) == CANDIDATE
-            {
-                walk.states[index] |= UNSHALLOW;
-            }
-        }
-        for id in common {
-            let index = walk.find(id?)?;
-            if walk.states[index] & CANDIDATE != 0 {
-                walk.objects[index]
-                    .as_mut()
-                    .expect("validated metadata")
-                    .reached = true;
-            }
-        }
-        walk.objects()?;
-        for index in 0..count {
-            charge(walk.work, 1)?;
-            let object = walk.objects[index].as_mut().expect("validated metadata");
-            object.excluded = object.reached || walk.states[index] & UNSHALLOW != 0;
-            object.reset_walk();
-        }
-        for id in roots {
-            let index = walk.find(*id)?;
-            walk.objects[index]
-                .as_mut()
-                .expect("validated metadata")
-                .wanted = true;
-            charge(walk.work, walk.lookup_cost())?;
-            reach_at(
-                walk.objects,
-                self.by_id,
-                *id,
-                metadata(self.objects, index).info.kind,
-                1,
-                true,
-            )?;
-        }
-        for index in 0..count {
-            charge(walk.work, 1)?;
-            if walk.states[index] & UNSHALLOW != 0 {
-                walk.commit(index, Parents::Seed)?;
-            }
-        }
-        walk.objects()?;
-        charge(
-            walk.work,
-            (count as u64)
-                .checked_mul(roots.len() as u64 + 1)
-                .ok_or(Error::LimitExceeded)?,
-        )?;
-        filter_objects(walk.objects, fetch.filter);
+        walk.client_boundaries(shallow)?;
+        walk.exclude(excluded, revision.limits.max_exclusions)?;
+        walk.candidates(roots, options.since)?;
+        walk.exclude_common(common)?;
+        walk.wanted_payload(roots)?;
+        walk.filter(fetch.filter)?;
         if selection.include_tags {
-            charge(
-                walk.work,
-                (self.reference_count() as u64)
-                    .checked_mul(2 * walk.lookup_cost() + 1)
-                    .ok_or(Error::LimitExceeded)?,
-            )?;
-            Selection {
-                repository: self,
-                work: walk.objects,
-                scratch: (walk.read, walk.parse),
-                remaining: walk.bytes,
-                filter: fetch.filter,
-            }
-            .include_matching_tags()?;
+            walk.include_tags()?;
             walk.objects()?;
-            charge(
-                walk.work,
-                (count as u64)
-                    .checked_mul(roots.len() as u64 + 1)
-                    .ok_or(Error::LimitExceeded)?,
-            )?;
-            filter_objects(walk.objects, fetch.filter);
+            walk.filter(fetch.filter)?;
         }
-        charge(walk.work, count as u64)?;
-        let mut length = 0;
-        for (index, object) in walk.objects.iter().enumerate() {
-            if object.expect("validated metadata").reached {
-                selected[length] = index;
-                length += 1;
-            }
-        }
+        let length = walk.selected_indices(selected)?;
         revision.count = count;
         Ok(&selected[..length])
     }
@@ -300,6 +183,158 @@ struct Walker<'a, 'b, 'index, 'repo, R: Repository + ?Sized> {
 }
 
 impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
+    fn client_boundaries(
+        &mut self,
+        shallow: impl IntoIterator<Item = Result<ObjectId>>,
+    ) -> Result<()> {
+        for id in shallow {
+            let index = self.find(id?).map_err(|error| {
+                if error == Error::ObjectNotFound {
+                    Error::InvalidRequest
+                } else {
+                    error
+                }
+            })?;
+            if metadata(self.objects, index).info.kind != ObjectKind::Commit {
+                return Err(Error::InvalidRequest);
+            }
+            self.objects[index]
+                .as_mut()
+                .expect("validated metadata")
+                .client_shallow = true;
+        }
+        Ok(())
+    }
+
+    fn exclude(
+        &mut self,
+        excluded: impl IntoIterator<Item = Result<ObjectId>>,
+        limit: usize,
+    ) -> Result<()> {
+        for (position, id) in excluded.into_iter().enumerate() {
+            charge(self.work, 1)?;
+            if position >= limit {
+                return Err(Error::LimitExceeded);
+            }
+            let index = self.find(id?)?;
+            self.states[index] |= PENDING;
+        }
+        self.ancestry(None, EXCLUDED)
+    }
+
+    fn candidates(&mut self, roots: &[ObjectId], since: Option<u64>) -> Result<()> {
+        for &id in roots {
+            let index = self.find(id)?;
+            let index = self.peel(index)?;
+            if metadata(self.objects, index).info.kind == ObjectKind::Commit {
+                self.states[index] |= PENDING;
+            }
+        }
+        self.ancestry(since.filter(|&value| value != 0), CANDIDATE)?;
+        charge(self.work, self.states.len() as u64)?;
+        if !self.states.iter().any(|state| state & CANDIDATE != 0) {
+            return Err(Error::InvalidRequest);
+        }
+        // Freeze candidate membership before marking borders: a merge border
+        // may stop another candidate from appearing in the eventual payload.
+        for index in 0..self.states.len() {
+            charge(self.work, 1)?;
+            if self.states[index] & CANDIDATE != 0 {
+                self.commit(index, Parents::Boundary)?;
+            }
+        }
+        for index in 0..self.states.len() {
+            charge(self.work, 1)?;
+            if metadata(self.objects, index).client_shallow
+                && self.states[index] & (CANDIDATE | BORDER) == CANDIDATE
+            {
+                self.states[index] |= UNSHALLOW;
+            }
+        }
+        Ok(())
+    }
+
+    fn exclude_common(&mut self, common: impl IntoIterator<Item = Result<ObjectId>>) -> Result<()> {
+        for id in common {
+            let index = self.find(id?)?;
+            if self.states[index] & CANDIDATE != 0 {
+                self.objects[index]
+                    .as_mut()
+                    .expect("validated metadata")
+                    .reached = true;
+            }
+        }
+        self.objects()?;
+        for index in 0..self.objects.len() {
+            charge(self.work, 1)?;
+            let object = self.objects[index].as_mut().expect("validated metadata");
+            object.excluded = object.reached || self.states[index] & UNSHALLOW != 0;
+            object.reset_walk();
+        }
+        Ok(())
+    }
+
+    fn wanted_payload(&mut self, roots: &[ObjectId]) -> Result<()> {
+        for &id in roots {
+            let index = self.find(id)?;
+            self.objects[index]
+                .as_mut()
+                .expect("validated metadata")
+                .wanted = true;
+            charge(self.work, self.lookup_cost())?;
+            reach_at(
+                self.objects,
+                self.repository.by_id,
+                id,
+                metadata(self.repository.objects, index).info.kind,
+                1,
+                true,
+            )?;
+        }
+        for index in 0..self.states.len() {
+            charge(self.work, 1)?;
+            if self.states[index] & UNSHALLOW != 0 {
+                self.commit(index, Parents::Seed)?;
+            }
+        }
+        self.objects()
+    }
+
+    fn filter(&mut self, filter: BlobFilter) -> Result<()> {
+        charge(self.work, self.objects.len() as u64)?;
+        filter_objects(self.objects, filter);
+        Ok(())
+    }
+
+    fn include_tags(&mut self) -> Result<()> {
+        charge(
+            self.work,
+            (self.repository.reference_count() as u64)
+                .checked_mul(2 * self.lookup_cost() + 1)
+                .ok_or(Error::LimitExceeded)?,
+        )?;
+        Selection {
+            repository: self.repository,
+            work: self.objects,
+            scratch: (self.read, self.parse),
+            remaining: self.bytes,
+            filter: BlobFilter::All,
+        }
+        .include_matching_tags()
+    }
+
+    fn selected_indices(&mut self, selected: &mut [usize]) -> Result<usize> {
+        charge(self.work, self.objects.len() as u64)?;
+        let mut length = 0;
+        for (index, object) in self.objects.iter().enumerate() {
+            if object.expect("validated metadata").reached {
+                selected[length] = index;
+                length += 1;
+            }
+        }
+        Ok(length)
+    }
+
     fn lookup_cost(&self) -> u64 {
         lookup_cost(self.objects.len())
     }

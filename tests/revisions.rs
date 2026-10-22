@@ -10,6 +10,14 @@ use git_zero::{
     io::SliceWriter,
 };
 
+fn validate<'a>(
+    fixture: &'a Fixture,
+    metadata: &'a mut [Option<git_zero::ValidationMetadata>],
+    index: &'a mut [usize],
+) -> ValidatedRepository<'a, 'a, Fixture> {
+    ValidatedRepository::new(fixture, metadata, index, &mut [0; 1], &mut [0; 256]).unwrap()
+}
+
 fn limits() -> RevisionLimits {
     RevisionLimits {
         max_exclusions: 8,
@@ -51,14 +59,7 @@ fn select(
 ) -> (Vec<ObjectId>, Vec<ShallowChange>, u64, u64) {
     let mut metadata = [None; N];
     let mut by_id = [0; N];
-    let repository = ValidatedRepository::new(
-        fixture,
-        &mut metadata,
-        &mut by_id,
-        &mut [0; 1],
-        &mut [0; 256],
-    )
-    .unwrap();
+    let repository = validate(fixture, &mut metadata, &mut by_id);
     let mut work = [None; N];
     let mut selected = [0; N];
     let mut state = [0; N];
@@ -387,14 +388,7 @@ fn opt_in_caps_buffered_and_one_byte_cursors_match_and_cancel_is_terminal() {
         let fixture = Fixture::new(format);
         let mut metadata = [None; N];
         let mut ids = [0; N];
-        let repository = ValidatedRepository::new(
-            &fixture,
-            &mut metadata,
-            &mut ids,
-            &mut [0; 1],
-            &mut [0; 256],
-        )
-        .unwrap();
+        let repository = validate(&fixture, &mut metadata, &mut ids);
         for version in [0, 1, 2] {
             for args in [
                 vec!["deepen-since 1700000200"],
@@ -490,14 +484,7 @@ fn invalid_refs_conflicts_limits_and_disabled_paths_produce_no_output_or_body_re
     let fixture = Fixture::new(ObjectFormat::Sha1);
     let mut metadata = [None; N];
     let mut ids = [0; N];
-    let repository = ValidatedRepository::new(
-        &fixture,
-        &mut metadata,
-        &mut ids,
-        &mut [0; 1],
-        &mut [0; 256],
-    )
-    .unwrap();
+    let repository = validate(&fixture, &mut metadata, &mut ids);
     for version in [0, 1, 2] {
         for (args, expected) in [
             (vec!["deepen-not ambiguous"], Error::InvalidRequest),
@@ -587,14 +574,7 @@ fn exact_shared_budgets_capacity_failures_and_fresh_retries_are_bounded() {
         let (_, _, required_bytes, required_work) = select(&fixture, &selection);
         let mut metadata = [None; N];
         let mut by_id = [0; N];
-        let repository = ValidatedRepository::new(
-            &fixture,
-            &mut metadata,
-            &mut by_id,
-            &mut [0; 1],
-            &mut [0; 256],
-        )
-        .unwrap();
+        let repository = validate(&fixture, &mut metadata, &mut by_id);
         let count = fixture.object_count();
         let mut objects = [None; N];
         let mut indices = [usize::MAX; N];
@@ -774,14 +754,7 @@ fn probes_end_at_boundary_flush_and_ordinary_acks_need_no_revision_storage() {
     let fixture = Fixture::new(ObjectFormat::Sha1);
     let mut metadata = [None; N];
     let mut ids = [0; N];
-    let repository = ValidatedRepository::new(
-        &fixture,
-        &mut metadata,
-        &mut ids,
-        &mut [0; 1],
-        &mut [0; 256],
-    )
-    .unwrap();
+    let repository = validate(&fixture, &mut metadata, &mut ids);
     for version in [0, 1] {
         let body = body(&fixture, version, &["deepen-since 1700000200"], false);
         let mut buffers = RevisionBuffers::<8, N, 1, 256>::new();
@@ -845,18 +818,11 @@ fn matching_tag_work_reserves_both_searches_and_exact_limits() {
             tag_work - ordinary_work,
             (fixture.reference_count() as u64) * (2 * lookup + 1)
                 + (header as u64) * (lookup + 8)
-                + 4 * count
+                + 3 * count
         );
         let mut metadata = [None; N];
         let mut by_id = [0; N];
-        let repository = ValidatedRepository::new(
-            &fixture,
-            &mut metadata,
-            &mut by_id,
-            &mut [0; 1],
-            &mut [0; 256],
-        )
-        .unwrap();
+        let repository = validate(&fixture, &mut metadata, &mut by_id);
         for (work, expected) in [
             (tag_work, Ok(())),
             (tag_work - 1, Err(Error::LimitExceeded)),
@@ -911,14 +877,7 @@ fn boundary_emission_scan_is_reserved_before_any_control_output() {
     let exact = server_work + core_work + fixture.object_count() as u64;
     let mut metadata = [None; N];
     let mut by_id = [0; N];
-    let repository = ValidatedRepository::new(
-        &fixture,
-        &mut metadata,
-        &mut by_id,
-        &mut [0; 1],
-        &mut [0; 256],
-    )
-    .unwrap();
+    let repository = validate(&fixture, &mut metadata, &mut by_id);
     for (work, expected) in [(exact - 1, Err(Error::LimitExceeded)), (exact, Ok(()))] {
         let mut buffers = RevisionBuffers::<8, N, 1, 256>::new();
         let mut storage = [0; 4096];
@@ -952,14 +911,7 @@ fn exclusions_dates_common_history_unshallow_and_tags_share_one_byte_budget() {
     let (_, _, bytes, work) = select(&fixture, &selection);
     let mut metadata = [None; N];
     let mut by_id = [0; N];
-    let repository = ValidatedRepository::new(
-        &fixture,
-        &mut metadata,
-        &mut by_id,
-        &mut [0; 1],
-        &mut [0; 256],
-    )
-    .unwrap();
+    let repository = validate(&fixture, &mut metadata, &mut by_id);
     for (limit, expected) in [(bytes, Ok(())), (bytes - 1, Err(Error::LimitExceeded))] {
         let mut objects = [None; N];
         let mut indices = [0; N];
@@ -1090,14 +1042,7 @@ fn v2_ack_only_revision_requests_validate_exclusions_before_output() {
     let fixture = Fixture::new(ObjectFormat::Sha1);
     let mut metadata = [None; N];
     let mut index = [0; N];
-    let repository = ValidatedRepository::new(
-        &fixture,
-        &mut metadata,
-        &mut index,
-        &mut [0; 1],
-        &mut [0; 256],
-    )
-    .unwrap();
+    let repository = validate(&fixture, &mut metadata, &mut index);
     for name in ["ambiguous", "missing", "main^"] {
         let argument = format!("deepen-not {name}");
         let body = body(&fixture, 2, &[&argument], false);

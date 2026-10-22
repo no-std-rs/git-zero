@@ -89,51 +89,28 @@ fn timestamp(input: &[u8]) -> Result<u64> {
     if input.is_empty() {
         return Ok(0);
     }
-    let mut value = input;
-    while value.first().is_some_and(u8::is_ascii_whitespace) {
-        value = &value[1..];
-    }
-    let negative = value.first() == Some(&b'-');
-    if negative || value.first() == Some(&b'+') {
-        value = &value[1..];
-    }
-    let base = if value.starts_with(b"0x") || value.starts_with(b"0X") {
-        value = &value[2..];
-        16
-    } else if value.starts_with(b"0b") || value.starts_with(b"0B") {
-        value = &value[2..];
-        2
-    } else if value.starts_with(b"0") {
-        8
-    } else {
-        10
+    let input = input.trim_ascii_start();
+    let negative = input.first() == Some(&b'-');
+    let digits = match input.first() {
+        Some(b'-' | b'+') => &input[1..],
+        _ => input,
     };
-    if value.is_empty() {
+    // Reject another sign/whitespace after a sign before sharing the base-zero
+    // parser used by filters. The MAX sentinel is specific to timestamps.
+    if !digits.first().is_some_and(u8::is_ascii_hexdigit) {
         return Err(Error::InvalidRequest);
     }
-    let mut number = 0_u64;
-    for &byte in value {
-        let digit = match byte {
-            b'0'..=b'9' => u64::from(byte - b'0'),
-            b'a'..=b'f' => u64::from(byte - b'a' + 10),
-            b'A'..=b'F' => u64::from(byte - b'A' + 10),
-            _ => return Err(Error::InvalidRequest),
-        };
-        if digit >= base {
-            return Err(Error::InvalidRequest);
-        }
-        number = number
-            .checked_mul(base)
-            .and_then(|number| number.checked_add(digit))
-            .ok_or(Error::InvalidRequest)?;
+    let value = filter_number(digits)?;
+    let value = if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    };
+    if value == u64::MAX {
+        Err(Error::InvalidRequest)
+    } else {
+        Ok(value)
     }
-    if negative {
-        number = number.wrapping_neg();
-    }
-    if number == u64::MAX {
-        return Err(Error::InvalidRequest);
-    }
-    Ok(number)
 }
 
 pub(crate) fn argument_parts(line: &[u8]) -> (&[u8], Option<&[u8]>) {
