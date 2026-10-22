@@ -61,6 +61,15 @@ function execute({ event = "status", state = "open", number = pull.number, comme
   return { reports, reads, lookups, validations, recipes };
 }
 
+function assertWaiting(options) {
+  const result = execute(options);
+  assert.equal(result.validations, 1);
+  assert.deepEqual(result.lookups, ["complexity"]);
+  assert.deepEqual(result.reads, []);
+  assert.equal(result.reports[0].passed, false);
+  assert.match(result.reports[0].summary, /Waiting for verified/);
+}
+
 test("PR and recovery deliveries regenerate required title and commit policies", () => {
   for (const event of ["pull_request", "status", "runnerless_completion", "issue_comment"]) {
     const result = execute({ event });
@@ -73,24 +82,14 @@ test("PR and recovery deliveries regenerate required title and commit policies",
 
 test("a stale canonical report fails closed through one indexed lookup", () => {
   for (const identity of [{ head_sha: "previous-head" }, { target_sha: "previous-base" }]) {
-    const result = execute({ comment: envelope({}, identity) });
-    assert.equal(result.validations, 1);
-    assert.deepEqual(result.lookups, ["complexity"]);
-    assert.deepEqual(result.reads, []);
-    assert.equal(result.reports[0].passed, false);
-    assert.match(result.reports[0].summary, /Waiting for verified/);
+    assertWaiting({ comment: envelope({}, identity) });
   }
 });
 
 test("pending publisher comments fail closed with plain or Markdown line breaks", () => {
   for (const spacing of ["", "  "]) {
     const pending = { actorId: 317265358, body: `<!-- codex-review-artifact-publisher -->${spacing}\n<!-- ci-toolkit:complexity -->${spacing}\n## Build artifact\nPublication: pending` };
-    const result = execute({ comment: pending });
-    assert.equal(result.validations, 1);
-    assert.deepEqual(result.lookups, ["complexity"]);
-    assert.deepEqual(result.reads, []);
-    assert.equal(result.reports[0].passed, false);
-    assert.match(result.reports[0].summary, /Waiting for verified/);
+    assertWaiting({ comment: pending });
   }
 });
 
@@ -103,18 +102,12 @@ test("publisher authentication and repository, PR and schema identities remain m
     envelope({ schema_version: 2 }),
   ];
   for (const comment of ignored) {
-    const result = execute({ comment });
-    assert.deepEqual(result.lookups, ["complexity"]);
-    assert.equal(result.reports[0].passed, false);
-    assert.deepEqual(result.reads, []);
+    assertWaiting({ comment });
   }
 });
 
 test("absent measurements stay failing while required policies are regenerated", () => {
-  const result = execute({ comment: null });
-  assert.equal(result.validations, 1);
-  assert.equal(result.reports[0].passed, false);
-  assert.match(result.reports[0].summary, /Waiting for verified/);
+  assertWaiting({ comment: null });
 });
 
 test("a changed comparison producer cannot supply a passing ratio", () => {
@@ -147,18 +140,12 @@ test("closed PRs and default-branch deliveries do not emit PR policies", () => {
   }
 });
 
-
 test("non-current or unavailable publication sets never supply a ratio", () => {
   for (const publication of [
     { state: "missing" }, { state: "pending" }, { state: "expired" }, { state: "unavailable" },
     { head: "previous-head" }, { base: "previous-base" }, { comment: null },
   ]) {
-    const result = execute({ publication });
-    assert.equal(result.validations, 1);
-    assert.deepEqual(result.lookups, ["complexity"]);
-    assert.deepEqual(result.reads, []);
-    assert.equal(result.reports[0].passed, false);
-    assert.match(result.reports[0].summary, /Waiting for verified/);
+    assertWaiting({ publication });
   }
 });
 
