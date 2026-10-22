@@ -29,23 +29,25 @@ function envelope(changes = {}, identity = {}) {
   return { actorId: 317265358, body: `${prefix}LM-CC/token data: \`${JSON.stringify(data)}\`` };
 }
 
+class Spec {
+  file() { return this; }
+  releasePlease() { return this; }
+  publishArtifacts() { return this; }
+}
+
 function execute({ event = "status", state = "open", number = pull.number, comment = envelope(), publication = {}, files = {},
   lookup = () => new Value(JSON.stringify({ state: "available", head: pull.head, base: pull.base, comment, ...publication })),
 } = {}) {
   const reports = [], reads = [], lookups = [];
   let validations = 0, recipes = 0;
-  class Spec {
-    file() { return this; }
-    releasePlease() { return this; }
-    publishArtifacts() { return this; }
-    run() { recipes++; }
-  }
+  const program = new Spec();
+  program.run = () => { recipes++; };
   const context = createContext({
     Value, F64: { parseFloat }, isFinite,
     ArtifactSpec: Spec, ArtifactStatus: Spec,
     ArtifactComment: { generated() { return {}; } },
     OperationRef: Spec,
-    workflow: () => new Spec(),
+    workflow: () => program,
     event: { isMerge: () => false, details: () => new Value(JSON.stringify({ event, pullNumber: number, fullName: "no-std-rs/git-zero" })) },
     pulls: { get: () => ({ ...pull, state }) },
     policies: { validate() { validations++; } },
