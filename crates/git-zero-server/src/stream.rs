@@ -7,7 +7,7 @@ use crate::{
     Request, Response, route,
     upload_pack::{self, UploadRequest},
 };
-use git_zero_core::{Error, Repository, Result, io::SliceWriter, pack, repository::uses_only_head};
+use git_zero_core::{Error, Repository, Result, io::SliceWriter, pack};
 
 /// Incrementally collect a bounded request body in caller-owned storage. No
 /// protocol output is possible until `finish` returns a complete body to parse.
@@ -114,15 +114,7 @@ impl<'a> ResponseEncoder<'a> {
         let Plan::Upload(version) = plan else {
             return Self::ordinary_response(repository, plan, output.finish());
         };
-        if !uses_only_head(repository) {
-            return Err(Error::Unsupported);
-        }
-        let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
-        let upload =
-            UploadRequest::parse(request.body, repository.object_format(), version, |id| {
-                (id == head).then_some(()).ok_or(Error::InvalidRequest)
-            })?;
-        upload.require_complete()?;
+        let upload = UploadRequest::parse_complete(repository, request.body, version)?;
         upload.acknowledge(repository, &mut output)?;
         let mut encoder = Self::buffered(upload_pack::response(), output.finish());
         if upload.done {

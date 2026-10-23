@@ -3,9 +3,9 @@
 use crate::{Request, Response, route::Version, v2};
 #[cfg(feature = "read")]
 use crate::{route, serve_with_scratch};
-use git_zero_core::{Error, Repository, Result, io::Write, repository::uses_only_head};
 #[cfg(feature = "read")]
-use git_zero_core::{ObjectId, SelectionOptions, ValidatedRepository, pack};
+use git_zero_core::{Error, ObjectId, SelectionOptions, ValidatedRepository, pack};
+use git_zero_core::{Repository, Result, io::Write};
 
 pub(crate) mod advertisement;
 pub(crate) mod extensions;
@@ -360,18 +360,7 @@ pub(crate) fn write_upload<W: Write>(
     if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
         return Ok(());
     }
-    if !uses_only_head(repository) {
-        return Err(Error::Unsupported);
-    }
-    let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
-    let upload = UploadRequest::parse(request.body, repository.object_format(), version, |id| {
-        if id == head {
-            Ok(())
-        } else {
-            Err(Error::InvalidRequest)
-        }
-    })?;
-    upload.require_complete()?;
+    let upload = UploadRequest::parse_complete(repository, request.body, version)?;
     upload.acknowledge(repository, output)?;
     if upload.done {
         let mut packed = upload.output(output);

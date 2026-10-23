@@ -4,6 +4,7 @@ use git_zero_core::{
     Error, ObjectFormat, ObjectId, ObjectKind, Repository, Result,
     io::Write,
     pktline::{self, Packet},
+    repository::uses_only_head,
 };
 
 pub(crate) fn capabilities(selection: bool) -> &'static [u8] {
@@ -188,6 +189,24 @@ fn parse_haves(mut bytes: &[u8], format: ObjectFormat) -> Result<bool> {
 }
 
 impl<'a> UploadRequest<'a> {
+    /// The complete-pack path may serve only HEAD and aliases of HEAD. Share
+    /// this restriction and capability validation across buffered and pull output.
+    pub fn parse_complete(
+        repository: &impl Repository,
+        bytes: &'a [u8],
+        version: crate::route::Version,
+    ) -> Result<Self> {
+        if !uses_only_head(repository) {
+            return Err(Error::Unsupported);
+        }
+        let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
+        let upload = Self::parse(bytes, repository.object_format(), version, |id| {
+            (id == head).then_some(()).ok_or(Error::InvalidRequest)
+        })?;
+        upload.require_complete()?;
+        Ok(upload)
+    }
+
     pub fn parse(
         bytes: &'a [u8],
         format: ObjectFormat,
