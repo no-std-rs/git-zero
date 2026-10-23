@@ -28,12 +28,12 @@ Authentication, authorization and deployment policy belong to hosts.
 
 ## Next delivery order
 
-1. Extend the opt-in time/exclusion deepening API to Worker hosts and finish
-   cross-host shallow coverage, retaining checkout/history comparisons and limits.
-2. Publish packed dumb HTTP repositories and extend requested-closure caches to
-   async hosts, retaining immutable refs/pack/index consistency.
-3. Finish native header policy, request deadlines, HTTP framing and independent
-   connections; add the Worker preparation/storage boundary and host diagnostics.
+1. Extend requested-closure caches to async hosts with an owned preparation and
+   storage boundary, retaining immutable refs/pack/index consistency.
+2. Finish cross-host shallow/HEAD/ref coverage beyond the bounded Worker fixture;
+   retain independent checkout/history comparisons and enforced limits.
+3. Finish native request deadlines, HTTP framing and independent connections;
+   add deployed Worker diagnostics and asynchronous provider preparation.
 4. Close cross-host oracle, concurrency, fuzzing and resource-budget gaps, then
    evaluate the read-only completion gate. Compression and delta generation are
    optional performance extensions, not prerequisites for valid stored packs.
@@ -97,8 +97,10 @@ host filesystem/name policies extend beyond core graph validation.
   traversal budgets. Caller-owned revision state keeps boundary announcements
   separate from pack membership. Native Git HTTP comparisons cover clone/fetch,
   checkouts and strict fsck in v0/v1/v2 and both formats.
-- [ ] Enable time/exclusion deepening in the Worker ABI/host with explicit revision
-  storage/exclusion limits and matching cross-host oracle and fixed-memory tests.
+- [x] Opt-in Worker time/exclusion deepening with one revision-state byte per
+  object, at most eight exclusions and 1 MiB of shared graph reads. The native
+  Git oracle also runs on Worker v0/v1/v2 in both formats; ABI tests enforce
+  fixed memory, cancellation, failure/retry and independent want grants.
   Combining revision cuts with tree-depth/object-type filters remains rejected.
 - [ ] Decide scope and rejection rules for further filters (tree/sparse/combine)
   and optional negotiation extensions before advertising them.
@@ -122,9 +124,11 @@ capability conflicts, unauthorized wants, truncation and exhausted budgets.
   complete-file replacement, eviction, counters and isolated readers.
 - [x] Cooperative native cold-miss leases: nonblocking per-key attempts,
   recheck after acquisition, explicit unlock and cancellation/failure cleanup.
-- [ ] Packed dumb publication: `objects/info/packs`, pack/index downloads and
-  immutable publication consistent with refs/HEAD. Use actual pack checksums for
-  Git filenames; selected-cache keys are a separate host identity.
+- [x] Immutable stored-pack dumb publication: `objects/info/packs`, checksum-named
+  pack/index downloads, independent pull cursors and caller-owned entry metadata.
+  Native generated/verified-file and bounded raw-import Worker hosts pass real-Git
+  packed-only/mixed clone/fetch, exact-object/empty-tree and strict fsck checks in
+  both formats. Selected-cache keys remain separate from Git pack filenames.
 - [ ] Reuse prepacked entries/packs for the requested closure, beyond the current
   encoder's complete-HEAD reuse; validate compressed/delta inputs and dependencies.
 - [x] Synchronous selected-pack HTTP hook with authorization and selection before
@@ -163,8 +167,11 @@ cooperative leases; live lock files retain identity until namespace quiescence.
   checks. Unset quotas preserve the original bounded-storage API.
 - [x] Independent configurable accepted-socket read/write timeouts, including
   disabled settings, unchanged defaults and accepted-descriptor failure cleanup.
-- [ ] Header-specific admission policy and CLI configuration, plus explicit
-  request/idle deadlines where needed. Per-I/O timeouts are not total deadlines.
+- [x] Native header-byte/field/name/value admission policy, independent request
+  and body quotas, and explicit CLI flags. Inclusive socket tests cover fragmented
+  intake, unread excess bytes, malformed fields, precedence and state reuse.
+- [ ] Explicit request/idle deadlines where needed. Per-I/O timeouts and byte
+  quotas are not total deadlines.
 - [ ] HTTP/1.1 framing, chunked intake, keep-alive and pipelined/leftover-byte
   handling with strict framing ambiguity rejection and cancellation tests.
 - [ ] Poll-based connections with independent caller-owned request/output state,
@@ -208,9 +215,10 @@ Local KV/R2-shaped tests do not establish deployment or propagation measurements
   nine tree levels and a 96 KiB binary; both-format smart full/incremental clones.
 - [x] Native A → B → A snapshot fetches with real Git, exact object/checkout
   checks, complete-pack hits and eviction; lower-level selected-cache race tests.
-- [x] Seven bounded libFuzzer targets plus ordinary-Cargo seed replay and CI ASan
+- [x] Nine bounded libFuzzer targets plus ordinary-Cargo seed replay and CI ASan
   smoke campaigns for packets, responses, routing, graphs, inflation, loose
-  objects and pack entries/deltas; shallow/filter cancellation seeds are included.
+  objects, pack entries/deltas and index metadata/range lookups; shallow/filter
+  cancellation and SHA-1/SHA-256 large-offset index seeds are included.
 - [x] Allocation counters for providers, validation, selection, pack/index/cache
   operations and decoding. Worker ABI tests enforce a 24-page ceiling and no growth.
 - [x] Paired HTTP/object-read benchmark harness, pinned caller-repository inputs,
@@ -221,8 +229,11 @@ Local KV/R2-shaped tests do not establish deployment or propagation measurements
   experiments at `f71e266`, with raw data, provenance and reproduction limits.
 - [ ] Bring Worker coverage to the full native fixture/HEAD/ref/shallow matrix,
   including both formats and independently checked protocol behavior.
-- [ ] Complete unassisted dumb-object closure checks. Git's loose walker can omit
-  a referenced empty tree; assisted import/fsck is recorded as assisted evidence.
+- [x] Unassisted packed-only/mixed dumb closure checks on native and Worker hosts:
+  every physical object, including referenced empty trees, must arrive through
+  ordinary Git HTTP before strict fsck; no assisted import or alternate is used.
+- [ ] Complete unassisted loose-only dumb closure checks. Git's loose walker can
+  omit a referenced empty tree; existing assisted evidence stays identified.
 - [ ] Worker HTTP selected-cache transitions and concurrent cold-miss/eviction
   comparisons on both hosts. Native synchronous single-producer HTTP transition,
   failure and eviction/reopen cases are covered; backend lease tests are separate.

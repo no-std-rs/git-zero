@@ -13,6 +13,11 @@ use rustix::{
     io::{self, Errno},
 };
 
+#[cfg(feature = "server")]
+mod publication;
+#[cfg(feature = "server")]
+pub use publication::{FilePublication, FilePublishedResponse};
+
 /// One object's uncompressed body in an owned file descriptor.
 ///
 /// The body may occupy the whole file or a byte range in a shared data file.

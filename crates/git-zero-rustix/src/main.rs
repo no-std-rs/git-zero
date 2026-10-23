@@ -4,7 +4,8 @@ use git_zero::{
     http::{self, Response},
 };
 use git_zero_rustix::{
-    HttpTransport, accept, listen_on, local_address, read_request, respond, respond_stream,
+    HttpTransport, RequestPolicy, accept, listen_on, local_address, read_request_with_policy,
+    respond, respond_published, respond_stream,
 };
 use std::{
     io::{self, Write as _},
@@ -29,26 +30,58 @@ fn run() -> git_zero::Result<()> {
         Some("ls-remote") => fetch(args.get(2).ok_or(Error::InvalidRequest)?, true),
         _ => {
             eprintln!(
-                "Usage: git-zero serve [port|IP:port] [--allow-reachable-wants] | ls-remote URL | fetch URL\nIPv6 listen addresses use [IP]:port. The optional serve grant exposes the entire visible snapshot closure. fetch writes a smart pack or a dumb loose HEAD object to stdout."
+                "Usage: git-zero serve [port|IP:port] [--allow-reachable-wants] [--max-header-bytes=N] [--max-header-fields=N] [--max-header-name-bytes=N] [--max-header-value-bytes=N] [--max-wire-bytes=N] [--max-body-bytes=N] | ls-remote URL | fetch URL\nIPv6 listen addresses use [IP]:port. The optional serve grant exposes the entire visible snapshot closure. fetch writes a smart pack or a dumb loose HEAD object to stdout."
             );
             Err(Error::InvalidRequest)
         }
     }
 }
 
-fn serve_options(args: &[String]) -> git_zero::Result<(SocketAddr, http::WantOptions)> {
-    let (address, granted) = match args {
-        [] => ("8080", false),
-        [flag] if flag == "--allow-reachable-wants" => ("8080", true),
-        [address] => (address.as_str(), false),
-        [address, flag] if flag == "--allow-reachable-wants" => (address.as_str(), true),
-        _ => return Err(Error::InvalidRequest),
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ServeOptions {
+    wants: http::WantOptions,
+    admission: RequestPolicy,
+}
+
+fn serve_options(args: &[String]) -> git_zero::Result<(SocketAddr, ServeOptions)> {
+    let mut address = "8080";
+    let mut granted = false;
+    let mut options = ServeOptions {
+        wants: http::WantOptions::STRICT,
+        admission: RequestPolicy::default(),
     };
-    let options = if granted {
-        http::WantOptions::all_visible_reachable(1024)
-    } else {
-        http::WantOptions::STRICT
-    };
+    for (index, argument) in args.iter().enumerate() {
+        if argument == "--allow-reachable-wants" {
+            if granted {
+                return Err(Error::InvalidRequest);
+            }
+            granted = true;
+        } else if let Some((name, value)) = argument.split_once('=') {
+            let slot = match name {
+                "--max-header-bytes" => &mut options.admission.headers.max_bytes,
+                "--max-header-fields" => &mut options.admission.headers.max_fields,
+                "--max-header-name-bytes" => &mut options.admission.headers.max_name_bytes,
+                "--max-header-value-bytes" => &mut options.admission.headers.max_value_bytes,
+                "--max-wire-bytes" => &mut options.admission.request.max_wire_bytes,
+                "--max-body-bytes" => &mut options.admission.request.max_body_bytes,
+                _ => return Err(Error::InvalidRequest),
+            };
+            if slot.is_some()
+                || value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(Error::InvalidRequest);
+            }
+            *slot = Some(value.parse().map_err(|_| Error::InvalidRequest)?);
+        } else if index == 0 && !argument.starts_with("--") {
+            address = argument;
+        } else {
+            return Err(Error::InvalidRequest);
+        }
+    }
+    if granted {
+        options.wants = http::WantOptions::all_visible_reachable(1024);
+    }
     Ok((listen_address(address)?, options))
 }
 
@@ -59,7 +92,7 @@ fn listen_address(value: &str) -> git_zero::Result<SocketAddr> {
     value.parse().map_err(|_| Error::InvalidRequest)
 }
 
-fn serve(address: SocketAddr, options: http::WantOptions) -> git_zero::Result<()> {
+fn serve(address: SocketAddr, options: ServeOptions) -> git_zero::Result<()> {
     let files = [File {
         name: "README.md",
         contents: b"Hello from an allocation-free in-memory Git repository.\n",
@@ -76,6 +109,13 @@ fn serve(address: SocketAddr, options: http::WantOptions) -> git_zero::Result<()
         &mut [0; 128],
         &mut [0; 128],
     )?;
+    let mut entries = [git_zero::pack::IndexEntry::EMPTY; 3];
+    let publication = http::dumb::Publication::new(
+        &repository,
+        &mut entries,
+        &mut [0; 1024],
+        http::dumb::LooseObjects::Enabled,
+    )?;
     let listener = listen_on(address)?;
     // Port 0 is assigned by the OS and reported only after the socket is bound.
     println!("http://{}/repo.git", local_address(&listener)?);
@@ -88,11 +128,14 @@ fn serve(address: SocketAddr, options: http::WantOptions) -> git_zero::Result<()
         let socket = accept(&listener)?;
         if let Err(error) = serve_connection(
             &repository,
+            &publication,
             &socket,
-            &mut request_storage,
-            &mut control,
-            &mut staging,
-            &mut selection,
+            ConnectionBuffers {
+                request: &mut request_storage,
+                control: &mut control,
+                staging: &mut staging,
+                selection: &mut selection,
+            },
             options,
         ) {
             eprintln!("response: {error:?}");
@@ -100,16 +143,27 @@ fn serve(address: SocketAddr, options: http::WantOptions) -> git_zero::Result<()
     }
 }
 
-fn serve_connection(
-    repository: &ValidatedRepository<'_, '_, impl git_zero::Repository>,
+struct ConnectionBuffers<'a> {
+    request: &'a mut [u8],
+    control: &'a mut [u8],
+    staging: &'a mut [u8],
+    selection: &'a mut http::SelectionBuffers<4, 3, 128, 128>,
+}
+
+fn serve_connection<R: git_zero::Repository>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    publication: &http::dumb::Publication<'_, ValidatedRepository<'_, '_, R>>,
     socket: &impl rustix::fd::AsFd,
-    request_storage: &mut [u8],
-    control: &mut [u8],
-    staging: &mut [u8],
-    selection: &mut http::SelectionBuffers<4, 3, 128, 128>,
-    options: http::WantOptions,
+    buffers: ConnectionBuffers<'_>,
+    options: ServeOptions,
 ) -> git_zero::Result<()> {
-    let mut request = match read_request(socket, request_storage) {
+    let ConnectionBuffers {
+        request: request_storage,
+        control,
+        staging,
+        selection,
+    } = buffers;
+    let mut request = match read_request_with_policy(socket, request_storage, options.admission) {
         Ok(request) => request,
         Err(error) => return reject_request(socket, error),
     };
@@ -124,11 +178,16 @@ fn serve_connection(
         );
     };
     request.path = path;
+    match publication.prepare(request) {
+        Ok(Some(mut encoder)) => return respond_published(socket, &mut encoder, staging),
+        Ok(None) => {}
+        Err(error) => return reject_request(socket, error),
+    }
     let mut encoder = match http::stream::ResponseEncoder::with_selection_storage_policy(
         repository,
         request,
         selection.storage(1_048_576),
-        options,
+        options.wants,
         control,
     ) {
         Ok(encoder) => encoder,
@@ -202,6 +261,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn serve_header_and_request_quotas_are_explicit_exact_and_unique() {
+        let args = [
+            "[::1]:0",
+            "--max-header-bytes=4096",
+            "--max-header-fields=32",
+            "--max-header-name-bytes=64",
+            "--max-header-value-bytes=1024",
+            "--max-wire-bytes=8192",
+            "--max-body-bytes=2048",
+            "--allow-reachable-wants",
+        ]
+        .map(str::to_owned);
+        let (address, options) = serve_options(&args).unwrap();
+        assert_eq!(address, "[::1]:0".parse::<SocketAddr>().unwrap());
+        assert_eq!(
+            options.wants,
+            http::WantOptions::all_visible_reachable(1024)
+        );
+        assert_eq!(
+            options.admission,
+            RequestPolicy {
+                request: git_zero_rustix::RequestLimits {
+                    max_wire_bytes: Some(8192),
+                    max_body_bytes: Some(2048)
+                },
+                headers: git_zero_rustix::HeaderLimits {
+                    max_bytes: Some(4096),
+                    max_fields: Some(32),
+                    max_name_bytes: Some(64),
+                    max_value_bytes: Some(1024)
+                },
+            }
+        );
+        for args in [
+            vec!["--max-header-bytes="],
+            vec!["--max-header-bytes=-1"],
+            vec!["--max-header-bytes=+1"],
+            vec!["--max-header-bytes= 1"],
+            vec!["--max-header-bytes=184467440737095516160"],
+            vec!["--max-header-bytes=1", "--max-header-bytes=2"],
+            vec!["--allow-reachable-wants", "--allow-reachable-wants"],
+            vec!["--max-header-fields=2", "0"],
+            vec!["--max-unknown=2"],
+        ] {
+            assert_eq!(
+                serve_options(&args.into_iter().map(str::to_owned).collect::<Vec<_>>()),
+                Err(Error::InvalidRequest)
+            );
+        }
+        let (_, options) = serve_options(&["--max-header-fields=0".to_owned()]).unwrap();
+        assert_eq!(options.admission.headers.max_fields, Some(0));
+        assert_eq!(options.wants, http::WantOptions::STRICT);
+        assert_eq!(
+            serve_options(&[]).unwrap().1.admission,
+            RequestPolicy::default()
+        );
+    }
+
+    #[test]
     fn serve_arguments_keep_the_grant_explicit_with_optional_default_address() {
         for (args, address, granted) in [
             (vec![], "127.0.0.1:8080", false),
@@ -213,7 +331,7 @@ mod tests {
             let (actual, options) = serve_options(&args).unwrap();
             assert_eq!(actual, address.parse::<SocketAddr>().unwrap());
             assert_eq!(
-                options,
+                options.wants,
                 if granted {
                     http::WantOptions::all_visible_reachable(1024)
                 } else {

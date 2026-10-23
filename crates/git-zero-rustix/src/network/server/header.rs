@@ -1,5 +1,6 @@
 //! Bounded incremental HTTP header intake and delimiter scan state.
 use super::super::{header_end, receive};
+use super::HeaderLimits;
 use git_zero::{Error, Result, http::Request};
 use rustix::fd::AsFd;
 
@@ -31,8 +32,12 @@ pub(super) fn read_header(
     socket: &impl AsFd,
     storage: &mut [u8],
     max_wire_bytes: Option<usize>,
+    max_header_bytes: Option<usize>,
 ) -> Result<(usize, usize)> {
-    let capacity = max_wire_bytes.map_or(storage.len(), |limit| limit.min(storage.len()));
+    let capacity = [max_wire_bytes, max_header_bytes]
+        .into_iter()
+        .flatten()
+        .fold(storage.len(), usize::min);
     let mut length = 0;
     let mut scan = HeaderScan::default();
     let end = loop {
@@ -40,11 +45,13 @@ pub(super) fn read_header(
             break end;
         }
         if length == capacity {
-            return Err(if max_wire_bytes == Some(length) {
-                Error::LimitExceeded
-            } else {
-                Error::BufferTooSmall
-            });
+            return Err(
+                if max_wire_bytes == Some(length) || max_header_bytes == Some(length) {
+                    Error::LimitExceeded
+                } else {
+                    Error::BufferTooSmall
+                },
+            );
         }
         let count = receive(socket, &mut storage[length..capacity])?;
         if count == 0 {
@@ -72,12 +79,27 @@ pub(super) struct Headers<'a> {
 }
 
 impl<'a> Headers<'a> {
-    pub(super) fn parse(header: &'a str) -> Result<Self> {
+    pub(super) fn parse(header: &'a str, limits: HeaderLimits) -> Result<Self> {
         let mut parsed = Self::default();
-        for line in header.split("\r\n").skip(1).filter(|line| !line.is_empty()) {
+        for (index, line) in header
+            .split("\r\n")
+            .skip(1)
+            .filter(|line| !line.is_empty())
+            .enumerate()
+        {
             let (name, value) = line.split_once(':').ok_or(Error::InvalidRequest)?;
             if name.is_empty() || !name.bytes().all(token_byte) || !value.bytes().all(field_byte) {
                 return Err(Error::InvalidRequest);
+            }
+            if limits.max_fields.is_some_and(|limit| index >= limit)
+                || limits
+                    .max_name_bytes
+                    .is_some_and(|limit| name.len() > limit)
+                || limits
+                    .max_value_bytes
+                    .is_some_and(|limit| value.len() > limit)
+            {
+                return Err(Error::LimitExceeded);
             }
             if name.eq_ignore_ascii_case("transfer-encoding") {
                 return Err(Error::Unsupported);

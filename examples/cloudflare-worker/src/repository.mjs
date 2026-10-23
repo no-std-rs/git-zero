@@ -1,5 +1,6 @@
 import { readRequestBody } from "./bytes.mjs";
 import { streamResponse } from "./stream.mjs";
+import { revisionPolicy } from "./revision-policy.mjs";
 import { wantPolicy } from "./want-policy.mjs";
 
 const encoder = new TextEncoder();
@@ -138,7 +139,7 @@ function failure(status, message) {
   return new Response(`${message}\n`, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export function repositoryResponse(module, repository, target, body, method, headers, policy = null) {
+export function repositoryResponse(module, repository, target, body, method, headers, policy = null, revisions = null, publication = null) {
   const { exports } = new WebAssembly.Instance(module, {});
   importRepository(exports, repository);
   let length;
@@ -147,13 +148,33 @@ export function repositoryResponse(module, repository, target, body, method, hea
     if (error instanceof RepositoryError && error.status === 413) return failure(413, "Request exceeds Wasm capacity");
     throw error;
   }
-  const result = policy
+  const objectRoute = target.replace(/^\//, "").split("?", 1)[0].startsWith("objects/");
+  if (publication && objectRoute) {
+    const result = exports.stream_start_repository_packed(length, method === "POST" ? 1 : 0, publication === "mixed" ? 1 : 0);
+    const size = exports.publication_length();
+    return streamResponse(exports, result, size >= 0 ? size : undefined);
+  }
+  const result = revisions
+    ? exports.stream_start_repository_revisions(length, method === "POST" ? 1 : 0, policy ? 1 : 0, policy?.maxWantLines ?? 64, revisions.maxExclusions, revisions.graphReadLimit)
+    : policy
     ? exports.stream_start_repository_policy(length, method === "POST" ? 1 : 0, 1, policy.maxWantLines)
     : exports.stream_start_repository(length, method === "POST" ? 1 : 0);
   return streamResponse(exports, result);
 }
 
-// The trusted loader returns { repository, target, wantPolicy?, maxWantLines? },
+// A complete raw import is still bounded to 64 objects / 128 KiB. No complete
+// PACK or index buffer is retained in Wasm; metadata is instance-owned.
+export function publicationPolicy(module, mode = "loose-only") {
+  if (mode === "loose-only") return null;
+  if (!["packed-only", "mixed"].includes(mode)) throw new TypeError("Invalid publication mode");
+  const exports = WebAssembly.Module.exports(module);
+  for (const name of ["stream_start_repository_packed", "publication_length"]) {
+    if (!exports.some((entry) => entry.kind === "function" && entry.name === name)) throw new TypeError(`Publication requires Wasm export ${name}`);
+  }
+  return mode;
+}
+
+// The trusted loader returns { repository, target, wantPolicy?, maxWantLines?, revisionLimits?, publication? },
 // or null. Authentication, public projection and immutable URL retention belong
 // to its host. Policy scalars are copied before awaiting the request body.
 export function createRepositoryWorker(module, loadRepository) {
@@ -165,14 +186,18 @@ export function createRepositoryWorker(module, loadRepository) {
       try { selected = await loadRepository(request); }
       catch { return failure(503, "Repository unavailable"); }
       if (!selected) return failure(404, "Repository not found");
-      let policy;
-      try { policy = wantPolicy(module, selected.wantPolicy, selected.maxWantLines, "stream_start_repository_policy"); }
-      catch { return failure(503, "Invalid host want policy or missing Wasm export"); }
+      let policy, revisions, publication;
+      try {
+        policy = wantPolicy(module, selected.wantPolicy, selected.maxWantLines, "stream_start_repository_policy");
+        revisions = revisionPolicy(module, selected.revisionLimits, "stream_start_repository_revisions");
+        publication = publicationPolicy(module, selected.publication);
+      }
+      catch { return failure(503, "Invalid host policy or missing Wasm export"); }
       let body;
       try { body = await readRequestBody(request, 32768); }
       catch { return failure(400, "Invalid or oversized request"); }
       try {
-        return repositoryResponse(module, selected.repository, selected.target, body, request.method, request.headers, policy);
+        return repositoryResponse(module, selected.repository, selected.target, body, request.method, request.headers, policy, revisions, publication);
       } catch (error) {
         return failure(error instanceof RepositoryError ? error.status : 502, "Invalid or oversized repository");
       }

@@ -215,3 +215,11 @@ all-features = true
 
 [lints]
 workspace = true
+
+[[test]]
+name = "index_stream"
+required-features = ["write"]
+
+[[test]]
+name = "dumb_publication"
+required-features = ["read", "server"]

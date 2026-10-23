@@ -94,24 +94,8 @@ pub fn write_index(
     pack_checksum: ObjectId,
     output: &mut impl Write,
 ) -> Result<ObjectId> {
-    u32::try_from(entries.len()).map_err(|_| Error::Unsupported)?;
+    validate_entries(entries, pack_checksum)?;
     let format = pack_checksum.format();
-    if entries
-        .iter()
-        .any(|entry| entry.id.format() != format || entry.offset < 12)
-        || entries.windows(2).any(|pair| pair[0].id >= pair[1].id)
-    {
-        return Err(Error::InvalidObject);
-    }
-    // The high bit of each 32-bit large-offset reference is its tag.
-    if entries
-        .iter()
-        .filter(|entry| entry.offset >= 0x8000_0000)
-        .count() as u64
-        > 0x8000_0000
-    {
-        return Err(Error::Unsupported);
-    }
     let mut output = IndexWriter {
         output,
         hash: format.hash(),
@@ -130,6 +114,28 @@ pub fn write_index(
     let checksum = output.hash.finish();
     output.output.write_all(checksum.as_bytes())?;
     Ok(checksum)
+}
+
+pub(super) fn validate_entries(entries: &[IndexEntry], pack_checksum: ObjectId) -> Result<()> {
+    u32::try_from(entries.len()).map_err(|_| Error::Unsupported)?;
+    let format = pack_checksum.format();
+    if entries
+        .iter()
+        .any(|entry| entry.id.format() != format || entry.offset < 12)
+        || entries.windows(2).any(|pair| pair[0].id >= pair[1].id)
+    {
+        return Err(Error::InvalidObject);
+    }
+    // The high bit of each 32-bit large-offset reference is its tag.
+    if entries
+        .iter()
+        .filter(|entry| entry.offset >= 0x8000_0000)
+        .count() as u64
+        > 0x8000_0000
+    {
+        return Err(Error::Unsupported);
+    }
+    Ok(())
 }
 
 struct PackWriter<'a, W> {

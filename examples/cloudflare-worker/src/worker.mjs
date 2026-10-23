@@ -2,6 +2,7 @@ import { decodeSnapshot, loadSnapshot, MAX_SNAPSHOT_BYTES, persistSnapshot, Snap
 import { readRequestBody } from "./bytes.mjs";
 import { captureMetadata } from "./metadata.mjs";
 import { streamResponse } from "./stream.mjs";
+import { environmentRevisions } from "./revision-policy.mjs";
 import { WantPolicyError, wantPolicy } from "./want-policy.mjs";
 import { importRepository, repositoryResponse } from "./repository.mjs";
 import { treeRepository } from "./tree.mjs";
@@ -20,7 +21,7 @@ function decodeToken(token, version = 1) {
   return decodeSnapshot(bytes, version);
 }
 
-function invoke(module, parts, target, body, method, headers, policy) {
+function invoke(module, parts, target, body, method, headers, policy, revisions) {
   // Each response owns an instance, so overlapping fetches cannot share
   // Rust's fixed input/output arrays. The compiled module itself is reusable.
   const { exports } = new WebAssembly.Instance(module, {});
@@ -48,7 +49,9 @@ function invoke(module, parts, target, body, method, headers, policy) {
     offset += value.length;
   }
   input.set(body, offset);
-  const result = policy
+  const result = revisions
+    ? exports.stream_start_revisions(length, method === "POST" ? 1 : 0, 0, policy ? 1 : 0, policy?.maxWantLines ?? 64, revisions.maxExclusions, revisions.graphReadLimit)
+    : policy
     ? exports.stream_start_policy(length, method === "POST" ? 1 : 0, 0, 1, policy.maxWantLines)
     : exports.stream_start(length, method === "POST" ? 1 : 0, 0);
   return streamResponse(exports, result);
@@ -58,12 +61,13 @@ export function createWorker(module) {
   return {
     async fetch(request, env = {}) {
       const url = new URL(request.url);
-      let policy;
+      let policy, revisions;
       try {
         policy = wantPolicy(module, env.GIT_WANT_POLICY, env.GIT_MAX_WANT_LINES === undefined ? 64 : Number(env.GIT_MAX_WANT_LINES),
           "stream_start_policy", "stream_start_repository_policy");
+        revisions = environmentRevisions(module, env);
       } catch (error) {
-        if (!(error instanceof WantPolicyError)) throw error;
+        if (!(error instanceof WantPolicyError || error instanceof TypeError)) throw error;
         return new Response(`${error.message}\n`, { status: 503 });
       }
       if (url.pathname === "/" && request.method === "GET") {
@@ -108,10 +112,10 @@ export function createWorker(module) {
         const parts = inline ? decodeToken(inline[1], version) : await loadSnapshot(env, stored[1], stored[2], version);
         const body = await readRequestBody(request, 32768);
         const target = `${inline ? inline[2] : stored[3]}${url.search}`;
-        if (version === 1) return invoke(module, parts, target, body, request.method, request.headers, policy);
+        if (version === 1) return invoke(module, parts, target, body, request.method, request.headers, policy, revisions);
         try {
           const tree = await treeRepository(parts);
-          return repositoryResponse(module, tree.repository, target, body, request.method, request.headers, policy);
+          return repositoryResponse(module, tree.repository, target, body, request.method, request.headers, policy, revisions);
         } catch (error) {
           throw new SnapshotError("Invalid or oversized tree snapshot", stored ? 502 : error.status === 413 ? 413 : 400);
         }

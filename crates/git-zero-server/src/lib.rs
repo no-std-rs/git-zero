@@ -3,6 +3,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod dumb;
 mod http_backend;
 pub mod receive;
 mod route;

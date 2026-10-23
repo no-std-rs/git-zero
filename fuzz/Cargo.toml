@@ -72,3 +72,10 @@ path = "fuzz_targets/graph.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "indexes"
+path = "fuzz_targets/indexes.rs"
+test = false
+doc = false
+bench = false

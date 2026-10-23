@@ -151,3 +151,35 @@ cap. Its buffered responder receives `WantOptions` on every call; revoking that
 grant denies unadvertised wants before consulting even a warmed cache. This
 trusted host flag never comes from HTTP input and does not replace authentication
 or an authorized immutable repository projection.
+
+Header-specific admission uses `read_request_with_policy` and `RequestPolicy`.
+`HeaderLimits` independently bounds complete header bytes (request line and
+final delimiter included), field count, name bytes and raw value bytes after the
+colon. Leading/trailing whitespace consumes the value budget. Unknown and
+repeated ordinary fields consume quotas too. Defaults are unset and preserve
+`read_request` / `read_request_with_limits` behavior. An incomplete header stops
+at the byte cap without consuming the first excess byte. Each field's syntax is
+validated before its field quotas; accepted fields still follow the existing
+framing/duplicate rules. Exhaustion returns `LimitExceeded` before body intake,
+gzip expansion or repository preparation. Close failed requests and reuse their
+storage only after dropping all provisional views.
+
+The CLI accepts these optional inclusive limits, including zero:
+
+```sh
+git-zero serve 8080 --max-header-bytes=4096 --max-header-fields=32 \
+  --max-header-name-bytes=64 --max-header-value-bytes=1024 \
+  --max-wire-bytes=65536 --max-body-bytes=32768
+```
+
+Values are decimal byte/count budgets. Duplicate/unknown flags, signs and
+out-of-range values fail before listening. The address, when present, comes
+first. These controls leave accepted-socket per-I/O timeouts unchanged and do not
+establish aggregate request/idle deadlines.
+
+Packed dumb publication is described in [the publication guide](../../docs/packed-dumb.md).
+`respond_published` streams generated packs/indexes;
+`FilePublication::from_fds` verifies pinned complete files and
+`respond_file_published` streams them with independent offsets. Both cancel on
+socket/provider failure. The CLI's immutable demonstration snapshot now serves
+its generated pack/index alongside loose objects.

@@ -8,6 +8,8 @@ pub mod cache;
 pub mod storage;
 #[cfg(feature = "storage")]
 pub use storage::{FileObject, FileRepository};
+#[cfg(all(feature = "storage", feature = "server"))]
+pub use storage::{FilePublication, FilePublishedResponse};
 
 #[cfg(any(feature = "client", feature = "server"))]
 mod network;

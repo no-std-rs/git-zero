@@ -11,8 +11,12 @@ mod abi {
     use crate::{raw, view::WorkerRepository};
     use core::cell::UnsafeCell;
     use git_zero::{
-        Entry, EntryKind, Error, ObjectFormat, Snapshot, SnapshotBuilder, ValidatedRepository,
-        http::{self, Request, SelectionBuffers, WantOptions, WantPolicy, stream::ResponseEncoder},
+        Entry, EntryKind, Error, ObjectFormat, RevisionLimits, Snapshot, SnapshotBuilder,
+        ValidatedRepository,
+        http::{
+            self, Request, RevisionStorage, SelectionBuffers, WantOptions, WantPolicy,
+            stream::ResponseEncoder,
+        },
         io::SliceWriter,
     };
 
@@ -33,6 +37,8 @@ mod abi {
         commit: [u8; 1024],
         control: [u8; 8192],
         selection: SelectionBuffers<64, 64, 512, 512>,
+        revisions: [u8; 64],
+        publication: [git_zero::pack::IndexEntry; raw::OBJECTS],
     }
     struct Exclusive<T>(UnsafeCell<T>);
     // SAFETY: Same synchronous, single-threaded, non-reentrant ABI as Buffer.
@@ -44,7 +50,11 @@ mod abi {
             commit: [0; 1024],
             control: [0; 8192],
             selection: SelectionBuffers::new(),
+            revisions: [0; 64],
+            publication: [git_zero::pack::IndexEntry::EMPTY; raw::OBJECTS],
         }));
+    static PUBLICATION: Exclusive<Option<http::dumb::Publication<'static, raw::Imported>>> =
+        Exclusive(UnsafeCell::new(None));
     enum Session {
         Snapshot {
             repository: Snapshot<'static>,
@@ -53,6 +63,9 @@ mod abi {
         Imported {
             repository: &'static raw::Imported,
             encoder: ResponseEncoder<'static>,
+        },
+        Published {
+            encoder: http::dumb::PublishedResponse<'static, raw::Imported>,
         },
     }
     static SESSION: Exclusive<Option<Session>> = Exclusive(UnsafeCell::new(None));
@@ -73,6 +86,9 @@ mod abi {
         // SAFETY: Exclusive ABI entry; drops all references before buffer reuse.
         unsafe {
             *SESSION.0.get() = None;
+            // Drop every cursor before the publication it borrowed, and both
+            // before importing new objects or reusing the metadata array.
+            *PUBLICATION.0.get() = None;
         }
     }
 
@@ -273,6 +289,8 @@ mod abi {
             "application/x-git-upload-pack-advertisement" => 1,
             "application/x-git-upload-pack-result" => 2,
             "application/x-git-loose-object" => 3,
+            "application/x-git-packed-objects" => 4,
+            "application/x-git-packed-objects-toc" => 5,
             _ => 0,
         };
     }
@@ -282,7 +300,7 @@ mod abi {
     /// stream; starting another request replaces it. Errors: -1 capacity, -2 input.
     #[unsafe(no_mangle)]
     pub extern "C" fn stream_start(input_length: usize, method: u32, format: u32) -> i32 {
-        start_frame(input_length, method, format, 0, usize::MAX)
+        start_frame(input_length, method, format, 0, usize::MAX, None)
     }
 
     /// Host-granted want policy, never parsed from INPUT. Unknown policy cancels
@@ -301,6 +319,52 @@ mod abi {
             format,
             policy,
             max_want_lines as usize,
+            None,
+        )
+    }
+
+    #[derive(Clone, Copy)]
+    struct RevisionConfig {
+        max_exclusions: usize,
+        graph_read_limit: u64,
+    }
+
+    impl RevisionConfig {
+        fn new(max_exclusions: u32, graph_read_limit: u32) -> git_zero::Result<Self> {
+            if max_exclusions > 8 || graph_read_limit > 1_048_576 {
+                return Err(Error::InvalidRequest);
+            }
+            Ok(Self {
+                max_exclusions: max_exclusions as usize,
+                graph_read_limit: graph_read_limit as u64,
+            })
+        }
+    }
+
+    /// Explicit host opt-in; limits are not read from the untrusted HTTP frame.
+    /// At most eight exclusions and 1 MiB of graph reads; lower budgets, including
+    /// zero, are enforced before output. Existing starts stay revision-disabled.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn stream_start_revisions(
+        input_length: usize,
+        method: u32,
+        format: u32,
+        policy: u32,
+        max_want_lines: u32,
+        max_exclusions: u32,
+        graph_read_limit: u32,
+    ) -> i32 {
+        stream_cancel();
+        let Ok(revision) = RevisionConfig::new(max_exclusions, graph_read_limit) else {
+            return -2;
+        };
+        start_frame(
+            input_length,
+            method,
+            format,
+            policy,
+            max_want_lines as usize,
+            Some(revision),
         )
     }
 
@@ -321,6 +385,7 @@ mod abi {
         format: u32,
         policy: u32,
         max_want_lines: usize,
+        revision: Option<RevisionConfig>,
     ) -> i32 {
         stream_cancel();
         let options = match want_options(policy, max_want_lines) {
@@ -339,7 +404,7 @@ mod abi {
         // disjoint static fields are exclusively borrowed until cancel/restart.
         let input = unsafe { &(&*INPUT.0.get())[..input_length] };
         let storage = unsafe { &mut *SESSION_STORAGE.0.get() };
-        let session = start_session(input, storage, method, format, options);
+        let session = start_session(input, storage, method, format, options, revision);
         match session {
             Ok(session) => {
                 unsafe {
@@ -348,7 +413,7 @@ mod abi {
                 3
             }
             Err(Error::BufferTooSmall) => -1,
-            Err(Error::LimitExceeded) if options != WantOptions::STRICT => -1,
+            Err(Error::LimitExceeded) if options != WantOptions::STRICT || revision.is_some() => -1,
             Err(_) => -2,
         }
     }
@@ -359,6 +424,7 @@ mod abi {
         method: u32,
         format: ObjectFormat,
         options: WantOptions,
+        revision: Option<RevisionConfig>,
     ) -> git_zero::Result<Session> {
         let (repository, request) = repository_request(
             input,
@@ -379,12 +445,14 @@ mod abi {
             &mut [0; 128],
             &mut [0; 128],
         )?;
-        let encoder = ResponseEncoder::with_selection_storage_policy(
+        let encoder = prepare_response(
             &validated,
             request,
-            storage.selection.storage(1_048_576),
-            options,
+            &mut storage.selection,
+            &mut storage.revisions,
             &mut storage.control,
+            options,
+            revision,
         )?;
         response_header(encoder.response(), unsafe { &mut *OUTPUT.0.get() });
         Ok::<_, Error>(Session::Snapshot {
@@ -457,7 +525,7 @@ mod abi {
     /// Git-Protocol/Content-Type bytes, then body. Format is fixed by the import.
     #[unsafe(no_mangle)]
     pub extern "C" fn stream_start_repository(input_length: usize, method: u32) -> i32 {
-        start_repository_frame(input_length, method, 0, usize::MAX)
+        start_repository_frame(input_length, method, 0, usize::MAX, None)
     }
 
     #[unsafe(no_mangle)]
@@ -467,7 +535,108 @@ mod abi {
         policy: u32,
         max_want_lines: u32,
     ) -> i32 {
-        start_repository_frame(input_length, method, policy, max_want_lines as usize)
+        start_repository_frame(input_length, method, policy, max_want_lines as usize, None)
+    }
+
+    /// Imported-repository counterpart of `stream_start_revisions`.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn stream_start_repository_revisions(
+        input_length: usize,
+        method: u32,
+        policy: u32,
+        max_want_lines: u32,
+        max_exclusions: u32,
+        graph_read_limit: u32,
+    ) -> i32 {
+        stream_cancel();
+        let Ok(revision) = RevisionConfig::new(max_exclusions, graph_read_limit) else {
+            return -2;
+        };
+        start_repository_frame(
+            input_length,
+            method,
+            policy,
+            max_want_lines as usize,
+            Some(revision),
+        )
+    }
+
+    /// Complete stored-pack dumb publication for an authenticated raw import.
+    /// loose: 0=packed-only, 1=fall through to ordinary loose-object responses.
+    /// Other routes retain strict ordinary selection; smart host options should
+    /// use their existing dedicated starts. Publication and cursor borrow only
+    /// this instance's immutable import and fixed 64-entry metadata array.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn stream_start_repository_packed(
+        input_length: usize,
+        method: u32,
+        loose: u32,
+    ) -> i32 {
+        stream_cancel();
+        let loose = match loose {
+            0 => http::dumb::LooseObjects::Disabled,
+            1 => http::dumb::LooseObjects::Enabled,
+            _ => return -2,
+        };
+        if input_length > INPUT_CAPACITY {
+            return -1;
+        }
+        // SAFETY: Cancellation above releases all prior publication/cursor
+        // borrows. Ready imports are immutable until repository_begin cancels.
+        let imported = unsafe { &*IMPORTED.0.get() };
+        if !imported.ready() {
+            return -2;
+        }
+        let input = unsafe { &(&*INPUT.0.get())[..input_length] };
+        let request = match request(input, method, true) {
+            Ok(request) => request,
+            Err(_) => return -2,
+        };
+        let storage = unsafe { &mut *SESSION_STORAGE.0.get() };
+        let publication = match http::dumb::Publication::new(
+            imported,
+            &mut storage.publication,
+            &mut [0; 512],
+            loose,
+        ) {
+            Ok(publication) => publication,
+            Err(Error::BufferTooSmall | Error::LimitExceeded) => return -1,
+            Err(_) => return -2,
+        };
+        // SAFETY: Publication is replaced only after SESSION is cancelled.
+        unsafe {
+            *PUBLICATION.0.get() = Some(publication);
+        }
+        let publication = unsafe { (&*PUBLICATION.0.get()).as_ref().unwrap() };
+        match publication.prepare(request) {
+            Ok(Some(encoder)) => {
+                response_header(encoder.response(), unsafe { &mut *OUTPUT.0.get() });
+                unsafe {
+                    *SESSION.0.get() = Some(Session::Published { encoder });
+                }
+                3
+            }
+            Ok(None) => start_repository_frame(input_length, method, 0, usize::MAX, None),
+            Err(Error::BufferTooSmall | Error::LimitExceeded) => {
+                stream_cancel();
+                -1
+            }
+            Err(_) => {
+                stream_cancel();
+                -2
+            }
+        }
+    }
+
+    /// Known complete wire length for a currently prepared publication response.
+    /// -1 means no publication cursor; all bounded raw imports fit signed i32.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn publication_length() -> i32 {
+        // SAFETY: Read-only, exclusive non-reentrant ABI access.
+        match unsafe { &*SESSION.0.get() } {
+            Some(Session::Published { encoder }) => i32::try_from(encoder.size()).unwrap_or(-1),
+            _ => -1,
+        }
     }
 
     fn start_repository_frame(
@@ -475,6 +644,7 @@ mod abi {
         method: u32,
         policy: u32,
         max_want_lines: usize,
+        revision: Option<RevisionConfig>,
     ) -> i32 {
         stream_cancel();
         let options = match want_options(policy, max_want_lines) {
@@ -492,13 +662,13 @@ mod abi {
         }
         let input = unsafe { &(&*INPUT.0.get())[..input_length] };
         let storage = unsafe { &mut *SESSION_STORAGE.0.get() };
-        match start_imported_session(imported, input, storage, method, options) {
+        match start_imported_session(imported, input, storage, method, options, revision) {
             Ok(session) => {
                 unsafe { *SESSION.0.get() = Some(session) };
                 3
             }
             Err(Error::BufferTooSmall) => -1,
-            Err(Error::LimitExceeded) if options != WantOptions::STRICT => -1,
+            Err(Error::LimitExceeded) if options != WantOptions::STRICT || revision.is_some() => -1,
             Err(_) => -2,
         }
     }
@@ -509,6 +679,7 @@ mod abi {
         storage: &'static mut SessionStorage,
         method: u32,
         options: WantOptions,
+        revision: Option<RevisionConfig>,
     ) -> git_zero::Result<Session> {
         let mut objects = [None; raw::OBJECTS];
         let mut by_id = [0; raw::OBJECTS];
@@ -520,18 +691,54 @@ mod abi {
             &mut [0; 512],
             &mut [0; 512],
         )?;
-        let encoder = ResponseEncoder::with_selection_storage_policy(
+        let encoder = prepare_response(
             &validated,
             request(input, method, true)?,
-            storage.selection.storage(1_048_576),
-            options,
+            &mut storage.selection,
+            &mut storage.revisions,
             &mut storage.control,
+            options,
+            revision,
         )?;
         response_header(encoder.response(), unsafe { &mut *OUTPUT.0.get() });
         Ok(Session::Imported {
             repository,
             encoder,
         })
+    }
+
+    fn prepare_response<R: git_zero::Repository + ?Sized>(
+        repository: &ValidatedRepository<'_, '_, R>,
+        request: Request<'_>,
+        selection: &'static mut SelectionBuffers<64, 64, 512, 512>,
+        states: &'static mut [u8],
+        control: &'static mut [u8],
+        options: WantOptions,
+        revision: Option<RevisionConfig>,
+    ) -> git_zero::Result<ResponseEncoder<'static>> {
+        if let Some(config) = revision {
+            ResponseEncoder::with_revision_storage_policy(
+                repository,
+                request,
+                RevisionStorage {
+                    selection: selection.storage(config.graph_read_limit),
+                    state: states,
+                    limits: RevisionLimits {
+                        max_exclusions: config.max_exclusions,
+                    },
+                },
+                options,
+                control,
+            )
+        } else {
+            ResponseEncoder::with_selection_storage_policy(
+                repository,
+                request,
+                selection.storage(1_048_576),
+                options,
+                control,
+            )
+        }
     }
 
     /// Produce at most `capacity` body bytes in OUTPUT. 0 means clean EOF.
@@ -548,17 +755,17 @@ mod abi {
             return -2;
         };
         let output = unsafe { &mut (&mut *OUTPUT.0.get())[..capacity] };
-        let (repository, encoder) = match active {
+        let result = match active {
             Session::Snapshot {
                 repository,
                 encoder,
-            } => (WorkerRepository::Snapshot(repository), encoder),
+            } => encoder.read(&WorkerRepository::Snapshot(repository), output),
             Session::Imported {
                 repository,
                 encoder,
-            } => (WorkerRepository::Imported(repository), encoder),
+            } => encoder.read(&WorkerRepository::Imported(repository), output),
+            Session::Published { encoder } => encoder.read(output),
         };
-        let result = encoder.read(&repository, output);
         match result {
             Ok(length) => length as i32,
             Err(_) => {

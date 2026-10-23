@@ -196,11 +196,30 @@ impl<'a> ResponseEncoder<'a> {
         storage: crate::RevisionStorage<'a>,
         control: &'a mut [u8],
     ) -> Result<Self> {
+        Self::with_revision_storage_policy(
+            repository,
+            request,
+            storage,
+            crate::WantOptions::STRICT,
+            control,
+        )
+    }
+
+    /// Combine explicit revision budgets with a request-local want grant. Neither
+    /// capability can be inherited by another response or a strict constructor.
+    #[cfg(feature = "read")]
+    pub fn with_revision_storage_policy<R: Repository + ?Sized>(
+        repository: &git_zero_core::ValidatedRepository<'_, '_, R>,
+        request: Request<'_>,
+        storage: crate::RevisionStorage<'a>,
+        options: crate::WantOptions,
+        control: &'a mut [u8],
+    ) -> Result<Self> {
         Self::selected_storage(
             repository,
             request,
             storage.selection,
-            crate::WantOptions::STRICT,
+            options,
             Some((storage.state, storage.limits)),
             control,
         )

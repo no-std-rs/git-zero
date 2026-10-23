@@ -17,10 +17,14 @@ pub use client::HttpTransport;
 mod server;
 #[cfg(feature = "server")]
 pub use server::{
-    AcceptedSocketTimeouts, RequestLimits, accept, accept_with_timeouts, listen, listen_on,
-    local_address, local_port, read_request, read_request_with_limits, respond, respond_headers,
-    respond_stream,
+    AcceptedSocketTimeouts, HeaderLimits, RequestLimits, RequestPolicy, accept,
+    accept_with_timeouts, listen, listen_on, local_address, local_port, read_request,
+    read_request_with_limits, read_request_with_policy, respond, respond_headers,
+    respond_published, respond_stream,
 };
+
+#[cfg(all(feature = "server", feature = "storage"))]
+pub use server::respond_file_published;
 
 #[cfg(not(target_vendor = "apple"))]
 const SOCKET_FLAGS: SocketFlags = SocketFlags::CLOEXEC;

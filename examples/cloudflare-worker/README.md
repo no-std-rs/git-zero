@@ -414,3 +414,46 @@ history/side checkouts, exact blob:limit boundaries and canonical all-kind
 selected pack inventories. Plain/gzip negative tests retain private/mixed-want,
 projection validation, restart and old/incomplete-interface guards. These are
 local bounded fixtures, not a deployment or throughput claim.
+
+## Optional revision history and packed publication
+
+The trusted loader used with `createRepositoryWorker` can enable bounded
+revision history and packed dumb HTTP independently:
+
+```js
+return {
+  repository, target,
+  revisionLimits: { maxExclusions: 8, graphReadLimit: 1048576 },
+  publication: "packed-only", // or "mixed"; omission keeps loose-only
+};
+```
+
+The host copies policy scalars before awaiting the request body. Revision limits
+must be integers within the fixed eight-exclusion/1 MiB graph-read ceilings;
+zero is an active budget. Every exclusion argument, including duplicates,
+consumes the count. A separate byte per object tracks revision boundaries.
+Malformed inputs and exhausted limits cancel before output; a new request resets
+all selection/boundary state. Real-Git comparisons cover time/exclusion clone and
+repeated deepening in v0/v1/v2, SHA-1/SHA-256. Revision cuts with tree-depth or
+object-type filters remain rejected. Enabling revisions does not grant
+unadvertised wants; the existing visible-closure permission remains separate.
+
+The metadata-capture demo can opt in with `GIT_REVISION_HISTORY="enabled"`,
+`GIT_MAX_EXCLUSIONS="8"` and `GIT_GRAPH_READ_LIMIT="1048576"`. Defaults leave
+revision history disabled; deployment configuration never comes from captured
+headers or snapshot data. Flat and tree-shaped metadata use the same policy.
+
+New ABI entrypoints `stream_start_revisions` and
+`stream_start_repository_revisions` accept explicit host policy/want/exclusion
+and graph-read limits. Their ordinary/strict counterparts keep revision history
+disabled. Invalid host limits return `-2`; exhausted enabled limits return `-1`.
+Every start cancels the previous cursor before reusing its storage.
+
+Packed publication serves checksum-named complete packs and indexes from the
+same imported immutable graph. `packed-only` denies loose object routes;
+`mixed` lets the host expose loose objects alongside the complete pack. The
+bounded raw import remains 64 objects/eight refs/128 KiB, and the fixed Wasm
+memory ceiling remains 24 pages with no growth. This path provides synchronous
+resident-object preparation, not asynchronous pack caching. The metadata demo
+keeps its existing loose-only layout. See [the publication guide](../../docs/packed-dumb.md)
+for identity, streaming and native verified-file contracts.

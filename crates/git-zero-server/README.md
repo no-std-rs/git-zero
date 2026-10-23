@@ -203,3 +203,18 @@ exhausted limits; failures after sending headers require transport abort.
 
 Native tests compare real Git with `http-backend` for both hashes and v0/v1/v2.
 The Worker example does not opt into revision storage yet.
+
+`dumb::Publication` adds immutable complete stored-pack publication with
+`objects/info/packs` and checksum-named `.pack`/`.idx` downloads. Preparation
+retains one caller-owned metadata entry per object; pack/index bytes stream
+without a complete buffer. It supports packed-only and loose fallthrough modes,
+shared route validation and independent response cancellation. Dispatch it before
+the ordinary handler over the exact same stable repository. Native and bounded
+Worker hosts pass unassisted real-Git packed/mixed clones in both object formats.
+See [the publication guide](../../docs/packed-dumb.md).
+
+`ResponseEncoder::with_revision_storage_policy` combines explicit revision
+buffers/limits with an independent host want grant. Revision capability cannot
+authorize an otherwise forbidden object, and permission does not enable revision
+cuts in ordinary constructors. Worker exports now expose these separate options
+with fixed state and graph/exclusion limits.
