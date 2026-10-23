@@ -9,132 +9,17 @@ const identity = key(source.exports);
 const raw = generated(source.exports);
 
 for (const kind of ["kv", "r2"]) {
-  test(`${kind} cache awaits publication, verifies every hit and preserves private versioned keys`, async () => {
-    const { binding, policy } = cache(kind);
-    binding.putGate = deferred();
-    let generates = 0, authenticates = 0, completed = false;
-    const first = policy.resolve(identity, () => { generates++; return raw; }, (pack) => {
-      authenticates++; assert.equal(Buffer.compare(Buffer.from(pack), raw), 0);
-    }).then((result) => { completed = true; return result; });
-    await until(() => binding.operations.some((value) => value.operation === "put"));
-    assert.equal(completed, false);
-    assert.equal(binding.records.size, 0);
-    assert.equal(authenticates, 1);
-    binding.putGate.resolve();
-    assert.equal(await first, "miss");
-    assert.equal(binding.records.size, 1);
-    const entry = [...binding.records.keys()][0];
-    assert.equal(entry, `selected-packs/v1/test-private/${identity}`);
-    assert.equal(await policy.resolve(identity, () => { throw new Error("hit generated"); }, (pack) => {
-      authenticates++; assert.equal(Buffer.compare(Buffer.from(pack), raw), 0);
-    }), "hit");
-    assert.equal(generates, 1);
-    assert.equal(authenticates, 2);
-    assert.deepEqual(policy.statistics(), {
-      hits: 1, misses: 1, waits: 0, writes: 1, failures: 0, producers: 0, peakProducers: 1, inflight: 0, waiters: 0,
-    });
-    if (kind === "kv") {
-      assert.equal(binding.operations[0].type, "stream");
-      assert.deepEqual(binding.operations.find((value) => value.operation === "put").options, { expirationTtl: 3600 });
-    } else {
-      assert.equal(binding.operations[0].type, undefined);
-      assert.deepEqual(binding.operations.find((value) => value.operation === "put").options,
-        { httpMetadata: { contentType: "application/octet-stream" } });
-    }
-  });
+  test(`${kind} cache awaits publication, verifies every hit and preserves private versioned keys`, () => checkAwaitedPublication(kind));
 
-  test(`${kind} same-key cold misses coordinate, then every response rechecks storage independently`, async () => {
-    const { binding, policy } = cache(kind);
-    binding.getGate = deferred();
-    let generates = 0, authenticates = 0;
-    const generate = () => { generates++; return raw; };
-    const authenticate = (pack) => { authenticates++; assert.equal(Buffer.compare(Buffer.from(pack), raw), 0); };
-    const first = policy.resolve(identity, generate, authenticate);
-    await until(() => binding.operations.length === 1);
-    const followers = Array.from({ length: 8 }, () => policy.resolve(identity, generate, authenticate));
-    assert.equal(binding.operations.length, 1);
-    binding.getGate.resolve();
-    assert.deepEqual(await Promise.all([first, ...followers]), ["miss", ...Array(8).fill("hit")]);
-    assert.equal(generates, 1);
-    assert.equal(authenticates, 9);
-    assert.equal(policy.statistics().writes, 1);
-    assert.equal(policy.statistics().inflight, 0);
-    assert.equal(policy.statistics().peakProducers, 1);
-    assert.equal(binding.operations.filter((value) => value.operation === "get").length, 9);
-  });
+  test(`${kind} same-key cold misses coordinate, then every response rechecks storage independently`, () => checkColdMissCoordination(kind));
 
-  test(`${kind} failed reads and publication preserve existing records and release cold-miss state`, async () => {
-    const { binding, policy } = cache(kind);
-    await policy.resolve(identity, () => raw, () => {});
-    const saved = [...binding.records.values()][0].slice();
-    binding.readError = new Error("backend offline");
-    await assert.rejects(policy.resolve(identity, () => { throw new Error("must not generate"); }, () => {}), /read failed/);
-    assert.equal(policy.statistics().inflight, 0);
-    assert.equal(Buffer.compare(Buffer.from([...binding.records.values()][0]), Buffer.from(saved)), 0);
-    binding.readError = null;
-    binding.nextRead = await encodePackRecord(identity, raw, 1);
-    binding.writeError = new Error("write failed");
-    await assert.rejects(policy.resolve(identity, () => raw, () => {}), /publication failed/);
-    assert.equal(policy.statistics().inflight, 0);
-    assert.equal(Buffer.compare(Buffer.from([...binding.records.values()][0]), Buffer.from(saved)), 0);
-    binding.writeError = null;
-    assert.equal(await policy.resolve(identity, () => { throw new Error("preserved hit"); }, () => {}), "hit");
-  });
+  test(`${kind} failed reads and publication preserve existing records and release cold-miss state`, () => checkStorageFailureRecovery(kind));
 
-  test(`${kind} expired and evicted records regenerate, new isolates retain valid hits`, async () => {
-    let now = 100;
-    const { binding, policy } = cache(kind, { now: () => now, ttlSeconds: 60 });
-    let generations = 0;
-    const generate = () => { generations++; return raw; };
-    assert.equal(await policy.resolve(identity, generate, () => {}), "miss");
-    now = 159;
-    assert.equal(await policy.resolve(identity, generate, () => {}), "hit");
-    now = 160;
-    assert.equal(await policy.resolve(identity, generate, () => {}), "miss", "expiry is inclusive");
-    const reloaded = createPackCache({ backend: kind, binding, namespace: "test-private", now: () => now });
-    assert.equal(await reloaded.resolve(identity, generate, () => {}), "hit");
-    binding.records.clear();
-    assert.equal(await reloaded.resolve(identity, generate, () => {}), "miss");
-    assert.equal(generations, 3);
-  });
+  test(`${kind} expired and evicted records regenerate, new isolates retain valid hits`, () => checkExpiryAndReopen(kind));
 
-  test(`${kind} corrupt envelopes fail closed without generation or insertion`, async () => {
-    const { binding, policy } = cache(kind, { now: () => 100 });
-    const good = await encodePackRecord(identity, raw, 200);
-    const variants = [good.slice(0, -1), new Uint8Array([...good, 0]), good.slice()];
-    variants[2][70] ^= 1;
-    for (const record of variants) {
-      binding.nextRead = record;
-      let generated = false, attached = false;
-      await assert.rejects(policy.resolve(identity, () => { generated = true; return raw; }, () => { attached = true; }), /validation|integrity/);
-      assert.equal(generated, false);
-      assert.equal(attached, false);
-      assert.equal(binding.records.size, 0);
-      assert.equal(policy.statistics().inflight, 0);
-    }
-  });
+  test(`${kind} corrupt envelopes fail closed without generation or insertion`, () => checkCorruptEnvelopes(kind));
 
-  test(`${kind} oversize records cancel bounded reads and exact byte limits accept complete packs`, async () => {
-    const { binding, policy } = cache(kind, { maxBytes: raw.length });
-    assert.equal(await policy.resolve(identity, () => raw, () => {}), "miss");
-    assert.equal(await policy.resolve(identity, () => { throw new Error("unexpected miss"); }, () => {}), "hit");
-    const small = createPackCache({ backend: kind, binding, namespace: "test-private", maxBytes: raw.length - 1 });
-    await assert.rejects(small.resolve(identity, () => raw, () => {}), /read|record/);
-    binding.records.clear();
-    await assert.rejects(small.resolve(identity, () => raw, () => {}), /exceeds/);
-    assert.equal(binding.records.size, 0);
-    let cancelled = false;
-    const bad = { get: async () => {
-      const body = new ReadableStream({
-        start(controller) { controller.enqueue(new Uint8Array(MAX_PACK_BYTES + 101)); },
-        cancel() { cancelled = true; },
-      });
-      return kind === "kv" ? body : { size: MAX_PACK_BYTES + 101, body };
-    }, put: async () => { throw new Error("must not write"); } };
-    const bounded = createPackCache({ backend: kind, binding: bad, namespace: "bounded" });
-    await assert.rejects(bounded.resolve(identity, () => raw, () => {}), /read|record/);
-    assert.equal(cancelled, true);
-  });
+  test(`${kind} oversize records cancel bounded reads and exact byte limits accept complete packs`, () => checkBoundedRecords(kind));
 }
 
 test("cache records validate schema, selected identity, lengths, expiry and every checksum byte", async () => {
@@ -273,3 +158,130 @@ test("abort cancels an outstanding record reader and late get results release th
     }
   }
 });
+
+async function checkAwaitedPublication(kind) {
+  const { binding, policy } = cache(kind);
+  binding.putGate = deferred();
+  let generates = 0, authenticates = 0, completed = false;
+  const first = policy.resolve(identity, () => { generates++; return raw; }, (pack) => {
+    authenticates++; assert.equal(Buffer.compare(Buffer.from(pack), raw), 0);
+  }).then((result) => { completed = true; return result; });
+  await until(() => binding.operations.some((value) => value.operation === "put"));
+  assert.equal(completed, false);
+  assert.equal(binding.records.size, 0);
+  assert.equal(authenticates, 1);
+  binding.putGate.resolve();
+  assert.equal(await first, "miss");
+  assert.equal(binding.records.size, 1);
+  const entry = [...binding.records.keys()][0];
+  assert.equal(entry, `selected-packs/v1/test-private/${identity}`);
+  assert.equal(await policy.resolve(identity, () => { throw new Error("hit generated"); }, (pack) => {
+    authenticates++; assert.equal(Buffer.compare(Buffer.from(pack), raw), 0);
+  }), "hit");
+  assert.equal(generates, 1);
+  assert.equal(authenticates, 2);
+  assert.deepEqual(policy.statistics(), {
+    hits: 1, misses: 1, waits: 0, writes: 1, failures: 0, producers: 0, peakProducers: 1, inflight: 0, waiters: 0,
+  });
+  if (kind === "kv") {
+    assert.equal(binding.operations[0].type, "stream");
+    assert.deepEqual(binding.operations.find((value) => value.operation === "put").options, { expirationTtl: 3600 });
+  } else {
+    assert.equal(binding.operations[0].type, undefined);
+    assert.deepEqual(binding.operations.find((value) => value.operation === "put").options,
+      { httpMetadata: { contentType: "application/octet-stream" } });
+  }
+}
+
+async function checkColdMissCoordination(kind) {
+  const { binding, policy } = cache(kind);
+  binding.getGate = deferred();
+  let generates = 0, authenticates = 0;
+  const generate = () => { generates++; return raw; };
+  const authenticate = (pack) => { authenticates++; assert.equal(Buffer.compare(Buffer.from(pack), raw), 0); };
+  const first = policy.resolve(identity, generate, authenticate);
+  await until(() => binding.operations.length === 1);
+  const followers = Array.from({ length: 8 }, () => policy.resolve(identity, generate, authenticate));
+  assert.equal(binding.operations.length, 1);
+  binding.getGate.resolve();
+  assert.deepEqual(await Promise.all([first, ...followers]), ["miss", ...Array(8).fill("hit")]);
+  assert.equal(generates, 1);
+  assert.equal(authenticates, 9);
+  assert.equal(policy.statistics().writes, 1);
+  assert.equal(policy.statistics().inflight, 0);
+  assert.equal(policy.statistics().peakProducers, 1);
+  assert.equal(binding.operations.filter((value) => value.operation === "get").length, 9);
+}
+
+async function checkStorageFailureRecovery(kind) {
+  const { binding, policy } = cache(kind);
+  await policy.resolve(identity, () => raw, () => {});
+  const saved = [...binding.records.values()][0].slice();
+  binding.readError = new Error("backend offline");
+  await assert.rejects(policy.resolve(identity, () => { throw new Error("must not generate"); }, () => {}), /read failed/);
+  assert.equal(policy.statistics().inflight, 0);
+  assert.equal(Buffer.compare(Buffer.from([...binding.records.values()][0]), Buffer.from(saved)), 0);
+  binding.readError = null;
+  binding.nextRead = await encodePackRecord(identity, raw, 1);
+  binding.writeError = new Error("write failed");
+  await assert.rejects(policy.resolve(identity, () => raw, () => {}), /publication failed/);
+  assert.equal(policy.statistics().inflight, 0);
+  assert.equal(Buffer.compare(Buffer.from([...binding.records.values()][0]), Buffer.from(saved)), 0);
+  binding.writeError = null;
+  assert.equal(await policy.resolve(identity, () => { throw new Error("preserved hit"); }, () => {}), "hit");
+}
+
+async function checkExpiryAndReopen(kind) {
+  let now = 100;
+  const { binding, policy } = cache(kind, { now: () => now, ttlSeconds: 60 });
+  let generations = 0;
+  const generate = () => { generations++; return raw; };
+  assert.equal(await policy.resolve(identity, generate, () => {}), "miss");
+  now = 159;
+  assert.equal(await policy.resolve(identity, generate, () => {}), "hit");
+  now = 160;
+  assert.equal(await policy.resolve(identity, generate, () => {}), "miss", "expiry is inclusive");
+  const reloaded = createPackCache({ backend: kind, binding, namespace: "test-private", now: () => now });
+  assert.equal(await reloaded.resolve(identity, generate, () => {}), "hit");
+  binding.records.clear();
+  assert.equal(await reloaded.resolve(identity, generate, () => {}), "miss");
+  assert.equal(generations, 3);
+}
+
+async function checkCorruptEnvelopes(kind) {
+  const { binding, policy } = cache(kind, { now: () => 100 });
+  const good = await encodePackRecord(identity, raw, 200);
+  const variants = [good.slice(0, -1), new Uint8Array([...good, 0]), good.slice()];
+  variants[2][70] ^= 1;
+  for (const record of variants) {
+    binding.nextRead = record;
+    let generated = false, attached = false;
+    await assert.rejects(policy.resolve(identity, () => { generated = true; return raw; }, () => { attached = true; }), /validation|integrity/);
+    assert.equal(generated, false);
+    assert.equal(attached, false);
+    assert.equal(binding.records.size, 0);
+    assert.equal(policy.statistics().inflight, 0);
+  }
+}
+
+async function checkBoundedRecords(kind) {
+  const { binding, policy } = cache(kind, { maxBytes: raw.length });
+  assert.equal(await policy.resolve(identity, () => raw, () => {}), "miss");
+  assert.equal(await policy.resolve(identity, () => { throw new Error("unexpected miss"); }, () => {}), "hit");
+  const small = createPackCache({ backend: kind, binding, namespace: "test-private", maxBytes: raw.length - 1 });
+  await assert.rejects(small.resolve(identity, () => raw, () => {}), /read|record/);
+  binding.records.clear();
+  await assert.rejects(small.resolve(identity, () => raw, () => {}), /exceeds/);
+  assert.equal(binding.records.size, 0);
+  let cancelled = false;
+  const bad = { get: async () => {
+    const body = new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(MAX_PACK_BYTES + 101)); },
+      cancel() { cancelled = true; },
+    });
+    return kind === "kv" ? body : { size: MAX_PACK_BYTES + 101, body };
+  }, put: async () => { throw new Error("must not write"); } };
+  const bounded = createPackCache({ backend: kind, binding: bad, namespace: "bounded" });
+  await assert.rejects(bounded.resolve(identity, () => raw, () => {}), /read|record/);
+  assert.equal(cancelled, true);
+}

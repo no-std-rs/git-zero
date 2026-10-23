@@ -80,248 +80,27 @@ fn watchdog(peer: TcpStream, run: impl FnOnce() -> Result<()>) -> Result<()> {
 
 #[test]
 fn idle_backpressure_expires_and_cancels_without_a_socket_write_timeout() {
-    with_repository(|repository| {
-        let (socket, peer) = pair();
-        let id = repository.object_id(2).unwrap().to_string();
-        let path = format!("objects/{}/{}", &id[..2], &id[2..]);
-        let mut encoder = ResponseEncoder::new(repository, request(&path), &mut []).unwrap();
-        let start = Instant::now();
-        let result = watchdog(peer, || {
-            without_allocations(|| {
-                respond_stream_with_deadlines(
-                    &socket,
-                    repository,
-                    &mut encoder,
-                    &mut [0; 1024],
-                    ResponseDeadlines {
-                        total: None,
-                        idle: Some(Duration::from_millis(100)),
-                    },
-                )
-            })
-        });
-        assert_eq!(result, Err(Error::LimitExceeded));
-        assert!(start.elapsed() < Duration::from_secs(3));
-        assert_eq!(
-            encoder.read(repository, &mut [0; 1]),
-            Err(Error::InvalidRequest)
-        );
-        assert_eq!(
-            sockopt::socket_timeout(&socket, Timeout::Send).unwrap(),
-            None
-        );
-        assert_eq!(
-            sockopt::socket_timeout(&socket, Timeout::Recv).unwrap(),
-            Some(Duration::from_secs(2))
-        );
-    });
+    with_repository(check_idle_backpressure);
 }
 
 #[test]
 fn total_response_deadline_survives_continuous_progress_and_slow_provider_reads() {
-    with_repository(|repository| {
-        let slow = Slow {
-            repository,
-            reads: Cell::new(0),
-        };
-        let (socket, mut peer) = pair();
-        let guard = peer.try_clone().unwrap();
-        let receiver = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            peer.read_to_end(&mut bytes).unwrap();
-            bytes
-        });
-        let id = repository.object_id(2).unwrap().to_string();
-        let path = format!("objects/{}/{}", &id[..2], &id[2..]);
-        let mut encoder = ResponseEncoder::new(&slow, request(&path), &mut []).unwrap();
-        let result = watchdog(guard, || {
-            without_allocations(|| {
-                respond_stream_with_deadlines(
-                    &socket,
-                    &slow,
-                    &mut encoder,
-                    &mut [0; 1024],
-                    ResponseDeadlines {
-                        total: Some(Duration::from_millis(120)),
-                        idle: Some(Duration::from_secs(1)),
-                    },
-                )
-            })
-        });
-        assert_eq!(result, Err(Error::LimitExceeded));
-        assert!(slow.reads.get() > 1);
-        assert_eq!(encoder.read(&slow, &mut [0; 1]), Err(Error::InvalidRequest));
-        drop(socket);
-        let partial = receiver.join().unwrap();
-        assert!(partial.starts_with(b"HTTP/1.0 200"));
-        assert!(partial.len() < 4 * 1024 * 1024);
-    });
+    with_repository(check_total_response_deadline);
 }
 
 #[test]
 fn deadline_configuration_failure_cancels_before_headers_and_empty_staging_is_rejected() {
-    with_repository(|repository| {
-        for (deadlines, expected) in [
-            (
-                ResponseDeadlines {
-                    total: Some(Duration::ZERO),
-                    idle: None,
-                },
-                Error::InvalidRequest,
-            ),
-            (
-                ResponseDeadlines {
-                    total: None,
-                    idle: Some(Duration::ZERO),
-                },
-                Error::InvalidRequest,
-            ),
-            (
-                ResponseDeadlines {
-                    total: Some(Duration::MAX),
-                    idle: None,
-                },
-                Error::InvalidRequest,
-            ),
-        ] {
-            let (socket, mut peer) = pair();
-            let mut control = [0; 128];
-            let mut encoder =
-                ResponseEncoder::new(repository, request("HEAD"), &mut control).unwrap();
-            assert_eq!(
-                without_allocations(|| respond_stream_with_deadlines(
-                    &socket,
-                    repository,
-                    &mut encoder,
-                    &mut [0; 128],
-                    deadlines
-                )),
-                Err(expected)
-            );
-            assert_eq!(
-                encoder.read(repository, &mut [0; 1]),
-                Err(Error::InvalidRequest)
-            );
-            drop(socket);
-            let mut bytes = Vec::new();
-            peer.read_to_end(&mut bytes).unwrap();
-            assert!(bytes.is_empty());
-        }
-        let (socket, _peer) = pair();
-        let mut control = [0; 128];
-        let mut encoder = ResponseEncoder::new(repository, request("HEAD"), &mut control).unwrap();
-        assert_eq!(
-            respond_stream_with_deadlines(
-                &socket,
-                repository,
-                &mut encoder,
-                &mut [],
-                ResponseDeadlines {
-                    total: Some(Duration::from_secs(1)),
-                    idle: None
-                }
-            ),
-            Err(Error::BufferTooSmall)
-        );
-        assert_eq!(
-            encoder.read(repository, &mut [0; 1]),
-            Err(Error::InvalidRequest)
-        );
-    });
+    with_repository(check_invalid_deadlines);
 }
 
 #[test]
 fn complete_stream_and_known_length_publication_responses_preserve_wire_and_socket_options() {
-    with_repository(|repository| {
-        for deadlines in [
-            ResponseDeadlines::default(),
-            ResponseDeadlines {
-                total: Some(Duration::from_secs(2)),
-                idle: Some(Duration::from_secs(1)),
-            },
-        ] {
-            let (socket, mut peer) = pair();
-            let mut control = [0; 128];
-            let mut encoder =
-                ResponseEncoder::new(repository, request("HEAD"), &mut control).unwrap();
-            respond_stream_with_deadlines(
-                &socket,
-                repository,
-                &mut encoder,
-                &mut [0; 17],
-                deadlines,
-            )
-            .unwrap();
-            drop(socket);
-            let mut bytes = String::new();
-            peer.read_to_string(&mut bytes).unwrap();
-            assert!(bytes.starts_with("HTTP/1.0 200 Response\r\nContent-Type: text/plain"));
-            assert!(bytes.ends_with("\r\n\r\nref: refs/heads/main\n"));
-        }
-        let mut entries = [git_zero::pack::IndexEntry::EMPTY; 3];
-        let publication = Publication::new(
-            repository,
-            &mut entries,
-            &mut [0; 4096],
-            LooseObjects::Disabled,
-        )
-        .unwrap();
-        let mut encoder = publication
-            .prepare(request("objects/info/packs"))
-            .unwrap()
-            .unwrap();
-        let expected_size = encoder.size();
-        let (socket, mut peer) = pair();
-        without_allocations(|| {
-            respond_published_with_deadlines(
-                &socket,
-                &mut encoder,
-                &mut [0; 17],
-                ResponseDeadlines {
-                    total: Some(Duration::from_secs(2)),
-                    idle: None,
-                },
-            )
-        })
-        .unwrap();
-        drop(socket);
-        let mut bytes = String::new();
-        peer.read_to_string(&mut bytes).unwrap();
-        assert!(bytes.contains(&format!("Content-Length: {expected_size}\r\n")));
-        assert!(bytes.contains("\r\n\r\nP pack-"));
-    });
+    with_repository(check_complete_responses);
 }
 
 #[test]
 fn known_length_pack_backpressure_cancels_its_publication_cursor() {
-    with_repository(|repository| {
-        let mut entries = [git_zero::pack::IndexEntry::EMPTY; 3];
-        let publication = Publication::new(
-            repository,
-            &mut entries,
-            &mut [0; 4096],
-            LooseObjects::Disabled,
-        )
-        .unwrap();
-        let path = format!("objects/pack/pack-{}.pack", publication.checksum());
-        let mut encoder = publication.prepare(request(&path)).unwrap().unwrap();
-        let (socket, peer) = pair();
-        assert_eq!(
-            watchdog(peer, || without_allocations(|| {
-                respond_published_with_deadlines(
-                    &socket,
-                    &mut encoder,
-                    &mut [0; 1024],
-                    ResponseDeadlines {
-                        total: Some(Duration::from_millis(100)),
-                        idle: None,
-                    },
-                )
-            })),
-            Err(Error::LimitExceeded)
-        );
-        assert_eq!(encoder.read(&mut [0; 1]), Err(Error::InvalidRequest));
-    });
+    with_repository(check_publication_backpressure);
 }
 
 struct Slow<'a, R> {
@@ -346,4 +125,227 @@ impl<R: Repository> Repository for Slow<'_, R> {
         thread::sleep(Duration::from_millis(25));
         self.repository.read_object(index, offset, output)
     }
+}
+
+fn check_idle_backpressure(repository: &Snapshot<'_>) {
+    let (socket, peer) = pair();
+    let id = repository.object_id(2).unwrap().to_string();
+    let path = format!("objects/{}/{}", &id[..2], &id[2..]);
+    let mut encoder = ResponseEncoder::new(repository, request(&path), &mut []).unwrap();
+    let start = Instant::now();
+    let result = watchdog(peer, || {
+        without_allocations(|| {
+            respond_stream_with_deadlines(
+                &socket,
+                repository,
+                &mut encoder,
+                &mut [0; 1024],
+                ResponseDeadlines {
+                    total: None,
+                    idle: Some(Duration::from_millis(100)),
+                },
+            )
+        })
+    });
+    assert_eq!(result, Err(Error::LimitExceeded));
+    assert!(start.elapsed() < Duration::from_secs(3));
+    assert_eq!(
+        encoder.read(repository, &mut [0; 1]),
+        Err(Error::InvalidRequest)
+    );
+    assert_eq!(
+        sockopt::socket_timeout(&socket, Timeout::Send).unwrap(),
+        None
+    );
+    assert_eq!(
+        sockopt::socket_timeout(&socket, Timeout::Recv).unwrap(),
+        Some(Duration::from_secs(2))
+    );
+}
+
+fn check_total_response_deadline(repository: &Snapshot<'_>) {
+    let slow = Slow {
+        repository,
+        reads: Cell::new(0),
+    };
+    let (socket, mut peer) = pair();
+    let guard = peer.try_clone().unwrap();
+    let receiver = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        peer.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let id = repository.object_id(2).unwrap().to_string();
+    let path = format!("objects/{}/{}", &id[..2], &id[2..]);
+    let mut encoder = ResponseEncoder::new(&slow, request(&path), &mut []).unwrap();
+    let result = watchdog(guard, || {
+        without_allocations(|| {
+            respond_stream_with_deadlines(
+                &socket,
+                &slow,
+                &mut encoder,
+                &mut [0; 1024],
+                ResponseDeadlines {
+                    total: Some(Duration::from_millis(120)),
+                    idle: Some(Duration::from_secs(1)),
+                },
+            )
+        })
+    });
+    assert_eq!(result, Err(Error::LimitExceeded));
+    assert!(slow.reads.get() > 1);
+    assert_eq!(encoder.read(&slow, &mut [0; 1]), Err(Error::InvalidRequest));
+    drop(socket);
+    let partial = receiver.join().unwrap();
+    assert!(partial.starts_with(b"HTTP/1.0 200"));
+    assert!(partial.len() < 4 * 1024 * 1024);
+}
+
+fn check_invalid_deadlines(repository: &Snapshot<'_>) {
+    for (deadlines, expected) in [
+        (
+            ResponseDeadlines {
+                total: Some(Duration::ZERO),
+                idle: None,
+            },
+            Error::InvalidRequest,
+        ),
+        (
+            ResponseDeadlines {
+                total: None,
+                idle: Some(Duration::ZERO),
+            },
+            Error::InvalidRequest,
+        ),
+        (
+            ResponseDeadlines {
+                total: Some(Duration::MAX),
+                idle: None,
+            },
+            Error::InvalidRequest,
+        ),
+    ] {
+        let (socket, mut peer) = pair();
+        let mut control = [0; 128];
+        let mut encoder = ResponseEncoder::new(repository, request("HEAD"), &mut control).unwrap();
+        assert_eq!(
+            without_allocations(|| respond_stream_with_deadlines(
+                &socket,
+                repository,
+                &mut encoder,
+                &mut [0; 128],
+                deadlines
+            )),
+            Err(expected)
+        );
+        assert_eq!(
+            encoder.read(repository, &mut [0; 1]),
+            Err(Error::InvalidRequest)
+        );
+        drop(socket);
+        let mut bytes = Vec::new();
+        peer.read_to_end(&mut bytes).unwrap();
+        assert!(bytes.is_empty());
+    }
+    let (socket, _peer) = pair();
+    let mut control = [0; 128];
+    let mut encoder = ResponseEncoder::new(repository, request("HEAD"), &mut control).unwrap();
+    assert_eq!(
+        respond_stream_with_deadlines(
+            &socket,
+            repository,
+            &mut encoder,
+            &mut [],
+            ResponseDeadlines {
+                total: Some(Duration::from_secs(1)),
+                idle: None
+            }
+        ),
+        Err(Error::BufferTooSmall)
+    );
+    assert_eq!(
+        encoder.read(repository, &mut [0; 1]),
+        Err(Error::InvalidRequest)
+    );
+}
+
+fn check_complete_responses(repository: &Snapshot<'_>) {
+    for deadlines in [
+        ResponseDeadlines::default(),
+        ResponseDeadlines {
+            total: Some(Duration::from_secs(2)),
+            idle: Some(Duration::from_secs(1)),
+        },
+    ] {
+        let (socket, mut peer) = pair();
+        let mut control = [0; 128];
+        let mut encoder = ResponseEncoder::new(repository, request("HEAD"), &mut control).unwrap();
+        respond_stream_with_deadlines(&socket, repository, &mut encoder, &mut [0; 17], deadlines)
+            .unwrap();
+        drop(socket);
+        let mut bytes = String::new();
+        peer.read_to_string(&mut bytes).unwrap();
+        assert!(bytes.starts_with("HTTP/1.0 200 Response\r\nContent-Type: text/plain"));
+        assert!(bytes.ends_with("\r\n\r\nref: refs/heads/main\n"));
+    }
+    let mut entries = [git_zero::pack::IndexEntry::EMPTY; 3];
+    let publication = Publication::new(
+        repository,
+        &mut entries,
+        &mut [0; 4096],
+        LooseObjects::Disabled,
+    )
+    .unwrap();
+    let mut encoder = publication
+        .prepare(request("objects/info/packs"))
+        .unwrap()
+        .unwrap();
+    let expected_size = encoder.size();
+    let (socket, mut peer) = pair();
+    without_allocations(|| {
+        respond_published_with_deadlines(
+            &socket,
+            &mut encoder,
+            &mut [0; 17],
+            ResponseDeadlines {
+                total: Some(Duration::from_secs(2)),
+                idle: None,
+            },
+        )
+    })
+    .unwrap();
+    drop(socket);
+    let mut bytes = String::new();
+    peer.read_to_string(&mut bytes).unwrap();
+    assert!(bytes.contains(&format!("Content-Length: {expected_size}\r\n")));
+    assert!(bytes.contains("\r\n\r\nP pack-"));
+}
+
+fn check_publication_backpressure(repository: &Snapshot<'_>) {
+    let mut entries = [git_zero::pack::IndexEntry::EMPTY; 3];
+    let publication = Publication::new(
+        repository,
+        &mut entries,
+        &mut [0; 4096],
+        LooseObjects::Disabled,
+    )
+    .unwrap();
+    let path = format!("objects/pack/pack-{}.pack", publication.checksum());
+    let mut encoder = publication.prepare(request(&path)).unwrap().unwrap();
+    let (socket, peer) = pair();
+    assert_eq!(
+        watchdog(peer, || without_allocations(|| {
+            respond_published_with_deadlines(
+                &socket,
+                &mut encoder,
+                &mut [0; 1024],
+                ResponseDeadlines {
+                    total: Some(Duration::from_millis(100)),
+                    idle: None,
+                },
+            )
+        })),
+        Err(Error::LimitExceeded)
+    );
+    assert_eq!(encoder.read(&mut [0; 1]), Err(Error::InvalidRequest));
 }

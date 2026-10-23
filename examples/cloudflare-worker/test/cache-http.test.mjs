@@ -12,38 +12,7 @@ import { directory, execute, fixtures, gitBinary, gitEnvironment } from "./repos
 for (const repository of fixtures) {
   for (const kind of ["kv", "r2"]) {
     for (const version of [0, 1, 2]) {
-      test(`${kind} real Git ${repository.format} v${version} cold/warm clones compare refs, objects, checkout and fsck`, async () => {
-        const { binding, policy } = cache(kind);
-        const worker = handler(repository, policy);
-        const git = (...args) => execute(gitBinary, ["-c", `protocol.version=${version}`, ...args], {
-          env: gitEnvironment(repository.format), encoding: "buffer", timeout: 60000,
-        });
-        await withServer((request) => worker.fetch(request), async (origin) => {
-          const url = `${origin}/repo.git`;
-          const advertised = (await git("ls-remote", "--symref", url)).stdout.toString().trim().split("\n").sort();
-          const oracle = (await git("ls-remote", "--symref", repository.source)).stdout.toString().trim().split("\n").sort();
-          assert.deepEqual(advertised, oracle);
-          assert.equal(binding.operations.length, 0, "discovery/ref commands never touch pack storage");
-          const roots = [];
-          for (const state of ["cold", "warm"]) {
-            const clone = join(directory, `cache-${kind}-${repository.format}-${version}-${state}`);
-            await git("clone", "-q", url, clone);
-            await verify(git, clone, repository);
-            roots.push(clone);
-          }
-          assert.ok(policy.statistics().misses > 0);
-          assert.ok(policy.statistics().hits > 0);
-          assert.equal(policy.statistics().writes, policy.statistics().misses);
-          const records = binding.records.size;
-          await git("-C", roots[0], "fetch", "-q", "origin");
-          assert.equal(binding.records.size, records, "up-to-date negotiation does not add cache records");
-          binding.records.clear();
-          const clone = join(directory, `cache-${kind}-${repository.format}-${version}-evicted`);
-          await git("clone", "-q", url, clone);
-          await verify(git, clone, repository);
-          assert.ok(binding.records.size > 0);
-        });
-      });
+      test(`${kind} real Git ${repository.format} v${version} cold/warm clones compare refs, objects, checkout and fsck`, () => checkRealGitCachedClones(repository, kind, version));
     }
   }
 }
@@ -278,4 +247,37 @@ async function verify(git, clone, repository) {
     const [mode, , id] = metadata.split(" ");
     if (mode !== "120000") assert.equal(Buffer.compare(await readFile(join(clone, path)), repository.objects.find((object) => object.id === id).body), 0);
   }
+}
+
+async function checkRealGitCachedClones(repository, kind, version) {
+  const { binding, policy } = cache(kind);
+  const worker = handler(repository, policy);
+  const git = (...args) => execute(gitBinary, ["-c", `protocol.version=${version}`, ...args], {
+    env: gitEnvironment(repository.format), encoding: "buffer", timeout: 60000,
+  });
+  await withServer((request) => worker.fetch(request), async (origin) => {
+    const url = `${origin}/repo.git`;
+    const advertised = (await git("ls-remote", "--symref", url)).stdout.toString().trim().split("\n").sort();
+    const oracle = (await git("ls-remote", "--symref", repository.source)).stdout.toString().trim().split("\n").sort();
+    assert.deepEqual(advertised, oracle);
+    assert.equal(binding.operations.length, 0, "discovery/ref commands never touch pack storage");
+    const roots = [];
+    for (const state of ["cold", "warm"]) {
+      const clone = join(directory, `cache-${kind}-${repository.format}-${version}-${state}`);
+      await git("clone", "-q", url, clone);
+      await verify(git, clone, repository);
+      roots.push(clone);
+    }
+    assert.ok(policy.statistics().misses > 0);
+    assert.ok(policy.statistics().hits > 0);
+    assert.equal(policy.statistics().writes, policy.statistics().misses);
+    const records = binding.records.size;
+    await git("-C", roots[0], "fetch", "-q", "origin");
+    assert.equal(binding.records.size, records, "up-to-date negotiation does not add cache records");
+    binding.records.clear();
+    const clone = join(directory, `cache-${kind}-${repository.format}-${version}-evicted`);
+    await git("clone", "-q", url, clone);
+    await verify(git, clone, repository);
+    assert.ok(binding.records.size > 0);
+  });
 }

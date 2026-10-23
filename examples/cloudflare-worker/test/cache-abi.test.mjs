@@ -7,41 +7,7 @@ import { fixtures, synthetic } from "./repository-fixture.mjs";
 
 for (const repository of fixtures) {
   for (const version of [0, 1, 2]) {
-    test(`cache ABI ${repository.format} v${version} preserves exact wire output across suspended misses and hits`, async () => {
-      const options = { version };
-      const { exports, result, memory } = prepare(repository, options);
-      assert.equal(result, 1);
-      const identity = key(exports);
-      assert.equal(identity.length, 96);
-      assert.equal(exports.stream_read(1), -2, "no response output before attachment");
-      assert.equal(exports.cache_read(0), -1);
-      assert.equal(exports.cache_read(exports.output_capacity() + 1), -1);
-      const raw = generated(exports, 17);
-      assert.equal(key(exports), identity);
-      assert.equal(raw.subarray(0, 4).toString(), "PACK");
-      const width = repository.format === "sha1" ? 20 : 32;
-      assert.deepEqual(createHash(repository.format).update(raw.subarray(0, -width)).digest(), raw.subarray(-width));
-      assert.equal(attach(exports, raw), 3);
-      assert.equal(exports.cache_ptr(), 0, "active pack bytes are read-only");
-      assert.equal(exports.cache_read(1), -2);
-      assert.equal(exports.cache_key(), -2);
-      assert.equal(exports.stream_read(65537), -1, "attached output uses the old input arena");
-      const metadata = Buffer.from(new Uint8Array(memory, exports.output_ptr(), 3));
-      assert.equal(metadata.readUInt16LE(0), 200);
-      assert.equal(metadata[2], 2);
-      const miss = drain(exports, 1);
-      assert.deepEqual(unframe(miss), raw);
-      assert.equal(exports.memory.buffer, memory);
-      const headers = new Headers({ "Git-Protocol": `version=${version}`, "Content-Type": "application/x-git-upload-pack-request" });
-      const direct = await repositoryResponse(module, repository, "git-upload-pack", requestBody(repository, options), "POST", headers).arrayBuffer();
-      assert.equal(Buffer.compare(unframe(miss), unframe(Buffer.from(direct))), 0);
-      assert.deepEqual(control(miss), control(Buffer.from(direct)));
-      const hit = prepare(repository, options);
-      assert.equal(key(hit.exports), identity);
-      assert.equal(attach(hit.exports, raw), 3);
-      assert.deepEqual(drain(hit.exports, 1001), miss);
-      assert.equal(hit.exports.memory.buffer, hit.memory);
-    });
+    test(`cache ABI ${repository.format} v${version} preserves exact wire output across suspended misses and hits`, () => checkPreparedWire(repository, version));
   }
 }
 
@@ -180,4 +146,40 @@ function control(wire) {
     offset += Math.max(4, length);
   }
   return wire.subarray(0, offset);
+}
+
+async function checkPreparedWire(repository, version) {
+  const options = { version };
+  const { exports, result, memory } = prepare(repository, options);
+  assert.equal(result, 1);
+  const identity = key(exports);
+  assert.equal(identity.length, 96);
+  assert.equal(exports.stream_read(1), -2, "no response output before attachment");
+  assert.equal(exports.cache_read(0), -1);
+  assert.equal(exports.cache_read(exports.output_capacity() + 1), -1);
+  const raw = generated(exports, 17);
+  assert.equal(key(exports), identity);
+  assert.equal(raw.subarray(0, 4).toString(), "PACK");
+  const width = repository.format === "sha1" ? 20 : 32;
+  assert.deepEqual(createHash(repository.format).update(raw.subarray(0, -width)).digest(), raw.subarray(-width));
+  assert.equal(attach(exports, raw), 3);
+  assert.equal(exports.cache_ptr(), 0, "active pack bytes are read-only");
+  assert.equal(exports.cache_read(1), -2);
+  assert.equal(exports.cache_key(), -2);
+  assert.equal(exports.stream_read(65537), -1, "attached output uses the old input arena");
+  const metadata = Buffer.from(new Uint8Array(memory, exports.output_ptr(), 3));
+  assert.equal(metadata.readUInt16LE(0), 200);
+  assert.equal(metadata[2], 2);
+  const miss = drain(exports, 1);
+  assert.deepEqual(unframe(miss), raw);
+  assert.equal(exports.memory.buffer, memory);
+  const headers = new Headers({ "Git-Protocol": `version=${version}`, "Content-Type": "application/x-git-upload-pack-request" });
+  const direct = await repositoryResponse(module, repository, "git-upload-pack", requestBody(repository, options), "POST", headers).arrayBuffer();
+  assert.equal(Buffer.compare(unframe(miss), unframe(Buffer.from(direct))), 0);
+  assert.deepEqual(control(miss), control(Buffer.from(direct)));
+  const hit = prepare(repository, options);
+  assert.equal(key(hit.exports), identity);
+  assert.equal(attach(hit.exports, raw), 3);
+  assert.deepEqual(drain(hit.exports, 1001), miss);
+  assert.equal(hit.exports.memory.buffer, hit.memory);
 }

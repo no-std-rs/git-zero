@@ -95,20 +95,32 @@ export function createPackCache({ backend, binding, namespace, maxBytes = MAX_PA
   integer(maxInflight, 1, 1024, "producer limit");
   integer(maxWaiters, 0, 4096, "waiter limit");
   if (typeof now !== "function") throw new TypeError("Invalid pack cache clock");
-  const get = binding.get.bind(binding), put = binding.put.bind(binding);
-  const flights = new Map();
   const counters = { hits: 0, misses: 0, waits: 0, writes: 0, failures: 0, producers: 0, peakProducers: 0 };
-  let waiters = 0;
-  const path = (key) => `selected-packs/v1/${namespace}/${key}`;
-  const clock = () => integer(now(), 0, Number.MAX_SAFE_INTEGER - ttlSeconds, "clock");
+  const storage = new PackStorage({ backend, binding, namespace, maxBytes, ttlSeconds, now }, counters);
+  const coordinator = new PackCoordinator(storage, maxInflight, maxWaiters, counters);
+  return Object.freeze({
+    maxBytes,
+    statistics: () => coordinator.statistics(),
+    resolve: (key, generate, authenticate, signal) => coordinator.resolve(key, generate, authenticate, signal),
+  });
+}
 
-  async function load(key, signal) {
+class PackStorage {
+  constructor({ backend, binding, namespace, maxBytes, ttlSeconds, now }, counters) {
+    Object.assign(this, { backend, namespace, maxBytes, ttlSeconds, now, counters });
+    this.get = binding.get.bind(binding);
+    this.put = binding.put.bind(binding);
+  }
+  path(key) { return `selected-packs/v1/${this.namespace}/${key}`; }
+  clock() { return integer(this.now(), 0, Number.MAX_SAFE_INTEGER - this.ttlSeconds, "clock"); }
+
+  async load(key, signal) {
     aborted(signal);
     let stored;
     try {
-      const operation = Promise.resolve(get(path(key), ...(backend === "kv" ? ["stream"] : []))).then((value) => {
+      const operation = Promise.resolve(this.get(this.path(key), ...(this.backend === "kv" ? ["stream"] : []))).then((value) => {
         if (signal?.aborted && value !== null) {
-          const body = backend === "kv" ? value : value.body;
+          const body = this.backend === "kv" ? value : value.body;
           body.cancel().catch(() => {});
         }
         return value;
@@ -121,15 +133,15 @@ export function createPackCache({ backend, binding, namespace, maxBytes = MAX_PA
     }
     aborted(signal);
     if (stored === null) return null;
-    const stream = backend === "kv" ? stored : stored.body;
+    const stream = this.backend === "kv" ? stored : stored.body;
     try {
-      if (backend === "r2" && stored.size > HEADER + maxBytes + DIGEST) {
+      if (this.backend === "r2" && stored.size > HEADER + this.maxBytes + DIGEST) {
         await stream.cancel();
         throw new Error("Oversized R2 pack record");
       }
-      const record = await awaiting(readBytes(stream, HEADER + maxBytes + DIGEST, signal), signal);
+      const record = await awaiting(readBytes(stream, HEADER + this.maxBytes + DIGEST, signal), signal);
       aborted(signal);
-      return await decodePackRecord(key, record, maxBytes, clock());
+      return await decodePackRecord(key, record, this.maxBytes, this.clock());
     } catch (error) {
       aborted(signal);
       if (error instanceof PackCacheError) throw error;
@@ -137,14 +149,14 @@ export function createPackCache({ backend, binding, namespace, maxBytes = MAX_PA
     }
   }
 
-  async function store(key, pack, signal) {
-    const record = await encodePackRecord(key, pack, clock() + ttlSeconds);
+  async store(key, pack, signal) {
+    const record = await encodePackRecord(key, pack, this.clock() + this.ttlSeconds);
     aborted(signal);
     try {
-      await awaiting(backend === "kv"
-        ? put(path(key), record, { expirationTtl: ttlSeconds })
-        : put(path(key), record, { httpMetadata: { contentType: "application/octet-stream" } }), signal);
-      counters.writes++;
+      await awaiting(this.backend === "kv"
+        ? this.put(this.path(key), record, { expirationTtl: this.ttlSeconds })
+        : this.put(this.path(key), record, { httpMetadata: { contentType: "application/octet-stream" } }), signal);
+      this.counters.writes++;
     } catch (error) {
       if (error instanceof PackCacheError) throw error;
       throw new PackCacheError("Pack cache publication failed");
@@ -152,58 +164,64 @@ export function createPackCache({ backend, binding, namespace, maxBytes = MAX_PA
     aborted(signal);
   }
 
-  return Object.freeze({
-    maxBytes,
-    statistics() { return Object.freeze({ ...counters, inflight: flights.size, waiters }); },
-    // authenticate is request-local and attaches only verified exact-set bytes.
-    // It runs on every hit as well as before every miss publication.
-    async resolve(key, generate, authenticate, signal) {
-      keyBytes(key);
-      try {
+}
+
+class PackCoordinator {
+  constructor(storage, maxInflight, maxWaiters, counters) {
+    Object.assign(this, { storage, maxInflight, maxWaiters, counters });
+    this.flights = new Map();
+    this.waiters = 0;
+  }
+  statistics() {
+    return Object.freeze({ ...this.counters, inflight: this.flights.size, waiters: this.waiters });
+  }
+
+  async resolve(key, generate, authenticate, signal) {
+    keyBytes(key);
+    try {
+      aborted(signal);
+      while (this.flights.has(key)) {
+        if (this.waiters >= this.maxWaiters) throw new PackCacheError("Pack cache waiter limit exhausted");
+        this.counters.waits++;
+        this.waiters++;
+        try { await awaiting(this.flights.get(key), signal); }
+        finally { this.waiters--; }
         aborted(signal);
-        while (flights.has(key)) {
-          if (waiters >= maxWaiters) throw new PackCacheError("Pack cache waiter limit exhausted");
-          counters.waits++;
-          waiters++;
-          try { await awaiting(flights.get(key), signal); }
-          finally { waiters--; }
-          aborted(signal);
-        }
-        // Register before the first await so every same-key miss observes it.
-        if (flights.size >= maxInflight) throw new PackCacheError("Pack cache producer limit exhausted");
-        let release;
-        const flight = new Promise((resolve) => { release = resolve; });
-        flights.set(key, flight);
-        counters.producers++;
-        counters.peakProducers = Math.max(counters.peakProducers, counters.producers);
-        try {
-          let pack = await load(key, signal);
-          aborted(signal);
-          if (pack !== null) {
-            await authenticate(pack);
-            aborted(signal);
-            counters.hits++;
-            return "hit";
-          }
-          counters.misses++;
-          pack = await generate();
-          aborted(signal);
-          if (!(pack instanceof Uint8Array) || pack.length > maxBytes) throw new PackCacheError("Generated pack exceeds cache limit", 413);
+      }
+      // Register before the first await so every same-key miss observes it.
+      if (this.flights.size >= this.maxInflight) throw new PackCacheError("Pack cache producer limit exhausted");
+      let release;
+      const flight = new Promise((resolve) => { release = resolve; });
+      this.flights.set(key, flight);
+      this.counters.producers++;
+      this.counters.peakProducers = Math.max(this.counters.peakProducers, this.counters.producers);
+      try {
+        let pack = await this.storage.load(key, signal);
+        aborted(signal);
+        if (pack !== null) {
           await authenticate(pack);
           aborted(signal);
-          await store(key, pack, signal);
-          return "miss";
-        } finally {
-          counters.producers--;
-          flights.delete(key);
-          release();
+          this.counters.hits++;
+          return "hit";
         }
-      } catch (error) {
-        counters.failures++;
-        throw error;
+        this.counters.misses++;
+        pack = await generate();
+        aborted(signal);
+        if (!(pack instanceof Uint8Array) || pack.length > this.storage.maxBytes) throw new PackCacheError("Generated pack exceeds cache limit", 413);
+        await authenticate(pack);
+        aborted(signal);
+        await this.storage.store(key, pack, signal);
+        return "miss";
+      } finally {
+        this.counters.producers--;
+        this.flights.delete(key);
+        release();
       }
-    },
-  });
+    } catch (error) {
+      this.counters.failures++;
+      throw error;
+    }
+  }
 }
 
 export function packCachePolicy(module, cache) {
