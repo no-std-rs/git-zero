@@ -1,5 +1,5 @@
 //! Bounded, stateless protocol v2. Validate the whole command before output.
-use crate::upload;
+use crate::upload_pack;
 use git_zero_core::{
     Error, Head, ObjectFormat, ObjectId, Repository, Result,
     io::Write,
@@ -281,7 +281,7 @@ impl Fetch {
         args: &[u8],
         format: ObjectFormat,
         mut want: impl FnMut(ObjectId) -> Result<()>,
-        extensions: &mut crate::fetch::Extensions,
+        extensions: &mut crate::upload_pack::extensions::Extensions,
     ) -> Result<Self> {
         let mut fetch = Self {
             done: false,
@@ -290,13 +290,13 @@ impl Fetch {
         };
         let mut wanted = false;
         for arg in arguments(args) {
-            match crate::fetch::argument_parts(arg) {
+            match crate::upload_pack::extensions::argument_parts(arg) {
                 (b"want", Some(hex)) => {
-                    want(upload::id(hex, format)?)?;
+                    want(upload_pack::id(hex, format)?)?;
                     wanted = true;
                 }
                 (b"have", Some(hex)) => {
-                    upload::id(hex, format)?;
+                    upload_pack::id(hex, format)?;
                 }
                 (b"done", None) if !fetch.done => fetch.done = true,
                 (b"include-tag", None) => fetch.include_tags = true,

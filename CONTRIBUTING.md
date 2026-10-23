@@ -123,6 +123,9 @@ were verified on a live PR before being added to protection.
 
 ## Crate boundaries and releases
 
+For subsystem entrypoints and their upstream Git equivalents, start with the
+[source map](docs/upstream-mapping.md).
+
 Keep shared object and wire types in `git-zero-core`. Client and server crates
 must depend on the core rather than on one another. New decoding/validation APIs
 belong behind `read`; snapshot construction and encoding APIs belong behind

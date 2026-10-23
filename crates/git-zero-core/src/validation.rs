@@ -1,3 +1,5 @@
+//! Object/link validation and bounded reachable-object selection for upload-pack.
+//! `ValidatedRepository` shares its authenticated index with fetch history traversal.
 //! Opt-in validation of the repository graph contract, without allocation.
 use core::cmp::Ordering;
 

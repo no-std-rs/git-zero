@@ -67,7 +67,7 @@ pub(crate) fn info_refs(
         || route.service != Some("git-upload-pack")
         || route.version == crate::route::Version::V2
     {
-        return crate::serve_info_refs(repository, route, output, true);
+        return super::advertisement::serve_info_refs(repository, route, output, true);
     }
     // Reuse the exact packet generator for preflight, including the unborn
     // first-ref carrier and resolved symref. No service/success prefix escapes
@@ -77,5 +77,5 @@ pub(crate) fn info_refs(
         [0; git_zero_core::repository::UPLOAD_CAPABILITIES.len() + REACHABLE.len()];
     capabilities[..ordinary.len()].copy_from_slice(ordinary);
     capabilities[ordinary.len()..].copy_from_slice(REACHABLE);
-    crate::serve_capability_refs(repository, route.version, output, &capabilities)
+    super::advertisement::serve_capability_refs(repository, route.version, output, &capabilities)
 }

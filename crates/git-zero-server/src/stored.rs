@@ -1,8 +1,8 @@
 //! Smart HTTP protocol over an external immutable object/ref catalog. Parsing
 //! never grants access: the host authorizes wants, checks common commit IDs,
 //! selects a closure and supplies authenticated pack representations separately.
-pub use crate::upload::{Acknowledgments, ShallowUpdates};
-use crate::{route::Version, upload::UploadRequest, v2};
+pub use crate::upload_pack::{Acknowledgments, ShallowUpdates};
+use crate::{route::Version, upload_pack::UploadRequest, v2};
 use git_zero_core::{
     Error, FetchOptions, ObjectFormat, ObjectId, Result,
     io::Write,
@@ -157,7 +157,7 @@ impl Iterator for Objects<'_> {
                 continue;
             };
             let line = line.strip_suffix(b"\n").unwrap_or(line);
-            let (marker, value) = crate::fetch::argument_parts(line);
+            let (marker, value) = crate::upload_pack::extensions::argument_parts(line);
             let Some(value) = value else {
                 continue;
             };
@@ -260,9 +260,9 @@ pub fn reference(
                 name,
                 b"\0",
                 format.capability(),
-                crate::upload::capabilities(features.selection),
+                crate::upload_pack::capabilities(features.selection),
                 if features.reachable_wants {
-                    crate::policy::REACHABLE
+                    crate::upload_pack::policy::REACHABLE
                 } else {
                     b""
                 },

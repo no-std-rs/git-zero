@@ -20,7 +20,7 @@ impl Extensions {
     pub fn argument(&mut self, line: &[u8], format: ObjectFormat) -> Result<()> {
         match argument_parts(line) {
             (b"shallow", Some(value)) => {
-                crate::upload::id(value, format)?;
+                super::negotiation::id(value, format)?;
                 self.has_shallow = true;
             }
             (b"deepen", Some(value)) => {

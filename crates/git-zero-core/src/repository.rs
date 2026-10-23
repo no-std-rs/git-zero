@@ -1,3 +1,5 @@
+//! Immutable object/ref providers, HEAD states, ref validation and symbolic resolution.
+//! Fetch graph validation and selection live in `validation`.
 use crate::{Error, Object, ObjectFormat, ObjectId, ObjectInfo, Result};
 
 /// V0 upload capabilities, including their leading separator. Shared with the

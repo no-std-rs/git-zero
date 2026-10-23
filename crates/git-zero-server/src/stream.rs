@@ -1,6 +1,12 @@
 //! Host-driven request intake and pull-based responses. HTTP transfer framing,
 //! socket readiness and staging unsent output remain the host's responsibility.
-use crate::{Request, Response, route, upload::UploadRequest};
+use crate::upload_pack::advertisement;
+#[cfg(feature = "read")]
+use crate::upload_pack::policy;
+use crate::{
+    Request, Response, route,
+    upload_pack::{self, UploadRequest},
+};
 use git_zero_core::{Error, Repository, Result, io::SliceWriter, pack, repository::uses_only_head};
 
 /// Incrementally collect a bounded request body in caller-owned storage. No
@@ -118,7 +124,7 @@ impl<'a> ResponseEncoder<'a> {
             })?;
         upload.require_complete()?;
         upload.acknowledge(repository, &mut output)?;
-        let mut encoder = Self::buffered(upload_response(), output.finish());
+        let mut encoder = Self::buffered(upload_pack::response(), output.finish());
         if upload.done {
             encoder.body = Body::Pack(pack::Encoder::new(repository, None)?);
             encoder.band = upload.band();
@@ -232,9 +238,9 @@ impl<'a> ResponseEncoder<'a> {
             let route = route::validate(request)?;
             if route.rejection.is_none() && route.path == "info/refs" {
                 let response = if revision.is_some() {
-                    crate::serve_revision_info_refs(repository, &route, &mut output)?
+                    advertisement::serve_revision_info_refs(repository, &route, &mut output)?
                 } else {
-                    crate::policy::info_refs(repository, &route, &mut output, options)?
+                    policy::info_refs(repository, &route, &mut output, options)?
                 };
                 return Ok(Self::buffered(response, output.finish()));
             }
@@ -243,7 +249,7 @@ impl<'a> ResponseEncoder<'a> {
         let Plan::Upload(version) = plan else {
             return Self::ordinary_response(repository, plan, output.finish());
         };
-        let selected = crate::prepare_fetch(
+        let selected = upload_pack::prepare_fetch(
             repository,
             request,
             version,
@@ -252,7 +258,7 @@ impl<'a> ResponseEncoder<'a> {
             revision,
             &mut output,
         )?;
-        let mut encoder = Self::buffered(upload_response(), output.finish());
+        let mut encoder = Self::buffered(upload_pack::response(), output.finish());
         if let Some(indices) = selected.indices {
             encoder.body = Body::Pack(pack::Encoder::new(repository, Some(indices))?);
             encoder.band = selected.upload.band();
@@ -271,19 +277,22 @@ impl<'a> ResponseEncoder<'a> {
             return Ok(Plan::Buffered(response));
         }
         if selection && request.method == "GET" && route.path == "info/refs" {
-            return crate::serve_info_refs(repository, &route, output, true).map(Plan::Buffered);
+            return advertisement::serve_info_refs(repository, &route, output, true)
+                .map(Plan::Buffered);
         }
         if request.method == "POST" && route.path == "git-upload-pack" {
             if route.version == route::Version::V2
                 && crate::v2::serve_refs(repository, request.body, output)?
             {
-                return Ok(Plan::Buffered(upload_response()));
+                return Ok(Plan::Buffered(upload_pack::response()));
             }
             return Ok(Plan::Upload(route.version));
         }
         // Loose bodies are prepared separately, without buffering their bytes.
         if request.method == "GET" && route.path.starts_with("objects/") {
-            if let Some(index) = crate::loose_index(repository, &route.path.as_bytes()[8..]) {
+            if let Some(index) =
+                crate::http_backend::loose_index(repository, &route.path.as_bytes()[8..])
+            {
                 return Ok(Plan::Loose(index));
             }
         }
@@ -405,11 +414,4 @@ fn copy(bytes: &[u8], position: &mut usize, output: &mut [u8]) -> Result<usize> 
     output[..count].copy_from_slice(&bytes[*position..*position + count]);
     *position += count;
     Ok(count)
-}
-
-fn upload_response() -> Response {
-    Response {
-        status: 200,
-        content_type: "application/x-git-upload-pack-result",
-    }
 }

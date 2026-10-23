@@ -2,6 +2,7 @@
 
 - [Usage and crate features](usage.md)
 - [Library architecture](design.md)
+- [Source map for upstream Git developers](upstream-mapping.md)
 - [Embedding and repository APIs](embedding.md)
 - [Object formats and decoding](object-decoding.md)
 - [Development and validation](validation.md)
