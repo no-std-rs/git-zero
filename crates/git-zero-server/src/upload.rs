@@ -255,22 +255,11 @@ impl<'a> UploadRequest<'a> {
     }
 
     #[cfg(feature = "read")]
-    fn exclusions(&self) -> impl Iterator<Item = &'a [u8]> + '_ {
-        let mut bytes = self.shallow_body;
-        core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten()).filter_map(|packet| {
-            let Packet::Data(value) = packet else {
-                return None;
-            };
-            request_line(value).strip_prefix(b"deepen-not ")
-        })
-    }
-
-    #[cfg(feature = "read")]
     pub(crate) fn exclusion_ids<'r>(
         &'r self,
         repository: &'r impl Repository,
     ) -> impl Iterator<Item = Result<ObjectId>> + 'r {
-        self.exclusions()
+        packet_values(self.shallow_body, b"deepen-not ")
             .map(move |name| exclusion_ref(repository, name))
     }
 
@@ -301,13 +290,11 @@ impl<'a> UploadRequest<'a> {
         objects: &[Option<git_zero_core::ValidationMetadata>],
         output: &mut impl Write,
     ) -> Result<()> {
-        let mut updates = ShallowUpdates::new(self, format);
-        if updates.enabled {
-            for (marker, id) in objects.iter().flatten().filter_map(shallow_change) {
-                updates.change(id, marker == b"unshallow ", output)?;
-            }
-        }
-        updates.finish(output)
+        self.revision_info(
+            format,
+            objects.iter().flatten().filter_map(shallow_change),
+            output,
+        )
     }
 
     #[cfg(feature = "read")]
@@ -351,22 +338,14 @@ impl<'a> UploadRequest<'a> {
         &'r self,
         repository: &'r impl Repository,
     ) -> impl Iterator<Item = Result<ObjectId>> + 'r {
-        let mut bytes = self.haves;
-        core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten())
-            .filter_map(have_id)
+        packet_values(self.haves, b"have ")
+            .filter_map(|hex| ObjectId::from_hex(hex).ok())
             .filter_map(move |id| common_commit(repository, id).transpose())
     }
 
     #[cfg(feature = "read")]
     pub fn shallow(&self) -> impl Iterator<Item = Result<ObjectId>> + '_ {
-        let mut bytes = self.shallow_body;
-        core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten()).filter_map(|packet| {
-            let Packet::Data(line) = packet else {
-                return None;
-            };
-            let hex = line.strip_prefix(b"shallow ")?;
-            Some(ObjectId::from_hex(hex.strip_suffix(b"\n").unwrap_or(hex)))
-        })
+        packet_values(self.shallow_body, b"shallow ").map(ObjectId::from_hex)
     }
 
     #[cfg(feature = "read")]
@@ -409,6 +388,24 @@ impl<'a> UploadRequest<'a> {
 }
 
 #[cfg(feature = "read")]
+fn exclusion_matches(full: &[u8], name: &[u8]) -> bool {
+    [
+        (b"".as_slice(), b"".as_slice()),
+        (b"refs/", b""),
+        (b"refs/tags/", b""),
+        (b"refs/heads/", b""),
+        (b"refs/remotes/", b""),
+        (b"refs/remotes/", b"/HEAD"),
+    ]
+    .iter()
+    .any(|&(prefix, suffix)| {
+        full.strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix(suffix))
+            == Some(name)
+    })
+}
+
+#[cfg(feature = "read")]
 fn exclusion_ref(repository: &impl Repository, name: &[u8]) -> Result<ObjectId> {
     let mut found = if name == b"HEAD" {
         repository.head_state().id()
@@ -420,41 +417,30 @@ fn exclusion_ref(repository: &impl Repository, name: &[u8]) -> Result<ObjectId> 
             .reference_name(index)
             .ok_or(Error::InvalidReference)?
             .as_bytes();
-        let matched = [
-            (b"".as_slice(), b"".as_slice()),
-            (b"refs/", b""),
-            (b"refs/tags/", b""),
-            (b"refs/heads/", b""),
-            (b"refs/remotes/", b""),
-            (b"refs/remotes/", b"/HEAD"),
-        ]
-        .iter()
-        .any(|&(prefix, suffix)| {
-            full.strip_prefix(prefix)
-                .and_then(|rest| rest.strip_suffix(suffix))
-                == Some(name)
-        });
-        if matched {
-            if found.is_some() {
-                return Err(Error::InvalidRequest);
-            }
-            // Validation already authenticated symbolic aliases and their final ID.
-            found = Some(
-                repository
-                    .reference_id(index)
-                    .ok_or(Error::InvalidReference)?,
-            );
+        if !exclusion_matches(full, name) {
+            continue;
         }
+        if found.is_some() {
+            return Err(Error::InvalidRequest);
+        }
+        // Validation already authenticated symbolic aliases and their final ID.
+        found = Some(
+            repository
+                .reference_id(index)
+                .ok_or(Error::InvalidReference)?,
+        );
     }
     found.ok_or(Error::InvalidRequest)
 }
 
 #[cfg(feature = "read")]
-fn shallow_change(object: &git_zero_core::ValidationMetadata) -> Option<(&'static [u8], ObjectId)> {
+fn shallow_change(
+    object: &git_zero_core::ValidationMetadata,
+) -> Option<git_zero_core::ShallowChange> {
     if object.is_shallow() {
-        Some((b"shallow ", object.id))
+        Some(git_zero_core::ShallowChange::Shallow(object.id))
     } else if object.is_unshallow() {
-        Some((b"unshallow ", object.id))
+        Some(git_zero_core::ShallowChange::Unshallow(object.id))
     } else {
         None
     }
@@ -462,12 +448,15 @@ fn shallow_change(object: &git_zero_core::ValidationMetadata) -> Option<(&'stati
 
 // The request parser already checked packet framing and ID syntax. These
 // helpers keep packet filtering separate from fallible repository metadata.
-fn have_id(packet: Packet<'_>) -> Option<ObjectId> {
-    let Packet::Data(line) = packet else {
-        return None;
-    };
-    let hex = line.strip_prefix(b"have ")?;
-    ObjectId::from_hex(hex.strip_suffix(b"\n").unwrap_or(hex)).ok()
+fn packet_values<'a>(mut bytes: &'a [u8], prefix: &'static [u8]) -> impl Iterator<Item = &'a [u8]> {
+    core::iter::from_fn(move || pktline::read(&mut bytes).ok().flatten()).filter_map(
+        move |packet| {
+            let Packet::Data(line) = packet else {
+                return None;
+            };
+            request_line(line).strip_prefix(prefix)
+        },
+    )
 }
 
 pub(crate) fn common_commit(
@@ -547,6 +536,13 @@ pub fn write_upload_error(error: Error, output: &mut impl Write) -> Result<()> {
 
 /// Stream host-computed shallow changes before acknowledgments/pack framing.
 /// The host must validate commit IDs and may only unshallow a client boundary.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Phase {
+    Initial,
+    Started,
+    Finished,
+}
+
 /// A v0/v1 depth probe ends with a flush even without changes; v2 emits a
 /// section only for changes in a final response. Errors are terminal.
 #[cfg(feature = "read")]
@@ -554,8 +550,7 @@ pub struct ShallowUpdates {
     format: ObjectFormat,
     v2: bool,
     enabled: bool,
-    started: bool,
-    finished: bool,
+    phase: Phase,
     failure: Option<Error>,
 }
 #[cfg(feature = "read")]
@@ -565,8 +560,7 @@ impl ShallowUpdates {
             format,
             v2: request.v2,
             enabled: request.extensions.history() && (!request.v2 || request.done),
-            started: false,
-            finished: false,
+            phase: Phase::Initial,
             failure: None,
         }
     }
@@ -575,40 +569,48 @@ impl ShallowUpdates {
         self.enabled
     }
     pub fn change(&mut self, id: ObjectId, unshallow: bool, output: &mut impl Write) -> Result<()> {
-        let result = (|| {
-            self.ready()?;
-            if self.finished || !self.enabled {
-                return Err(Error::InvalidRequest);
-            }
-            if id.is_zero() || id.format() != self.format {
-                return Err(Error::InvalidObjectId);
-            }
-            if !self.started && self.v2 {
-                pktline::write(output, b"shallow-info\n")?;
-            }
-            self.started = true;
-            let marker: &[u8] = if unshallow {
-                b"unshallow "
-            } else {
-                b"shallow "
-            };
-            pktline::write_parts(output, &[marker, id.to_hex().as_bytes(), b"\n"])
-        })();
+        let result = self.write_change(id, unshallow, output);
         self.record(result)
     }
+    fn write_change(
+        &mut self,
+        id: ObjectId,
+        unshallow: bool,
+        output: &mut impl Write,
+    ) -> Result<()> {
+        self.ready()?;
+        if self.phase == Phase::Finished || !self.enabled {
+            return Err(Error::InvalidRequest);
+        }
+        if id.is_zero() || id.format() != self.format {
+            return Err(Error::InvalidObjectId);
+        }
+        if self.phase == Phase::Initial && self.v2 {
+            pktline::write(output, b"shallow-info\n")?;
+        }
+        self.phase = Phase::Started;
+        let marker: &[u8] = if unshallow {
+            b"unshallow "
+        } else {
+            b"shallow "
+        };
+        pktline::write_parts(output, &[marker, id.to_hex().as_bytes(), b"\n"])
+    }
     pub fn finish(&mut self, output: &mut impl Write) -> Result<()> {
-        let result = (|| {
-            self.ready()?;
-            if self.finished {
-                return Err(Error::InvalidRequest);
-            }
-            self.finished = true;
-            if self.enabled && (!self.v2 || self.started) {
-                output.write_all(if self.v2 { b"0001" } else { b"0000" })?;
-            }
-            Ok(())
-        })();
+        let result = self.write_finish(output);
         self.record(result)
+    }
+    fn write_finish(&mut self, output: &mut impl Write) -> Result<()> {
+        self.ready()?;
+        if self.phase == Phase::Finished {
+            return Err(Error::InvalidRequest);
+        }
+        let started = self.phase == Phase::Started;
+        self.phase = Phase::Finished;
+        if self.enabled && (!self.v2 || started) {
+            output.write_all(if self.v2 { b"0001" } else { b"0000" })?;
+        }
+        Ok(())
     }
     fn ready(&self) -> Result<()> {
         self.failure.map_or(Ok(()), Err)
@@ -629,8 +631,7 @@ pub struct Acknowledgments {
     mode: u8,
     suppress: bool,
     last: Option<ObjectId>,
-    started: bool,
-    finished: bool,
+    phase: Phase,
 }
 impl Acknowledgments {
     pub(crate) fn new(request: &UploadRequest<'_>) -> Self {
@@ -640,15 +641,14 @@ impl Acknowledgments {
             mode: request.capabilities.ack(),
             suppress: !request.v2 && request.extensions.history() && request.haves.is_empty(),
             last: None,
-            started: false,
-            finished: false,
+            phase: Phase::Initial,
         }
     }
     pub fn start(&mut self, output: &mut impl Write) -> Result<()> {
-        if self.started || self.finished {
+        if self.phase != Phase::Initial {
             return Err(Error::InvalidRequest);
         }
-        self.started = true;
+        self.phase = Phase::Started;
         if self.v2 {
             pktline::write(
                 output,
@@ -662,7 +662,7 @@ impl Acknowledgments {
         Ok(())
     }
     pub fn common(&mut self, id: ObjectId, output: &mut impl Write) -> Result<()> {
-        if !self.started || self.finished || id.is_zero() {
+        if self.phase != Phase::Started || id.is_zero() {
             return Err(Error::InvalidRequest);
         }
         if self.suppress
@@ -683,10 +683,10 @@ impl Acknowledgments {
         Ok(())
     }
     pub fn finish(&mut self, output: &mut impl Write) -> Result<()> {
-        if !self.started || self.finished {
+        if self.phase != Phase::Started {
             return Err(Error::InvalidRequest);
         }
-        self.finished = true;
+        self.phase = Phase::Finished;
         if self.v2 {
             if !self.done {
                 if self.last.is_none() {

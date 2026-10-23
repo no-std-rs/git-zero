@@ -184,33 +184,7 @@ impl<'a> ResponseEncoder<'a> {
         options: crate::WantOptions,
         control: &'a mut [u8],
     ) -> Result<Self> {
-        let mut output = SliceWriter::new(control);
-        if options.policy == crate::WantPolicy::AllVisibleReachable && request.method == "GET" {
-            let route = route::validate(request)?;
-            if route.rejection.is_none() && route.path == "info/refs" {
-                let response = crate::policy::info_refs(repository, &route, &mut output, options)?;
-                return Ok(Self::buffered(response, output.finish()));
-            }
-        }
-        let plan = Self::ordinary(repository, request, &mut output, true)?;
-        let Plan::Upload(version) = plan else {
-            return Self::ordinary_response(repository, plan, output.finish());
-        };
-        let selected = crate::prepare_fetch(
-            repository,
-            request,
-            version,
-            storage,
-            options,
-            None,
-            &mut output,
-        )?;
-        let mut encoder = Self::buffered(upload_response(), output.finish());
-        if let Some(indices) = selected.indices {
-            encoder.body = Body::Pack(pack::Encoder::new(repository, Some(indices))?);
-            encoder.band = selected.upload.band();
-        }
-        Ok(encoder)
+        Self::selected_storage(repository, request, storage, options, None, control)
     }
 
     /// Opt in to time/exclusion deepening. Boundary state is temporary; only
@@ -232,11 +206,38 @@ impl<'a> ResponseEncoder<'a> {
         storage: crate::RevisionStorage<'a>,
         control: &'a mut [u8],
     ) -> Result<Self> {
+        Self::selected_storage(
+            repository,
+            request,
+            storage.selection,
+            crate::WantOptions::STRICT,
+            Some((storage.state, storage.limits)),
+            control,
+        )
+    }
+
+    #[cfg(feature = "read")]
+    fn selected_storage<R: Repository + ?Sized>(
+        repository: &git_zero_core::ValidatedRepository<'_, '_, R>,
+        request: Request<'_>,
+        storage: crate::SelectionStorage<'a>,
+        options: crate::WantOptions,
+        revision: Option<(&mut [u8], git_zero_core::RevisionLimits)>,
+        control: &'a mut [u8],
+    ) -> Result<Self> {
         let mut output = SliceWriter::new(control);
-        let route = route::validate(request)?;
-        if route.rejection.is_none() && request.method == "GET" && route.path == "info/refs" {
-            let response = crate::serve_revision_info_refs(repository, &route, &mut output)?;
-            return Ok(Self::buffered(response, output.finish()));
+        if request.method == "GET"
+            && (revision.is_some() || options.policy == crate::WantPolicy::AllVisibleReachable)
+        {
+            let route = route::validate(request)?;
+            if route.rejection.is_none() && route.path == "info/refs" {
+                let response = if revision.is_some() {
+                    crate::serve_revision_info_refs(repository, &route, &mut output)?
+                } else {
+                    crate::policy::info_refs(repository, &route, &mut output, options)?
+                };
+                return Ok(Self::buffered(response, output.finish()));
+            }
         }
         let plan = Self::ordinary(repository, request, &mut output, true)?;
         let Plan::Upload(version) = plan else {
@@ -246,9 +247,9 @@ impl<'a> ResponseEncoder<'a> {
             repository,
             request,
             version,
-            storage.selection,
-            crate::WantOptions::STRICT,
-            Some((storage.state, storage.limits)),
+            storage,
+            options,
+            revision,
             &mut output,
         )?;
         let mut encoder = Self::buffered(upload_response(), output.finish());

@@ -78,10 +78,23 @@ def compare_clients(bare, clients, env):
         verify_checkout(bare, path, head, env)
 
 
-def compare(root, zero_url):
-    env = revision_environment(root)
-    bare = root / "repo.git"
-    ids = json.loads((root / "revision-ids.json").read_text())
+def clone_clients(root, env, urls, case, version, branch, options):
+    clients = []
+    for name, url in urls:
+        path, result = clone(root, env, f"{name}-v{version}-{case}", url, version, branch, options)
+        assert result.returncode == 0, (name, case, result.stderr)
+        clients.append(path)
+    return clients
+
+
+def fetch_clients(bare, clients, env, version, arguments, *refspecs):
+    for path in clients:
+        git(path, "-c", f"protocol.version={version}", "fetch", "--no-tags",
+            *arguments, "origin", *refspecs, env=env)
+    compare_clients(bare, clients, env)
+
+
+def compare_protocol(root, bare, ids, env, urls, version):
     cases = [
         ("equal-root", "main", [since(100)]), ("equal-C", "main", [since(200)]),
         ("skew-cut", "main", [since(250)]), ("merge-skew", "merge", [since(250)]),
@@ -96,43 +109,34 @@ def compare(root, zero_url):
     ]
     failures = [("all-cut", [since(401)]), ("ambiguous", ["--shallow-exclude=ambiguous"]),
                 ("raw-id", ["--shallow-exclude=" + ids["B"]])]
+    for case, branch, options in cases:
+        clients = clone_clients(root, env, urls, case, version, branch, options)
+        compare_clients(bare, clients, env)
+    for case, options in failures:
+        for name, url in urls:
+            _, result = clone(root, env, f"{name}-v{version}-{case}", url, version, "main", options)
+            assert result.returncode != 0, (name, case)
+    for mode in ("since", "exclude"):
+        clients = clone_clients(root, env, urls, f"fetch-{mode}", version, "main", ["--depth=1"])
+        options = [since(200)] if mode == "since" else ["--shallow-exclude=cutoff"]
+        for arguments in (options, options, [since(100)], [since(350)], ["--unshallow"]):
+            fetch_clients(bare, clients, env, version, arguments)
+    clients = clone_clients(root, env, urls, "unrelated", version,
+                            "main", ["--depth=1", "--no-single-branch"])
+    for arguments, branch in (([since(200)], "main"), ([since(100)], "merge")):
+        fetch_clients(bare, clients, env, version, arguments, branch)
+    print(f"v{version} revision clone/fetch/boundary/checkout oracle passed", flush=True)
+
+
+def compare(root, zero_url):
+    env = revision_environment(root)
+    bare = root / "repo.git"
+    ids = json.loads((root / "revision-ids.json").read_text())
     with reference_server(root, env, True) as reference:
         urls = (("reference", reference), ("zero", zero_url))
         for version in (0, 1, 2):
-            for case, branch, options in cases:
-                clients = []
-                for name, url in urls:
-                    path, result = clone(root, env, f"{name}-v{version}-{case}", url, version, branch, options)
-                    assert result.returncode == 0, (name, case, result.stderr)
-                    clients.append(path)
-                compare_clients(bare, clients, env)
-            for case, options in failures:
-                for name, url in urls:
-                    _, result = clone(root, env, f"{name}-v{version}-{case}", url, version, "main", options)
-                    assert result.returncode != 0, (name, case)
-            for mode in ("since", "exclude"):
-                clients = []
-                for name, url in urls:
-                    path, result = clone(root, env, f"{name}-v{version}-fetch-{mode}", url, version, "main", ["--depth=1"])
-                    assert result.returncode == 0, result.stderr
-                    clients.append(path)
-                options = [since(200)] if mode == "since" else ["--shallow-exclude=cutoff"]
-                for arguments in (options, options, [since(100)], [since(350)], ["--unshallow"]):
-                    for path in clients:
-                        git(path, "-c", f"protocol.version={version}", "fetch", "--no-tags", *arguments, "origin", env=env)
-                    compare_clients(bare, clients, env)
-            clients = []
-            for name, url in urls:
-                path, result = clone(root, env, f"{name}-v{version}-unrelated", url, version,
-                                     "main", ["--depth=1", "--no-single-branch"])
-                assert result.returncode == 0, result.stderr
-                clients.append(path)
-            for arguments, branch in (([since(200)], "main"), ([since(100)], "merge")):
-                for path in clients:
-                    git(path, "-c", f"protocol.version={version}", "fetch", "--no-tags", *arguments,
-                        "origin", branch, env=env)
-                compare_clients(bare, clients, env)
-            print(f"v{version} revision clone/fetch/boundary/checkout oracle passed", flush=True)
+            compare_protocol(root, bare, ids, env, urls, version)
+
 
 
 if __name__ == "__main__":

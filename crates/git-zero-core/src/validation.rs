@@ -397,7 +397,7 @@ impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
         let mut has_shallow = false;
         for id in shallow {
             let index = find(work, self.repository.by_id, id?).ok_or(Error::InvalidRequest)?;
-            let object = work[index].as_mut().expect("validated metadata");
+            let object = metadata_mut(work, index);
             if object.info.kind != ObjectKind::Commit {
                 return Err(Error::InvalidRequest);
             }
@@ -461,7 +461,7 @@ impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
         let work = &mut *self.work;
         for &id in roots {
             let index = find(work, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
-            work[index].as_mut().expect("validated metadata").wanted = true;
+            metadata_mut(work, index).wanted = true;
             reach_at(
                 work,
                 self.repository.by_id,
@@ -489,7 +489,7 @@ impl<R: Repository + ?Sized> Selection<'_, '_, '_, R> {
                 // include-tag adds the annotation outside the object filter.
                 // Its complete tag chain must survive the second policy pass.
                 let tag = find(work, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
-                work[tag].as_mut().expect("validated metadata").wanted = true;
+                metadata_mut(work, tag).wanted = true;
                 reach_at(
                     work,
                     self.repository.by_id,
@@ -623,10 +623,7 @@ fn walk(
         let object = slot.expect("initialized metadata");
         object.reached && !object.checked
     }) {
-        objects[index]
-            .as_mut()
-            .expect("initialized metadata")
-            .checked = true;
+        metadata_mut(objects, index).checked = true;
         let object = *metadata(objects, index);
         if object.info.kind == ObjectKind::Tree
             && !filter.follows_tree(object.depth.saturating_sub(1))
@@ -634,51 +631,63 @@ fn walk(
             continue;
         }
         let mut body = Body::budgeted(repository, index, read_scratch, budget.as_deref_mut())?;
-        match object.info.kind {
-            ObjectKind::Commit => {
-                let stop = !history.follows_parents(object.depth, object.client_shallow);
-                validate_commit(
-                    &mut body,
-                    parse_scratch,
-                    objects,
-                    by_id,
-                    (!stop).then_some(history.parent_depth(object.depth)),
-                )?;
-                objects[index]
-                    .as_mut()
-                    .expect("initialized metadata")
-                    .shallow = stop;
-            }
-            ObjectKind::Tree => {
-                let child_depth = if matches!(filter, BlobFilter::TreeDepth(_))
-                    && !(object.wanted && object.forced)
-                {
-                    object.depth.saturating_add(1)
-                } else {
-                    1
-                };
-                validate_tree(
-                    &mut body,
-                    parse_scratch,
-                    objects,
-                    by_id,
-                    object.forced,
-                    child_depth,
-                )?
-            }
-            ObjectKind::Blob => {}
-            ObjectKind::Tag => validate_tag(
-                &mut body,
-                parse_scratch,
-                objects,
-                by_id,
-                object.depth,
-                object.forced,
-                object.wanted,
-            )?,
-        }
+        validate_walk_object(
+            &mut body,
+            index,
+            objects,
+            by_id,
+            parse_scratch,
+            history,
+            filter,
+        )?;
     }
     Ok(())
+}
+
+fn validate_walk_object(
+    body: &mut Body<'_, '_, impl Repository + ?Sized>,
+    index: usize,
+    objects: &mut [Option<ValidationMetadata>],
+    by_id: &[usize],
+    scratch: &mut [u8],
+    history: History,
+    filter: BlobFilter,
+) -> Result<()> {
+    let object = *metadata(objects, index);
+    match object.info.kind {
+        ObjectKind::Commit => {
+            let stop = !history.follows_parents(object.depth, object.client_shallow);
+            validate_commit(
+                body,
+                scratch,
+                objects,
+                by_id,
+                (!stop).then_some(history.parent_depth(object.depth)),
+            )?;
+            metadata_mut(objects, index).shallow = stop;
+            Ok(())
+        }
+        ObjectKind::Tree => {
+            let child_depth = if matches!(filter, BlobFilter::TreeDepth(_))
+                && !(object.wanted && object.forced)
+            {
+                object.depth.saturating_add(1)
+            } else {
+                1
+            };
+            validate_tree(body, scratch, objects, by_id, object.forced, child_depth)
+        }
+        ObjectKind::Blob => Ok(()),
+        ObjectKind::Tag => validate_tag(
+            body,
+            scratch,
+            objects,
+            by_id,
+            object.depth,
+            object.forced,
+            object.wanted,
+        ),
+    }
 }
 
 fn validate_reference_target(
@@ -747,6 +756,13 @@ fn metadata(objects: &[Option<ValidationMetadata>], index: usize) -> &Validation
     objects[index].as_ref().expect("initialized metadata")
 }
 
+fn metadata_mut(
+    objects: &mut [Option<ValidationMetadata>],
+    index: usize,
+) -> &mut ValidationMetadata {
+    objects[index].as_mut().expect("initialized metadata")
+}
+
 fn find(objects: &[Option<ValidationMetadata>], by_id: &[usize], id: ObjectId) -> Option<usize> {
     let position = by_id
         .binary_search_by_key(&id, |&index| metadata(objects, index).id)
@@ -775,7 +791,7 @@ fn reach_at(
         return Err(Error::InvalidObject);
     }
     let index = find(objects, by_id, id).ok_or(Error::ObjectNotFound)?;
-    let object = objects[index].as_mut().expect("initialized metadata");
+    let object = metadata_mut(objects, index);
     if object.info.kind != kind {
         return Err(Error::InvalidObject);
     }
@@ -908,19 +924,38 @@ fn validate_commit(
     by_id: &[usize],
     parent_depth: Option<u32>,
 ) -> Result<()> {
+    let tree = commit_tree(body, scratch)?;
+    reach(objects, by_id, tree, ObjectKind::Tree)?;
+    commit_parents(body, scratch, |id| match parent_depth {
+        Some(depth) => reach_at(objects, by_id, id, ObjectKind::Commit, depth, false),
+        None => Ok(()),
+    })?;
+    validate_extra_headers(
+        body,
+        scratch,
+        &[b"tree", b"parent", b"author", b"committer"],
+    )
+}
+
+fn commit_tree(
+    body: &mut Body<'_, '_, impl Repository + ?Sized>,
+    scratch: &mut [u8],
+) -> Result<ObjectId> {
     let format = body.reader.object_format();
-    reach(
-        objects,
-        by_id,
-        link(body.line(scratch)?, b"tree ", format)?,
-        ObjectKind::Tree,
-    )?;
+    link(body.line(scratch)?, b"tree ", format)
+}
+
+// Both graph validation and revision selection consume these structural headers
+// after the root tree. The caller decides which parents to traverse.
+fn commit_parents<'a>(
+    body: &mut Body<'_, '_, impl Repository + ?Sized>,
+    scratch: &'a mut [u8],
+    mut visit: impl FnMut(ObjectId) -> Result<()>,
+) -> Result<&'a [u8]> {
+    let format = body.reader.object_format();
     let mut line = body.line(scratch)?;
     while line.starts_with(b"parent ") {
-        let id = link(line, b"parent ", format)?;
-        if let Some(depth) = parent_depth {
-            reach_at(objects, by_id, id, ObjectKind::Commit, depth, false)?;
-        }
+        visit(link(line, b"parent ", format)?)?;
         line = body.line(scratch)?;
     }
     if !line.starts_with(b"author ") || line.len() == b"author ".len() {
@@ -930,11 +965,7 @@ fn validate_commit(
     if !line.starts_with(b"committer ") || line.len() == b"committer ".len() {
         return Err(Error::InvalidObject);
     }
-    validate_extra_headers(
-        body,
-        scratch,
-        &[b"tree", b"parent", b"author", b"committer"],
-    )
+    Ok(line)
 }
 
 fn tag_target(
@@ -963,7 +994,7 @@ fn validate_tag(
     reach_at(objects, by_id, id, kind, depth, forced)?;
     if wanted {
         let index = find(objects, by_id, id).ok_or(Error::ObjectNotFound)?;
-        objects[index].as_mut().expect("validated metadata").wanted = true;
+        metadata_mut(objects, index).wanted = true;
     }
     let line = body.line(scratch)?;
     if !line.starts_with(b"tag ") || line.len() == b"tag ".len() {

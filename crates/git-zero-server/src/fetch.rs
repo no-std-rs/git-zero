@@ -160,29 +160,25 @@ fn scaled_filter_number(value: &[u8]) -> Result<u64> {
         .ok_or(Error::InvalidRequest)
 }
 
-fn filter_number(mut value: &[u8]) -> Result<u64> {
+fn filter_number(value: &[u8]) -> Result<u64> {
     // Native Git uses its base-0 unsigned parser, allowing leading C whitespace
     // and one plus sign. Keep this separate from decimal protocol depths.
-    while value
-        .first()
-        .is_some_and(|&byte| matches!(byte, b' ' | b'\t'..=b'\r'))
-    {
-        value = &value[1..];
-    }
-    let value = value.strip_prefix(b"+").unwrap_or(value);
-    let (digits, radix) = match value {
-        [b'0', b'x' | b'X', digits @ ..] => (digits, 16),
-        [b'0', b'b' | b'B', digits @ ..] => (digits, 2),
-        [b'0', ..] => (value, 8),
-        _ => (value, 10),
+    let text = core::str::from_utf8(value).map_err(|_| Error::InvalidRequest)?;
+    let text = text.trim_start_matches(|character| matches!(character, ' ' | '\t'..='\r'));
+    let text = text.strip_prefix('+').unwrap_or(text);
+    let (offset, radix) = match text.as_bytes() {
+        [b'0', b'x' | b'X', ..] => (2, 16),
+        [b'0', b'b' | b'B', ..] => (2, 2),
+        [b'0', ..] => (0, 8),
+        _ => (0, 10),
     };
+    let digits = &text[offset..];
     // from_str_radix also accepts '+', but a second sign or one after a base
     // prefix is invalid in Git's numeric syntax.
-    if !digits.first().is_some_and(u8::is_ascii_hexdigit) {
+    if !digits.as_bytes().first().is_some_and(u8::is_ascii_hexdigit) {
         return Err(Error::InvalidRequest);
     }
-    let text = core::str::from_utf8(digits).map_err(|_| Error::InvalidRequest)?;
-    u64::from_str_radix(text, radix).map_err(|_| Error::InvalidRequest)
+    u64::from_str_radix(digits, radix).map_err(|_| Error::InvalidRequest)
 }
 
 #[cfg(test)]

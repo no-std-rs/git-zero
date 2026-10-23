@@ -57,6 +57,23 @@ fn python(root: &Path, phase: &str, format: &str, url: Option<&str>) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+fn respond_error(socket: &impl rustix::fd::AsFd, error: Error, control: &mut [u8]) {
+    let mut body = SliceWriter::new(control);
+    http::write_upload_error(error, &mut body).unwrap();
+    respond(
+        socket,
+        http::Response {
+            status: if matches!(error, Error::BufferTooSmall | Error::LimitExceeded) {
+                413
+            } else {
+                400
+            },
+            content_type: "application/x-git-upload-pack-result",
+        },
+        body.as_bytes(),
+    )
+    .unwrap();
+}
 fn serve<R: Repository + ?Sized>(
     repository: &ValidatedRepository<'_, '_, R>,
     listener: &impl rustix::fd::AsFd,
@@ -85,65 +102,53 @@ fn serve<R: Repository + ?Sized>(
             Ok(mut encoder) => {
                 respond_stream(&socket, repository, &mut encoder, &mut staging).unwrap()
             }
-            Err(error) => {
-                let mut body = SliceWriter::new(&mut control);
-                http::write_upload_error(error, &mut body).unwrap();
-                respond(
-                    &socket,
-                    http::Response {
-                        status: if matches!(error, Error::BufferTooSmall | Error::LimitExceeded) {
-                            413
-                        } else {
-                            400
-                        },
-                        content_type: "application/x-git-upload-pack-result",
-                    },
-                    body.as_bytes(),
-                )
-                .unwrap();
-            }
+            Err(error) => respond_error(&socket, error, &mut control),
         }
     }
 }
+fn check_revision_format(format: &str) {
+    let root = std::env::temp_dir().join(format!(
+        "git-zero-revision-http-{}-{format}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let _cleanup = Cleanup(root.clone());
+    python(&root, "prepare", format, None);
+    let fixture = fixture::Fixture::load(&root).unwrap();
+    let (id, head) = fixture.head().unwrap();
+    let refs = fixture.references().unwrap();
+    let files = FileRepository::new(id, fixture.objects());
+    let source = RefRepository::new(&files, head, &refs).unwrap();
+    let mut metadata = [None; fixture::OBJECTS];
+    let mut by_id = [0; fixture::OBJECTS];
+    let repository = allocations::without_allocations(|| {
+        ValidatedRepository::new(
+            &source,
+            &mut metadata,
+            &mut by_id,
+            &mut [0; 17],
+            &mut [0; 512],
+        )
+    })
+    .unwrap();
+    let listener = listen(0).unwrap();
+    let port = local_port(&listener).unwrap();
+    let stopped = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| serve(&repository, &listener, &stopped));
+        let _stop = Stop(&stopped, port);
+        python(
+            &root,
+            "compare",
+            format,
+            Some(&format!("http://127.0.0.1:{port}/repo.git")),
+        );
+    });
+}
+
 #[test]
 fn real_git_revision_history_matches_http_backend_in_both_formats_and_all_protocols() {
     for format in ["sha1", "sha256"] {
-        let root = std::env::temp_dir().join(format!(
-            "git-zero-revision-http-{}-{format}",
-            std::process::id()
-        ));
-        std::fs::create_dir(&root).unwrap();
-        let _cleanup = Cleanup(root.clone());
-        python(&root, "prepare", format, None);
-        let fixture = fixture::Fixture::load(&root).unwrap();
-        let (id, head) = fixture.head().unwrap();
-        let refs = fixture.references().unwrap();
-        let files = FileRepository::new(id, fixture.objects());
-        let source = RefRepository::new(&files, head, &refs).unwrap();
-        let mut metadata = [None; fixture::OBJECTS];
-        let mut by_id = [0; fixture::OBJECTS];
-        let repository = allocations::without_allocations(|| {
-            ValidatedRepository::new(
-                &source,
-                &mut metadata,
-                &mut by_id,
-                &mut [0; 17],
-                &mut [0; 512],
-            )
-        })
-        .unwrap();
-        let listener = listen(0).unwrap();
-        let port = local_port(&listener).unwrap();
-        let stopped = AtomicBool::new(false);
-        std::thread::scope(|scope| {
-            scope.spawn(|| serve(&repository, &listener, &stopped));
-            let _stop = Stop(&stopped, port);
-            python(
-                &root,
-                "compare",
-                format,
-                Some(&format!("http://127.0.0.1:{port}/repo.git")),
-            );
-        });
+        check_revision_format(format);
     }
 }
