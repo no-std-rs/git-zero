@@ -1,4 +1,5 @@
 //! Stateless v0 negotiation. Parse the complete bounded body before output.
+use super::extensions;
 use git_zero_core::{
     Error, ObjectFormat, ObjectId, ObjectKind, Repository, Result,
     io::Write,
@@ -99,7 +100,7 @@ pub(crate) struct UploadRequest<'a> {
     v2: bool,
     #[cfg(feature = "read")]
     shallow_body: &'a [u8],
-    pub extensions: crate::fetch::Extensions,
+    pub extensions: extensions::Extensions,
     #[cfg(feature = "read")]
     include_tags: bool,
 }
@@ -128,7 +129,7 @@ fn parse_wants(
     bytes: &mut &[u8],
     format: ObjectFormat,
     mut want: impl FnMut(ObjectId) -> Result<()>,
-    extensions: &mut crate::fetch::Extensions,
+    extensions: &mut extensions::Extensions,
 ) -> Result<Capabilities> {
     let mut wanted = false;
     let mut extended = false;
@@ -203,7 +204,7 @@ impl<'a> UploadRequest<'a> {
         revisions_enabled: bool,
         want: impl FnMut(ObjectId) -> Result<()>,
     ) -> Result<Self> {
-        let mut extensions = crate::fetch::Extensions::new(revisions_enabled);
+        let mut extensions = extensions::Extensions::new(revisions_enabled);
         #[cfg(feature = "read")]
         let shallow_body = bytes;
         if version == crate::route::Version::V2 {
@@ -316,7 +317,7 @@ impl<'a> UploadRequest<'a> {
             |id| {
                 remaining = remaining.checked_sub(1).ok_or(Error::LimitExceeded)?;
                 let allowed = match options.policy {
-                    crate::WantPolicy::AdvertisedOnly => crate::advertised(repository, id),
+                    crate::WantPolicy::AdvertisedOnly => super::advertised(repository, id),
                     crate::WantPolicy::AllVisibleReachable => repository.find_index(id).is_some(),
                 };
                 if !allowed {

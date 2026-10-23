@@ -1,3 +1,5 @@
+//! Streaming pack decoding for intake/indexing, independent of receive-pack control.
+//! Server push negotiation and status live in git-zero-server's `receive` module.
 //! Incremental pack intake. All emitted bytes and metadata are provisional
 //! until the pack trailer is verified. The host owns quarantine and publication.
 use super::{EntryHeader, EntryKind, crc::Crc32, decode::parse_entry_header};

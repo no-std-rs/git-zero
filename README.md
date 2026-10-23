@@ -46,6 +46,7 @@ commands, file-backed storage, crate features, and the Worker demo.
 
 - [Documentation index](docs/README.md)
 - [Current architecture](docs/design.md)
+- [Source map for upstream Git developers](docs/upstream-mapping.md)
 - [Embedding and repository APIs](docs/embedding.md)
 - [Object formats and decoding](docs/object-decoding.md)
 - [Development and validation](docs/validation.md)
