@@ -1,6 +1,6 @@
 use super::MAX_INPUT;
 use git_zero::{
-    Snapshot,
+    Repository, Snapshot,
     http::{self, Request},
     io::SliceWriter,
     pack,
@@ -92,6 +92,73 @@ fn exercise(
         fragment_size,
         &mut selection,
     );
+    prepared(repository, request, capacity, fragment_size);
+}
+
+// Exercise the transport-silent cache phase with the same fuzzed routing and
+// bounded control budgets. Failed attachment has no response cursor to drain.
+fn prepared(
+    repository: git_zero::ValidatedRepository<'_, '_, impl git_zero::Repository>,
+    request: Request<'_>,
+    capacity: usize,
+    fragment_size: usize,
+) {
+    use http::stream::{ResponseEncoder, preparation::PreparedResponse};
+    let mut selection = http::SelectionBuffers::<2, 2, 1, 128>::new();
+    let mut control = [0; MAX_INPUT];
+    let Ok(encoder) = ResponseEncoder::with_selection_storage_policy(
+        &repository,
+        request,
+        selection.storage(MAX_INPUT as u64),
+        http::WantOptions::STRICT,
+        &mut control[..capacity],
+    ) else {
+        return;
+    };
+    let mut ids = [repository.object_format().zero_id(); 2];
+    let Ok(mut pending) = PreparedResponse::new(encoder, &repository, &mut ids) else {
+        return;
+    };
+    if pending.key().is_none() {
+        check_stream(
+            &repository,
+            request,
+            fragment_size,
+            &mut pending.without_pack().unwrap(),
+        );
+        return;
+    }
+    let mut pack = [0; MAX_INPUT];
+    let mut length = 0;
+    loop {
+        let end = (length + fragment_size).min(pack.len());
+        let Ok(count) = pending.read_pack(&repository, &mut pack[length..end]) else {
+            return;
+        };
+        if count == 0 {
+            break;
+        }
+        length += count;
+    }
+    pending
+        .key()
+        .unwrap()
+        .verify_pack(&pack[..length], &mut ids, MAX_INPUT)
+        .unwrap();
+    // Reuse request bytes as a mutation selector without extending fuzz input.
+    if request.body.first().is_some_and(|byte| byte & 1 != 0) {
+        pack[length - 1] ^= 1;
+        assert!(
+            pending
+                .attach(&pack[..length], &mut ids, MAX_INPUT)
+                .is_err()
+        );
+    } else {
+        let mut encoder = pending
+            .attach(&pack[..length], &mut ids, MAX_INPUT)
+            .unwrap();
+        check_stream(&repository, request, fragment_size, &mut encoder);
+    }
 }
 
 fn streaming(

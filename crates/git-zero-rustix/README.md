@@ -183,3 +183,44 @@ Packed dumb publication is described in [the publication guide](../../docs/packe
 `respond_file_published` streams them with independent offsets. Both cancel on
 socket/provider failure. The CLI's immutable demonstration snapshot now serves
 its generated pack/index alongside loose objects.
+
+## Native deadlines and chunked intake
+
+`read_request_with_deadlines` adds `RequestDeadlines { total, idle }` to a request
+policy. `total` starts when intake begins and never resets on progress. `idle`
+resets only after a positive read. `respond_stream_with_deadlines` and
+`respond_published_with_deadlines` apply independent `ResponseDeadlines` to
+streamed/known-length output; successful writes reset idle, while total remains
+absolute. Unset defaults preserve the original blocking APIs and their overhead.
+
+The CLI accepts positive, unique `--request-deadline-ms=N`, `--idle-deadline-ms=N`,
+`--response-deadline-ms=N` and `--response-idle-deadline-ms=N`. Deadline exhaustion
+returns `LimitExceeded` (the CLI's existing 413 admission response before output).
+A shorter accepted-socket timeout retains `Backend`. Poll plus per-call
+nonblocking I/O preserves descriptor flags and read/write timeout settings.
+
+Intake covers HTTP bytes plus the final parse/inflation check. Response checks
+bracket provider pulls and EOF, cancelling on expiry without a successful protocol
+terminator. These calls cannot preempt synchronous provider code. Accept, Git
+preparation between phases, and total connection lifetime require host policy;
+the example still serves accepted connections serially.
+
+`--chunked-requests` explicitly enables bounded HTTP/1.1 transfer decoding.
+Library hosts can call `read_request_chunked` with `ChunkedLimits`: defaults allow
+1024 nonzero chunks and 32 wire bytes per size line. Complete encoded wire remains
+resident, while chunk bodies compact in place. Wire quotas count chunk framing;
+body quotas count transfer-decoded identity bytes or subsequently inflated gzip
+bytes. Gzip expansion uses storage beyond the complete encoded wire.
+
+Duplicate transfer fields and Content-Length/Transfer-Encoding conflicts fail.
+Unsupported transfer codings, extensions and nonempty trailers are rejected
+explicitly. HTTP/1.0 chunked requests fail. Retained bytes after a final chunk fail;
+there is no keep-alive or pipeline processing, and every response closes the
+connection. Existing entrypoints continue to reject Transfer-Encoding by default.
+
+`read_request_from` and `read_request_from_chunked` expose the same parser to a
+host-supplied blocking read callback, including TLS streams. The callback owns
+peer/certificate validation, TLS records, buffering, deadlines and cancellation;
+it fills at most the supplied slice and returns zero only at EOF. Parser errors
+invalidate storage and require closing that transport. This is a documented
+transport boundary; no TLS provider or authenticated TLS test is bundled here.

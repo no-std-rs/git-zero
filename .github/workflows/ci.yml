@@ -296,7 +296,7 @@ jobs:
       - run: cargo install cargo-fuzz --version 0.13.2 --locked
       - name: Bounded AddressSanitizer fuzz campaigns
         run: |
-          for target in packets responses routing graph inflation loose entries receive indexes; do
+          for target in packets responses routing graph inflation loose entries receive indexes native_http; do
             mkdir -p "$RUNNER_TEMP/fuzz-corpus/$target"
             cargo fuzz run "$target" "$RUNNER_TEMP/fuzz-corpus/$target" "fuzz/corpus/$target" -- \
               -runs=5000 -max_len=4096 -timeout=5 -rss_limit_mb=512

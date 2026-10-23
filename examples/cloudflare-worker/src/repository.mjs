@@ -1,4 +1,5 @@
 import { readRequestBody } from "./bytes.mjs";
+import { cachedResponse, packCachePolicy } from "./pack-cache.mjs";
 import { streamResponse } from "./stream.mjs";
 import { revisionPolicy } from "./revision-policy.mjs";
 import { wantPolicy } from "./want-policy.mjs";
@@ -139,7 +140,7 @@ function failure(status, message) {
   return new Response(`${message}\n`, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export function repositoryResponse(module, repository, target, body, method, headers, policy = null, revisions = null, publication = null) {
+export function repositoryResponse(module, repository, target, body, method, headers, policy = null, revisions = null, publication = null, cache = null, signal = undefined) {
   const { exports } = new WebAssembly.Instance(module, {});
   importRepository(exports, repository);
   let length;
@@ -154,6 +155,7 @@ export function repositoryResponse(module, repository, target, body, method, hea
     const size = exports.publication_length();
     return streamResponse(exports, result, size >= 0 ? size : undefined);
   }
+  if (cache) return cachedResponse(exports, length, method, policy, revisions, cache, signal, streamResponse);
   const result = revisions
     ? exports.stream_start_repository_revisions(length, method === "POST" ? 1 : 0, policy ? 1 : 0, policy?.maxWantLines ?? 64, revisions.maxExclusions, revisions.graphReadLimit)
     : policy
@@ -186,18 +188,19 @@ export function createRepositoryWorker(module, loadRepository) {
       try { selected = await loadRepository(request); }
       catch { return failure(503, "Repository unavailable"); }
       if (!selected) return failure(404, "Repository not found");
-      let policy, revisions, publication;
+      let policy, revisions, publication, cache;
       try {
         policy = wantPolicy(module, selected.wantPolicy, selected.maxWantLines, "stream_start_repository_policy");
         revisions = revisionPolicy(module, selected.revisionLimits, "stream_start_repository_revisions");
         publication = publicationPolicy(module, selected.publication);
+        cache = packCachePolicy(module, selected.packCache);
       }
       catch { return failure(503, "Invalid host policy or missing Wasm export"); }
       let body;
       try { body = await readRequestBody(request, 32768); }
       catch { return failure(400, "Invalid or oversized request"); }
       try {
-        return repositoryResponse(module, selected.repository, selected.target, body, request.method, request.headers, policy, revisions, publication);
+        return repositoryResponse(module, selected.repository, selected.target, body, request.method, request.headers, policy, revisions, publication, cache, request.signal);
       } catch (error) {
         return failure(error instanceof RepositoryError ? error.status : 502, "Invalid or oversized repository");
       }

@@ -28,12 +28,12 @@ Authentication, authorization and deployment policy belong to hosts.
 
 ## Next delivery order
 
-1. Extend requested-closure caches to async hosts with an owned preparation and
-   storage boundary, retaining immutable refs/pack/index consistency.
-2. Finish cross-host shallow/HEAD/ref coverage beyond the bounded Worker fixture;
-   retain independent checkout/history comparisons and enforced limits.
-3. Finish native request deadlines, HTTP framing and independent connections;
-   add deployed Worker diagnostics and asynchronous provider preparation.
+1. Extend Worker providers beyond resident import so the full native fixture
+   fits; retain the bounded HEAD/ref/shallow/filter oracle and deployed diagnostics.
+2. Finish native HTTP/1.1 keep-alive, leftover/pipelined bytes and independent
+   connections; extend the authenticated host transport boundary to TLS tests.
+3. Add cross-isolate cache coordination and native concurrent cold-miss HTTP
+   comparisons; retain immutable identity, awaited publication and enforced limits.
 4. Close cross-host oracle, concurrency, fuzzing and resource-budget gaps, then
    evaluate the read-only completion gate. Compression and delta generation are
    optional performance extensions, not prerequisites for valid stored packs.
@@ -138,9 +138,13 @@ capability conflicts, unauthorized wants, truncation and exhausted budgets.
 - [x] Bounded native buffered example with an explicit private disk namespace,
   staging nonce and optional visible-closure grant. Warmed entries never bypass
   revoked permission or duplicate-counting want limits.
-- [ ] Async complete-pack KV/R2 adapters and cold-miss coordination, separate from
-  the implemented metadata snapshot persistence. Bound reads/writes, await complete
-  publication and retain independent responses across failure, expiry and eviction.
+- [x] Opt-in async complete-pack KV/R2 adapters with bounded records, expiry,
+  verified exact-set attachment, awaited publication and isolate-local cold-miss
+  coordination/admission. Real-Git comparisons cover both formats and v0/v1/v2,
+  A → B → A, eviction/reopen, corruption, cancellation and independent responses.
+  See the [cache contract](docs/async-pack-cache.md); metadata persistence is separate.
+- [ ] Distributed cold-miss coordination across isolates. KV propagation may cause
+  another producer after a completed local flight; no distributed lease is claimed.
 - [ ] Production cache lifecycle integration for total disk quotas, crash/staging
   cleanup, directory durability and filesystem/distributed lock scope. The current
   synchronous example has one producer; cooperative leases remain an explicit API.
@@ -170,10 +174,15 @@ cooperative leases; live lock files retain identity until namespace quiescence.
 - [x] Native header-byte/field/name/value admission policy, independent request
   and body quotas, and explicit CLI flags. Inclusive socket tests cover fragmented
   intake, unread excess bytes, malformed fields, precedence and state reuse.
-- [ ] Explicit request/idle deadlines where needed. Per-I/O timeouts and byte
-  quotas are not total deadlines.
-- [ ] HTTP/1.1 framing, chunked intake, keep-alive and pipelined/leftover-byte
-  handling with strict framing ambiguity rejection and cancellation tests.
+- [x] Opt-in monotonic total/idle deadlines for native intake and streamed or
+  known-length publication output, with independent CLI flags, preserved accepted
+  socket settings, allocation checks and stalled/dripping/provider regressions.
+  Intake/output budgets are separate; synchronous provider calls are not preempted.
+- [x] Opt-in bounded HTTP/1.1 chunked intake, strict length/transfer ambiguity
+  rejection, in-place transfer decoding, gzip/body/wire quotas and chunk work caps.
+  Extensions/nonempty trailers are explicitly rejected; responses close the socket.
+- [ ] HTTP/1.1 response framing, keep-alive and pipelined/leftover-byte handling
+  with cancellation and connection-lifetime/preparation deadlines where needed.
 - [ ] Poll-based connections with independent caller-owned request/output state,
   bounded connection admission and slow/disconnected-client isolation.
 - [ ] TLS integration through a documented host boundary and transport tests.
@@ -190,9 +199,11 @@ cooperative leases; live lock files retain identity until namespace quiescence.
   explicit public header/binding selection and Access-credential exclusion.
 - [x] Optional tree-shaped metadata, encoded-key files, versioned records and
   preservation of existing flat snapshot IDs. Deployment authentication is host-owned.
-- [ ] An owned preparation/storage boundary for asynchronous selected-pack cache
-  I/O, keeping request identity and buffers stable across awaits. Current Rust
-  preparation/provider reads are synchronous; response pulls alone do not solve this.
+- [x] An instance-owned preparation/storage boundary for async selected-pack
+  caching: authorization/selection precede I/O; copied imports and retained control
+  buffers survive awaits; verified raw packs attach before transport. ABI tests
+  retain the 24-page ceiling through phased input/output reuse and no memory growth.
+  Provider reads and graph preparation remain synchronous, with resident raw input.
 - [ ] A bounded generated/host-backed provider beyond complete resident raw import.
 - [ ] Diagnostics and measured preparation/pull CPU, JavaScript/backend/isolate
   memory and retention behavior under overlapping requests on a deployed Worker.
@@ -215,10 +226,11 @@ Local KV/R2-shaped tests do not establish deployment or propagation measurements
   nine tree levels and a 96 KiB binary; both-format smart full/incremental clones.
 - [x] Native A → B → A snapshot fetches with real Git, exact object/checkout
   checks, complete-pack hits and eviction; lower-level selected-cache race tests.
-- [x] Nine bounded libFuzzer targets plus ordinary-Cargo seed replay and CI ASan
+- [x] Ten bounded libFuzzer targets plus ordinary-Cargo seed replay and CI ASan
   smoke campaigns for packets, responses, routing, graphs, inflation, loose
-  objects, pack entries/deltas and index metadata/range lookups; shallow/filter
-  cancellation and SHA-1/SHA-256 large-offset index seeds are included.
+  objects, pack entries/deltas, index metadata/range lookups and native HTTP
+  intake. Routing also exercises prepared cache attachment. Shallow/filter,
+  chunked/framing conflicts and both-format large-offset index seeds are retained.
 - [x] Allocation counters for providers, validation, selection, pack/index/cache
   operations and decoding. Worker ABI tests enforce a 24-page ceiling and no growth.
 - [x] Paired HTTP/object-read benchmark harness, pinned caller-repository inputs,
@@ -227,16 +239,22 @@ Local KV/R2-shaped tests do not establish deployment or propagation measurements
 - [x] Preserve the [historical Linux v6.12 snapshot evidence](tests/benchmarks/linux-v6.12-f71/README.md):
   91,865 objects, warm loopback clone, separate download/index/checkout and decoder
   experiments at `f71e266`, with raw data, provenance and reproduction limits.
-- [ ] Bring Worker coverage to the full native fixture/HEAD/ref/shallow matrix,
-  including both formats and independently checked protocol behavior.
+- [x] Bounded Worker HEAD/ref/shallow matrix: empty/unborn defaults, detached
+  HEAD with/without refs, symbolic chains and existing nested tags; real-Git
+  absolute/relative/unshallow, blob-filter and time/exclusion comparisons in both
+  formats and v0/v1/v2, including KV/R2 miss/hit paths and exact objects/checkouts.
+- [ ] Bring Worker providers/coverage to the full native rich fixture, including
+  its 384 KiB object and larger graph beyond the current resident import limits.
 - [x] Unassisted packed-only/mixed dumb closure checks on native and Worker hosts:
   every physical object, including referenced empty trees, must arrive through
   ordinary Git HTTP before strict fsck; no assisted import or alternate is used.
 - [ ] Complete unassisted loose-only dumb closure checks. Git's loose walker can
   omit a referenced empty tree; existing assisted evidence stays identified.
-- [ ] Worker HTTP selected-cache transitions and concurrent cold-miss/eviction
-  comparisons on both hosts. Native synchronous single-producer HTTP transition,
-  failure and eviction/reopen cases are covered; backend lease tests are separate.
+- [x] Worker HTTP selected-cache transitions, concurrent cold misses, independent
+  cancellation, failure and eviction/reopen. Every response rechecks its prepared
+  exact set; changed host data/policy cannot mutate an already prepared instance.
+- [ ] Native concurrent cold-miss/eviction HTTP comparisons. Synchronous native
+  transitions and backend lease tests do not establish concurrent HTTP serving.
 - [ ] Broader upstream fixture substitution: more unchanged cases, Worker hosting
   and static dumb Alias routes. Retain licensing/provenance and no-fallback traces.
 - [ ] Sustained native HTTP-framing and concurrent/cancelled host-state fuzzing;

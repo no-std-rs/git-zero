@@ -1,8 +1,7 @@
 //! Bounded incremental HTTP header intake and delimiter scan state.
-use super::super::{header_end, receive};
+use super::super::header_end;
 use super::HeaderLimits;
 use git_zero::{Error, Result, http::Request};
-use rustix::fd::AsFd;
 
 #[derive(Default)]
 struct HeaderScan {
@@ -29,7 +28,7 @@ impl HeaderScan {
 
 // Keep any body bytes received with the header for the subsequent bounded read.
 pub(super) fn read_header(
-    socket: &impl AsFd,
+    receive: &mut impl FnMut(&mut [u8]) -> Result<usize>,
     storage: &mut [u8],
     max_wire_bytes: Option<usize>,
     max_header_bytes: Option<usize>,
@@ -53,9 +52,12 @@ pub(super) fn read_header(
                 },
             );
         }
-        let count = receive(socket, &mut storage[length..capacity])?;
+        let count = receive(&mut storage[length..capacity])?;
         if count == 0 {
             return Err(Error::InvalidRequest);
+        }
+        if count > capacity - length {
+            return Err(Error::Backend);
         }
         length += count;
     };
@@ -76,11 +78,21 @@ pub(super) struct Headers<'a> {
     pub(super) git_protocol: Option<&'a str>,
     pub(super) content_encoding: Option<&'a str>,
     pub(super) content_length: Option<&'a str>,
+    pub(super) chunked: bool,
 }
 
 impl<'a> Headers<'a> {
     pub(super) fn parse(header: &'a str, limits: HeaderLimits) -> Result<Self> {
+        Self::parse_framed(header, limits, false)
+    }
+
+    pub(super) fn parse_framed(
+        header: &'a str,
+        limits: HeaderLimits,
+        allow_chunked: bool,
+    ) -> Result<Self> {
         let mut parsed = Self::default();
+        let mut transfer = None;
         for (index, line) in header
             .split("\r\n")
             .skip(1)
@@ -102,7 +114,13 @@ impl<'a> Headers<'a> {
                 return Err(Error::LimitExceeded);
             }
             if name.eq_ignore_ascii_case("transfer-encoding") {
-                return Err(Error::Unsupported);
+                if !allow_chunked {
+                    return Err(Error::Unsupported);
+                }
+                if transfer.replace(value.trim_matches([' ', '\t'])).is_some() {
+                    return Err(Error::InvalidRequest);
+                }
+                continue;
             }
             let slot = if name.eq_ignore_ascii_case("content-type") {
                 &mut parsed.content_type
@@ -118,6 +136,15 @@ impl<'a> Headers<'a> {
             if slot.replace(value.trim_matches([' ', '\t'])).is_some() {
                 return Err(Error::InvalidRequest);
             }
+        }
+        if let Some(value) = transfer {
+            if parsed.content_length.is_some() {
+                return Err(Error::InvalidRequest);
+            }
+            if !value.eq_ignore_ascii_case("chunked") {
+                return Err(Error::Unsupported);
+            }
+            parsed.chunked = true;
         }
         Ok(parsed)
     }

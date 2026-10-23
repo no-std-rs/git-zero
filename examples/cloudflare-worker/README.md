@@ -457,3 +457,32 @@ memory ceiling remains 24 pages with no growth. This path provides synchronous
 resident-object preparation, not asynchronous pack caching. The metadata demo
 keeps its existing loose-only layout. See [the publication guide](../../docs/packed-dumb.md)
 for identity, streaming and native verified-file contracts.
+
+## Asynchronous selected-pack storage
+
+`createRepositoryWorker` accepts a trusted loader's optional `packCache`, created
+once per isolate with `createPackCache` from `src/pack-cache.mjs`. The
+[cache contract](../../docs/async-pack-cache.md) describes configuration, private
+namespaces, limits, record integrity, cancellation and KV/R2 consistency. Existing
+metadata snapshot persistence and the default demo do not enable pack caching.
+
+`cache_prepare` pins an authenticated raw import and prepares request-specific
+control bytes before asynchronous storage. `cache_key` copies its exact-set key;
+`cache_read` generates raw miss bytes, and `cache_attach` verifies a complete hit
+or miss before enabling ordinary response reads. Ordinary routes and ACK-only
+rounds bypass storage. Every response retains its own Wasm instance.
+
+Preparation uses the enlarged 144 KiB physical output arena for pack staging.
+After attachment it borrows that arena immutably and reuses the released 64 KiB
+input arena for response pulls; `output_ptr()` and `output_capacity()` reflect
+that phase. Public ordinary output capacity remains 128 KiB before attachment.
+Hosts must query the pointer after attachment, never retain writable views across
+ABI calls, and cancel before reusing input/import storage. The initial linear
+memory ceiling stays 24 pages; complete 64-object/128 KiB imports still fit.
+
+The cache suites cover cold/warm/evicted real-Git clones, all physical objects,
+strict fsck, checkout modes, HEAD/ref states, both formats and v0/v1/v2. A separate
+Git HTTP backend compares shallow files, history, delivered bodies and checkouts
+for absolute/relative/unshallow, blob filters, time and exclusion cuts. These are
+local tests with KV/R2-shaped stores; deployed memory, propagation, CPU and cost
+measurements remain open.

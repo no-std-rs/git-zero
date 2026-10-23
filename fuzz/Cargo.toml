@@ -11,6 +11,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 git-zero = { path = ".." }
+git-zero-rustix = { path = "../crates/git-zero-rustix", default-features = false, features = ["server"] }
 sha1 = { version = "0.10.7", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
 
@@ -76,6 +77,13 @@ bench = false
 [[bin]]
 name = "indexes"
 path = "fuzz_targets/indexes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "native_http"
+path = "fuzz_targets/native_http.rs"
 test = false
 doc = false
 bench = false
