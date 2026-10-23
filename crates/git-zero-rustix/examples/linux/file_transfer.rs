@@ -71,6 +71,16 @@ mod tests {
         )
         .unwrap();
         let (writer, mut reader) = UnixStream::pair().unwrap();
+        writer
+            .set_write_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        // Drain while sending: small writes consume socket-buffer metadata too,
+        // so even a short file can fill the queue before its last byte is sent.
+        let received = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
         // SAFETY: these borrowed descriptors remain valid for the transfer.
         let socket =
             unsafe { rustix::fd::BorrowedFd::borrow_raw(std::os::fd::AsRawFd::as_raw_fd(&writer)) };
@@ -80,22 +90,23 @@ mod tests {
             0
         );
         drop(writer);
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).unwrap();
-        (bytes, counts)
+        (received.join().unwrap(), counts)
     }
 
     #[test]
     fn file_ranges_and_forced_buffered_transfers_match() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
-        let expected = std::fs::read(path).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("git-zero-file-transfer-{}.bin", std::process::id()));
+        let expected: Vec<u8> = (0..=255).cycle().take(256 * 1024).collect();
+        std::fs::write(&path, &expected).unwrap();
         let length = (expected.len() - 11) as u64;
         for automatic in [true, false] {
-            let (bytes, counts) = transfer(path, 11, length, automatic);
+            let (bytes, counts) = transfer(path.to_str().unwrap(), 11, length, automatic);
             assert_eq!(bytes, expected[11..]);
             assert_eq!(counts.sendfile_bytes + counts.buffered_file_bytes, length);
             assert_eq!(counts.sendfile_bytes > 0, automatic);
         }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

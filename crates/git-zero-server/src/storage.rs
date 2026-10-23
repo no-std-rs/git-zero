@@ -1,5 +1,69 @@
 //! Caller-owned fetch storage, with a borrowed view for each request.
-use git_zero_core::{ObjectId, ValidationMetadata};
+use git_zero_core::{ObjectId, RevisionLimits, ValidationMetadata};
+
+/// Explicit opt-in for time/exclusion history. One additional state byte per
+/// repository object, with limits shared by ref resolution and graph selection.
+/// Existing selection entrypoints retain their old capabilities and behavior.
+pub struct RevisionStorage<'a> {
+    pub selection: SelectionStorage<'a>,
+    pub state: &'a mut [u8],
+    pub limits: RevisionLimits,
+}
+
+impl RevisionStorage<'_> {
+    pub fn reborrow(&mut self) -> RevisionStorage<'_> {
+        RevisionStorage {
+            selection: self.selection.reborrow(),
+            state: self.state,
+            limits: self.limits,
+        }
+    }
+}
+
+/// Fixed-capacity backing for explicitly enabled revision selection. The added
+/// boundary state is exactly OBJECTS bytes; no request-sized allocation is hidden.
+pub struct RevisionBuffers<
+    const WANTS: usize,
+    const OBJECTS: usize,
+    const READ: usize,
+    const PARSE: usize,
+> {
+    selection: SelectionBuffers<WANTS, OBJECTS, READ, PARSE>,
+    state: [u8; OBJECTS],
+}
+
+impl<const WANTS: usize, const OBJECTS: usize, const READ: usize, const PARSE: usize>
+    RevisionBuffers<WANTS, OBJECTS, READ, PARSE>
+{
+    pub const fn new() -> Self {
+        Self {
+            selection: SelectionBuffers::new(),
+            state: [0; OBJECTS],
+        }
+    }
+    pub fn storage(
+        &mut self,
+        graph_read_limit: u64,
+        limits: RevisionLimits,
+    ) -> RevisionStorage<'_> {
+        RevisionStorage {
+            selection: self.selection.storage(graph_read_limit),
+            state: &mut self.state,
+            limits,
+        }
+    }
+    pub const fn storage_bytes(&self) -> usize {
+        core::mem::size_of::<Self>()
+    }
+}
+
+impl<const WANTS: usize, const OBJECTS: usize, const READ: usize, const PARSE: usize> Default
+    for RevisionBuffers<WANTS, OBJECTS, READ, PARSE>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Independent per-request storage for bounded reachable-object selection.
 /// `wants` bounds distinct wanted IDs. `objects` and `indices` each need the

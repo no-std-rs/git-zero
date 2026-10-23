@@ -1,6 +1,6 @@
 //! Explicit host permission for wants; packet/body contents never grant access.
 #[cfg(feature = "read")]
-use git_zero_core::{Error, Repository, Result, io::Write};
+use git_zero_core::{Repository, Result, io::Write};
 
 /// The host must authenticate and supply one immutable, authorized repository
 /// projection. Validation proves its exact reachable union; it does not grant ACLs.
@@ -48,7 +48,7 @@ impl WantOptions {
 pub(crate) const REACHABLE: &[u8] = b" allow-reachable-sha1-in-want";
 
 #[cfg(feature = "read")]
-struct Discard;
+pub(crate) struct Discard;
 #[cfg(feature = "read")]
 impl Write for Discard {
     fn write_all(&mut self, _: &[u8]) -> Result<()> {
@@ -77,29 +77,5 @@ pub(crate) fn info_refs(
         [0; git_zero_core::repository::UPLOAD_CAPABILITIES.len() + REACHABLE.len()];
     capabilities[..ordinary.len()].copy_from_slice(ordinary);
     capabilities[ordinary.len()..].copy_from_slice(REACHABLE);
-    crate::advertise_smart_with_capabilities(
-        repository,
-        route.version,
-        &mut Discard,
-        true,
-        &capabilities,
-    )
-    .map_err(|error| {
-        if error == Error::InvalidPacket {
-            Error::LimitExceeded
-        } else {
-            error
-        }
-    })?;
-    crate::advertise_smart_with_capabilities(
-        repository,
-        route.version,
-        output,
-        true,
-        &capabilities,
-    )?;
-    Ok(crate::Response {
-        status: 200,
-        content_type: "application/x-git-upload-pack-advertisement",
-    })
+    crate::serve_capability_refs(repository, route.version, output, &capabilities)
 }

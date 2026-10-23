@@ -205,6 +205,8 @@ jobs:
         run: cargo test -p git-zero-rustix --test head_states --locked
       - name: SHA-1/SHA-256 refs, tags and selected-object server comparisons
         run: cargo test -p git-zero-rustix --test references --locked
+      - name: Time and exclusion deepening against Git HTTP backend
+        run: cargo test -p git-zero-rustix --test revision_http --locked
       - name: Unchanged pinned Git smart HTTP fixtures against both CGI backends
         if: runner.os == 'Linux' && matrix.git != 'system' && matrix.shard == '0/2'
         run: |

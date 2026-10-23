@@ -49,8 +49,8 @@ earlier extend all reachable client boundaries, so this case deliberately differ
 the versioned native oracle asserts both outcomes and identical imported objects.
 Depth requests retransmit their bounded closure; ordinary shallow haves stop
 common traversal at the client's boundary. Root commits at the depth limit stay
-shallow, matching Git. Time/exclusion deepening and other filters are
-rejected. The default advertised-ID want policy requires partial clones to use
+shallow, matching Git. Ordinary selection entrypoints reject time/exclusion
+deepening; the separate revision API below enables it. The default advertised-ID want policy requires partial clones to use
 `--no-checkout`. Explicitly authorized hosts can enable lazy promised-object
 retrieval as described below. Legacy complete-pack
 APIs omit these capabilities and reject extended requests before output.
@@ -155,3 +155,51 @@ publishing. `atomic` requires an authoritative all-ref transaction. `Report`
 encodes the actual publication result, and `write_progress` can send sideband
 messages beforehand without acknowledging success. HTTP framing and storage are
 host operations. Existing read-only routing does not enable pushes implicitly.
+
+
+### Time and exclusion deepening
+
+Enable `read` and explicitly supply `RevisionStorage` to `serve_with_revisions`,
+`ResponseEncoder::with_revisions`, or `with_revision_storage`. The convenience
+`RevisionBuffers<WANTS, OBJECTS, READ, PARSE>` owns ordinary selection storage
+plus exactly one state byte per object. `storage(graph_read_limit, limits)`
+accepts `RevisionLimits { max_exclusions }`. Keep separate buffers
+for overlapping requests. These APIs keep the strict advertised-ID want policy;
+they do not enable promised-object wants or selected-pack cache hooks.
+
+Only revision-enabled v0/v1 discovery advertises `deepen-since` and `deepen-not`.
+V2 accepts these arguments under `fetch=shallow` on the same opt-in API. The
+[Git protocol rules](https://git-scm.com/docs/gitprotocol-capabilities#_deepen_since)
+allow their combination and repeated exclusions, but forbid combining them with
+absolute depth. Timestamp cuts use committer times, include equality, and stop
+old ancestry paths even when a later ancestor has a newer time. Exclusions remove
+commit ancestry without removing shared trees/blobs needed by selected commits.
+Names resolve against visible HEAD/refs only, using Git's ref-name expansions;
+ambiguous names, raw IDs, revision expressions and missing refs fail. Annotated
+and symbolic refs work. Tree/blob exclusions have no commit-ancestry effect.
+
+Existing client boundaries produce independent shallow/unshallow changes,
+including when a boundary body is absent from the pack. Newly unshallowed
+commits seed missing parents. `blob:none` and `blob:limit` can combine with these
+cuts. Revision requests with tree-depth or object-type filters currently return
+`Unsupported`; ordinary selection still supports those filters.
+
+Wire timestamps follow deterministic unsigned base-zero conversion, including
+hex/octal/binary prefixes and signed unsigned conversion, with `u64::MAX` reserved
+as an invalid sentinel. The last repeated `deepen-since` wins. Canonical Git
+clients send decimal; acceptance of binary prefixes in reference Git depends on
+its C library. Historical committer dates use Git's tolerant decimal-prefix rule.
+
+The graph-byte limit covers every structural read and reread across exclusions,
+date probing, boundary detection, common history, wanted closure and included
+tags. Exclusion limits count duplicate wire arguments before ref lookup. The
+caller bounds request bytes, want storage, object/index slots and read/parse
+scratch. Metadata scans have the same object-capacity bound as ordinary selection
+(quadratic worst case); ref resolution is bounded by the exclusion count and
+visible ref names. This API does not implement a total request-preparation CPU
+budget. Successful selection returns ascending provider indices; failures
+invalidate all output. Stream preparation returns no successful response on
+exhausted limits; failures after sending headers require transport abort.
+
+Native tests compare real Git with `http-backend` for both hashes and v0/v1/v2.
+The Worker example does not opt into revision storage yet.

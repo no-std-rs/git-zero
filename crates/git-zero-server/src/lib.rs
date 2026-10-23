@@ -33,7 +33,7 @@ pub use git_zero_core::http::{Request, Response};
 #[cfg(feature = "read")]
 mod storage;
 #[cfg(feature = "read")]
-pub use storage::{SelectionBuffers, SelectionStorage};
+pub use storage::{RevisionBuffers, RevisionStorage, SelectionBuffers, SelectionStorage};
 
 /// Serve independent refs, tags and multiple wanted IDs with caller-owned
 /// selection storage. Accept only advertised ref/peeled/HEAD IDs, rejecting
@@ -140,13 +140,63 @@ pub fn serve_with_selected_pack_policy<R: Repository + ?Sized, W: Write>(
     output: &mut W,
     write_selected: impl FnOnce(&[usize], &mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<Response> {
+    serve_selected_request(
+        repository,
+        request,
+        storage.reborrow(),
+        options,
+        None,
+        output,
+        write_selected,
+    )
+}
+
+/// Serve time/exclusion deepening with explicit caller storage and exclusion limits.
+/// This also supports all existing selected fetch modes. Only this opt-in path
+/// advertises v0/v1 deepen-since/deepen-not. Successful output is invalidated by
+/// any later error; a streaming host must abort on provider/transport failure.
+#[cfg(feature = "read")]
+pub fn serve_with_revisions<R: Repository + ?Sized>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    request: Request<'_>,
+    storage: &mut RevisionStorage<'_>,
+    output: &mut impl Write,
+) -> Result<Response> {
+    let storage = storage.reborrow();
+    serve_selected_request(
+        repository,
+        request,
+        storage.selection,
+        WantOptions::STRICT,
+        Some((storage.state, storage.limits)),
+        output,
+        |indices, read, packed| {
+            pack::write_selected_with_scratch(repository, indices, read, packed).map(|_| ())
+        },
+    )
+}
+
+#[cfg(feature = "read")]
+fn serve_selected_request<R: Repository + ?Sized, W: Write>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    request: Request<'_>,
+    storage: SelectionStorage<'_>,
+    options: WantOptions,
+    revision: Option<(&mut [u8], git_zero_core::RevisionLimits)>,
+    output: &mut W,
+    write_selected: impl FnOnce(&[usize], &mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
+) -> Result<Response> {
     let route = route::validate(request)?;
     if let Some(response) = route.rejection {
         return Ok(response);
     }
     if request.method != "POST" || route.path != "git-upload-pack" {
         if request.method == "GET" && route.path == "info/refs" {
-            return policy::info_refs(repository, &route, output, options);
+            return if revision.is_some() {
+                serve_revision_info_refs(repository, &route, output)
+            } else {
+                policy::info_refs(repository, &route, output, options)
+            };
         }
         return serve_with_scratch(repository, request, storage.read, output);
     }
@@ -155,12 +205,7 @@ pub fn serve_with_selected_pack_policy<R: Repository + ?Sized, W: Write>(
         return Ok(upload_response());
     }
     let selected = prepare_fetch(
-        repository,
-        request,
-        version,
-        storage.reborrow(),
-        options,
-        output,
+        repository, request, version, storage, options, revision, output,
     )?;
     if let Some(indices) = selected.indices {
         let mut packed = selected.upload.output(output);
@@ -178,45 +223,118 @@ struct SelectedFetch<'storage, 'body> {
 }
 
 #[cfg(feature = "read")]
+fn select_fetch<'indices, R: Repository + ?Sized>(
+    repository: &ValidatedRepository<'_, '_, R>,
+    upload: &UploadRequest<'_>,
+    wants: &[ObjectId],
+    work: &mut [Option<git_zero_core::ValidationMetadata>],
+    indices: &'indices mut [usize],
+    scratch: (
+        &mut [u8],
+        &mut [u8],
+        Option<&mut git_zero_core::RevisionState<'_>>,
+    ),
+    options: SelectionOptions,
+) -> Result<&'indices [usize]> {
+    if upload.extensions.revision() {
+        repository.select_revision_fetch(
+            wants,
+            (
+                upload.common(repository),
+                upload.shallow(),
+                upload.exclusion_ids(repository),
+            ),
+            work,
+            indices,
+            (scratch.0, scratch.1, scratch.2.ok_or(Error::Unsupported)?),
+            (
+                options,
+                upload.extensions.options,
+                git_zero_core::RevisionOptions {
+                    since: upload.extensions.since,
+                },
+            ),
+        )
+    } else {
+        repository.select_bounded_fetch(
+            wants,
+            (upload.common(repository), upload.shallow()),
+            work,
+            indices,
+            (scratch.0, scratch.1),
+            (options, upload.extensions.options),
+        )
+    }
+}
+
+#[cfg(feature = "read")]
 fn prepare_fetch<'storage, 'body, R: Repository + ?Sized>(
     repository: &ValidatedRepository<'_, '_, R>,
     request: Request<'body>,
     version: Version,
     storage: SelectionStorage<'storage>,
     options: WantOptions,
+    revision: Option<(&mut [u8], git_zero_core::RevisionLimits)>,
     output: &mut impl Write,
 ) -> Result<SelectedFetch<'storage, 'body>> {
-    let (upload, count) =
-        UploadRequest::parse_selected(repository, request.body, version, storage.wants, options)?;
-    let boundary_probe =
-        version != Version::V2 && !upload.done && upload.extensions.options.depth.is_some();
+    let (upload, count) = UploadRequest::parse_selected(
+        repository,
+        request.body,
+        version,
+        storage.wants,
+        options,
+        revision.is_some(),
+    )?;
+    let mut revision =
+        revision.map(|(state, limits)| git_zero_core::RevisionState::new(state, limits));
+    if upload.extensions.exclusions > revision.as_ref().map_or(0, |state| state.max_exclusions()) {
+        return Err(Error::LimitExceeded);
+    }
+    let boundary_probe = version != Version::V2 && !upload.done && upload.extensions.history();
     let select_boundaries = boundary_probe
-        && (!upload.extensions.options.deepen_relative || upload.shallow().next().is_some());
+        && (upload.extensions.revision()
+            || !upload.extensions.options.deepen_relative
+            || upload.shallow().next().is_some());
     let indices = if upload.done || select_boundaries {
-        Some(repository.select_bounded_fetch(
+        let options = SelectionOptions {
+            graph_read_limit: storage.graph_read_limit,
+            include_tags: upload.include_tags(),
+        };
+        Some(select_fetch(
+            repository,
+            &upload,
             &storage.wants[..count],
-            (upload.common(repository), upload.shallow()),
             storage.objects,
             storage.indices,
-            (storage.read, storage.parse),
-            (
-                SelectionOptions {
-                    graph_read_limit: storage.graph_read_limit,
-                    include_tags: upload.include_tags(),
-                },
-                upload.extensions.options,
-            ),
+            (storage.read, storage.parse, revision.as_mut()),
+            options,
         )?)
     } else {
         upload.validate_shallow(repository)?;
+        if upload.extensions.revision() {
+            for id in upload.exclusion_ids(repository) {
+                id?;
+            }
+        }
         None
     };
     if indices.is_some() {
-        upload.shallow_info(
-            repository.object_format(),
-            &storage.objects[..repository.object_count()],
-            output,
-        )?;
+        if upload.extensions.revision() {
+            upload.revision_info(
+                repository.object_format(),
+                revision
+                    .as_ref()
+                    .ok_or(Error::Unsupported)?
+                    .changes(storage.objects),
+                output,
+            )?;
+        } else {
+            upload.shallow_info(
+                repository.object_format(),
+                &storage.objects[..repository.object_count()],
+                output,
+            )?;
+        }
     } else if boundary_probe {
         output.write_all(b"0000")?;
     }
@@ -607,4 +725,49 @@ fn reference_line(
         output.write_all(suffix)?;
         output.write_all(b"\n")
     }
+}
+
+#[cfg(feature = "read")]
+fn serve_revision_info_refs(
+    repository: &impl Repository,
+    route: &route::Route<'_>,
+    output: &mut impl Write,
+) -> Result<Response> {
+    if route.service != Some("git-upload-pack") {
+        return serve_info_refs(repository, route, output, true);
+    }
+    const EXTRA: &[u8] = b" deepen-since deepen-not";
+    let ordinary = git_zero_core::repository::UPLOAD_CAPABILITIES;
+    let mut capabilities = [0; git_zero_core::repository::UPLOAD_CAPABILITIES.len() + EXTRA.len()];
+    capabilities[..ordinary.len()].copy_from_slice(ordinary);
+    capabilities[ordinary.len()..].copy_from_slice(EXTRA);
+    serve_capability_refs(repository, route.version, output, &capabilities)
+}
+
+#[cfg(feature = "read")]
+fn serve_capability_refs(
+    repository: &impl Repository,
+    version: Version,
+    output: &mut impl Write,
+    capabilities: &[u8],
+) -> Result<Response> {
+    advertise_smart_with_capabilities(
+        repository,
+        version,
+        &mut policy::Discard,
+        true,
+        capabilities,
+    )
+    .map_err(|error| {
+        if error == Error::InvalidPacket {
+            Error::LimitExceeded
+        } else {
+            error
+        }
+    })?;
+    advertise_smart_with_capabilities(repository, version, output, true, capabilities)?;
+    Ok(Response {
+        status: 200,
+        content_type: "application/x-git-upload-pack-advertisement",
+    })
 }

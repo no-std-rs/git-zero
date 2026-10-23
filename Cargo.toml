@@ -157,6 +157,10 @@ name = "reader"
 required-features = ["read", "server"]
 
 [[test]]
+name = "revisions"
+required-features = ["read", "server"]
+
+[[test]]
 name = "references"
 required-features = ["read", "server"]
 

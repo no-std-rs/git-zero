@@ -1001,3 +1001,24 @@ client operations and the reference HTTP backend. Both formats and v0/v1/v2
 exercise physical omission, lazy checkout, canonical pack/object sets and modes;
 these are correctness tests, without benchmark or deployed-host claims. Worker
 plain/gzip policy and lifecycle guards supplement the ordinary Git transport.
+
+
+## Time/exclusion deepening
+
+```sh
+cargo test --test revisions --locked
+cargo test -p git-zero-rustix --test revision_http --locked
+```
+
+`server_revisions.py` builds an independent Git fixture with skewed/equal
+committer times, a merge, shared binary content, symbolic refs, nested tags and
+ambiguous names. Real Git compares clone and repeated fetch results against
+Git `http-backend` over v0/v1/v2 in SHA-1/SHA-256: exact delivered object IDs and
+bodies, shallow files, reachable history, checkout and strict fsck. The native
+suite runs in the existing Git/platform CI matrix and retains failing fixtures.
+Select a different Git with `GIT_ZERO_TEST_GIT`; in-tree builds use their adjacent
+HTTP helpers. Core tests check boundary announcements independently of PACK
+membership, combined blob filters, common haves, output-free errors, exact shared
+byte budgets, state capacity/retry, allocation denial, one-byte pulls,
+cancellation, and exact capability-packet limits. Worker revision history remains
+a separate delivery item.
