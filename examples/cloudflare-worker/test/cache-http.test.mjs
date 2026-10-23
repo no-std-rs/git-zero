@@ -19,57 +19,13 @@ for (const repository of fixtures) {
 
 test("simultaneous cold HTTP requests await one publication and retain independent response cursors", async () => {
   for (const kind of ["kv", "r2"]) {
-    const { binding, policy } = cache(kind);
-    const repository = fixtures[0];
-    const worker = handler(repository, policy);
-    binding.putGate = deferred();
-    let completed = 0;
-    const pending = Array.from({ length: 6 }, () => worker.fetch(httpRequest(repository)).then((response) => { completed++; return response; }));
-    await until(() => binding.operations.some((value) => value.operation === "put"));
-    assert.equal(completed, 0);
-    assert.equal(policy.statistics().misses, 1);
-    assert.equal(policy.statistics().writes, 0);
-    binding.putGate.resolve();
-    const responses = await Promise.all(pending);
-    assert.ok(responses.every((response) => response.status === 200));
-    await responses[0].body.cancel();
-    const bodies = await Promise.all(responses.slice(1).map((response) => response.arrayBuffer()));
-    const digest = (bytes) => createHash("sha256").update(unframe(Buffer.from(bytes))).digest("hex");
-    assert.ok(bodies.every((body) => digest(body) === digest(bodies[0])));
-    assert.equal(policy.statistics().writes, 1);
-    assert.equal(policy.statistics().hits, 5);
-    assert.equal(policy.statistics().inflight, 0);
-    assert.equal(policy.statistics().waiters, 0);
+    await checkConcurrentResponses(kind);
   }
 });
 
 test("snapshot A to B to A responses remain immutable across awaits, eviction and cache recreation", async () => {
   for (const kind of ["kv", "r2"]) {
-    const repository = fixtures[0];
-    const other = { ...repository, head: { type: "detached", id: repository.refs.find((ref) => ref.name === "refs/heads/side").id } };
-    const { binding, policy } = cache(kind);
-    let selected = repository;
-    const worker = createRepositoryWorker(module, async () => ({ repository: selected, target: "git-upload-pack", packCache: policy }));
-    binding.getGate = deferred();
-    const a = worker.fetch(httpRequest(repository));
-    await until(() => binding.operations.length === 1);
-    selected = other;
-    const b = worker.fetch(httpRequest(other));
-    await until(() => binding.operations.length === 2);
-    binding.getGate.resolve();
-    const firstA = await bytes(await a);
-    const firstB = await bytes(await b);
-    assert.notEqual(digest(firstA), digest(firstB));
-    selected = repository;
-    const hitA = await bytes(await worker.fetch(httpRequest(repository)));
-    assert.equal(digest(firstA), digest(hitA));
-    const recreated = createPackCache({ backend: kind, binding, namespace: "test-private" });
-    const restarted = handler(repository, recreated);
-    assert.equal(digest(await bytes(await restarted.fetch(httpRequest(repository)))), digest(firstA));
-    assert.equal(recreated.statistics().hits, 1);
-    binding.records.clear();
-    assert.equal(digest(await bytes(await restarted.fetch(httpRequest(repository)))), digest(firstA));
-    assert.equal(recreated.statistics().misses, 1);
+    await checkSnapshotTransitions(kind);
   }
 });
 
@@ -116,37 +72,7 @@ test("revoked wants and duplicate-counting limits fail before warmed cache acces
 
 test("corrupt hits, wrong authenticated object sets, backend failures and failed puts expose no Git success", async () => {
   for (const kind of ["kv", "r2"]) {
-    const repository = fixtures[0];
-    const { binding, policy } = cache(kind);
-    const worker = handler(repository, policy);
-    assert.equal((await worker.fetch(httpRequest(repository))).status, 200);
-    const [name, record] = [...binding.records][0];
-    const altered = record.slice();
-    altered[70] ^= 1;
-    binding.records.set(name, altered);
-    let response = await worker.fetch(httpRequest(repository));
-    assert.equal(response.status, 502);
-    assert.equal(response.headers.get("Cache-Control"), "no-store");
-    assert.ok(!(await response.text()).includes("PACK"));
-    binding.records.set(name, record);
-    const filterRequest = () => httpRequest(repository, { extra: ["filter blob:none"] });
-    assert.equal((await worker.fetch(filterRequest())).status, 200);
-    const filtered = [...binding.records].find(([key]) => key !== name);
-    const selectedKey = name.split("/").at(-1);
-    const wrong = await decodePackRecord(filtered[0].split("/").at(-1), filtered[1], 147456, 0);
-    binding.records.set(name, await encodePackRecord(selectedKey, wrong, Math.floor(Date.now() / 1000) + 3600));
-    response = await worker.fetch(httpRequest(repository));
-    assert.equal(response.status, 502, "valid envelope still requires exact canonical pack closure");
-    binding.records.clear();
-    binding.readError = new Error("offline");
-    assert.equal((await worker.fetch(httpRequest(repository))).status, 503);
-    binding.readError = null;
-    binding.writeError = new Error("storage full");
-    assert.equal((await worker.fetch(httpRequest(repository))).status, 503);
-    assert.equal(binding.records.size, 0);
-    assert.equal(policy.statistics().inflight, 0);
-    binding.writeError = null;
-    assert.equal((await worker.fetch(httpRequest(repository))).status, 200);
+    await checkHttpStorageFailures(kind);
   }
 });
 
@@ -174,25 +100,7 @@ test("request cancellation during read, miss publication and cold-miss waiting d
 
 test("cached shallow and filtered responses retain each request's own control and exact pack", async () => {
   for (const repository of fixtures) {
-    const { policy } = cache();
-    const worker = handler(repository, policy, { revisionLimits: { maxExclusions: 8, graphReadLimit: 1048576 } });
-    const direct = handler(repository, null, { revisionLimits: { maxExclusions: 8, graphReadLimit: 1048576 } });
-    for (const version of [0, 1, 2]) {
-      for (const extra of [["deepen 1"], ["filter blob:none"], ["deepen 2", "filter blob:limit=4"], ["deepen-since 1"]]) {
-        const options = { version, extra };
-        const reference = await direct.fetch(httpRequest(repository, options));
-        const first = await worker.fetch(httpRequest(repository, options));
-        assert.equal(first.status, reference.status);
-        assert.equal(first.status, 200, `${repository.format} v${version} ${extra}`);
-        const expected = await bytes(reference);
-        const actual = await bytes(first);
-        assert.equal(digest(actual), digest(expected));
-        assert.equal(control(actual).toString("hex"), control(expected).toString("hex"));
-        const hit = await bytes(await worker.fetch(httpRequest(repository, options)));
-        assert.equal(Buffer.compare(hit, actual), 0);
-      }
-    }
-    assert.ok(policy.statistics().hits > 0);
+    await checkBoundedFetchResponses(repository);
   }
 });
 
@@ -280,4 +188,112 @@ async function checkRealGitCachedClones(repository, kind, version) {
     await verify(git, clone, repository);
     assert.ok(binding.records.size > 0);
   });
+}
+
+async function checkConcurrentResponses(kind) {
+  const { binding, policy } = cache(kind);
+  const repository = fixtures[0];
+  const worker = handler(repository, policy);
+  binding.putGate = deferred();
+  let completed = 0;
+  const pending = Array.from({ length: 6 }, () => worker.fetch(httpRequest(repository)).then((response) => { completed++; return response; }));
+  await until(() => binding.operations.some((value) => value.operation === "put"));
+  assert.equal(completed, 0);
+  assert.equal(policy.statistics().misses, 1);
+  assert.equal(policy.statistics().writes, 0);
+  binding.putGate.resolve();
+  const responses = await Promise.all(pending);
+  assert.ok(responses.every((response) => response.status === 200));
+  await responses[0].body.cancel();
+  const bodies = await Promise.all(responses.slice(1).map((response) => response.arrayBuffer()));
+  const digest = (bytes) => createHash("sha256").update(unframe(Buffer.from(bytes))).digest("hex");
+  assert.ok(bodies.every((body) => digest(body) === digest(bodies[0])));
+  assert.equal(policy.statistics().writes, 1);
+  assert.equal(policy.statistics().hits, 5);
+  assert.equal(policy.statistics().inflight, 0);
+  assert.equal(policy.statistics().waiters, 0);
+}
+
+async function checkSnapshotTransitions(kind) {
+  const repository = fixtures[0];
+  const other = { ...repository, head: { type: "detached", id: repository.refs.find((ref) => ref.name === "refs/heads/side").id } };
+  const { binding, policy } = cache(kind);
+  let selected = repository;
+  const worker = createRepositoryWorker(module, async () => ({ repository: selected, target: "git-upload-pack", packCache: policy }));
+  binding.getGate = deferred();
+  const a = worker.fetch(httpRequest(repository));
+  await until(() => binding.operations.length === 1);
+  selected = other;
+  const b = worker.fetch(httpRequest(other));
+  await until(() => binding.operations.length === 2);
+  binding.getGate.resolve();
+  const firstA = await bytes(await a);
+  const firstB = await bytes(await b);
+  assert.notEqual(digest(firstA), digest(firstB));
+  selected = repository;
+  const hitA = await bytes(await worker.fetch(httpRequest(repository)));
+  assert.equal(digest(firstA), digest(hitA));
+  const recreated = createPackCache({ backend: kind, binding, namespace: "test-private" });
+  const restarted = handler(repository, recreated);
+  assert.equal(digest(await bytes(await restarted.fetch(httpRequest(repository)))), digest(firstA));
+  assert.equal(recreated.statistics().hits, 1);
+  binding.records.clear();
+  assert.equal(digest(await bytes(await restarted.fetch(httpRequest(repository)))), digest(firstA));
+  assert.equal(recreated.statistics().misses, 1);
+}
+
+async function checkHttpStorageFailures(kind) {
+  const repository = fixtures[0];
+  const { binding, policy } = cache(kind);
+  const worker = handler(repository, policy);
+  assert.equal((await worker.fetch(httpRequest(repository))).status, 200);
+  const [name, record] = [...binding.records][0];
+  const altered = record.slice();
+  altered[70] ^= 1;
+  binding.records.set(name, altered);
+  let response = await worker.fetch(httpRequest(repository));
+  assert.equal(response.status, 502);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.ok(!(await response.text()).includes("PACK"));
+  binding.records.set(name, record);
+  const filterRequest = () => httpRequest(repository, { extra: ["filter blob:none"] });
+  assert.equal((await worker.fetch(filterRequest())).status, 200);
+  const filtered = [...binding.records].find(([key]) => key !== name);
+  const selectedKey = name.split("/").at(-1);
+  const wrong = await decodePackRecord(filtered[0].split("/").at(-1), filtered[1], 147456, 0);
+  binding.records.set(name, await encodePackRecord(selectedKey, wrong, Math.floor(Date.now() / 1000) + 3600));
+  response = await worker.fetch(httpRequest(repository));
+  assert.equal(response.status, 502, "valid envelope still requires exact canonical pack closure");
+  binding.records.clear();
+  binding.readError = new Error("offline");
+  assert.equal((await worker.fetch(httpRequest(repository))).status, 503);
+  binding.readError = null;
+  binding.writeError = new Error("storage full");
+  assert.equal((await worker.fetch(httpRequest(repository))).status, 503);
+  assert.equal(binding.records.size, 0);
+  assert.equal(policy.statistics().inflight, 0);
+  binding.writeError = null;
+  assert.equal((await worker.fetch(httpRequest(repository))).status, 200);
+}
+
+async function checkBoundedFetchResponses(repository) {
+  const { policy } = cache();
+  const worker = handler(repository, policy, { revisionLimits: { maxExclusions: 8, graphReadLimit: 1048576 } });
+  const direct = handler(repository, null, { revisionLimits: { maxExclusions: 8, graphReadLimit: 1048576 } });
+  for (const version of [0, 1, 2]) {
+    for (const extra of [["deepen 1"], ["filter blob:none"], ["deepen 2", "filter blob:limit=4"], ["deepen-since 1"]]) {
+      const options = { version, extra };
+      const reference = await direct.fetch(httpRequest(repository, options));
+      const first = await worker.fetch(httpRequest(repository, options));
+      assert.equal(first.status, reference.status);
+      assert.equal(first.status, 200, `${repository.format} v${version} ${extra}`);
+      const expected = await bytes(reference);
+      const actual = await bytes(first);
+      assert.equal(digest(actual), digest(expected));
+      assert.equal(control(actual).toString("hex"), control(expected).toString("hex"));
+      const hit = await bytes(await worker.fetch(httpRequest(repository, options)));
+      assert.equal(Buffer.compare(hit, actual), 0);
+    }
+  }
+  assert.ok(policy.statistics().hits > 0);
 }

@@ -54,22 +54,7 @@ fn chunk_and_transport_boundaries_preserve_binary_body_and_git_metadata_without_
     for chunk in [1, 2, 7, 32, 1024] {
         let wire = wire(body, chunk, None);
         for width in [1, 2, 3, 7, 31, 4096] {
-            let parsed = parse(
-                &wire,
-                width,
-                &mut [0; 1024],
-                RequestPolicy::default(),
-                ChunkedLimits::default(),
-            )
-            .unwrap();
-            assert_eq!(parsed.body, body);
-            assert_eq!(parsed.method, "POST");
-            assert_eq!(parsed.path, "/repo.git/git-upload-pack");
-            assert_eq!(
-                parsed.content_type.as_deref(),
-                Some("application/x-git-upload-pack-request")
-            );
-            assert_eq!(parsed.git_protocol.as_deref(), Some("version=2"));
+            check_fragmented_request(body, &wire, width);
         }
     }
 }
@@ -84,62 +69,40 @@ fn wire_decoded_body_chunk_count_line_and_capacity_limits_are_inclusive_and_inde
         max_chunks: 4,
         max_line_bytes: 3,
     };
-    for width in [1, 7, wire.len()] {
-        assert_eq!(
-            parse(&wire, width, &mut vec![0; wire.len()], policy, chunks)
-                .unwrap()
-                .body,
-            b"1234567890"
-        );
-        let mut small_wire = policy;
-        small_wire.request.max_wire_bytes = Some(wire.len() - 1);
-        assert_eq!(
-            parse(&wire, width, &mut [0; 1024], small_wire, chunks),
-            Err(Error::LimitExceeded)
-        );
-        let mut small_body = policy;
-        small_body.request.max_body_bytes = Some(9);
-        assert_eq!(
-            parse(&wire, width, &mut [0; 1024], small_body, chunks),
-            Err(Error::LimitExceeded)
-        );
-        assert_eq!(
-            parse(
-                &wire,
-                width,
-                &mut [0; 1024],
-                policy,
-                ChunkedLimits {
-                    max_chunks: 3,
-                    ..chunks
-                }
-            ),
-            Err(Error::LimitExceeded)
-        );
-        assert_eq!(
-            parse(
-                &wire,
-                width,
-                &mut [0; 1024],
-                policy,
-                ChunkedLimits {
-                    max_line_bytes: 2,
-                    ..chunks
-                }
-            ),
-            Err(Error::LimitExceeded)
-        );
-        assert_eq!(
-            parse(
-                &wire,
-                width,
-                &mut vec![0; wire.len() - 1],
-                RequestPolicy::default(),
-                chunks
-            ),
-            Err(Error::BufferTooSmall)
-        );
-    }
+    let mut small_wire = policy;
+    small_wire.request.max_wire_bytes = Some(wire.len() - 1);
+    let mut small_body = policy;
+    small_body.request.max_body_bytes = Some(9);
+    let cases = [
+        (wire.len(), policy, chunks, Ok(b"1234567890".as_slice())),
+        (1024, small_wire, chunks, Err(Error::LimitExceeded)),
+        (1024, small_body, chunks, Err(Error::LimitExceeded)),
+        (
+            1024,
+            policy,
+            ChunkedLimits {
+                max_chunks: 3,
+                ..chunks
+            },
+            Err(Error::LimitExceeded),
+        ),
+        (
+            1024,
+            policy,
+            ChunkedLimits {
+                max_line_bytes: 2,
+                ..chunks
+            },
+            Err(Error::LimitExceeded),
+        ),
+        (
+            wire.len() - 1,
+            RequestPolicy::default(),
+            chunks,
+            Err(Error::BufferTooSmall),
+        ),
+    ];
+    check_admission_cases(&wire, &cases);
     let empty = wire_for(b"0\r\n\r\n");
     let mut zero_body = RequestPolicy::default();
     zero_body.request.max_body_bytes = Some(0);
@@ -373,4 +336,42 @@ fn host_transport_boundary_bounds_callback_counts_and_preserves_legacy_default()
         RequestPolicy::default(),
     );
     assert_eq!(result.err().unwrap(), Error::Unsupported);
+}
+
+fn check_fragmented_request(body: &[u8], wire: &[u8], width: usize) {
+    let parsed = parse(
+        wire,
+        width,
+        &mut [0; 1024],
+        RequestPolicy::default(),
+        ChunkedLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        parsed,
+        http::Parsed {
+            method: "POST".into(),
+            path: "/repo.git/git-upload-pack".into(),
+            query: None,
+            content_type: Some("application/x-git-upload-pack-request".into()),
+            git_protocol: Some("version=2".into()),
+            body: body.to_vec(),
+        }
+    );
+}
+
+type AdmissionCase<'a> = (usize, RequestPolicy, ChunkedLimits, Result<&'a [u8], Error>);
+
+fn check_admission_cases(wire: &[u8], cases: &[AdmissionCase<'_>]) {
+    for width in [1, 7, wire.len()] {
+        for &(capacity, policy, chunks, expected) in cases {
+            let actual = parse(wire, width, &mut vec![0; capacity], policy, chunks)
+                .map(|request| request.body);
+            assert_eq!(
+                actual,
+                expected.map(<[u8]>::to_vec),
+                "width={width}, capacity={capacity}, policy={policy:?}, chunks={chunks:?}"
+            );
+        }
+    }
 }

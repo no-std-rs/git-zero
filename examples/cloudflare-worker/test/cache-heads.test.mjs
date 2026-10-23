@@ -71,48 +71,52 @@ async function checkHeadState(fixture, state) {
   await withServer((request) => worker.fetch(request), async (origin) => {
     const url = `${origin}/repo.git`;
     for (const version of [0, 1, 2]) {
-      const git = (...args) => execute(gitBinary, ["-c", `protocol.version=${version}`, ...args], {
-        env: gitEnvironment(fixture.format), encoding: "buffer", timeout: 30000,
-      });
-      const expected = (await git("ls-remote", "--symref", source)).stdout.toString().trim().split("\n").sort();
-      const actual = (await git("ls-remote", "--symref", url)).stdout.toString().trim().split("\n").sort();
-      assert.deepEqual(actual, expected, `v${version} HEAD/ref advertisement`);
-      const head = await fetch(`${url}/HEAD`).then((response) => response.text());
-      assert.equal(head, repository.head.type === "unborn" || repository.head.type === "symbolic" ? `ref: ${repository.head.target}\n` : `${repository.head.id}\n`);
-      const reference = join(root, `reference-${version}`), clone = join(root, `worker-${version}`);
-      await git("clone", "-q", "--no-local", source, reference);
-      await git("clone", "-q", url, clone);
-      await git("-C", clone, "fsck", "--strict");
-      await git("-C", reference, "fsck", "--strict");
-      const refs = async (path) => (await git("-C", path, "for-each-ref", "--format=%(refname) %(objectname)")).stdout.toString().trim().split("\n").sort();
-      assert.deepEqual(await refs(clone), await refs(reference));
-      const symbolic = (path) => git("-C", path, "symbolic-ref", "-q", "HEAD").then((value) => value.stdout.toString().trim(), () => null);
-      assert.equal(await symbolic(clone), await symbolic(reference));
-      const objects = async (path) => (await git("-C", path, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")).stdout.toString().trim().split("\n").filter(Boolean).sort();
-      assert.deepEqual(await objects(clone), await objects(reference));
-      if (repository.head.type === "unborn") {
-        assert.deepEqual(await objects(clone), []);
-        assert.equal((await git("-C", clone, "rev-parse", "--show-object-format")).stdout.toString().trim(), fixture.format);
-        assert.equal(binding.operations.length, 0);
-      } else {
-        assert.equal((await git("-C", clone, "rev-parse", "HEAD")).stdout.toString().trim(), repository.head.id);
-        const tree = (path) => git("-C", path, "ls-tree", "-r", "-z", "HEAD").then((value) => value.stdout);
-        const expectedTree = await tree(reference);
-        assert.equal(Buffer.compare(await tree(clone), expectedTree), 0);
-        for (const row of expectedTree.toString().split("\0").filter(Boolean)) {
-          const [metadata, path] = row.split("\t");
-          const mode = metadata.split(" ")[0];
-          const file = join(clone, path), oracle = join(reference, path);
-          if (mode === "120000") assert.equal(await readlink(file), await readlink(oracle));
-          else {
-            assert.equal(Buffer.compare(await readFile(file), await readFile(oracle)), 0);
-            assert.equal(Boolean((await lstat(file)).mode & 0o111), Boolean((await lstat(oracle)).mode & 0o111));
-          }
-        }
-        await git("-C", clone, "fetch", "-q", "origin", "HEAD");
-        await git("-C", clone, "fsck", "--strict");
-        assert.equal((await git("-C", clone, "rev-parse", "FETCH_HEAD")).stdout.toString().trim(), repository.head.id);
-      }
+      await compareHeadVersion({ repository, source, root, binding, url, version });
     }
   });
+}
+
+async function compareHeadVersion({ repository, source, root, binding, url, version }) {
+  const git = (...args) => execute(gitBinary, ["-c", `protocol.version=${version}`, ...args], {
+    env: gitEnvironment(repository.format), encoding: "buffer", timeout: 30000,
+  });
+  const expected = (await git("ls-remote", "--symref", source)).stdout.toString().trim().split("\n").sort();
+  const actual = (await git("ls-remote", "--symref", url)).stdout.toString().trim().split("\n").sort();
+  assert.deepEqual(actual, expected, `v${version} HEAD/ref advertisement`);
+  const head = await fetch(`${url}/HEAD`).then((response) => response.text());
+  assert.equal(head, repository.head.type === "unborn" || repository.head.type === "symbolic" ? `ref: ${repository.head.target}\n` : `${repository.head.id}\n`);
+  const reference = join(root, `reference-${version}`), clone = join(root, `worker-${version}`);
+  await git("clone", "-q", "--no-local", source, reference);
+  await git("clone", "-q", url, clone);
+  await git("-C", clone, "fsck", "--strict");
+  await git("-C", reference, "fsck", "--strict");
+  const refs = async (path) => (await git("-C", path, "for-each-ref", "--format=%(refname) %(objectname)")).stdout.toString().trim().split("\n").sort();
+  assert.deepEqual(await refs(clone), await refs(reference));
+  const symbolic = (path) => git("-C", path, "symbolic-ref", "-q", "HEAD").then((value) => value.stdout.toString().trim(), () => null);
+  assert.equal(await symbolic(clone), await symbolic(reference));
+  const objects = async (path) => (await git("-C", path, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")).stdout.toString().trim().split("\n").filter(Boolean).sort();
+  assert.deepEqual(await objects(clone), await objects(reference));
+  if (repository.head.type === "unborn") {
+    assert.deepEqual(await objects(clone), []);
+    assert.equal((await git("-C", clone, "rev-parse", "--show-object-format")).stdout.toString().trim(), repository.format);
+    assert.equal(binding.operations.length, 0);
+  } else {
+    assert.equal((await git("-C", clone, "rev-parse", "HEAD")).stdout.toString().trim(), repository.head.id);
+    const tree = (path) => git("-C", path, "ls-tree", "-r", "-z", "HEAD").then((value) => value.stdout);
+    const expectedTree = await tree(reference);
+    assert.equal(Buffer.compare(await tree(clone), expectedTree), 0);
+    for (const row of expectedTree.toString().split("\0").filter(Boolean)) {
+      const [metadata, path] = row.split("\t");
+      const mode = metadata.split(" ")[0];
+      const file = join(clone, path), oracle = join(reference, path);
+      if (mode === "120000") assert.equal(await readlink(file), await readlink(oracle));
+      else {
+        assert.equal(Buffer.compare(await readFile(file), await readFile(oracle)), 0);
+        assert.equal(Boolean((await lstat(file)).mode & 0o111), Boolean((await lstat(oracle)).mode & 0o111));
+      }
+    }
+    await git("-C", clone, "fetch", "-q", "origin", "HEAD");
+    await git("-C", clone, "fsck", "--strict");
+    assert.equal((await git("-C", clone, "rev-parse", "FETCH_HEAD")).stdout.toString().trim(), repository.head.id);
+  }
 }

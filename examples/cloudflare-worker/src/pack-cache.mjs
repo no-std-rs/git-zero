@@ -96,131 +96,114 @@ export function createPackCache({ backend, binding, namespace, maxBytes = MAX_PA
   integer(maxWaiters, 0, 4096, "waiter limit");
   if (typeof now !== "function") throw new TypeError("Invalid pack cache clock");
   const counters = { hits: 0, misses: 0, waits: 0, writes: 0, failures: 0, producers: 0, peakProducers: 0 };
-  const storage = new PackStorage({ backend, binding, namespace, maxBytes, ttlSeconds, now }, counters);
-  const coordinator = new PackCoordinator(storage, maxInflight, maxWaiters, counters);
+  const storage = { backend, namespace, maxBytes, ttlSeconds, now, counters,
+    get: binding.get.bind(binding), put: binding.put.bind(binding) };
+  const coordinator = { storage, maxInflight, maxWaiters, counters, flights: new Map(), waiters: 0 };
   return Object.freeze({
     maxBytes,
-    statistics: () => coordinator.statistics(),
-    resolve: (key, generate, authenticate, signal) => coordinator.resolve(key, generate, authenticate, signal),
+    statistics: () => Object.freeze({ ...counters, inflight: coordinator.flights.size, waiters: coordinator.waiters }),
+    resolve: (key, generate, authenticate, signal) => resolvePack(coordinator, key, generate, authenticate, signal),
   });
 }
 
-class PackStorage {
-  constructor({ backend, binding, namespace, maxBytes, ttlSeconds, now }, counters) {
-    Object.assign(this, { backend, namespace, maxBytes, ttlSeconds, now, counters });
-    this.get = binding.get.bind(binding);
-    this.put = binding.put.bind(binding);
-  }
-  path(key) { return `selected-packs/v1/${this.namespace}/${key}`; }
-  clock() { return integer(this.now(), 0, Number.MAX_SAFE_INTEGER - this.ttlSeconds, "clock"); }
+function cachePath(namespace, key) { return `selected-packs/v1/${namespace}/${key}`; }
+function cacheClock(storage) { return integer(storage.now(), 0, Number.MAX_SAFE_INTEGER - storage.ttlSeconds, "clock"); }
 
-  async load(key, signal) {
-    aborted(signal);
-    let stored;
-    try {
-      const operation = Promise.resolve(this.get(this.path(key), ...(this.backend === "kv" ? ["stream"] : []))).then((value) => {
-        if (signal?.aborted && value !== null) {
-          const body = this.backend === "kv" ? value : value.body;
-          body.cancel().catch(() => {});
-        }
-        return value;
-      });
-      stored = await awaiting(operation, signal);
-    }
-    catch (error) {
-      if (error instanceof PackCacheError) throw error;
-      throw new PackCacheError("Pack cache read failed");
-    }
-    aborted(signal);
-    if (stored === null) return null;
-    const stream = this.backend === "kv" ? stored : stored.body;
-    try {
-      if (this.backend === "r2" && stored.size > HEADER + this.maxBytes + DIGEST) {
-        await stream.cancel();
-        throw new Error("Oversized R2 pack record");
+async function loadPack(storage, key, signal) {
+  aborted(signal);
+  let stored;
+  try {
+    const operation = Promise.resolve(storage.get(cachePath(storage.namespace, key), ...(storage.backend === "kv" ? ["stream"] : []))).then((value) => {
+      if (signal?.aborted && value !== null) {
+        const body = storage.backend === "kv" ? value : value.body;
+        body.cancel().catch(() => {});
       }
-      const record = await awaiting(readBytes(stream, HEADER + this.maxBytes + DIGEST, signal), signal);
-      aborted(signal);
-      return await decodePackRecord(key, record, this.maxBytes, this.clock());
-    } catch (error) {
-      aborted(signal);
-      if (error instanceof PackCacheError) throw error;
-      throw new PackCacheError("Pack cache read or record validation failed", 502);
-    }
+      return value;
+    });
+    stored = await awaiting(operation, signal);
   }
-
-  async store(key, pack, signal) {
-    const record = await encodePackRecord(key, pack, this.clock() + this.ttlSeconds);
-    aborted(signal);
-    try {
-      await awaiting(this.backend === "kv"
-        ? this.put(this.path(key), record, { expirationTtl: this.ttlSeconds })
-        : this.put(this.path(key), record, { httpMetadata: { contentType: "application/octet-stream" } }), signal);
-      this.counters.writes++;
-    } catch (error) {
-      if (error instanceof PackCacheError) throw error;
-      throw new PackCacheError("Pack cache publication failed");
-    }
-    aborted(signal);
+  catch (error) {
+    if (error instanceof PackCacheError) throw error;
+    throw new PackCacheError("Pack cache read failed");
   }
-
+  aborted(signal);
+  if (stored === null) return null;
+  const stream = storage.backend === "kv" ? stored : stored.body;
+  try {
+    if (storage.backend === "r2" && stored.size > HEADER + storage.maxBytes + DIGEST) {
+      await stream.cancel();
+      throw new Error("Oversized R2 pack record");
+    }
+    const record = await awaiting(readBytes(stream, HEADER + storage.maxBytes + DIGEST, signal), signal);
+    aborted(signal);
+    return await decodePackRecord(key, record, storage.maxBytes, cacheClock(storage));
+  } catch (error) {
+    aborted(signal);
+    if (error instanceof PackCacheError) throw error;
+    throw new PackCacheError("Pack cache read or record validation failed", 502);
+  }
 }
 
-class PackCoordinator {
-  constructor(storage, maxInflight, maxWaiters, counters) {
-    Object.assign(this, { storage, maxInflight, maxWaiters, counters });
-    this.flights = new Map();
-    this.waiters = 0;
+async function storePack(storage, key, pack, signal) {
+  const record = await encodePackRecord(key, pack, cacheClock(storage) + storage.ttlSeconds);
+  aborted(signal);
+  try {
+    await awaiting(storage.backend === "kv"
+      ? storage.put(cachePath(storage.namespace, key), record, { expirationTtl: storage.ttlSeconds })
+      : storage.put(cachePath(storage.namespace, key), record, { httpMetadata: { contentType: "application/octet-stream" } }), signal);
+    storage.counters.writes++;
+  } catch (error) {
+    if (error instanceof PackCacheError) throw error;
+    throw new PackCacheError("Pack cache publication failed");
   }
-  statistics() {
-    return Object.freeze({ ...this.counters, inflight: this.flights.size, waiters: this.waiters });
-  }
+  aborted(signal);
+}
 
-  async resolve(key, generate, authenticate, signal) {
-    keyBytes(key);
-    try {
+
+async function resolvePack(state, key, generate, authenticate, signal) {
+  keyBytes(key);
+  try {
+    aborted(signal);
+    while (state.flights.has(key)) {
+      if (state.waiters >= state.maxWaiters) throw new PackCacheError("Pack cache waiter limit exhausted");
+      state.counters.waits++;
+      state.waiters++;
+      try { await awaiting(state.flights.get(key), signal); }
+      finally { state.waiters--; }
       aborted(signal);
-      while (this.flights.has(key)) {
-        if (this.waiters >= this.maxWaiters) throw new PackCacheError("Pack cache waiter limit exhausted");
-        this.counters.waits++;
-        this.waiters++;
-        try { await awaiting(this.flights.get(key), signal); }
-        finally { this.waiters--; }
-        aborted(signal);
-      }
-      // Register before the first await so every same-key miss observes it.
-      if (this.flights.size >= this.maxInflight) throw new PackCacheError("Pack cache producer limit exhausted");
-      let release;
-      const flight = new Promise((resolve) => { release = resolve; });
-      this.flights.set(key, flight);
-      this.counters.producers++;
-      this.counters.peakProducers = Math.max(this.counters.peakProducers, this.counters.producers);
-      try {
-        let pack = await this.storage.load(key, signal);
-        aborted(signal);
-        if (pack !== null) {
-          await authenticate(pack);
-          aborted(signal);
-          this.counters.hits++;
-          return "hit";
-        }
-        this.counters.misses++;
-        pack = await generate();
-        aborted(signal);
-        if (!(pack instanceof Uint8Array) || pack.length > this.storage.maxBytes) throw new PackCacheError("Generated pack exceeds cache limit", 413);
+    }
+    // Register before the first await so every same-key miss observes it.
+    if (state.flights.size >= state.maxInflight) throw new PackCacheError("Pack cache producer limit exhausted");
+    let release;
+    const flight = new Promise((resolve) => { release = resolve; });
+    state.flights.set(key, flight);
+    state.counters.producers++;
+    state.counters.peakProducers = Math.max(state.counters.peakProducers, state.counters.producers);
+    try {
+      let pack = await loadPack(state.storage, key, signal);
+      aborted(signal);
+      if (pack !== null) {
         await authenticate(pack);
         aborted(signal);
-        await this.storage.store(key, pack, signal);
-        return "miss";
-      } finally {
-        this.counters.producers--;
-        this.flights.delete(key);
-        release();
+        state.counters.hits++;
+        return "hit";
       }
-    } catch (error) {
-      this.counters.failures++;
-      throw error;
+      state.counters.misses++;
+      pack = await generate();
+      aborted(signal);
+      if (!(pack instanceof Uint8Array) || pack.length > state.storage.maxBytes) throw new PackCacheError("Generated pack exceeds cache limit", 413);
+      await authenticate(pack);
+      aborted(signal);
+      await storePack(state.storage, key, pack, signal);
+      return "miss";
+    } finally {
+      state.counters.producers--;
+      state.flights.delete(key);
+      release();
     }
+  } catch (error) {
+    state.counters.failures++;
+    throw error;
   }
 }
 
@@ -250,25 +233,8 @@ export async function cachedResponse(exports, length, method, policy, revisions,
     if (exports.cache_key() !== 48) throw new PackCacheError("Selected-pack preparation failed", 502);
     const key = [...new Uint8Array(exports.memory.buffer, exports.output_ptr(), 48)]
       .map((byte) => byte.toString(16).padStart(2, "0")).join("");
-    await cache.resolve(key, () => {
-      const pack = new Uint8Array(cache.maxBytes);
-      let size = 0;
-      while (true) {
-        aborted(signal);
-        const count = exports.cache_read(16384);
-        if (count < 0) throw new PackCacheError("Selected-pack encoding failed", 502);
-        if (count === 0) return pack.subarray(0, size);
-        if (size + count > pack.length) throw new PackCacheError("Selected pack exceeds cache limit", 413);
-        pack.set(new Uint8Array(exports.memory.buffer, exports.output_ptr(), count), size);
-        size += count;
-      }
-    }, (pack) => {
-      const pointer = exports.cache_ptr();
-      if (!pointer || pack.length > exports.cache_capacity()) throw new PackCacheError("Invalid prepared pack capacity", 502);
-      new Uint8Array(exports.memory.buffer, pointer, pack.length).set(pack);
-      const result = exports.cache_attach(pack.length, cache.maxBytes);
-      if (result < 0) throw new PackCacheError("Selected pack failed exact-set verification", result === -1 ? 413 : 502);
-    }, signal);
+    await cache.resolve(key, () => generatePack(exports, cache.maxBytes, signal),
+      (pack) => attachPack(exports, pack, cache.maxBytes), signal);
     aborted(signal);
     return respond(exports, 3);
   } catch (error) {
@@ -276,4 +242,26 @@ export async function cachedResponse(exports, length, method, policy, revisions,
     return packFailure(error instanceof PackCacheError ? error.message : "Pack cache failed",
       error instanceof PackCacheError ? error.status : 503);
   }
+}
+
+function generatePack(exports, maximum, signal) {
+  const pack = new Uint8Array(maximum);
+  let size = 0;
+  while (true) {
+    aborted(signal);
+    const count = exports.cache_read(16384);
+    if (count < 0) throw new PackCacheError("Selected-pack encoding failed", 502);
+    if (count === 0) return pack.subarray(0, size);
+    if (size + count > pack.length) throw new PackCacheError("Selected pack exceeds cache limit", 413);
+    pack.set(new Uint8Array(exports.memory.buffer, exports.output_ptr(), count), size);
+    size += count;
+  }
+}
+
+function attachPack(exports, pack, maximum) {
+  const pointer = exports.cache_ptr();
+  if (!pointer || pack.length > exports.cache_capacity()) throw new PackCacheError("Invalid prepared pack capacity", 502);
+  new Uint8Array(exports.memory.buffer, pointer, pack.length).set(pack);
+  const result = exports.cache_attach(pack.length, maximum);
+  if (result < 0) throw new PackCacheError("Selected pack failed exact-set verification", result === -1 ? 413 : 502);
 }

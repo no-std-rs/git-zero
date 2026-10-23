@@ -65,7 +65,7 @@ test("cache policy rejects invalid limits, implicit namespaces, malformed keys a
 test("producer admission is bounded across keys and authentication failures never publish", async () => {
   const { binding, policy } = cache("kv", { maxInflight: 1 });
   binding.getGate = deferred();
-  const first = policy.resolve(identity, () => raw, () => {});
+  const first = lookup(policy);
   await until(() => binding.operations.length === 1);
   const second = prepare(fixtures[1]);
   await assert.rejects(policy.resolve(key(second.exports), () => raw, () => {}), /producer limit/);
@@ -76,17 +76,17 @@ test("producer admission is bounded across keys and authentication failures neve
   await assert.rejects(policy.resolve(identity, () => raw, () => { throw new Error("wrong closure"); }), /wrong closure/);
   assert.equal(binding.records.size, 0);
   assert.equal(policy.statistics().inflight, 0);
-  assert.equal(await policy.resolve(identity, () => raw, () => {}), "miss");
+  assert.equal(await lookup(policy), "miss");
 });
 
 test("cancelled storage waits and followers release state without cancelling other responses", async () => {
   const { binding, policy } = cache();
   binding.getGate = deferred();
   const firstController = new AbortController();
-  const first = policy.resolve(identity, () => raw, () => {}, firstController.signal);
+  const first = lookup(policy, firstController.signal);
   await until(() => binding.operations.length === 1);
   const followerController = new AbortController();
-  const follower = policy.resolve(identity, () => raw, () => {}, followerController.signal);
+  const follower = lookup(policy, followerController.signal);
   followerController.abort();
   await assert.rejects(follower, /cancelled/);
   assert.equal(policy.statistics().inflight, 1);
@@ -94,11 +94,11 @@ test("cancelled storage waits and followers release state without cancelling oth
   await assert.rejects(first, /cancelled/);
   assert.equal(policy.statistics().inflight, 0);
   binding.getGate.resolve();
-  assert.equal(await policy.resolve(identity, () => raw, () => {}), "miss");
+  assert.equal(await lookup(policy), "miss");
   const already = new AbortController();
   already.abort();
   const operations = binding.operations.length;
-  await assert.rejects(policy.resolve(identity, () => raw, () => {}, already.signal), /cancelled/);
+  await assert.rejects(lookup(policy, already.signal), /cancelled/);
   assert.equal(binding.operations.length, operations);
 });
 
@@ -113,17 +113,17 @@ async function until(predicate) {
 test("same-key waiter admission is bounded and cancellation releases a slot immediately", async () => {
   const { binding, policy } = cache("kv", { maxWaiters: 1 });
   binding.getGate = deferred();
-  const first = policy.resolve(identity, () => raw, () => {});
+  const first = lookup(policy);
   await until(() => binding.operations.length === 1);
   const controller = new AbortController();
-  const waiting = policy.resolve(identity, () => raw, () => {}, controller.signal);
+  const waiting = lookup(policy, controller.signal);
   assert.equal(policy.statistics().waiters, 1);
-  await assert.rejects(policy.resolve(identity, () => raw, () => {}), /waiter limit/);
+  await assert.rejects(lookup(policy), /waiter limit/);
   assert.equal(binding.operations.length, 1);
   controller.abort();
   await assert.rejects(waiting, /cancelled/);
   assert.equal(policy.statistics().waiters, 0);
-  const replacement = policy.resolve(identity, () => raw, () => {});
+  const replacement = lookup(policy);
   binding.getGate.resolve();
   assert.equal(await first, "miss");
   assert.equal(await replacement, "hit");
@@ -215,20 +215,20 @@ async function checkColdMissCoordination(kind) {
 
 async function checkStorageFailureRecovery(kind) {
   const { binding, policy } = cache(kind);
-  await policy.resolve(identity, () => raw, () => {});
+  await lookup(policy);
   const saved = [...binding.records.values()][0].slice();
   binding.readError = new Error("backend offline");
-  await assert.rejects(policy.resolve(identity, () => { throw new Error("must not generate"); }, () => {}), /read failed/);
+  await assert.rejects(policy.resolve(identity, forbiddenGeneration, acceptPack), /read failed/);
   assert.equal(policy.statistics().inflight, 0);
   assert.equal(Buffer.compare(Buffer.from([...binding.records.values()][0]), Buffer.from(saved)), 0);
   binding.readError = null;
   binding.nextRead = await encodePackRecord(identity, raw, 1);
   binding.writeError = new Error("write failed");
-  await assert.rejects(policy.resolve(identity, () => raw, () => {}), /publication failed/);
+  await assert.rejects(lookup(policy), /publication failed/);
   assert.equal(policy.statistics().inflight, 0);
   assert.equal(Buffer.compare(Buffer.from([...binding.records.values()][0]), Buffer.from(saved)), 0);
   binding.writeError = null;
-  assert.equal(await policy.resolve(identity, () => { throw new Error("preserved hit"); }, () => {}), "hit");
+  assert.equal(await policy.resolve(identity, forbiddenGeneration, acceptPack), "hit");
 }
 
 async function checkExpiryAndReopen(kind) {
@@ -236,15 +236,15 @@ async function checkExpiryAndReopen(kind) {
   const { binding, policy } = cache(kind, { now: () => now, ttlSeconds: 60 });
   let generations = 0;
   const generate = () => { generations++; return raw; };
-  assert.equal(await policy.resolve(identity, generate, () => {}), "miss");
+  assert.equal(await policy.resolve(identity, generate, acceptPack), "miss");
   now = 159;
-  assert.equal(await policy.resolve(identity, generate, () => {}), "hit");
+  assert.equal(await policy.resolve(identity, generate, acceptPack), "hit");
   now = 160;
-  assert.equal(await policy.resolve(identity, generate, () => {}), "miss", "expiry is inclusive");
+  assert.equal(await policy.resolve(identity, generate, acceptPack), "miss", "expiry is inclusive");
   const reloaded = createPackCache({ backend: kind, binding, namespace: "test-private", now: () => now });
-  assert.equal(await reloaded.resolve(identity, generate, () => {}), "hit");
+  assert.equal(await reloaded.resolve(identity, generate, acceptPack), "hit");
   binding.records.clear();
-  assert.equal(await reloaded.resolve(identity, generate, () => {}), "miss");
+  assert.equal(await reloaded.resolve(identity, generate, acceptPack), "miss");
   assert.equal(generations, 3);
 }
 
@@ -266,12 +266,12 @@ async function checkCorruptEnvelopes(kind) {
 
 async function checkBoundedRecords(kind) {
   const { binding, policy } = cache(kind, { maxBytes: raw.length });
-  assert.equal(await policy.resolve(identity, () => raw, () => {}), "miss");
-  assert.equal(await policy.resolve(identity, () => { throw new Error("unexpected miss"); }, () => {}), "hit");
+  assert.equal(await lookup(policy), "miss");
+  assert.equal(await policy.resolve(identity, forbiddenGeneration, acceptPack), "hit");
   const small = createPackCache({ backend: kind, binding, namespace: "test-private", maxBytes: raw.length - 1 });
-  await assert.rejects(small.resolve(identity, () => raw, () => {}), /read|record/);
+  await assert.rejects(lookup(small), /read|record/);
   binding.records.clear();
-  await assert.rejects(small.resolve(identity, () => raw, () => {}), /exceeds/);
+  await assert.rejects(lookup(small), /exceeds/);
   assert.equal(binding.records.size, 0);
   let cancelled = false;
   const bad = { get: async () => {
@@ -282,6 +282,15 @@ async function checkBoundedRecords(kind) {
     return kind === "kv" ? body : { size: MAX_PACK_BYTES + 101, body };
   }, put: async () => { throw new Error("must not write"); } };
   const bounded = createPackCache({ backend: kind, binding: bad, namespace: "bounded" });
-  await assert.rejects(bounded.resolve(identity, () => raw, () => {}), /read|record/);
+  await assert.rejects(lookup(bounded), /read|record/);
   assert.equal(cancelled, true);
 }
+
+// Shared no-op callbacks keep storage-only cases focused on the expected state.
+function generatedPack() { return raw; }
+function acceptPack() {}
+function lookup(policy, signal = undefined) {
+  return policy.resolve(identity, generatedPack, acceptPack, signal);
+}
+
+function forbiddenGeneration() { assert.fail("a cache hit must not generate"); }

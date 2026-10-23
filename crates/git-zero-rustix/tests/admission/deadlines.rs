@@ -64,39 +64,7 @@ fn total_deadline_bounds_continuously_progressing_header_and_body_drips_in_both_
             b"GET /HEAD HTTP/1.0\r\nX-Drip: ".as_slice(),
             b"POST / HTTP/1.0\r\nContent-Length: 1024\r\n\r\n".as_slice(),
         ] {
-            let (child, mut peer) = pair(address, disabled());
-            peer.write_all(prefix).unwrap();
-            let guard = peer.try_clone().unwrap();
-            let (stop, stopped) = mpsc::channel();
-            let feeder = thread::spawn(move || {
-                loop {
-                    if stopped.recv_timeout(Duration::from_millis(20)).is_ok() {
-                        break;
-                    }
-                    if peer.write_all(b"a").is_err() {
-                        break;
-                    }
-                }
-            });
-            let (result, elapsed) = watchdog(guard, || {
-                without_allocations(|| {
-                    read_request_with_deadlines(
-                        &child,
-                        &mut [0; 2048],
-                        RequestPolicy::default(),
-                        RequestDeadlines {
-                            total: Some(Duration::from_millis(180)),
-                            idle: Some(Duration::from_secs(1)),
-                        },
-                    )
-                    .map(|_| ())
-                })
-            });
-            stop.send(()).ok();
-            feeder.join().unwrap();
-            assert_eq!(result, Err(Error::LimitExceeded));
-            assert!(elapsed >= Duration::from_millis(150));
-            assert!(elapsed < Duration::from_secs(2));
+            check_dripping_peer(address, prefix);
         }
     }
 }
@@ -348,4 +316,40 @@ fn timed_out_connection_does_not_poison_an_independent_accepted_connection() {
             None
         );
     }
+}
+
+fn check_dripping_peer(address: &str, prefix: &[u8]) {
+    let (child, mut peer) = pair(address, disabled());
+    peer.write_all(prefix).unwrap();
+    let guard = peer.try_clone().unwrap();
+    let (stop, stopped) = mpsc::channel();
+    let feeder = thread::spawn(move || {
+        loop {
+            if stopped.recv_timeout(Duration::from_millis(20)).is_ok() {
+                break;
+            }
+            if peer.write_all(b"a").is_err() {
+                break;
+            }
+        }
+    });
+    let (result, elapsed) = watchdog(guard, || {
+        without_allocations(|| {
+            read_request_with_deadlines(
+                &child,
+                &mut [0; 2048],
+                RequestPolicy::default(),
+                RequestDeadlines {
+                    total: Some(Duration::from_millis(180)),
+                    idle: Some(Duration::from_secs(1)),
+                },
+            )
+            .map(|_| ())
+        })
+    });
+    stop.send(()).ok();
+    feeder.join().unwrap();
+    assert_eq!(result, Err(Error::LimitExceeded));
+    assert!(elapsed >= Duration::from_millis(150));
+    assert!(elapsed < Duration::from_secs(2));
 }
