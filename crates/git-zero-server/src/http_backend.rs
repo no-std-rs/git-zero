@@ -3,6 +3,7 @@
 use crate::{
     Request, Response, route,
     upload_pack::{self, PackOutput, advertisement},
+    v2,
 };
 use git_zero_core::{
     Error, ObjectId, Repository, Result, io::Write, pack, reader::DEFAULT_READ_BUFFER_SIZE,
@@ -57,53 +58,89 @@ pub fn serve_with_pack<W: Write>(
     output: &mut W,
     write_pack: impl FnOnce(&mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<Response> {
-    let route = route::validate(request)?;
-    if let Some(response) = route.rejection {
-        return Ok(response);
+    match prepare(repository, request, output, false)? {
+        Plan::Buffered(response) => Ok(response),
+        Plan::Loose(index) => write_loose(repository, index, scratch, output),
+        Plan::Upload(version) => {
+            upload_pack::write_upload(repository, request, version, scratch, output, write_pack)?;
+            Ok(upload_pack::response())
+        }
     }
-    if request.method == "GET" {
-        return serve_get(repository, &route, scratch, output);
-    }
-    if request.method == "POST" && route.path == "git-upload-pack" {
-        upload_pack::write_upload(
-            repository,
-            request,
-            route.version,
-            scratch,
-            output,
-            write_pack,
-        )?;
-        return Ok(upload_pack::response());
-    }
-    Ok(Response {
-        status: if request.method == "POST" { 404 } else { 405 },
-        content_type: "text/plain; charset=utf-8",
-    })
 }
 
-fn serve_get(
+pub(crate) fn write_loose(
     repository: &impl Repository,
-    route: &route::Route<'_>,
+    index: usize,
     scratch: &mut [u8],
     output: &mut impl Write,
 ) -> Result<Response> {
-    let mut response = Response {
+    pack::write_loose_with_scratch(repository, index, scratch, output)?;
+    Ok(Response {
         status: 200,
-        content_type: "text/plain; charset=utf-8",
-    };
-    match route.path {
-        "HEAD" => write_head(repository, output)?,
-        "info/refs" => return advertisement::serve_info_refs(repository, route, output, false),
-        "objects/info/packs" => {}
-        path if path.starts_with("refs/") => {
-            response.status = serve_reference(repository, path, output)?
-        }
-        path if path.starts_with("objects/") => {
-            return serve_loose(repository, &path.as_bytes()[8..], scratch, output);
-        }
-        _ => response.status = 404,
+        content_type: "application/x-git-loose-object",
+    })
+}
+
+/// A validated HTTP route, shared by buffered output and pull-based encoders.
+pub(crate) enum Plan {
+    Buffered(Response),
+    Loose(usize),
+    Upload(route::Version),
+}
+
+pub(crate) fn prepare(
+    repository: &impl Repository,
+    request: Request<'_>,
+    output: &mut impl Write,
+    selection: bool,
+) -> Result<Plan> {
+    prepare_with_refs(repository, request, output, |route, output| {
+        advertisement::serve_info_refs(repository, route, output, selection)
+    })
+}
+
+/// The caller chooses discovery capabilities; all HTTP routing stays shared.
+pub(crate) fn prepare_with_refs<W: Write>(
+    repository: &impl Repository,
+    request: Request<'_>,
+    output: &mut W,
+    advertise: impl FnOnce(&route::Route<'_>, &mut W) -> Result<Response>,
+) -> Result<Plan> {
+    let route = route::validate(request)?;
+    if let Some(response) = route.rejection {
+        return Ok(Plan::Buffered(response));
     }
-    Ok(response)
+    let status = match (request.method, route.path) {
+        ("GET", "HEAD") => {
+            write_head(repository, output)?;
+            200
+        }
+        ("GET", "info/refs") => {
+            return advertise(&route, output).map(Plan::Buffered);
+        }
+        ("GET", "objects/info/packs") => 200,
+        ("GET", path) if path.starts_with("refs/") => serve_reference(repository, path, output)?,
+        ("GET", path) if path.starts_with("objects/") => {
+            if let Some(index) = loose_index(repository, &path.as_bytes()[8..]) {
+                return Ok(Plan::Loose(index));
+            }
+            404
+        }
+        ("POST", "git-upload-pack") => {
+            if route.version == route::Version::V2
+                && v2::serve_refs(repository, request.body, output)?
+            {
+                return Ok(Plan::Buffered(upload_pack::response()));
+            }
+            return Ok(Plan::Upload(route.version));
+        }
+        ("GET" | "POST", _) => 404,
+        _ => 405,
+    };
+    Ok(Plan::Buffered(Response {
+        status,
+        content_type: "text/plain; charset=utf-8",
+    }))
 }
 
 fn write_head(repository: &impl Repository, output: &mut impl Write) -> Result<()> {
@@ -142,27 +179,7 @@ fn serve_reference(
     Ok(200)
 }
 
-fn serve_loose(
-    repository: &impl Repository,
-    path: &[u8],
-    scratch: &mut [u8],
-    output: &mut impl Write,
-) -> Result<Response> {
-    let missing = Response {
-        status: 404,
-        content_type: "text/plain; charset=utf-8",
-    };
-    let Some(index) = loose_index(repository, path) else {
-        return Ok(missing);
-    };
-    pack::write_loose_with_scratch(repository, index, scratch, output)?;
-    Ok(Response {
-        status: 200,
-        content_type: "application/x-git-loose-object",
-    })
-}
-
-pub(crate) fn loose_index(repository: &impl Repository, path: &[u8]) -> Option<usize> {
+fn loose_index(repository: &impl Repository, path: &[u8]) -> Option<usize> {
     let width = repository.object_format().hex_length();
     if path.len() != width + 1 || path[2] != b'/' {
         return None;

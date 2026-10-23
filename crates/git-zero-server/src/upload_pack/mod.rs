@@ -1,11 +1,11 @@
 //! Upload-pack: authorize wants, negotiate history and emit a selected pack.
 //! HTTP dispatch lives in `http_backend`; pack encoding lives in git-zero-core.
-use crate::{Request, Response, route::Version, v2};
 #[cfg(feature = "read")]
-use crate::{route, serve_with_scratch};
+use crate::http_backend;
+use crate::{Request, Response, route::Version};
+use git_zero_core::{Error, Repository, Result, io::Write, repository::uses_only_head};
 #[cfg(feature = "read")]
-use git_zero_core::{Error, ObjectId, SelectionOptions, ValidatedRepository, pack};
-use git_zero_core::{Repository, Result, io::Write};
+use git_zero_core::{ObjectId, SelectionOptions, ValidatedRepository, pack};
 
 pub(crate) mod advertisement;
 pub(crate) mod extensions;
@@ -173,24 +173,13 @@ fn serve_selected_request<R: Repository + ?Sized, W: Write>(
     output: &mut W,
     write_selected: impl FnOnce(&[usize], &mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<Response> {
-    let route = route::validate(request)?;
-    if let Some(response) = route.rejection {
-        return Ok(response);
-    }
-    if request.method != "POST" || route.path != "git-upload-pack" {
-        if request.method == "GET" && route.path == "info/refs" {
-            return if revision.is_some() {
-                advertisement::serve_revision_info_refs(repository, &route, output)
-            } else {
-                policy::info_refs(repository, &route, output, options)
-            };
+    let version = match prepare_route(repository, request, options, revision.is_some(), output)? {
+        http_backend::Plan::Buffered(response) => return Ok(response),
+        http_backend::Plan::Loose(index) => {
+            return http_backend::write_loose(repository, index, storage.read, output);
         }
-        return serve_with_scratch(repository, request, storage.read, output);
-    }
-    let version = route.version;
-    if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
-        return Ok(response());
-    }
+        http_backend::Plan::Upload(version) => version,
+    };
     let selected = prepare_fetch(
         repository, request, version, storage, options, revision, output,
     )?;
@@ -200,6 +189,23 @@ fn serve_selected_request<R: Repository + ?Sized, W: Write>(
         packed.finish()?;
     }
     Ok(response())
+}
+
+#[cfg(feature = "read")]
+pub(crate) fn prepare_route(
+    repository: &impl Repository,
+    request: Request<'_>,
+    options: WantOptions,
+    revisions: bool,
+    output: &mut impl Write,
+) -> Result<http_backend::Plan> {
+    http_backend::prepare_with_refs(repository, request, output, |route, output| {
+        if revisions {
+            advertisement::serve_revision_info_refs(repository, route, output)
+        } else {
+            policy::info_refs(repository, route, output, options)
+        }
+    })
 }
 
 #[cfg(feature = "read")]
@@ -349,6 +355,23 @@ pub(super) fn advertised(repository: &impl Repository, id: ObjectId) -> bool {
         })
 }
 
+/// Validate the HEAD-only complete-pack contract before either output path.
+pub(crate) fn prepare_complete<'a>(
+    repository: &impl Repository,
+    body: &'a [u8],
+    version: Version,
+) -> Result<UploadRequest<'a>> {
+    if !uses_only_head(repository) {
+        return Err(Error::Unsupported);
+    }
+    let head = repository.head_state().id().ok_or(Error::InvalidRequest)?;
+    let upload = UploadRequest::parse(body, repository.object_format(), version, |id| {
+        (id == head).then_some(()).ok_or(Error::InvalidRequest)
+    })?;
+    upload.require_complete()?;
+    Ok(upload)
+}
+
 pub(crate) fn write_upload<W: Write>(
     repository: &impl Repository,
     request: Request<'_>,
@@ -357,10 +380,7 @@ pub(crate) fn write_upload<W: Write>(
     output: &mut W,
     write_pack: impl FnOnce(&mut [u8], &mut PackOutput<'_, W>) -> Result<()>,
 ) -> Result<()> {
-    if version == Version::V2 && v2::serve_refs(repository, request.body, output)? {
-        return Ok(());
-    }
-    let upload = UploadRequest::parse_complete(repository, request.body, version)?;
+    let upload = prepare_complete(repository, request.body, version)?;
     upload.acknowledge(repository, output)?;
     if upload.done {
         let mut packed = upload.output(output);

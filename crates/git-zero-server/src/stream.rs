@@ -1,11 +1,9 @@
 //! Host-driven request intake and pull-based responses. HTTP transfer framing,
 //! socket readiness and staging unsent output remain the host's responsibility.
-use crate::upload_pack::advertisement;
-#[cfg(feature = "read")]
-use crate::upload_pack::policy;
 use crate::{
-    Request, Response, route,
-    upload_pack::{self, UploadRequest},
+    Request, Response,
+    http_backend::{self, Plan},
+    upload_pack,
 };
 use git_zero_core::{Error, Repository, Result, io::SliceWriter, pack};
 
@@ -77,12 +75,6 @@ enum Body<'a> {
     Loose(pack::LooseEncoder),
 }
 
-enum Plan {
-    Buffered(Response),
-    Loose(usize),
-    Upload(route::Version),
-}
-
 /// An independent response cursor with bounded inline framing state. The host
 /// owns the repository, request and control buffers. Keep the same stable
 /// repository for every `read`; it may be recreated from immutable inputs.
@@ -110,11 +102,11 @@ impl<'a> ResponseEncoder<'a> {
         control: &'a mut [u8],
     ) -> Result<Self> {
         let mut output = SliceWriter::new(control);
-        let plan = Self::ordinary(repository, request, &mut output, false)?;
+        let plan = http_backend::prepare(repository, request, &mut output, false)?;
         let Plan::Upload(version) = plan else {
             return Self::ordinary_response(repository, plan, output.finish());
         };
-        let upload = UploadRequest::parse_complete(repository, request.body, version)?;
+        let upload = upload_pack::prepare_complete(repository, request.body, version)?;
         upload.acknowledge(repository, &mut output)?;
         let mut encoder = Self::buffered(upload_pack::response(), output.finish());
         if upload.done {
@@ -224,20 +216,13 @@ impl<'a> ResponseEncoder<'a> {
         control: &'a mut [u8],
     ) -> Result<Self> {
         let mut output = SliceWriter::new(control);
-        if request.method == "GET"
-            && (revision.is_some() || options.policy == crate::WantPolicy::AllVisibleReachable)
-        {
-            let route = route::validate(request)?;
-            if route.rejection.is_none() && route.path == "info/refs" {
-                let response = if revision.is_some() {
-                    advertisement::serve_revision_info_refs(repository, &route, &mut output)?
-                } else {
-                    policy::info_refs(repository, &route, &mut output, options)?
-                };
-                return Ok(Self::buffered(response, output.finish()));
-            }
-        }
-        let plan = Self::ordinary(repository, request, &mut output, true)?;
+        let plan = upload_pack::prepare_route(
+            repository,
+            request,
+            options,
+            revision.is_some(),
+            &mut output,
+        )?;
         let Plan::Upload(version) = plan else {
             return Self::ordinary_response(repository, plan, output.finish());
         };
@@ -256,39 +241,6 @@ impl<'a> ResponseEncoder<'a> {
             encoder.band = selected.upload.band();
         }
         Ok(encoder)
-    }
-
-    fn ordinary(
-        repository: &impl Repository,
-        request: Request<'_>,
-        output: &mut SliceWriter<'_>,
-        selection: bool,
-    ) -> Result<Plan> {
-        let route = route::validate(request)?;
-        if let Some(response) = route.rejection {
-            return Ok(Plan::Buffered(response));
-        }
-        if selection && request.method == "GET" && route.path == "info/refs" {
-            return advertisement::serve_info_refs(repository, &route, output, true)
-                .map(Plan::Buffered);
-        }
-        if request.method == "POST" && route.path == "git-upload-pack" {
-            if route.version == route::Version::V2
-                && crate::v2::serve_refs(repository, request.body, output)?
-            {
-                return Ok(Plan::Buffered(upload_pack::response()));
-            }
-            return Ok(Plan::Upload(route.version));
-        }
-        // Loose bodies are prepared separately, without buffering their bytes.
-        if request.method == "GET" && route.path.starts_with("objects/") {
-            if let Some(index) =
-                crate::http_backend::loose_index(repository, &route.path.as_bytes()[8..])
-            {
-                return Ok(Plan::Loose(index));
-            }
-        }
-        crate::serve_with_scratch(repository, request, &mut [], output).map(Plan::Buffered)
     }
 
     fn buffered(response: Response, prefix: &'a [u8]) -> Self {

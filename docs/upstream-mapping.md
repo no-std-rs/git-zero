@@ -29,8 +29,10 @@ feature parity or a line-for-line port.
 
 ## Follow a fetch
 
-For a buffered request, `http_backend::serve_with_pack` validates the route and
-calls `upload_pack::write_upload` for a complete HEAD-only pack. The public
+Buffered and pull-based output share `http_backend::prepare_with_refs` for
+route validation and response planning. Upload-pack supplies discovery policy
+through `prepare_route`; the complete-pack path calls `upload_pack::write_upload`
+and shares its HEAD-only validation with the pull encoder. The public
 `serve_with_selection*` and `serve_with_revisions` entrypoints go through
 `upload_pack::prepare_fetch`: parse the request, authorize wants, select the
 closure through `ValidatedRepository`, emit control packets, then encode the
