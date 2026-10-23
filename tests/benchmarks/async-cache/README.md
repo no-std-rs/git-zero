@@ -15,14 +15,15 @@ directories; both produced HEAD `c61523503dcaf0f9fc5baa5a9fde1829909d7433`,
 
 | Workload | Base wall median | Head wall median | Base server CPU median | Head server CPU median | Base/head frontend peak RSS |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Smart clone | 21.220 ms | 16.050 ms | 0.116 ms | 0.095 ms | 2648/2652 KiB |
-| Loose dumb clone | 24.324 ms | 16.943 ms | 0.612 ms | 0.404 ms | 2704/2748 KiB |
+| Smart clone | 21.220 ms | 16.819 ms | 0.116 ms | 0.090 ms | 2648/2624 KiB |
+| Loose dumb clone | 24.324 ms | 17.218 ms | 0.612 ms | 0.414 ms | 2704/2812 KiB |
 
 Raw zero-server observations are in [observations.csv](observations.csv).
 Wire response bytes were unchanged: smart 23,934, dumb 23,943. No runtime
 regression was observed on this fixture; the independent Git side also became
 faster between runs, so the wall-time reduction does not establish a speedup.
-The small RSS difference is process/startup noise, not whole-host accounting.
+Process/startup RSS varies across samples; these small absolute differences do
+not establish a memory improvement or regression or provide whole-host accounting.
 
 Reproduce with clean base/head checkouts, separate fixture/output paths, and the
 same installed Git/toolchain. Build each checkout with:

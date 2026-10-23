@@ -194,13 +194,7 @@ pub fn read_request_with_deadlines<'a>(
     policy: RequestPolicy,
     deadlines: RequestDeadlines,
 ) -> Result<Request<'a>> {
-    if deadlines == RequestDeadlines::default() {
-        return read_request_with_policy(socket, storage, policy);
-    }
-    let mut reader = DeadlineReader::new(socket, deadlines)?;
-    let result = read_request_from(&mut |bytes| reader.receive(bytes), storage, policy);
-    reader.check()?;
-    result
+    read_socket_request(socket, storage, policy, deadlines, None)
 }
 
 /// Host transport boundary for authenticated TLS or other blocking streams.
@@ -237,17 +231,21 @@ pub fn read_request_chunked<'a>(
     deadlines: RequestDeadlines,
     chunks: ChunkedLimits,
 ) -> Result<Request<'a>> {
+    read_socket_request(socket, storage, policy, deadlines, Some(chunks))
+}
+
+fn read_socket_request<'a>(
+    socket: &impl AsFd,
+    storage: &'a mut [u8],
+    policy: RequestPolicy,
+    deadlines: RequestDeadlines,
+    chunks: Option<ChunkedLimits>,
+) -> Result<Request<'a>> {
     if deadlines == RequestDeadlines::default() {
-        return read_request_from_chunked(
-            &mut |bytes| receive(socket, bytes),
-            storage,
-            policy,
-            chunks,
-        );
+        return read_request_framed(&mut |bytes| receive(socket, bytes), storage, policy, chunks);
     }
     let mut reader = DeadlineReader::new(socket, deadlines)?;
-    let result =
-        read_request_from_chunked(&mut |bytes| reader.receive(bytes), storage, policy, chunks);
+    let result = read_request_framed(&mut |bytes| reader.receive(bytes), storage, policy, chunks);
     reader.check()?;
     result
 }
@@ -266,7 +264,7 @@ fn read_request_framed<'a>(
         policy.headers.max_bytes,
     )?;
     let (header, storage) = storage.split_at_mut(end);
-    let mut length = length - end;
+    let length = length - end;
     let header = core::str::from_utf8(header).map_err(|_| Error::InvalidRequest)?;
     let line = request_line(header)?;
     let headers = if chunks.is_some() {
@@ -300,46 +298,77 @@ fn read_request_framed<'a>(
             .map(super::parse_length)
             .transpose()?
             .unwrap_or(0);
-        // Header intake already guarantees end <= an explicit wire quota.
-        if limits
-            .max_wire_bytes
-            .is_some_and(|limit| total > limit - end)
-            || (limits.max_body_bytes.is_some_and(|limit| total > limit)
-                && headers
-                    .content_encoding
-                    .is_none_or(|value| value.eq_ignore_ascii_case("identity")))
-        {
-            return Err(Error::LimitExceeded);
-        }
-        if total > storage.len() {
-            return Err(Error::BufferTooSmall);
-        }
-        while length < total {
-            let count = receive(&mut storage[length..total])?;
-            if count == 0 {
-                return Err(Error::InvalidRequest);
-            }
-            if count > total - length {
-                return Err(Error::Backend);
-            }
-            length += count;
-        }
+        let total = read_fixed_body(
+            receive,
+            storage,
+            length,
+            total,
+            RequestLimits {
+                max_wire_bytes: limits.max_wire_bytes.map(|limit| limit - end),
+                max_body_bytes: if identity {
+                    limits.max_body_bytes
+                } else {
+                    None
+                },
+            },
+        )?;
         (total, total)
     };
     let (wire, expanded) = storage.split_at_mut(wire_length);
-    request.body = &wire[..body_length];
-    match headers.content_encoding {
-        None => {}
-        Some(value) if value.eq_ignore_ascii_case("identity") => {}
+    request.body = decode_body(
+        &wire[..body_length],
+        expanded,
+        headers.content_encoding,
+        limits.max_body_bytes,
+    )?;
+    Ok(request)
+}
+
+fn read_fixed_body(
+    receive: &mut impl FnMut(&mut [u8]) -> Result<usize>,
+    storage: &mut [u8],
+    mut length: usize,
+    total: usize,
+    limits: RequestLimits,
+) -> Result<usize> {
+    if limits.max_wire_bytes.is_some_and(|limit| total > limit)
+        || limits.max_body_bytes.is_some_and(|limit| total > limit)
+    {
+        return Err(Error::LimitExceeded);
+    }
+    if total > storage.len() {
+        return Err(Error::BufferTooSmall);
+    }
+    while length < total {
+        let count = receive(&mut storage[length..total])?;
+        if count == 0 {
+            return Err(Error::InvalidRequest);
+        }
+        if count > total - length {
+            return Err(Error::Backend);
+        }
+        length += count;
+    }
+    Ok(total)
+}
+
+fn decode_body<'a>(
+    body: &'a [u8],
+    expanded: &'a mut [u8],
+    encoding: Option<&str>,
+    max_body_bytes: Option<usize>,
+) -> Result<&'a [u8]> {
+    match encoding {
+        None => Ok(body),
+        Some(value) if value.eq_ignore_ascii_case("identity") => Ok(body),
         Some(value) if value.eq_ignore_ascii_case("gzip") => {
             use git_zero::zlib::{InflateLimits, WINDOW_SIZE, decode_gzip};
             let length = decode_gzip(
-                request.body,
+                body,
                 expanded,
                 &mut [0; WINDOW_SIZE],
                 InflateLimits {
-                    max_output: limits
-                        .max_body_bytes
+                    max_output: max_body_bytes
                         .map_or(expanded.len(), |limit| limit.min(expanded.len()))
                         as u64,
                     max_ratio: 128,
@@ -350,20 +379,17 @@ fn read_request_framed<'a>(
                 // decode_gzip's only BufferTooSmall path is incomplete output.
                 // Input exhaustion is InvalidZlib because input is complete.
                 if error == Error::BufferTooSmall
-                    && limits
-                        .max_body_bytes
-                        .is_some_and(|limit| limit <= expanded.len())
+                    && max_body_bytes.is_some_and(|limit| limit <= expanded.len())
                 {
                     Error::LimitExceeded
                 } else {
                     error
                 }
             })?;
-            request.body = &expanded[..length];
+            Ok(&expanded[..length])
         }
-        _ => return Err(Error::Unsupported),
+        _ => Err(Error::Unsupported),
     }
-    Ok(request)
 }
 
 pub fn respond(socket: &impl AsFd, response: Response, body: &[u8]) -> Result<()> {
