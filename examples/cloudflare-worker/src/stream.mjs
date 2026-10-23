@@ -3,9 +3,11 @@ const CONTENT_TYPES = [
   "application/x-git-upload-pack-advertisement",
   "application/x-git-upload-pack-result",
   "application/x-git-loose-object",
+  "application/x-git-packed-objects",
+  "application/x-git-packed-objects-toc",
 ];
 
-export function streamResponse(exports, result) {
+export function streamResponse(exports, result, contentLength = undefined) {
   if (result < 0) {
     exports.stream_cancel();
     return new Response("Invalid or oversized Git request\n", {
@@ -32,6 +34,8 @@ export function streamResponse(exports, result) {
     cancel() { exports.stream_cancel(); },
   }, { highWaterMark: 0 });
   return new Response(stream, {
-    status, headers: { "Content-Type": type, "Cache-Control": "no-store" },
+    status, headers: { "Content-Type": type, "Cache-Control": "no-store",
+      ...(contentLength === undefined ? {} : { "Content-Length": String(contentLength) }),
+    },
   });
 }

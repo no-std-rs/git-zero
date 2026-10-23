@@ -906,7 +906,7 @@ Wasm compilation/linking succeeds without supplying any global allocator.
 
 `cargo test -p git-zero --test fuzz --locked` embeds and replays the binary seeds,
 every prefix truncation, six byte substitutions at every position,
-and reproducible xorshift inputs against eight shared targets.
+and reproducible xorshift inputs against nine shared targets.
 `cargo test -p git-zero --test core --locked` also checks non-hex packet prefixes
 at every position and the maximum packet-length boundary.
 The same target functions back a separate cargo-fuzz workspace; core dependencies
@@ -921,7 +921,7 @@ output capacity. Graph mutations recompute object IDs so invalid commit/tree
 records reach parsing, and compare borrowed versus short-read providers using
 the same bounded scratch. Inflation checks resumable state and output/ratio
 limits; loose/pack targets validate envelopes, entries and bounded delta
-instructions. Pack-index file parsing remains roadmap work.
+instructions. The index target checks pull/write byte equality, independent SHA checksums, large offsets and bounded external-range lookup; HTTP framing/concurrent host fuzzing remains open.
 
 Receive control fuzzing covers fragmented command/option packets, negotiated
 capabilities, independent budgets, raw ref names and terminal errors. Reports
@@ -1020,5 +1020,30 @@ Select a different Git with `GIT_ZERO_TEST_GIT`; in-tree builds use their adjace
 HTTP helpers. Core tests check boundary announcements independently of PACK
 membership, combined blob filters, common haves, output-free errors, exact shared
 byte budgets, state capacity/retry, allocation denial, one-byte pulls,
-cancellation, and exact capability-packet limits. Worker revision history remains
-a separate delivery item.
+cancellation, and exact capability-packet limits. Worker `revisions.test.mjs` runs the same oracle with the explicit revision ABI/host limits and retains failing fixtures.
+
+
+## Packed dumb publication and header policy
+
+```sh
+cargo test --test dumb_publication --test index_stream --locked
+cargo test -p git-zero-rustix --test packed_http --test file_publication --test admission --locked
+node --test examples/cloudflare-worker/test/packed.test.mjs examples/cloudflare-worker/test/revisions.test.mjs
+```
+
+Build the Worker first with `node examples/cloudflare-worker/scripts/build.mjs`.
+`server_packed.py` compares Git-created static packed repositories with native
+and Worker publications in SHA-1/SHA-256 and symbolic/detached/unborn HEAD states.
+It verifies checksum-derived filenames, HTTP lengths/media types, index bytes
+against Git's independent indexer, physical object sets, empty trees, refs,
+checkout modes/bytes and strict fsck. Every clone and repeated fetch uses only
+HTTP; no alternate or assisted object import repairs a clone. Mixed fixtures
+expose a subset of loose objects plus a complete pack. An all-loose repository
+can still trigger Git's documented missing-empty-tree behavior.
+
+Native file tests authenticate both files before publication, preserve positional
+read isolation across replacement/unlink, exercise partial writes/cancellation
+through the HTTP oracle and reject post-publication truncation. These checks do
+not establish directory durability, total disk quotas or asynchronous KV/R2 pack
+publication. Header policy tests exercise exact and exhausted independent limits,
+fragmentation, byte accounting, syntax precedence and reusing request storage.

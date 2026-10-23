@@ -28,6 +28,27 @@ pub struct RequestLimits {
     pub max_body_bytes: Option<usize>,
 }
 
+/// Inclusive HTTP header quotas. Byte counts apply to wire bytes before UTF-8
+/// decoding; values include whitespace after the colon. Unknown and repeated
+/// ordinary fields consume the same budgets as recognized Git/framing fields.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HeaderLimits {
+    /// Request line plus header fields and the final CRLF delimiter.
+    pub max_bytes: Option<usize>,
+    /// Number of fields, excluding the request line and final empty line.
+    pub max_fields: Option<usize>,
+    pub max_name_bytes: Option<usize>,
+    pub max_value_bytes: Option<usize>,
+}
+
+/// Independent whole-request/body and header policies. Unset defaults preserve
+/// the storage-bounded parser. These quotas do not impose a total time deadline.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RequestPolicy {
+    pub request: RequestLimits,
+    pub headers: HeaderLimits,
+}
+
 /// Per-blocking-call timeouts applied only to the accepted socket. These do not
 /// bound accept, a complete request, or a complete response. `None` disables the
 /// corresponding timeout; zero durations are invalid. The OS may round values.
@@ -132,12 +153,37 @@ pub fn read_request_with_limits<'a>(
     storage: &'a mut [u8],
     limits: RequestLimits,
 ) -> Result<Request<'a>> {
-    let (end, length) = read_header(socket, storage, limits.max_wire_bytes)?;
+    read_request_with_policy(
+        socket,
+        storage,
+        RequestPolicy {
+            request: limits,
+            headers: HeaderLimits::default(),
+        },
+    )
+}
+
+/// Apply header admission during intake and the single metadata-validation pass.
+/// An incomplete header stops at its exact byte quota without reading a byte
+/// beyond it. Field quotas are checked after that field's syntax, before body
+/// intake/inflation and repository preparation. Failure invalidates all storage.
+pub fn read_request_with_policy<'a>(
+    socket: &impl AsFd,
+    storage: &'a mut [u8],
+    policy: RequestPolicy,
+) -> Result<Request<'a>> {
+    let limits = policy.request;
+    let (end, length) = read_header(
+        socket,
+        storage,
+        limits.max_wire_bytes,
+        policy.headers.max_bytes,
+    )?;
     let (header, storage) = storage.split_at_mut(end);
     let mut length = length - end;
     let header = core::str::from_utf8(header).map_err(|_| Error::InvalidRequest)?;
     let line = request_line(header)?;
-    let headers = Headers::parse(header)?;
+    let headers = Headers::parse(header, policy.headers)?;
     let mut request = parse_request(line, &headers)?;
     let total = headers
         .content_length
@@ -242,6 +288,75 @@ pub fn respond_stream(
         encoder.cancel();
     }
     result
+}
+
+/// Stream a publication response with its known complete length. Each cursor
+/// pins its provider; failed writes cancel only that response. Close the socket
+/// on errors, including a provider that was changed/truncated after publication.
+pub fn respond_published<R: git_zero::Repository>(
+    socket: &impl AsFd,
+    encoder: &mut git_zero::http::dumb::PublishedResponse<'_, R>,
+    staging: &mut [u8],
+) -> Result<()> {
+    let result = respond_known(
+        socket,
+        encoder.response(),
+        encoder.size(),
+        staging,
+        |bytes| encoder.read(bytes),
+    );
+    if result.is_err() {
+        encoder.cancel();
+    }
+    result
+}
+
+/// Send a previously verified on-disk publication, with independent file reads
+/// and response-local cancellation on any provider or socket error.
+#[cfg(feature = "storage")]
+pub fn respond_file_published<R: git_zero::Repository>(
+    socket: &impl AsFd,
+    encoder: &mut crate::FilePublishedResponse<'_, R>,
+    staging: &mut [u8],
+) -> Result<()> {
+    let result = respond_known(
+        socket,
+        encoder.response(),
+        encoder.size(),
+        staging,
+        |bytes| encoder.read(bytes),
+    );
+    if result.is_err() {
+        encoder.cancel();
+    }
+    result
+}
+
+fn respond_known(
+    socket: &impl AsFd,
+    response: Response,
+    size: u64,
+    staging: &mut [u8],
+    mut read: impl FnMut(&mut [u8]) -> Result<usize>,
+) -> Result<()> {
+    if staging.is_empty() {
+        return Err(Error::BufferTooSmall);
+    }
+    respond_headers(socket, response, size)?;
+    let mut remaining = size;
+    let mut writer = SocketWriter(socket.as_fd());
+    loop {
+        let count = read(staging)?;
+        if count == 0 {
+            return if remaining == 0 {
+                Ok(())
+            } else {
+                Err(Error::Backend)
+            };
+        }
+        remaining = remaining.checked_sub(count as u64).ok_or(Error::Backend)?;
+        writer.write_all(&staging[..count])?;
+    }
 }
 
 /// Write framing for a body streamed separately by the host. The host must

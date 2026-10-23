@@ -12,3 +12,5 @@
 See the [test guide](../tests/README.md) for interoperability and decoder
 benchmarks, and the [roadmap](../ROADMAP.md) for planned work. Component setup
 stays with each crate or example's README.
+
+- [Immutable packed dumb HTTP](packed-dumb.md): generated/verified-file publication, Worker modes and URL identity.

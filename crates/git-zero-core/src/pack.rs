@@ -57,6 +57,11 @@ mod index;
 pub use index::{write_index, write_indexed_with_scratch};
 
 #[cfg(feature = "write")]
+mod index_stream;
+#[cfg(feature = "write")]
+pub use index_stream::IndexEncoder;
+
+#[cfg(feature = "write")]
 mod encode;
 #[cfg(feature = "write")]
 mod stream;

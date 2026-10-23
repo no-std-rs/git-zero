@@ -2,7 +2,19 @@ mod fuzz_support;
 
 type Target = (&'static str, fn(&[u8]), &'static [&'static [u8]]);
 
-const TARGETS: [Target; 8] = [
+const TARGETS: [Target; 9] = [
+    (
+        "indexes",
+        fuzz_support::indexes,
+        &[
+            include_bytes!("../fuzz/corpus/indexes/sha1-large"),
+            include_bytes!("../fuzz/corpus/indexes/sha256-large"),
+            include_bytes!("../fuzz/corpus/indexes/duplicates"),
+            include_bytes!("../fuzz/corpus/indexes/bad-offset"),
+            b"",
+            b"\x01",
+        ],
+    ),
     (
         "receive",
         fuzz_support::receive,

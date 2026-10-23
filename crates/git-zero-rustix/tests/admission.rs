@@ -1,6 +1,8 @@
 //! Logical admission policies and accepted-socket settings through public APIs.
 #[path = "../../../tests/common/allocations.rs"]
 mod allocations;
+#[path = "admission/headers.rs"]
+mod headers;
 #[path = "common/http.rs"]
 mod http;
 #[path = "admission/intake.rs"]

@@ -99,3 +99,19 @@ workspace = true
 [[test]]
 name = "revision_http"
 required-features = ["cli"]
+
+[[test]]
+name = "packed_http"
+required-features = ["cli"]
+
+[[test]]
+name = "file_publication"
+required-features = ["cli"]
+
+[[example]]
+name = "packed-dumb"
+required-features = ["cli"]
+
+[[test]]
+name = "publication_socket"
+required-features = ["cli"]
