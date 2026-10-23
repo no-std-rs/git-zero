@@ -10,7 +10,7 @@ import { ByteCache, Store, sha256 } from "../src/storage.mjs";
 
 const lost = () => new Error("Network connection lost.");
 function store(blobs) {
-  return Object.assign(Object.create(Store.prototype), { blobs, usage: { r2Puts: 0, r2WrittenBytes: 0, r2Deletes: 0, r2Gets: 0, r2ReadBytes: 0, r2Retries: 0 } });
+  return Object.assign(Object.create(Store.prototype), { blobs, usage: { r2Puts: 0, r2WrittenBytes: 0, r2Deletes: 0, r2Gets: 0, r2ReadBytes: 0, r2Retries: 0, r2Failures: 0 } });
 }
 
 test("idempotent chunk writes and deletes tolerate lost acknowledgments", async () => {
@@ -42,6 +42,7 @@ test("chunk reads retry both connection and response-body failures before cachin
   assert.equal(reads, 3);
   assert.equal(storage.usage.r2Gets, 3);
   assert.equal(storage.usage.r2Retries, 2);
+  assert.equal(storage.usage.r2Failures, 2);
   assert.equal(storage.usage.r2ReadBytes, data.length);
 });
 
@@ -50,11 +51,13 @@ test("storage retry budgets terminate and preserve permanent failures", async ()
   const storage = store({ async get() { reads++; throw lost(); } });
   await assert.rejects(storage.get({ key: "owned-chunk" }, new ByteCache(1024)), /Network connection lost/);
   assert.equal(reads, 3);
+  assert.equal(storage.usage.r2Failures, 3);
   let puts = 0;
   const forbidden = new Error("R2 S3 PUT failed (403)");
   storage.blobs.put = async () => { puts++; throw forbidden; };
   await assert.rejects(storage.put("owned-chunk", Uint8Array.of(1)), (error) => error === forbidden);
   assert.equal(puts, 1);
+  assert.equal(storage.usage.r2Failures, 4);
 });
 
 test("storage retries do not mask invalid or corrupted chunk data", async () => {

@@ -123,3 +123,45 @@ fixtures do not establish the full Linux storage reduction or hosting cost.
 Each request also caches at most 256 aliases for verified delta-base metadata.
 Missing and unresolved bases are looked up again as validation advances; the
 metadata cache is released with the request's byte caches.
+
+The mixed-workload runner salvaged from the earlier hosting experiment exercises
+the current streamed host against Git's HTTP backend:
+
+```sh
+# From the repository root, after npm ci in cloudflare/.
+node examples/repository-host/cloudflare/scripts/hosting-benchmark.mjs \
+  --work-dir /tmp/hosting-mixed-warm \
+  --runtime wrangler --view-cache warm --samples 2
+```
+
+Each pair executes 32 pushes and 56 latest/historical fetches. Fresh clients and
+clients seeded with an older ancestor must receive missing history; strict fsck,
+reachable-object lists and archive bytes are checked outside the wire timer.
+Pushes update the main and historical refs atomically. The Git reference maintains
+MIDX bitmaps and a split commit graph after each push; its ready time includes
+that maintenance separately from wire time. Pair order alternates between samples.
+The reference uses the test suite's threaded Python HTTP/CGI adapter; timings
+include the different local frontends and do not isolate codec execution speed.
+All pairs use one frozen host bundle; reports record its file sizes and SHA-256
+digests as well as the Git version, fixture tips and codec commit. The generated
+fixtures, frozen host bundle, logs and reports stay in the new
+work directory, which the runner refuses to overwrite.
+
+Use `--view-cache cold` to restart the own runtime before every fetch, or
+`--object-format sha256` and `--protocol 0`, `1` or `2` for compatibility runs.
+Cold startup counters remain visible before each operation; runtime construction,
+client seeding and verification are outside wire time. OS page caches remain
+uncontrolled. Smaller `--generations 4 --blob-bytes 4096 --samples 1` runs are
+functional smoke checks. `--stage full` requires all 32 generations and at least
+five pairs; a two-pair screen cannot establish a performance win.
+
+Reports retain raw service counters and observer counters alongside workload
+deltas. Inventory queries remain visible in totals but are subtracted from
+measured SQL work. A changed repository-instance epoch, decreased counter or
+incomplete counter schema fails the run. Unavailable SQL row counts stay `null`;
+failed SQL and R2 attempts remain counted. Fetch guards allow scratch SQL writes
+while requiring unchanged published/retained inventory and zero R2 puts/deletes.
+R2 written bytes count attempted uploads, while read bytes count completed bodies;
+partial failed response bytes are unmeasured. Worker CPU, Durable Object duration
+and monthly SQLite storage remain unknown. These local measurements and the
+recorded database size do not establish a complete cloud bill or deployed latency.

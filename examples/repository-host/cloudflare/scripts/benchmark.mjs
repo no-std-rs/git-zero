@@ -2,11 +2,11 @@
 // with actual local Wrangler R2/SQLite, or direct workerd with the S3 fixture.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { headers, start, TOKEN } from "../test/wrangler.mjs";
-import { startStandalone } from "../test/standalone.mjs";
+import { headers, TOKEN } from "../test/wrangler.mjs";
+import { freezeRuntime, startRuntime } from "./benchmark-runtime.mjs";
 
 const args = process.argv.slice(2);
 const options = Object.fromEntries(args.reduce((pairs, value, index) => { if (index % 2 === 0) pairs.push([value, args[index + 1]]); return pairs; }, []));
@@ -101,19 +101,8 @@ try {
   report.resources.sampleIntervalMs = 1000;
   progressTimer = setInterval(() => { progress({ phase, elapsedSeconds: (performance.now() - started) / 1000, recentClientProgress: recent, resources: report.resources }); save().catch(() => {}); }, 20000);
   await phaseRun("freeze-runtime", async () => {
-    if (runtime === "wrangler") {
-      await command(process.execPath, [join(root, "node_modules/wrangler/bin/wrangler.js"), "deploy", "--config", "wrangler.toml", "--dry-run", "--outdir", bundle], root);
-      await writeFile(join(bundle, "wrangler.toml"), `name = "git-zero-own-scale-proof"\nmain = "streamed.js"\ncompatibility_date = "2026-10-06"\nsend_metrics = false\n[vars]\nREPO_FORMAT = "${report.objectFormat === "sha256" ? 1 : 0}"\n[[r2_buckets]]\nbinding = "BLOBS"\nbucket_name = "git-zero-repository-data"\nremote = false\n[[durable_objects.bindings]]\nname = "REPOSITORIES"\nclass_name = "OwnRepository"\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["OwnRepository"]\n`);
-    } else {
-      await command(process.execPath, ["scripts/build.mjs"], root);
-      await mkdir(join(bundle, "src"), { recursive: true });
-      await mkdir(join(bundle, "build"));
-      for (const file of await readdir(join(root, "src"))) if (file.endsWith(".mjs")) await copyFile(join(root, "src", file), join(bundle, "src", file));
-      await copyFile(join(root, "build/git_zero_host_wasm.wasm"), join(bundle, "build/git_zero_host_wasm.wasm"));
-      await copyFile(join(root, "workerd.capnp"), join(bundle, "workerd.capnp"));
-    }
-    // Isolate package/config discovery and file watchers from the checkout.
-    await writeFile(join(bundle, "package.json"), '{"name":"git-zero-frozen-runtime","private":true,"type":"module"}\n');
+    await freezeRuntime(bundle, runtime, report.objectFormat === "sha256" ? 1 : 0,
+      { run: (binary, args) => command(binary, args, root) });
     return { directory: bundle };
   });
   const baseline = await phaseRun("source-strict-fsck", async () => {
@@ -144,7 +133,7 @@ try {
     return { reachableDiagnostics: baseline.diagnostics, unrelatedDiagnostics: baseline.allSourceDiagnostics.length - baseline.diagnostics.length };
   });
   const persist = join(work, "state");
-  server = runtime === "wrangler" ? await start(persist, { config: join(bundle, "wrangler.toml"), cwd: bundle, frozen: true }) : await startStandalone(persist, { format: report.objectFormat === "sha256" ? 1 : 0, cwd: bundle });
+  server = await startRuntime(persist, bundle, runtime, report.objectFormat === "sha256" ? 1 : 0);
   report.origin = server.origin; await save();
   const repo = `${server.origin}/kernel.git`;
   sampleTimer = setInterval(() => { resources().catch((error) => { report.resourceError = error.message; }); }, 1000);
@@ -169,7 +158,7 @@ try {
   });
   await phaseRun("cold-fetch", async () => {
     await server.stop();
-    server = runtime === "wrangler" ? await start(persist, { config: join(bundle, "wrangler.toml"), cwd: bundle, frozen: true }) : await startStandalone(persist, { format: report.objectFormat === "sha256" ? 1 : 0, cwd: bundle });
+    server = await startRuntime(persist, bundle, runtime, report.objectFormat === "sha256" ? 1 : 0);
     // Keep the ordinary client remote, then fetch from the restarted endpoint.
     await git(clone, ["remote", "set-url", "origin", `${server.origin}/kernel.git`]);
     await git(clone, ["fetch", "--progress", "origin"]);

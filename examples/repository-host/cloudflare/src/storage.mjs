@@ -11,6 +11,7 @@ async function retryStorage(operation, usage) {
   for (let attempt = 0; ; attempt++) {
     try { return await operation(); }
     catch (error) {
+      usage.r2Failures++;
       const transient = error?.retryable === true || /network connection lost|network error|fetch failed|ECONNRESET|ETIMEDOUT/i.test(String(error?.message ?? error));
       if (!transient || attempt === 2) throw storageFailure(error);
       usage.r2Retries++;
@@ -114,7 +115,8 @@ const STAGE_METADATA = ["stage_objects", "stage_edges", "stage_names", "stage_bl
 export class Store {
   constructor(ctx, env, namespace) {
     this.ctx = ctx; this.env = env; this.namespace = namespace; this.blobs = bucket(env);
-    this.usage = { sqlCalls: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2Puts: 0, r2Deletes: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
+    this.usage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2Puts: 0, r2Deletes: 0, r2Failures: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
+    this.observerUsage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0 };
     this.sqlKnown = true;
     this.edgeStages = new Map();
     for (const statement of SCHEMA) this.exec(statement);
@@ -151,15 +153,18 @@ export class Store {
     if (this.exec("SELECT namespace FROM host_identity WHERE id=1")[0].namespace !== namespace) throw new Error("stored repository identity differs");
   }
   exec(statement, ...bindings) {
+    this.usage.sqlCalls++;
     try {
       const cursor = this.ctx.storage.sql.exec(statement, ...bindings);
       const rows = cursor.toArray();
-      this.usage.sqlCalls++;
       if (typeof cursor.rowsRead === "number" && typeof cursor.rowsWritten === "number") {
         this.usage.sqlRowsRead += cursor.rowsRead; this.usage.sqlRowsWritten += cursor.rowsWritten;
       } else this.sqlKnown = false;
       return rows;
     } catch (error) {
+      this.usage.sqlFailures++;
+      // A failed binding can have performed work without returning row counts.
+      this.sqlKnown = false;
       throw storageFailure(error);
     }
   }
@@ -233,6 +238,20 @@ export class Store {
     }
   }
   statistics() {
+    const before = { ...this.usage };
+    let result;
+    try { result = this.inventory(); }
+    finally {
+      // Observer queries are visible in raw totals, but workload deltas must
+      // subtract them even if a diagnostic query itself fails.
+      for (const field of Object.keys(this.observerUsage)) this.observerUsage[field] += this.usage[field] - before[field];
+    }
+    const measured = (usage) => ({ ...usage, sqlRowsRead: this.sqlKnown ? usage.sqlRowsRead : null, sqlRowsWritten: this.sqlKnown ? usage.sqlRowsWritten : null });
+    result.usage = measured(this.usage);
+    result.observerUsage = measured(this.observerUsage);
+    return result;
+  }
+  inventory() {
     const result = {
       objects: this.exec("SELECT object_count FROM repository WHERE id=1")[0]?.object_count ?? 0,
       stagedObjects: this.exec("SELECT COUNT(*) AS count FROM stage_objects")[0].count,
@@ -249,7 +268,6 @@ export class Store {
       workerCpuMs: null,
       lastIntakeBudget: this.lastIntakeBudget ?? null,
     };
-    result.usage = { ...this.usage, sqlRowsRead: this.sqlKnown ? this.usage.sqlRowsRead : null, sqlRowsWritten: this.sqlKnown ? this.usage.sqlRowsWritten : null };
     return result;
   }
   async put(key, data) {
