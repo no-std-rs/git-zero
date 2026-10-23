@@ -75,3 +75,13 @@ fn revision_change(state: u8, id: ObjectId) -> Option<ShallowChange> {
         None
     }
 }
+
+// Candidate membership is frozen before this pure transition classifies which
+// existing client boundaries now have their parents available.
+pub(super) fn mark_unshallow(states: &mut [u8]) {
+    for state in states {
+        if *state & (CLIENT_SHALLOW | CANDIDATE | BORDER) == (CLIENT_SHALLOW | CANDIDATE) {
+            *state |= UNSHALLOW;
+        }
+    }
+}

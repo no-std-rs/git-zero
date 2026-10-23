@@ -352,15 +352,21 @@ impl<'index, 'repo, R: Repository + ?Sized> ValidatedRepository<'index, 'repo, R
             selection.walk(history)?;
             filter_objects(selection.work, fetch.filter);
         }
-        let mut length = 0;
-        for (index, slot) in selection.work.iter().enumerate() {
-            if slot.expect("initialized metadata").reached {
-                selected[length] = index;
-                length += 1;
-            }
-        }
+        let length = selected_indices(selection.work, selected);
         Ok(&selected[..length])
     }
+}
+
+// Publish both ordinary and revision selections in provider enumeration order.
+fn selected_indices(objects: &[Option<ValidationMetadata>], selected: &mut [usize]) -> usize {
+    let mut length = 0;
+    for (index, slot) in objects.iter().enumerate() {
+        if slot.expect("initialized metadata").reached {
+            selected[length] = index;
+            length += 1;
+        }
+    }
+    length
 }
 
 // One selection owns its caller buffers and a single shared read budget.
@@ -576,27 +582,7 @@ fn initialize_index(
     read_scratch: &mut [u8],
 ) -> Result<()> {
     for (index, slot) in objects.iter_mut().enumerate() {
-        let info = repository.object_info(index)?;
-        let id = repository.object_id(index).ok_or(Error::ObjectNotFound)?;
-        if ObjectHasher::new(repository, index)?.finish(read_scratch)? != id
-            || repository.object(index).is_some_and(|object| {
-                object.info() != info || object.id_with_format(repository.object_format()) != id
-            })
-        {
-            return Err(Error::InvalidObject);
-        }
-        *slot = Some(ValidationMetadata {
-            id,
-            info,
-            reached: false,
-            checked: false,
-            excluded: false,
-            forced: false,
-            wanted: false,
-            depth: u32::MAX,
-            client_shallow: false,
-            shallow: false,
-        });
+        *slot = Some(authenticated_metadata(repository, index, read_scratch)?);
         by_id[index] = index;
     }
     by_id.sort_unstable_by_key(|&index| metadata(objects, index).id);
@@ -607,6 +593,35 @@ fn initialize_index(
         return Err(Error::InvalidObject);
     }
     Ok(())
+}
+
+// Authenticate each object before publishing its identity in the lookup index.
+fn authenticated_metadata(
+    repository: &(impl Repository + ?Sized),
+    index: usize,
+    read_scratch: &mut [u8],
+) -> Result<ValidationMetadata> {
+    let info = repository.object_info(index)?;
+    let id = repository.object_id(index).ok_or(Error::ObjectNotFound)?;
+    if ObjectHasher::new(repository, index)?.finish(read_scratch)? != id
+        || repository.object(index).is_some_and(|object| {
+            object.info() != info || object.id_with_format(repository.object_format()) != id
+        })
+    {
+        return Err(Error::InvalidObject);
+    }
+    Ok(ValidationMetadata {
+        id,
+        info,
+        reached: false,
+        checked: false,
+        excluded: false,
+        forced: false,
+        wanted: false,
+        depth: u32::MAX,
+        client_shallow: false,
+        shallow: false,
+    })
 }
 
 fn walk(
@@ -852,22 +867,7 @@ impl<'scratch, 'repo, R: Repository + ?Sized> Body<'scratch, 'repo, R> {
     }
     fn byte(&mut self) -> Result<Option<u8>> {
         if self.position == self.length {
-            if self.budget.as_deref() == Some(&0) && self.reader.remaining() != 0 {
-                return Err(Error::LimitExceeded);
-            }
-            let capacity = self
-                .budget
-                .as_deref()
-                .map_or(self.scratch.len(), |remaining| {
-                    self.scratch
-                        .len()
-                        .min(usize::try_from(*remaining).unwrap_or(usize::MAX))
-                });
-            self.length = self.reader.read(&mut self.scratch[..capacity])?;
-            if let Some(remaining) = self.budget.as_deref_mut() {
-                *remaining -= self.length as u64;
-            }
-            self.position = 0;
+            self.refill()?;
             if self.length == 0 {
                 return Ok(None);
             }
@@ -875,6 +875,26 @@ impl<'scratch, 'repo, R: Repository + ?Sized> Body<'scratch, 'repo, R> {
         let byte = self.scratch[self.position];
         self.position += 1;
         Ok(Some(byte))
+    }
+    // Only refilling touches the provider and debits the shared byte budget.
+    fn refill(&mut self) -> Result<()> {
+        if self.budget.as_deref() == Some(&0) && self.reader.remaining() != 0 {
+            return Err(Error::LimitExceeded);
+        }
+        let capacity = self
+            .budget
+            .as_deref()
+            .map_or(self.scratch.len(), |remaining| {
+                self.scratch
+                    .len()
+                    .min(usize::try_from(*remaining).unwrap_or(usize::MAX))
+            });
+        self.length = self.reader.read(&mut self.scratch[..capacity])?;
+        if let Some(remaining) = self.budget.as_deref_mut() {
+            *remaining -= self.length as u64;
+        }
+        self.position = 0;
+        Ok(())
     }
     fn until<'a>(&mut self, delimiter: u8, output: &'a mut [u8]) -> Result<&'a [u8]> {
         let mut length = 0;
@@ -908,9 +928,15 @@ impl<'scratch, 'repo, R: Repository + ?Sized> Body<'scratch, 'repo, R> {
     }
 }
 
+// Required structural headers have an exact prefix and a nonempty value.
+fn header_value<'a>(line: &'a [u8], prefix: &[u8]) -> Result<&'a [u8]> {
+    line.strip_prefix(prefix)
+        .filter(|value| !value.is_empty())
+        .ok_or(Error::InvalidObject)
+}
+
 fn link(line: &[u8], prefix: &[u8], format: ObjectFormat) -> Result<ObjectId> {
-    let id = ObjectId::from_hex(line.strip_prefix(prefix).ok_or(Error::InvalidObject)?)
-        .map_err(|_| Error::InvalidObject)?;
+    let id = ObjectId::from_hex(header_value(line, prefix)?).map_err(|_| Error::InvalidObject)?;
     if id.format() != format {
         return Err(Error::InvalidObject);
     }
@@ -958,13 +984,9 @@ fn commit_parents<'a>(
         visit(link(line, b"parent ", format)?)?;
         line = body.line(scratch)?;
     }
-    if !line.starts_with(b"author ") || line.len() == b"author ".len() {
-        return Err(Error::InvalidObject);
-    }
+    header_value(line, b"author ")?;
     let line = body.line(scratch)?;
-    if !line.starts_with(b"committer ") || line.len() == b"committer ".len() {
-        return Err(Error::InvalidObject);
-    }
+    header_value(line, b"committer ")?;
     Ok(line)
 }
 
@@ -996,10 +1018,7 @@ fn validate_tag(
         let index = find(objects, by_id, id).ok_or(Error::ObjectNotFound)?;
         metadata_mut(objects, index).wanted = true;
     }
-    let line = body.line(scratch)?;
-    if !line.starts_with(b"tag ") || line.len() == b"tag ".len() {
-        return Err(Error::InvalidObject);
-    }
+    header_value(body.line(scratch)?, b"tag ")?;
     validate_extra_headers(body, scratch, &[b"object", b"type", b"tag"])
 }
 
@@ -1069,6 +1088,25 @@ fn check_duplicate_name(
     body.seek(resume)
 }
 
+fn check_tree_order(
+    previous: &[u8],
+    previous_kind: ObjectKind,
+    name: &[u8],
+    kind: ObjectKind,
+) -> Result<()> {
+    if previous == name
+        || cmp_tree_names(
+            previous,
+            previous_kind == ObjectKind::Tree,
+            name,
+            kind == ObjectKind::Tree,
+        ) != Ordering::Less
+    {
+        return Err(Error::UnsortedFiles);
+    }
+    Ok(())
+}
+
 fn validate_tree(
     body: &mut Body<'_, '_, impl Repository + ?Sized>,
     scratch: &mut [u8],
@@ -1085,19 +1123,8 @@ fn validate_tree(
     while body.offset() < body.reader.info().size {
         let start = body.offset();
         let (kind, name, id) = tree_entry(body, current)?;
-        if start != 0 {
-            let old = &previous[..previous_length];
-            if old == name
-                || cmp_tree_names(
-                    old,
-                    previous_kind == ObjectKind::Tree,
-                    name,
-                    kind == ObjectKind::Tree,
-                ) != Ordering::Less
-            {
-                return Err(Error::UnsortedFiles);
-            }
-        }
+        // The initial empty name sorts before every validated nonempty entry.
+        check_tree_order(&previous[..previous_length], previous_kind, name, kind)?;
         if kind != ObjectKind::Commit {
             reach_at(objects, by_id, id, kind, child_depth, forced)?;
         }

@@ -3,7 +3,6 @@ use super::*;
 
 fn sorted(mut values: Vec<ObjectId>) -> Vec<ObjectId> {
     values.sort_unstable();
-    values.dedup();
     values
 }
 
@@ -106,43 +105,27 @@ fn check(
     boundaries: &[usize],
     unshallow: &[usize],
 ) {
-    let (actual, changes, _) = select(fixture, selection);
+    let (actual, mut changes, _) = select(fixture, selection);
     assert_eq!(
         actual,
         sorted(objects.iter().map(|&index| fixture.ids[index]).collect())
     );
-    let actual_shallow = sorted(
-        changes
-            .iter()
-            .filter_map(|change| {
-                if let ShallowChange::Shallow(id) = change {
-                    Some(*id)
-                } else {
-                    None
-                }
-            })
-            .collect(),
-    );
-    let actual_unshallow = sorted(
-        changes
-            .iter()
-            .filter_map(|change| {
-                if let ShallowChange::Unshallow(id) = change {
-                    Some(*id)
-                } else {
-                    None
-                }
-            })
-            .collect(),
-    );
-    assert_eq!(
-        actual_shallow,
-        sorted(boundaries.iter().map(|&index| fixture.ids[index]).collect())
-    );
-    assert_eq!(
-        actual_unshallow,
-        sorted(unshallow.iter().map(|&index| fixture.ids[index]).collect())
-    );
+    let mut expected_changes: Vec<_> = boundaries
+        .iter()
+        .map(|&index| ShallowChange::Shallow(fixture.ids[index]))
+        .chain(
+            unshallow
+                .iter()
+                .map(|&index| ShallowChange::Unshallow(fixture.ids[index])),
+        )
+        .collect();
+    let key = |change: &ShallowChange| match *change {
+        ShallowChange::Shallow(id) => (false, id),
+        ShallowChange::Unshallow(id) => (true, id),
+    };
+    changes.sort_unstable_by_key(key);
+    expected_changes.sort_unstable_by_key(key);
+    assert_eq!(changes, expected_changes);
 }
 
 fn check_history_cuts(fixture: &Fixture) {

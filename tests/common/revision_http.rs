@@ -63,17 +63,22 @@ fn canonical_response(bytes: &[u8], version: u8) -> Vec<u8> {
     if version != 2 {
         return bytes.to_vec();
     }
-    let mut input = bytes;
+    canonical_v2_response(bytes)
+}
+
+// V2 PACK packet boundaries depend on cursor capacity, so compare their payload
+// while retaining every section delimiter and stream terminator in the oracle.
+fn canonical_v2_response(mut input: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
     let mut packed = false;
     while !input.is_empty() {
-        if input.starts_with(b"0001") {
-            result.extend_from_slice(b"DELIMITER");
-            input = &input[4..];
-            continue;
-        }
-        if input.starts_with(b"0002") {
-            result.extend_from_slice(b"END");
+        let marker: Option<&[u8]> = match input.get(..4) {
+            Some(b"0001") => Some(b"DELIMITER"),
+            Some(b"0002") => Some(b"END"),
+            _ => None,
+        };
+        if let Some(marker) = marker {
+            result.extend_from_slice(marker);
             input = &input[4..];
             continue;
         }

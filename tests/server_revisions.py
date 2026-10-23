@@ -94,6 +94,19 @@ def fetch_clients(bare, clients, env, version, arguments, *refspecs):
     compare_clients(bare, clients, env)
 
 
+def reject_clone(root, env, urls, case, version, options):
+    for name, url in urls:
+        _, result = clone(root, env, f"{name}-v{version}-{case}", url, version, "main", options)
+        assert result.returncode != 0, (name, case)
+
+
+def compare_deepening(root, bare, env, urls, version, mode):
+    clients = clone_clients(root, env, urls, f"fetch-{mode}", version, "main", ["--depth=1"])
+    options = [since(200)] if mode == "since" else ["--shallow-exclude=cutoff"]
+    for arguments in (options, options, [since(100)], [since(350)], ["--unshallow"]):
+        fetch_clients(bare, clients, env, version, arguments)
+
+
 def compare_protocol(root, bare, ids, env, urls, version):
     cases = [
         ("equal-root", "main", [since(100)]), ("equal-C", "main", [since(200)]),
@@ -113,14 +126,9 @@ def compare_protocol(root, bare, ids, env, urls, version):
         clients = clone_clients(root, env, urls, case, version, branch, options)
         compare_clients(bare, clients, env)
     for case, options in failures:
-        for name, url in urls:
-            _, result = clone(root, env, f"{name}-v{version}-{case}", url, version, "main", options)
-            assert result.returncode != 0, (name, case)
+        reject_clone(root, env, urls, case, version, options)
     for mode in ("since", "exclude"):
-        clients = clone_clients(root, env, urls, f"fetch-{mode}", version, "main", ["--depth=1"])
-        options = [since(200)] if mode == "since" else ["--shallow-exclude=cutoff"]
-        for arguments in (options, options, [since(100)], [since(350)], ["--unshallow"]):
-            fetch_clients(bare, clients, env, version, arguments)
+        compare_deepening(root, bare, env, urls, version, mode)
     clients = clone_clients(root, env, urls, "unrelated", version,
                             "main", ["--depth=1", "--no-single-branch"])
     for arguments, branch in (([since(200)], "main"), ([since(100)], "merge")):

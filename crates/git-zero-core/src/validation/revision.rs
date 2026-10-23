@@ -76,16 +76,38 @@ impl<R: Repository + ?Sized> ValidatedRepository<'_, '_, R> {
             walk.payload(&[])?;
             filter_objects(walk.objects, fetch.filter);
         }
-        let length = walk.selected_indices(selected);
+        let length = selected_indices(walk.objects, selected);
         revision.count = count;
         Ok(&selected[..length])
     }
 }
 
+#[derive(Clone, Copy)]
 enum Parents {
     Pending,
     Boundary,
     Seed,
+}
+
+fn mark_parent(
+    action: Parents,
+    index: usize,
+    parent: usize,
+    objects: &mut [Option<ValidationMetadata>],
+    states: &mut [u8],
+) {
+    match action {
+        Parents::Pending => states[parent] |= PENDING,
+        Parents::Boundary if states[parent] & CANDIDATE == 0 => states[index] |= BORDER,
+        Parents::Seed => {
+            let object = metadata_mut(objects, parent);
+            if !object.excluded {
+                object.reached = true;
+                object.depth = 1;
+            }
+        }
+        _ => {}
+    }
 }
 
 struct Walker<'a, 'b, 'index, 'repo, R: Repository + ?Sized> {
@@ -116,10 +138,7 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
     fn candidates(&mut self, roots: &[ObjectId], since: Option<u64>) -> Result<()> {
         for &id in roots {
             let index = self.find(id)?;
-            let index = self.peel(index)?;
-            if metadata(self.objects, index).info.kind == ObjectKind::Commit {
-                self.states[index] |= PENDING;
-            }
+            self.queue_commit(index)?;
         }
         self.ancestry(since.filter(|&value| value != 0), CANDIDATE)?;
 
@@ -128,16 +147,8 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         }
         // Freeze candidate membership before marking borders: a merge border
         // may stop another candidate from appearing in the eventual payload.
-        for index in 0..self.states.len() {
-            if self.states[index] & CANDIDATE != 0 {
-                self.commit(index, Parents::Boundary)?;
-            }
-        }
-        for state in self.states.iter_mut() {
-            if *state & (CLIENT_SHALLOW | CANDIDATE | BORDER) == (CLIENT_SHALLOW | CANDIDATE) {
-                *state |= UNSHALLOW;
-            }
-        }
+        self.visit_parents(CANDIDATE, Parents::Boundary)?;
+        state::mark_unshallow(self.states);
         Ok(())
     }
 
@@ -158,11 +169,7 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
     }
 
     fn wanted_payload(&mut self, roots: &[ObjectId]) -> Result<()> {
-        for index in 0..self.states.len() {
-            if self.states[index] & UNSHALLOW != 0 {
-                self.commit(index, Parents::Seed)?;
-            }
-        }
+        self.visit_parents(UNSHALLOW, Parents::Seed)?;
         self.payload(roots)
     }
 
@@ -175,17 +182,6 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
             filter: BlobFilter::All,
         }
         .include_matching_tags()
-    }
-
-    fn selected_indices(&self, selected: &mut [usize]) -> usize {
-        let mut length = 0;
-        for (index, object) in self.objects.iter().enumerate() {
-            if object.expect("validated metadata").reached {
-                selected[length] = index;
-                length += 1;
-            }
-        }
-        length
     }
 
     fn find(&self, id: ObjectId) -> Result<usize> {
@@ -204,6 +200,14 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         }
         Err(Error::InvalidObject)
     }
+    // Exclusions and explicit wants both peel annotated endpoints before queuing.
+    fn queue_commit(&mut self, index: usize) -> Result<()> {
+        let index = self.peel(index)?;
+        if metadata(self.objects, index).info.kind == ObjectKind::Commit {
+            self.states[index] |= PENDING;
+        }
+        Ok(())
+    }
     fn ancestry(&mut self, since: Option<u64>, flag: u8) -> Result<()> {
         while let Some(index) = self
             .states
@@ -211,29 +215,28 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
             .position(|state| state & (PENDING | DONE) == PENDING)
         {
             self.states[index] |= DONE;
-            if metadata(self.objects, index).info.kind != ObjectKind::Commit {
-                let peeled = self.peel(index)?;
-                if metadata(self.objects, peeled).info.kind == ObjectKind::Commit {
-                    self.states[peeled] |= PENDING;
-                }
-                continue;
-            }
-            if flag == CANDIDATE && self.states[index] & EXCLUDED != 0 {
-                continue;
-            }
-            if let Some(cut) = since {
-                if self.date(index)? < cut {
-                    continue;
-                }
-            }
-            self.states[index] |= flag;
-            self.commit(index, Parents::Pending)?;
+            self.visit_ancestor(index, since, flag)?;
         }
 
         for state in self.states.iter_mut() {
             *state &= !(PENDING | DONE);
         }
         Ok(())
+    }
+    fn visit_ancestor(&mut self, index: usize, since: Option<u64>, flag: u8) -> Result<()> {
+        if metadata(self.objects, index).info.kind != ObjectKind::Commit {
+            return self.queue_commit(index);
+        }
+        if flag == CANDIDATE && self.states[index] & EXCLUDED != 0 {
+            return Ok(());
+        }
+        if let Some(cut) = since {
+            if self.date(index)? < cut {
+                return Ok(());
+            }
+        }
+        self.states[index] |= flag;
+        self.commit(index, Parents::Pending)
     }
     fn date(&mut self, index: usize) -> Result<u64> {
         let mut body = Body::budgeted(self.repository, index, self.read, Some(&mut self.bytes))?;
@@ -242,26 +245,24 @@ impl<R: Repository + ?Sized> Walker<'_, '_, '_, '_, R> {
         Ok(commit_date(committer))
     }
 
+    // Both parent passes use stable provider order with their own state mask
+    // and parent transition.
+    fn visit_parents(&mut self, flag: u8, action: Parents) -> Result<()> {
+        for index in 0..self.states.len() {
+            if self.states[index] & flag != 0 {
+                self.commit(index, action)?;
+            }
+        }
+        Ok(())
+    }
+
     fn commit(&mut self, index: usize, action: Parents) -> Result<()> {
         let mut body = Body::budgeted(self.repository, index, self.read, Some(&mut self.bytes))?;
         commit_tree(&mut body, self.parse)?;
         commit_parents(&mut body, self.parse, |id| {
             let parent =
                 find(self.objects, self.repository.by_id, id).ok_or(Error::ObjectNotFound)?;
-            match action {
-                Parents::Pending => self.states[parent] |= PENDING,
-                Parents::Boundary if self.states[parent] & CANDIDATE == 0 => {
-                    self.states[index] |= BORDER
-                }
-                Parents::Seed => {
-                    let object = metadata_mut(self.objects, parent);
-                    if !object.excluded {
-                        object.reached = true;
-                        object.depth = 1;
-                    }
-                }
-                _ => {}
-            }
+            mark_parent(action, index, parent, self.objects, self.states);
             Ok(())
         })?;
         Ok(())
