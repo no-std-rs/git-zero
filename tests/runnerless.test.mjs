@@ -29,8 +29,8 @@ function envelope(changes = {}, identity = {}) {
   return { actorId: 317265358, body: `${prefix}LM-CC/token data: \`${JSON.stringify(data)}\`` };
 }
 
-function execute({ event = "status", state = "open", number = pull.number, pages = [[envelope()]], changedProducer } = {}) {
-  const reports = [], reads = [], requestedPages = [];
+function execute({ event = "status", state = "open", number = pull.number, comment = envelope(), publication = {}, files = {}, commentHost = {} } = {}) {
+  const reports = [], reads = [], lookups = [];
   let validations = 0, recipes = 0;
   class Spec {
     file() { return this; }
@@ -44,23 +44,20 @@ function execute({ event = "status", state = "open", number = pull.number, pages
     ArtifactComment: { generated() { return {}; } },
     OperationRef: Spec,
     workflow: () => new Spec(),
-    event: { isMerge: () => false, details: () => new Value(JSON.stringify({ event, pullNumber: number, fullName: "no-std-rs/git-zero", ...(event === "pull_request" ? { state } : {}) })) },
+    event: { isMerge: () => false, details: () => new Value(JSON.stringify({ event, pullNumber: number, fullName: "no-std-rs/git-zero" })) },
     pulls: { get: () => ({ ...pull, state }) },
     policies: { validate() { validations++; } },
     checks: { report(name, passed, summary) { reports.push({ name, passed, summary }); } },
-    repo: { readText(path, ref) { reads.push({ path, ref }); return path === changedProducer && ref === "head" ? "changed" : "trusted"; } },
-    PageRequest: class { constructor(page, size) { this.page = page; this.size = size; } },
-    comments: { list(request) {
-      assert.equal(request.size, 20, "Runnerless caps comment pages at 20");
-      requestedPages.push(request.page);
-      assert.ok(request.page <= pages.length, "must not scan beyond the supplied history");
-      return { items: pages[request.page - 1].map(row => new Value(JSON.stringify(row))), nextPage: request.page < pages.length ? request.page + 1 : 0 };
-    } },
+    repo: { readText(path, ref) { reads.push({ path, ref }); return files[path]?.[ref] ?? "trusted"; } },
+    comments: { artifact(publisher) {
+      lookups.push(publisher);
+      return new Value(JSON.stringify({ state: "available", head: pull.head, base: pull.base, comment, ...publication }));
+    }, list() { assert.fail("comparison checks must never enumerate comment history"); }, ...commentHost },
     jobs: { lookup: () => ({ ok: false }) },
   });
   runInContext(source, context);
   runInContext("run()", context);
-  return { reports, reads, requestedPages, validations, recipes };
+  return { reports, reads, lookups, validations, recipes };
 }
 
 test("PR and recovery deliveries regenerate required title and commit policies", () => {
@@ -69,27 +66,33 @@ test("PR and recovery deliveries regenerate required title and commit policies",
     assert.equal(result.validations, 1, event);
     assert.equal(result.recipes, 1, event);
     assert.equal(result.reports[0].passed, true, event);
-    assert.equal(result.reads.length, 4, "both producers must match head and base");
+    assert.deepEqual(result.lookups, ["complexity"], "successful comparisons also use exactly one lookup");
+    assert.deepEqual(result.reads, [
+      { path: "buildbuddy.yaml", ref: "head" },
+      { path: "buildbuddy.yaml", ref: "base" },
+      { path: "scripts/llm-cc-ratio.py", ref: "head" },
+      { path: "scripts/llm-cc-ratio.py", ref: "base" },
+    ], "verify the exact trusted producers at both revisions");
   }
 });
 
-test("a stale canonical report fails closed without scanning review history", () => {
+test("a stale canonical report fails closed through one indexed lookup", () => {
   for (const identity of [{ head_sha: "previous-head" }, { target_sha: "previous-base" }]) {
-    const result = execute({ pages: [[envelope({}, identity)], [envelope()]] });
+    const result = execute({ comment: envelope({}, identity) });
     assert.equal(result.validations, 1);
-    assert.deepEqual(result.requestedPages, [1]);
+    assert.deepEqual(result.lookups, ["complexity"]);
     assert.deepEqual(result.reads, []);
     assert.equal(result.reports[0].passed, false);
     assert.match(result.reports[0].summary, /Waiting for verified/);
   }
 });
 
-test("pending publisher comments stop history scans with plain or Markdown line breaks", () => {
+test("pending publisher comments fail closed with plain or Markdown line breaks", () => {
   for (const spacing of ["", "  "]) {
     const pending = { actorId: 317265358, body: `<!-- codex-review-artifact-publisher -->${spacing}\n<!-- ci-toolkit:complexity -->${spacing}\n## Build artifact\nPublication: pending` };
-    const result = execute({ pages: [[pending], [envelope()]] });
+    const result = execute({ comment: pending });
     assert.equal(result.validations, 1);
-    assert.deepEqual(result.requestedPages, [1]);
+    assert.deepEqual(result.lookups, ["complexity"]);
     assert.deepEqual(result.reads, []);
     assert.equal(result.reports[0].passed, false);
     assert.match(result.reports[0].summary, /Waiting for verified/);
@@ -104,21 +107,36 @@ test("publisher authentication and repository, PR and schema identities remain m
     envelope({}, { pr_number: 999 }),
     envelope({ schema_version: 2 }),
   ];
-  const result = execute({ pages: [ignored, [envelope()]] });
-  assert.deepEqual(result.requestedPages, [1, 2]);
-  assert.equal(result.reports[0].passed, true);
+  for (const comment of ignored) {
+    const result = execute({ comment });
+    assert.deepEqual(result.lookups, ["complexity"]);
+    assert.equal(result.reports[0].passed, false);
+    assert.deepEqual(result.reads, []);
+  }
 });
 
-test("absent measurements stay failing while required policies are regenerated", () => {
-  const result = execute({ pages: [[]] });
+test("missing publication data fails checks while backend failures remain errors", () => {
+  const result = execute({ comment: null });
   assert.equal(result.validations, 1);
   assert.equal(result.reports[0].passed, false);
   assert.match(result.reports[0].summary, /Waiting for verified/);
+  for (const publication of [
+    { state: "missing" }, { state: "pending" }, { state: "expired" }, { state: "unavailable" },
+    { head: "previous-head" }, { base: "previous-base" }, { comment: null },
+  ]) {
+    const result = execute({ publication });
+    assert.equal(result.validations, 1);
+    assert.deepEqual(result.lookups, ["complexity"]);
+    assert.deepEqual(result.reads, []);
+    assert.equal(result.reports[0].passed, false);
+    assert.match(result.reports[0].summary, /Waiting for verified/);
+  }
+  assert.throws(() => execute({ commentHost: { artifact() { throw new Error("host_failure"); } } }), /host_failure/);
 });
 
 test("a changed comparison producer cannot supply a passing ratio", () => {
   for (const changedProducer of ["buildbuddy.yaml", "scripts/llm-cc-ratio.py"]) {
-    const result = execute({ changedProducer });
+    const result = execute({ files: { [changedProducer]: { head: "changed" } } });
     assert.equal(result.reports[0].passed, false);
     assert.ok(result.reports[0].summary.includes(changedProducer));
   }
@@ -130,10 +148,10 @@ test("regressions, incomplete reports and invalid ratios fail closed", () => {
     { base_ratio: null }, { head_ratio: null },
     { base_ratio: -1 }, { head_ratio: -1 },
   ]) {
-    assert.equal(execute({ pages: [[envelope(changes)]] }).reports[0].passed, false);
+    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, false);
   }
   for (const changes of [{ head_ratio: 0.1 }, { base_ratio: 0, head_ratio: 0 }]) {
-    assert.equal(execute({ pages: [[envelope(changes)]] }).reports[0].passed, true);
+    assert.equal(execute({ comment: envelope(changes) }).reports[0].passed, true);
   }
 });
 
@@ -141,7 +159,7 @@ test("closed PRs and default-branch deliveries do not emit PR policies", () => {
   for (const options of [{ state: "closed" }, { number: null }]) {
     const result = execute(options);
     assert.equal(result.validations, 0);
-    assert.deepEqual(result.requestedPages, []);
+    assert.deepEqual(result.lookups, []);
     assert.deepEqual(result.reports, []);
   }
 });
