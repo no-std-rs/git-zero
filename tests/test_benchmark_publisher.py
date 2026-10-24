@@ -68,6 +68,15 @@ class PublicationTests(unittest.TestCase):
         with patch.object(publisher, "github", return_value=[pull, pull]), self.assertRaises(ValueError):
             publisher.resolve_pull(run, "no-std-rs/git-zero")
 
+    def test_closed_merged_pr_can_use_the_base_branch_merge_commit(self):
+        run = {"pull_requests": [], "head_sha": "c" * 40, "head_branch": "main",
+               "head_repository": {"full_name": "no-std-rs/git-zero"}}
+        pull = {"number": 7, "merge_commit_sha": "c" * 40,
+                "head": {"sha": "b" * 40, "ref": "feature", "repo": {"full_name": "no-std-rs/git-zero"}},
+                "base": {"repo": {"full_name": "no-std-rs/git-zero"}}}
+        with patch.object(publisher, "github", return_value=[pull]):
+            self.assertEqual(publisher.resolve_pull(run, "no-std-rs/git-zero"), 7)
+
     def test_manual_main_attempt_is_submitted_with_all_measurements(self):
         run = {"id": 100, "run_attempt": 2, "head_sha": "a" * 40, "head_branch": "main",
                "repository": {"full_name": "no-std-rs/git-zero"}, "head_repository": {"full_name": "no-std-rs/git-zero"},

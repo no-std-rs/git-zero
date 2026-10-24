@@ -146,7 +146,8 @@ def resolve_pull(run, repository):
         # advances. Requiring head.sha to remain current would lose old runs.
         pulls = [pull for pull in github(f"commits/{run['head_sha']}/pulls?per_page=100")
                  if pull["base"]["repo"]["full_name"] == repository
-                 and pull["head"]["ref"] == run["head_branch"]
+                 and (pull["head"]["ref"] == run["head_branch"]
+                      or pull.get("merge_commit_sha") == run["head_sha"])
                  and (pull["head"].get("repo") is None
                       or pull["head"]["repo"]["full_name"] == run["head_repository"]["full_name"])]
     if len(pulls) != 1:
