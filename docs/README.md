@@ -14,3 +14,5 @@ benchmarks, and the [roadmap](../ROADMAP.md) for planned work. Component setup
 stays with each crate or example's README.
 
 - [Immutable packed dumb HTTP](packed-dumb.md): generated/verified-file publication, Worker modes and URL identity.
+
+- [Asynchronous selected-pack cache](async-pack-cache.md): preparation ownership, KV/R2 records, cancellation and coordination scope.

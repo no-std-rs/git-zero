@@ -1,5 +1,8 @@
 //! Host-driven request intake and pull-based responses. HTTP transfer framing,
 //! socket readiness and staging unsent output remain the host's responsibility.
+#[cfg(feature = "read")]
+pub mod preparation;
+
 use crate::{
     Request, Response,
     http_backend::{self, Plan},
@@ -73,6 +76,11 @@ enum Body<'a> {
     Buffered,
     Pack(pack::Encoder<'a>),
     Loose(pack::LooseEncoder),
+    #[cfg(feature = "read")]
+    Cached {
+        bytes: &'a [u8],
+        position: usize,
+    },
 }
 
 /// An independent response cursor with bounded inline framing state. The host
@@ -92,6 +100,7 @@ pub struct ResponseEncoder<'a> {
     packet_length: usize,
     terminated: bool,
     cancelled: bool,
+    started: bool,
 }
 
 impl<'a> ResponseEncoder<'a> {
@@ -274,6 +283,7 @@ impl<'a> ResponseEncoder<'a> {
             packet_length: 0,
             terminated: false,
             cancelled: false,
+            started: false,
         }
     }
 
@@ -315,6 +325,7 @@ impl<'a> ResponseEncoder<'a> {
         if self.cancelled {
             return Err(Error::InvalidRequest);
         }
+        self.started = true;
         if self.position < self.prefix.len() {
             return copy(self.prefix, &mut self.position, output);
         }
@@ -340,10 +351,18 @@ impl<'a> ResponseEncoder<'a> {
 
     fn next_packet(&mut self, repository: &impl Repository) -> Result<()> {
         let capacity = if self.band == 1 { 995 } else { 1024 };
-        let Body::Pack(pack) = &mut self.body else {
-            unreachable!()
+        let length = match &mut self.body {
+            Body::Pack(pack) => pack.read(repository, &mut self.packet[5..5 + capacity])?,
+            #[cfg(feature = "read")]
+            Body::Cached { bytes, position } => {
+                if *position == bytes.len() {
+                    0
+                } else {
+                    copy(bytes, position, &mut self.packet[5..5 + capacity])?
+                }
+            }
+            _ => unreachable!(),
         };
-        let length = pack.read(repository, &mut self.packet[5..5 + capacity])?;
         self.packet_position = 0;
         if length == 0 {
             self.packet[..4].copy_from_slice(b"0000");
@@ -365,6 +384,14 @@ impl<'a> ResponseEncoder<'a> {
             Body::Buffered => Ok(0),
             Body::Pack(pack) => pack.read(repository, output),
             Body::Loose(loose) => loose.read(repository, output),
+            #[cfg(feature = "read")]
+            Body::Cached { bytes, position } => {
+                if *position == bytes.len() {
+                    Ok(0)
+                } else {
+                    copy(bytes, position, output)
+                }
+            }
         }
     }
 }

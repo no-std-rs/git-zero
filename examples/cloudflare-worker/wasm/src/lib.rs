@@ -29,7 +29,10 @@ mod abi {
     // SAFETY: This module is compiled only for the single-threaded Wasm host ABI.
     unsafe impl<const N: usize> Sync for Buffer<N> {}
     static INPUT: Buffer<INPUT_CAPACITY> = Buffer(UnsafeCell::new([0; INPUT_CAPACITY]));
-    static OUTPUT: Buffer<OUTPUT_CAPACITY> = Buffer(UnsafeCell::new([0; OUTPUT_CAPACITY]));
+    // Preparation reuses OUTPUT for complete cache staging; after attachment,
+    // response chunks use INPUT, which the prepared encoder no longer borrows.
+    static OUTPUT: Buffer<147456> = Buffer(UnsafeCell::new([0; 147456]));
+    static CACHED_ACTIVE: Exclusive<bool> = Exclusive(UnsafeCell::new(false));
 
     struct SessionStorage {
         entries: [Entry<'static>; 4],
@@ -55,6 +58,8 @@ mod abi {
         }));
     static PUBLICATION: Exclusive<Option<http::dumb::Publication<'static, raw::Imported>>> =
         Exclusive(UnsafeCell::new(None));
+    // Every variant is inline: the ABI forbids allocation and pins one session.
+    #[allow(clippy::large_enum_variant)]
     enum Session {
         Snapshot {
             repository: Snapshot<'static>,
@@ -63,6 +68,10 @@ mod abi {
         Imported {
             repository: &'static raw::Imported,
             encoder: ResponseEncoder<'static>,
+        },
+        Prepared {
+            repository: &'static raw::Imported,
+            preparation: http::stream::preparation::PreparedResponse<'static>,
         },
         Published {
             encoder: http::dumb::PublishedResponse<'static, raw::Imported>,
@@ -86,6 +95,7 @@ mod abi {
         // SAFETY: Exclusive ABI entry; drops all references before buffer reuse.
         unsafe {
             *SESSION.0.get() = None;
+            *CACHED_ACTIVE.0.get() = false;
             // Drop every cursor before the publication it borrowed, and both
             // before importing new objects or reusing the metadata array.
             *PUBLICATION.0.get() = None;
@@ -103,11 +113,19 @@ mod abi {
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn output_ptr() -> *const u8 {
-        OUTPUT.0.get().cast()
+        if unsafe { *CACHED_ACTIVE.0.get() } {
+            INPUT.0.get().cast()
+        } else {
+            OUTPUT.0.get().cast()
+        }
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn output_capacity() -> usize {
-        OUTPUT_CAPACITY
+        if unsafe { *CACHED_ACTIVE.0.get() } {
+            INPUT_CAPACITY
+        } else {
+            OUTPUT_CAPACITY
+        }
     }
 
     /// Input frame: four u32-LE lengths followed by cf, headers, vars, runtime
@@ -145,7 +163,7 @@ mod abi {
         };
         // SAFETY: All access is bounded, synchronous and exclusive per instance.
         let input = unsafe { &(&*INPUT.0.get())[..input_length] };
-        let output = unsafe { &mut *OUTPUT.0.get() };
+        let output = unsafe { &mut (&mut *OUTPUT.0.get())[..OUTPUT_CAPACITY] };
         match run(input, method, format, http_metadata, output) {
             Ok(length) => length as i32,
             Err(Error::BufferTooSmall) => -1,
@@ -746,7 +764,15 @@ mod abi {
     /// hosts must abort the response. Host pull/cancel callbacks drive all I/O.
     #[unsafe(no_mangle)]
     pub extern "C" fn stream_read(capacity: usize) -> i32 {
-        if capacity == 0 || capacity > OUTPUT_CAPACITY {
+        let cached = unsafe { *CACHED_ACTIVE.0.get() };
+        if capacity == 0
+            || capacity
+                > if cached {
+                    INPUT_CAPACITY
+                } else {
+                    OUTPUT_CAPACITY
+                }
+        {
             return -1;
         }
         // SAFETY: Exclusive, non-reentrant access; OUTPUT never aliases inputs.
@@ -754,7 +780,11 @@ mod abi {
         let Some(active) = session else {
             return -2;
         };
-        let output = unsafe { &mut (&mut *OUTPUT.0.get())[..capacity] };
+        let output = if cached {
+            unsafe { &mut (&mut *INPUT.0.get())[..capacity] }
+        } else {
+            unsafe { &mut (&mut *OUTPUT.0.get())[..capacity] }
+        };
         let result = match active {
             Session::Snapshot {
                 repository,
@@ -765,6 +795,7 @@ mod abi {
                 encoder,
             } => encoder.read(&WorkerRepository::Imported(repository), output),
             Session::Published { encoder } => encoder.read(output),
+            Session::Prepared { .. } => return -2,
         };
         match result {
             Ok(length) => length as i32,
@@ -774,6 +805,8 @@ mod abi {
             }
         }
     }
+
+    include!("cache.rs");
 
     #[panic_handler]
     fn panic(_: &core::panic::PanicInfo<'_>) -> ! {

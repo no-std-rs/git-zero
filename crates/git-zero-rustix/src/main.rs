@@ -4,8 +4,9 @@ use git_zero::{
     http::{self, Response},
 };
 use git_zero_rustix::{
-    HttpTransport, RequestPolicy, accept, listen_on, local_address, read_request_with_policy,
-    respond, respond_published, respond_stream,
+    ChunkedLimits, HttpTransport, RequestDeadlines, RequestPolicy, accept, listen_on,
+    local_address, read_request_chunked, read_request_with_deadlines, respond,
+    respond_published_with_deadlines, respond_stream_with_deadlines,
 };
 use std::{
     io::{self, Write as _},
@@ -30,7 +31,7 @@ fn run() -> git_zero::Result<()> {
         Some("ls-remote") => fetch(args.get(2).ok_or(Error::InvalidRequest)?, true),
         _ => {
             eprintln!(
-                "Usage: git-zero serve [port|IP:port] [--allow-reachable-wants] [--max-header-bytes=N] [--max-header-fields=N] [--max-header-name-bytes=N] [--max-header-value-bytes=N] [--max-wire-bytes=N] [--max-body-bytes=N] | ls-remote URL | fetch URL\nIPv6 listen addresses use [IP]:port. The optional serve grant exposes the entire visible snapshot closure. fetch writes a smart pack or a dumb loose HEAD object to stdout."
+                "Usage: git-zero serve [port|IP:port] [--allow-reachable-wants] [--max-header-bytes=N] [--max-header-fields=N] [--max-header-name-bytes=N] [--max-header-value-bytes=N] [--max-wire-bytes=N] [--max-body-bytes=N] [--request-deadline-ms=N] [--idle-deadline-ms=N] [--response-deadline-ms=N] [--response-idle-deadline-ms=N] [--chunked-requests] | ls-remote URL | fetch URL\nIPv6 listen addresses use [IP]:port. The optional serve grant exposes the entire visible snapshot closure. fetch writes a smart pack or a dumb loose HEAD object to stdout."
             );
             Err(Error::InvalidRequest)
         }
@@ -41,48 +42,83 @@ fn run() -> git_zero::Result<()> {
 struct ServeOptions {
     wants: http::WantOptions,
     admission: RequestPolicy,
+    deadlines: RequestDeadlines,
+    response_deadlines: RequestDeadlines,
+    chunks: Option<ChunkedLimits>,
 }
 
 fn serve_options(args: &[String]) -> git_zero::Result<(SocketAddr, ServeOptions)> {
     let mut address = "8080";
-    let mut granted = false;
+    let mut granted = None;
     let mut options = ServeOptions {
         wants: http::WantOptions::STRICT,
         admission: RequestPolicy::default(),
+        deadlines: RequestDeadlines::default(),
+        response_deadlines: RequestDeadlines::default(),
+        chunks: None,
     };
     for (index, argument) in args.iter().enumerate() {
-        if argument == "--allow-reachable-wants" {
-            if granted {
-                return Err(Error::InvalidRequest);
-            }
-            granted = true;
-        } else if let Some((name, value)) = argument.split_once('=') {
-            let slot = match name {
-                "--max-header-bytes" => &mut options.admission.headers.max_bytes,
-                "--max-header-fields" => &mut options.admission.headers.max_fields,
-                "--max-header-name-bytes" => &mut options.admission.headers.max_name_bytes,
-                "--max-header-value-bytes" => &mut options.admission.headers.max_value_bytes,
-                "--max-wire-bytes" => &mut options.admission.request.max_wire_bytes,
-                "--max-body-bytes" => &mut options.admission.request.max_body_bytes,
+        match argument.as_str() {
+            "--chunked-requests" => set_once(&mut options.chunks, ChunkedLimits::default())?,
+            "--allow-reachable-wants" => set_once(&mut granted, ())?,
+            _ => match argument.split_once('=') {
+                Some((name, value)) => serve_limit(&mut options, name, value)?,
+                None if index == 0 && !argument.starts_with("--") => address = argument,
                 _ => return Err(Error::InvalidRequest),
-            };
-            if slot.is_some()
-                || value.is_empty()
-                || !value.bytes().all(|byte| byte.is_ascii_digit())
-            {
-                return Err(Error::InvalidRequest);
-            }
-            *slot = Some(value.parse().map_err(|_| Error::InvalidRequest)?);
-        } else if index == 0 && !argument.starts_with("--") {
-            address = argument;
-        } else {
-            return Err(Error::InvalidRequest);
+            },
         }
     }
-    if granted {
+    if granted.is_some() {
         options.wants = http::WantOptions::all_visible_reachable(1024);
     }
     Ok((listen_address(address)?, options))
+}
+
+fn serve_limit(options: &mut ServeOptions, name: &str, value: &str) -> git_zero::Result<()> {
+    match name {
+        "--request-deadline-ms" => set_deadline(&mut options.deadlines.total, value),
+        "--idle-deadline-ms" => set_deadline(&mut options.deadlines.idle, value),
+        "--response-deadline-ms" => set_deadline(&mut options.response_deadlines.total, value),
+        "--response-idle-deadline-ms" => set_deadline(&mut options.response_deadlines.idle, value),
+        "--max-header-bytes" => set_number(&mut options.admission.headers.max_bytes, value),
+        "--max-header-fields" => set_number(&mut options.admission.headers.max_fields, value),
+        "--max-header-name-bytes" => {
+            set_number(&mut options.admission.headers.max_name_bytes, value)
+        }
+        "--max-header-value-bytes" => {
+            set_number(&mut options.admission.headers.max_value_bytes, value)
+        }
+        "--max-wire-bytes" => set_number(&mut options.admission.request.max_wire_bytes, value),
+        "--max-body-bytes" => set_number(&mut options.admission.request.max_body_bytes, value),
+        _ => Err(Error::InvalidRequest),
+    }
+}
+
+fn set_once<T>(slot: &mut Option<T>, value: T) -> git_zero::Result<()> {
+    if slot.is_some() {
+        return Err(Error::InvalidRequest);
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+fn argument_number<T: core::str::FromStr>(value: &str) -> git_zero::Result<T> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(Error::InvalidRequest);
+    }
+    value.parse().map_err(|_| Error::InvalidRequest)
+}
+
+fn set_number(slot: &mut Option<usize>, value: &str) -> git_zero::Result<()> {
+    set_once(slot, argument_number(value)?)
+}
+
+fn set_deadline(slot: &mut Option<core::time::Duration>, value: &str) -> git_zero::Result<()> {
+    let millis = argument_number(value)?;
+    if millis == 0 {
+        return Err(Error::InvalidRequest);
+    }
+    set_once(slot, core::time::Duration::from_millis(millis))
 }
 
 fn listen_address(value: &str) -> git_zero::Result<SocketAddr> {
@@ -163,7 +199,23 @@ fn serve_connection<R: git_zero::Repository>(
         staging,
         selection,
     } = buffers;
-    let mut request = match read_request_with_policy(socket, request_storage, options.admission) {
+    let intake = if let Some(chunks) = options.chunks {
+        read_request_chunked(
+            socket,
+            request_storage,
+            options.admission,
+            options.deadlines,
+            chunks,
+        )
+    } else {
+        read_request_with_deadlines(
+            socket,
+            request_storage,
+            options.admission,
+            options.deadlines,
+        )
+    };
+    let mut request = match intake {
         Ok(request) => request,
         Err(error) => return reject_request(socket, error),
     };
@@ -179,7 +231,14 @@ fn serve_connection<R: git_zero::Repository>(
     };
     request.path = path;
     match publication.prepare(request) {
-        Ok(Some(mut encoder)) => return respond_published(socket, &mut encoder, staging),
+        Ok(Some(mut encoder)) => {
+            return respond_published_with_deadlines(
+                socket,
+                &mut encoder,
+                staging,
+                options.response_deadlines,
+            );
+        }
         Ok(None) => {}
         Err(error) => return reject_request(socket, error),
     }
@@ -194,7 +253,13 @@ fn serve_connection<R: git_zero::Repository>(
         Err(error) => return reject_request(socket, error),
     };
     // Once headers start, an error closes the socket without a second response.
-    respond_stream(socket, repository, &mut encoder, staging)
+    respond_stream_with_deadlines(
+        socket,
+        repository,
+        &mut encoder,
+        staging,
+        options.response_deadlines,
+    )
 }
 
 fn reject_request(socket: &impl rustix::fd::AsFd, error: Error) -> git_zero::Result<()> {
@@ -317,6 +382,79 @@ mod tests {
             serve_options(&[]).unwrap().1.admission,
             RequestPolicy::default()
         );
+    }
+
+    #[test]
+    fn chunked_intake_requires_an_explicit_unique_flag() {
+        assert_eq!(serve_options(&[]).unwrap().1.chunks, None);
+        assert_eq!(
+            serve_options(&["--chunked-requests".to_owned()])
+                .unwrap()
+                .1
+                .chunks,
+            Some(ChunkedLimits::default())
+        );
+        assert_eq!(
+            serve_options(&[
+                "--chunked-requests".to_owned(),
+                "--chunked-requests".to_owned()
+            ]),
+            Err(Error::InvalidRequest)
+        );
+    }
+
+    #[test]
+    fn serve_deadline_flags_are_positive_unique_and_independent() {
+        let args = [
+            "0",
+            "--request-deadline-ms=1500",
+            "--idle-deadline-ms=250",
+            "--response-deadline-ms=2000",
+            "--response-idle-deadline-ms=300",
+        ]
+        .map(str::to_owned);
+        let (_, options) = serve_options(&args).unwrap();
+        assert_eq!(
+            options.deadlines,
+            RequestDeadlines {
+                total: Some(core::time::Duration::from_millis(1500)),
+                idle: Some(core::time::Duration::from_millis(250)),
+            }
+        );
+        assert_eq!(
+            options.response_deadlines,
+            RequestDeadlines {
+                total: Some(core::time::Duration::from_millis(2000)),
+                idle: Some(core::time::Duration::from_millis(300)),
+            }
+        );
+        assert_eq!(
+            serve_options(&[]).unwrap().1.deadlines,
+            RequestDeadlines::default()
+        );
+        for args in [
+            vec!["--response-deadline-ms=0"],
+            vec!["--response-idle-deadline-ms=0"],
+            vec!["--response-deadline-ms=1", "--response-deadline-ms=2"],
+            vec![
+                "--response-idle-deadline-ms=1",
+                "--response-idle-deadline-ms=2",
+            ],
+            vec!["--request-deadline-ms=0"],
+            vec!["--idle-deadline-ms=0"],
+            vec!["--request-deadline-ms=-1"],
+            vec!["--idle-deadline-ms=+1"],
+            vec!["--request-deadline-ms="],
+            vec!["--idle-deadline-ms= 1"],
+            vec!["--request-deadline-ms=18446744073709551616"],
+            vec!["--request-deadline-ms=1", "--request-deadline-ms=2"],
+            vec!["--idle-deadline-ms=1", "--idle-deadline-ms=1"],
+        ] {
+            assert_eq!(
+                serve_options(&args.into_iter().map(str::to_owned).collect::<Vec<_>>()),
+                Err(Error::InvalidRequest)
+            );
+        }
     }
 
     #[test]

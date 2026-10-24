@@ -218,3 +218,12 @@ buffers/limits with an independent host want grant. Revision capability cannot
 authorize an otherwise forbidden object, and permission does not enable revision
 cuts in ordinary constructors. Worker exports now expose these separate options
 with fixed state and graph/exclusion limits.
+
+For asynchronous selected-pack storage, consume an unread `ResponseEncoder` with
+`stream::preparation::PreparedResponse::new`. Its selected slots and prepared
+control bytes remain borrowed; request bytes and temporary validation metadata
+do not. Keep the authorized repository immutable across every await. Persist
+only raw `read_pack` output, then `attach` a complete pack to verify its exact set
+before obtaining a response cursor. Non-pack responses use `without_pack` and
+never need a backend. The [Worker adapter](../../docs/async-pack-cache.md) owns an
+isolated instance across awaits and demonstrates awaited KV/R2 publication.

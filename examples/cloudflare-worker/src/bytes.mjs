@@ -1,11 +1,15 @@
 // Bound complete host input before handing it to the fixed-memory Wasm ABI.
-export async function readBytes(stream, maximum) {
+export async function readBytes(stream, maximum, signal = undefined) {
   const reader = stream.getReader();
   const bytes = new Uint8Array(maximum);
   let length = 0;
+  const cancel = () => { reader.cancel().catch(() => {}); };
+  signal?.addEventListener("abort", cancel, { once: true });
   try {
+    if (signal?.aborted) throw new Error("Input cancelled");
     while (true) {
       const { done, value } = await reader.read();
+      if (signal?.aborted) throw new Error("Input cancelled");
       if (done) return bytes.subarray(0, length);
       if (length + value.length > maximum) throw new Error("Input exceeds limit");
       bytes.set(value, length);
@@ -15,6 +19,7 @@ export async function readBytes(stream, maximum) {
     await reader.cancel().catch(() => {});
     throw error;
   } finally {
+    signal?.removeEventListener("abort", cancel);
     reader.releaseLock();
   }
 }

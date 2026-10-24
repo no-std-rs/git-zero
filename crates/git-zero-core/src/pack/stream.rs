@@ -97,6 +97,12 @@ impl<'a> Encoder<'a> {
         Ok(())
     }
 
+    /// Immutable selection retained by this cursor. `None` denotes all objects.
+    /// This is metadata only; reading it never advances encoding.
+    pub fn selection(&self) -> Option<&'a [usize]> {
+        self.order
+    }
+
     /// Checksum becomes available after its complete trailer has been drained.
     pub fn checksum(&self) -> Option<ObjectId> {
         self.checksum.filter(|_| self.position == self.length)

@@ -105,3 +105,14 @@ is a later, separate roadmap gate.
 | --- | --- | --- | --- |
 | Header admission and CLI quotas | Native `admission::headers` and CLI argument tests; `packed_http` Git host uses explicit request/header policies | N: inclusive complete-header bytes, field counts, name/raw-value bytes, unknown/repeated fields, UTF-8 octets, exact/over limits, unread excess byte, syntax precedence, one-byte fragmentation, reuse and allocation guards | Aggregate request/idle deadlines, HTTP/1.1/chunking and connection admission remain open. Defaults preserve storage-bounded behavior. |
 | Immutable file publication lifecycle | `file_publication` validates both complete files, corrupt/truncated/extra bytes, rename/unlink/replacement, independent offsets/cancellation and post-publication truncation; `packed_http` exercises real file-backed clones | N D, 1/256; file downloads perform no raw object-body reads and preserve shared descriptor positions | Hosts prevent in-place writes and own directory durability, crash cleanup, quotas and lock scope. |
+
+The async-cache follow-up adds `cache-abi.test.mjs`, `cache-storage.test.mjs`,
+`cache-http.test.mjs`, `cache-heads.test.mjs` and `cache-shallow.test.mjs` on Worker
+S0/S1/S2 in both formats: bounded KV/R2 miss/hit, awaited publication, expiry,
+corruption, same-key local coordination, cancellation, A → B → A, empty/unborn,
+detached and symbolic-chain HEAD, plus Git HTTP shallow/filter/revision oracles.
+`http_selected_cache::prepared` checks the shared preparation API without allocation.
+The native admission suite covers opt-in total/idle intake/output deadlines and
+chunked/gzip framing; `native_http` adds socket-free ASan seed/smoke coverage.
+These additions do not complete the larger native fixture on Worker, distributed
+leases, native concurrent HTTP, authenticated TLS, or deployed resource accounting.

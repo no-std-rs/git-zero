@@ -15,6 +15,11 @@ use rustix::{
     net::{self, sockopt},
 };
 
+mod chunked;
+pub use chunked::ChunkedLimits;
+mod deadline;
+use deadline::{DeadlineReader, DeadlineWriter};
+pub use deadline::{RequestDeadlines, ResponseDeadlines};
 mod header;
 use header::{Headers, parse_request, read_header, request_line};
 
@@ -172,32 +177,162 @@ pub fn read_request_with_policy<'a>(
     storage: &'a mut [u8],
     policy: RequestPolicy,
 ) -> Result<Request<'a>> {
+    read_request_from(&mut |bytes| receive(socket, bytes), storage, policy)
+}
+
+/// Apply monotonic total-intake and idle-progress deadlines in addition to byte
+/// quotas and accepted-socket read timeouts. The deadline starts on this call,
+/// covers header/body intake and the final synchronous parse/inflation check,
+/// and never resets when a peer drips another byte. It excludes accept, Git
+/// preparation and response transmission. Close the socket on every error.
+/// Expired host deadlines return `LimitExceeded`; a shorter socket timeout
+/// retains `Backend`. Socket flags and timeout settings remain unchanged.
+/// With both deadlines unset this is identical to `read_request_with_policy`.
+pub fn read_request_with_deadlines<'a>(
+    socket: &impl AsFd,
+    storage: &'a mut [u8],
+    policy: RequestPolicy,
+    deadlines: RequestDeadlines,
+) -> Result<Request<'a>> {
+    read_socket_request(socket, storage, policy, deadlines, None)
+}
+
+/// Host transport boundary for authenticated TLS or other blocking streams.
+/// The callback fills at most the supplied slice, returns zero on EOF, and owns
+/// its transport deadlines/cancellation. Any error invalidates storage. Rust
+/// owns HTTP/Git parsing; the host owns peer authentication and TLS buffering.
+/// This default entry rejects Transfer-Encoding, as does the socket reader.
+pub fn read_request_from<'a>(
+    receive: &mut impl FnMut(&mut [u8]) -> Result<usize>,
+    storage: &'a mut [u8],
+    policy: RequestPolicy,
+) -> Result<Request<'a>> {
+    read_request_framed(receive, storage, policy, None)
+}
+
+/// Opt-in bounded chunked HTTP/1.1 intake over a host-supplied transport.
+/// Chunk extensions and nonempty trailers are explicitly unsupported. Duplicate
+/// transfer fields, Content-Length conflicts and invalid chunk syntax fail before
+/// returning a request. Responses still close the connection; retain no pipeline.
+pub fn read_request_from_chunked<'a>(
+    receive: &mut impl FnMut(&mut [u8]) -> Result<usize>,
+    storage: &'a mut [u8],
+    policy: RequestPolicy,
+    chunks: ChunkedLimits,
+) -> Result<Request<'a>> {
+    read_request_framed(receive, storage, policy, Some(chunks))
+}
+
+/// Bounded chunked intake with independent monotonic request deadlines.
+pub fn read_request_chunked<'a>(
+    socket: &impl AsFd,
+    storage: &'a mut [u8],
+    policy: RequestPolicy,
+    deadlines: RequestDeadlines,
+    chunks: ChunkedLimits,
+) -> Result<Request<'a>> {
+    read_socket_request(socket, storage, policy, deadlines, Some(chunks))
+}
+
+fn read_socket_request<'a>(
+    socket: &impl AsFd,
+    storage: &'a mut [u8],
+    policy: RequestPolicy,
+    deadlines: RequestDeadlines,
+    chunks: Option<ChunkedLimits>,
+) -> Result<Request<'a>> {
+    if deadlines == RequestDeadlines::default() {
+        return read_request_framed(&mut |bytes| receive(socket, bytes), storage, policy, chunks);
+    }
+    let mut reader = DeadlineReader::new(socket, deadlines)?;
+    let result = read_request_framed(&mut |bytes| reader.receive(bytes), storage, policy, chunks);
+    reader.check()?;
+    result
+}
+
+fn read_request_framed<'a>(
+    receive: &mut impl FnMut(&mut [u8]) -> Result<usize>,
+    storage: &'a mut [u8],
+    policy: RequestPolicy,
+    chunks: Option<ChunkedLimits>,
+) -> Result<Request<'a>> {
     let limits = policy.request;
     let (end, length) = read_header(
-        socket,
+        receive,
         storage,
         limits.max_wire_bytes,
         policy.headers.max_bytes,
     )?;
     let (header, storage) = storage.split_at_mut(end);
-    let mut length = length - end;
+    let length = length - end;
     let header = core::str::from_utf8(header).map_err(|_| Error::InvalidRequest)?;
     let line = request_line(header)?;
-    let headers = Headers::parse(header, policy.headers)?;
+    let headers = if chunks.is_some() {
+        Headers::parse_framed(header, policy.headers, true)?
+    } else {
+        Headers::parse(header, policy.headers)?
+    };
     let mut request = parse_request(line, &headers)?;
-    let total = headers
-        .content_length
-        .map(super::parse_length)
-        .transpose()?
-        .unwrap_or(0);
-    // Header intake already guarantees end <= an explicit wire quota.
-    if limits
-        .max_wire_bytes
-        .is_some_and(|limit| total > limit - end)
-        || (limits.max_body_bytes.is_some_and(|limit| total > limit)
-            && headers
-                .content_encoding
-                .is_none_or(|value| value.eq_ignore_ascii_case("identity")))
+    let identity = headers
+        .content_encoding
+        .is_none_or(|value| value.eq_ignore_ascii_case("identity"));
+    let (wire_length, body_length) = if headers.chunked {
+        if !line.ends_with(" HTTP/1.1") {
+            return Err(Error::InvalidRequest);
+        }
+        chunked::read(
+            receive,
+            storage,
+            length,
+            limits.max_wire_bytes.map(|limit| limit - end),
+            if identity {
+                limits.max_body_bytes
+            } else {
+                None
+            },
+            chunks.unwrap(),
+        )?
+    } else {
+        let total = headers
+            .content_length
+            .map(super::parse_length)
+            .transpose()?
+            .unwrap_or(0);
+        let total = read_fixed_body(
+            receive,
+            storage,
+            length,
+            total,
+            RequestLimits {
+                max_wire_bytes: limits.max_wire_bytes.map(|limit| limit - end),
+                max_body_bytes: if identity {
+                    limits.max_body_bytes
+                } else {
+                    None
+                },
+            },
+        )?;
+        (total, total)
+    };
+    let (wire, expanded) = storage.split_at_mut(wire_length);
+    request.body = decode_body(
+        &wire[..body_length],
+        expanded,
+        headers.content_encoding,
+        limits.max_body_bytes,
+    )?;
+    Ok(request)
+}
+
+fn read_fixed_body(
+    receive: &mut impl FnMut(&mut [u8]) -> Result<usize>,
+    storage: &mut [u8],
+    mut length: usize,
+    total: usize,
+    limits: RequestLimits,
+) -> Result<usize> {
+    if limits.max_wire_bytes.is_some_and(|limit| total > limit)
+        || limits.max_body_bytes.is_some_and(|limit| total > limit)
     {
         return Err(Error::LimitExceeded);
     }
@@ -205,26 +340,35 @@ pub fn read_request_with_policy<'a>(
         return Err(Error::BufferTooSmall);
     }
     while length < total {
-        let count = receive(socket, &mut storage[length..total])?;
+        let count = receive(&mut storage[length..total])?;
         if count == 0 {
             return Err(Error::InvalidRequest);
         }
+        if count > total - length {
+            return Err(Error::Backend);
+        }
         length += count;
     }
-    let (wire, expanded) = storage.split_at_mut(total);
-    request.body = wire;
-    match headers.content_encoding {
-        None => {}
-        Some(value) if value.eq_ignore_ascii_case("identity") => {}
+    Ok(total)
+}
+
+fn decode_body<'a>(
+    body: &'a [u8],
+    expanded: &'a mut [u8],
+    encoding: Option<&str>,
+    max_body_bytes: Option<usize>,
+) -> Result<&'a [u8]> {
+    match encoding {
+        None => Ok(body),
+        Some(value) if value.eq_ignore_ascii_case("identity") => Ok(body),
         Some(value) if value.eq_ignore_ascii_case("gzip") => {
             use git_zero::zlib::{InflateLimits, WINDOW_SIZE, decode_gzip};
             let length = decode_gzip(
-                request.body,
+                body,
                 expanded,
                 &mut [0; WINDOW_SIZE],
                 InflateLimits {
-                    max_output: limits
-                        .max_body_bytes
+                    max_output: max_body_bytes
                         .map_or(expanded.len(), |limit| limit.min(expanded.len()))
                         as u64,
                     max_ratio: 128,
@@ -235,20 +379,17 @@ pub fn read_request_with_policy<'a>(
                 // decode_gzip's only BufferTooSmall path is incomplete output.
                 // Input exhaustion is InvalidZlib because input is complete.
                 if error == Error::BufferTooSmall
-                    && limits
-                        .max_body_bytes
-                        .is_some_and(|limit| limit <= expanded.len())
+                    && max_body_bytes.is_some_and(|limit| limit <= expanded.len())
                 {
                     Error::LimitExceeded
                 } else {
                     error
                 }
             })?;
-            request.body = &expanded[..length];
+            Ok(&expanded[..length])
         }
-        _ => return Err(Error::Unsupported),
+        _ => Err(Error::Unsupported),
     }
-    Ok(request)
 }
 
 pub fn respond(socket: &impl AsFd, response: Response, body: &[u8]) -> Result<()> {
@@ -265,29 +406,91 @@ pub fn respond_stream(
     encoder: &mut git_zero::http::stream::ResponseEncoder<'_>,
     staging: &mut [u8],
 ) -> Result<()> {
-    let result = (|| {
-        if staging.is_empty() {
-            return Err(Error::BufferTooSmall);
+    respond_stream_using(
+        &mut SocketWriter(socket.as_fd()),
+        repository,
+        encoder,
+        staging,
+    )
+}
+
+/// Bound an entire streamed response and gaps in successful socket writes.
+/// Clock checks bracket every synchronous provider pull and EOF; a blocking
+/// provider cannot be preempted. Any expiry cancels the response without a
+/// successful protocol terminator. Close the transport on every error.
+pub fn respond_stream_with_deadlines(
+    socket: &impl AsFd,
+    repository: &impl git_zero::Repository,
+    encoder: &mut git_zero::http::stream::ResponseEncoder<'_>,
+    staging: &mut [u8],
+    deadlines: ResponseDeadlines,
+) -> Result<()> {
+    if deadlines == ResponseDeadlines::default() {
+        return respond_stream(socket, repository, encoder, staging);
+    }
+    let mut writer = match DeadlineWriter::new(socket, deadlines) {
+        Ok(writer) => writer,
+        Err(error) => {
+            encoder.cancel();
+            return Err(error);
         }
-        let response = encoder.response();
-        let mut storage = [0; 512];
-        let mut header = SliceWriter::new(&mut storage);
-        write!(&mut header, "HTTP/1.0 {} Response\r\nContent-Type: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", response.status, response.content_type)
-            .map_err(|_| Error::BufferTooSmall)?;
-        let mut writer = SocketWriter(socket.as_fd());
-        writer.write_all(header.as_bytes())?;
-        loop {
-            let count = encoder.read(repository, staging)?;
-            if count == 0 {
-                return Ok(());
-            }
-            writer.write_all(&staging[..count])?;
-        }
-    })();
+    };
+    respond_stream_using(&mut writer, repository, encoder, staging)
+}
+
+fn respond_stream_using(
+    writer: &mut impl Write,
+    repository: &impl git_zero::Repository,
+    encoder: &mut git_zero::http::stream::ResponseEncoder<'_>,
+    staging: &mut [u8],
+) -> Result<()> {
+    let result = respond_body(writer, encoder.response(), None, staging, |bytes| {
+        encoder.read(repository, bytes)
+    });
     if result.is_err() {
         encoder.cancel();
     }
     result
+}
+
+fn respond_body(
+    writer: &mut impl Write,
+    response: Response,
+    mut remaining: Option<u64>,
+    staging: &mut [u8],
+    mut read: impl FnMut(&mut [u8]) -> Result<usize>,
+) -> Result<()> {
+    if staging.is_empty() {
+        return Err(Error::BufferTooSmall);
+    }
+    let mut storage = [0; 512];
+    let mut header = SliceWriter::new(&mut storage);
+    write!(
+        &mut header,
+        "HTTP/1.0 {} Response\r\nContent-Type: {}\r\n",
+        response.status, response.content_type
+    )
+    .map_err(|_| Error::BufferTooSmall)?;
+    if let Some(size) = remaining {
+        write!(&mut header, "Content-Length: {size}\r\n").map_err(|_| Error::BufferTooSmall)?;
+    }
+    header.write_all(b"Cache-Control: no-store\r\nConnection: close\r\n\r\n")?;
+    writer.write_all(header.as_bytes())?;
+    loop {
+        writer.write_all(&[])?; // Deadline check before entering the provider.
+        let count = read(staging)?;
+        if let Some(left) = &mut remaining {
+            *left = left.checked_sub(count as u64).ok_or(Error::Backend)?;
+        }
+        writer.write_all(&staging[..count])?; // Also check EOF/late provider work.
+        if count == 0 {
+            return if remaining.unwrap_or(0) == 0 {
+                Ok(())
+            } else {
+                Err(Error::Backend)
+            };
+        }
+    }
 }
 
 /// Stream a publication response with its known complete length. Each cursor
@@ -305,6 +508,32 @@ pub fn respond_published<R: git_zero::Repository>(
         staging,
         |bytes| encoder.read(bytes),
     );
+    if result.is_err() {
+        encoder.cancel();
+    }
+    result
+}
+
+/// Known-length publication responses with the same total/idle write budget.
+/// Deadline configuration errors and late provider failures cancel this cursor.
+pub fn respond_published_with_deadlines<R: git_zero::Repository>(
+    socket: &impl AsFd,
+    encoder: &mut git_zero::http::dumb::PublishedResponse<'_, R>,
+    staging: &mut [u8],
+    deadlines: ResponseDeadlines,
+) -> Result<()> {
+    if deadlines == ResponseDeadlines::default() {
+        return respond_published(socket, encoder, staging);
+    }
+    let result = DeadlineWriter::new(socket, deadlines).and_then(|mut writer| {
+        respond_body(
+            &mut writer,
+            encoder.response(),
+            Some(encoder.size()),
+            staging,
+            |bytes| encoder.read(bytes),
+        )
+    });
     if result.is_err() {
         encoder.cancel();
     }
@@ -337,26 +566,15 @@ fn respond_known(
     response: Response,
     size: u64,
     staging: &mut [u8],
-    mut read: impl FnMut(&mut [u8]) -> Result<usize>,
+    read: impl FnMut(&mut [u8]) -> Result<usize>,
 ) -> Result<()> {
-    if staging.is_empty() {
-        return Err(Error::BufferTooSmall);
-    }
-    respond_headers(socket, response, size)?;
-    let mut remaining = size;
-    let mut writer = SocketWriter(socket.as_fd());
-    loop {
-        let count = read(staging)?;
-        if count == 0 {
-            return if remaining == 0 {
-                Ok(())
-            } else {
-                Err(Error::Backend)
-            };
-        }
-        remaining = remaining.checked_sub(count as u64).ok_or(Error::Backend)?;
-        writer.write_all(&staging[..count])?;
-    }
+    respond_body(
+        &mut SocketWriter(socket.as_fd()),
+        response,
+        Some(size),
+        staging,
+        read,
+    )
 }
 
 /// Write framing for a body streamed separately by the host. The host must

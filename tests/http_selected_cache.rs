@@ -1,5 +1,7 @@
 #[path = "common/allocations.rs"]
 mod allocations;
+#[path = "common/prepared_http.rs"]
+mod prepared;
 #[path = "common/selected_http.rs"]
 mod protocol;
 use protocol::{body, packet, request};

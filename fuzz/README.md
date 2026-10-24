@@ -56,7 +56,7 @@ cargo +nightly-2026-08-09 fuzz run packets /tmp/git-zero-fuzz/packets fuzz/corpu
   -runs=5000 -max_len=4096 -timeout=5 -rss_limit_mb=512
 ```
 
-Repeat for `responses`, `routing`, `graph`, `inflation`, `loose`, `entries`, `receive` and `indexes`, with separate writable output
+Repeat for `responses`, `routing`, `graph`, `inflation`, `loose`, `entries`, `receive`, `indexes` and `native_http`, with separate writable output
 corpus directories. libFuzzer writes new inputs into the first directory;
 the checked-in seed directories stay unchanged. For longer local campaigns,
 replace `-runs=5000` with `-max_total_time=600`. CI smoke runs are regression
@@ -76,3 +76,11 @@ paths fail at compile time and replay does not depend on the working directory.
 harness dependencies. `cargo fmt --manifest-path fuzz/Cargo.toml --check` checks
 the standalone package; the normal workspace format and Clippy checks cover the
 shared target support.
+
+`native_http` exercises the native host's in-memory transport boundary, including
+identity/chunked framing, gzip admission, logical/physical quotas, fragmentation,
+callback errors and clean reuse after failure. The target shares its implementation
+with `crates/git-zero-rustix/tests/common/native_parser.rs`; ordinary replay lives
+in the native admission suite. It does not open sockets or sleep. The routing
+campaign additionally suspends selected responses, generates raw misses and
+verifies or rejects attached packs before draining protocol output.
