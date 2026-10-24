@@ -159,30 +159,7 @@ fn check_started_encoder(fixture: &Fixture<'_>, repository: &TestRepository<'_>)
 
 fn check_non_pack_responses(fixture: &Fixture<'_>, repository: &TestRepository<'_>) {
     for version in 0..=2 {
-        let wanted = body(
-            fixture.format,
-            version,
-            &fixture.tips[..1],
-            &[],
-            &[],
-            false,
-            "",
-        );
-        let mut selection = SelectionBuffers::new();
-        let mut control = [0; 2048];
-        let mut prepared = prepare(
-            repository,
-            request(&wanted, version),
-            &mut selection,
-            &mut control,
-        );
-        assert_eq!(prepared.key(), None);
-        assert_eq!(
-            prepared.read_pack(repository, &mut [0; 7]),
-            Err(Error::InvalidRequest)
-        );
-        let mut encoder = prepared.without_pack().unwrap();
-        assert!(unframe(&drain(&mut encoder, repository, 3)).1.is_empty());
+        check_negotiation(fixture, repository, version);
     }
     let mut control = [0; 2048];
     let request = Request {
@@ -329,4 +306,31 @@ fn check_protocol_band(
     assert_eq!(drain(&mut encoder, repository, 17), actual);
     assert_eq!(fixture.blob_reads.get(), reads);
     fixture.fail_blobs.set(false);
+}
+
+fn check_negotiation(fixture: &Fixture<'_>, repository: &TestRepository<'_>, version: u8) {
+    let wanted = body(
+        fixture.format,
+        version,
+        &fixture.tips[..1],
+        &[],
+        &[],
+        false,
+        "",
+    );
+    let mut selection = SelectionBuffers::new();
+    let mut control = [0; 2048];
+    let mut prepared = prepare(
+        repository,
+        request(&wanted, version),
+        &mut selection,
+        &mut control,
+    );
+    assert_eq!(prepared.key(), None);
+    assert_eq!(
+        prepared.read_pack(repository, &mut [0; 7]),
+        Err(Error::InvalidRequest)
+    );
+    let mut encoder = prepared.without_pack().unwrap();
+    assert!(unframe(&drain(&mut encoder, repository, 3)).1.is_empty());
 }

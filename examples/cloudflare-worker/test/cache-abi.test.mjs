@@ -41,12 +41,7 @@ test("corrupt, truncated, wrong-format, wrong-set and over-budget packs cancel b
     const wrongSet = generated(subset.exports);
     const cases = [Buffer.alloc(0), raw.subarray(0, -1), Buffer.concat([raw, Buffer.from([0])]), altered, wrongFormat, wrongSet];
     for (const bytes of cases) {
-      const { exports, memory } = prepare(repository);
-      assert.equal(attach(exports, bytes), -2);
-      assert.equal(exports.stream_read(1), -2);
-      assert.equal(exports.cache_key(), -2);
-      assert.equal(exports.cache_ptr(), 0);
-      assert.equal(exports.memory.buffer, memory);
+      rejectCorruptPack(repository, bytes);
     }
     const limited = prepare(repository);
     assert.equal(attach(limited.exports, raw, raw.length - 1), -1);
@@ -182,4 +177,13 @@ async function checkPreparedWire(repository, version) {
   assert.equal(attach(hit.exports, raw), 3);
   assert.deepEqual(drain(hit.exports, 1001), miss);
   assert.equal(hit.exports.memory.buffer, hit.memory);
+}
+
+function rejectCorruptPack(repository, bytes) {
+  const { exports, memory } = prepare(repository);
+  assert.equal(attach(exports, bytes), -2);
+  assert.equal(exports.stream_read(1), -2);
+  assert.equal(exports.cache_key(), -2);
+  assert.equal(exports.cache_ptr(), 0);
+  assert.equal(exports.memory.buffer, memory);
 }

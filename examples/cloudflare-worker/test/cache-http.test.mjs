@@ -282,18 +282,22 @@ async function checkBoundedFetchResponses(repository) {
   const direct = handler(repository, null, { revisionLimits: { maxExclusions: 8, graphReadLimit: 1048576 } });
   for (const version of [0, 1, 2]) {
     for (const extra of [["deepen 1"], ["filter blob:none"], ["deepen 2", "filter blob:limit=4"], ["deepen-since 1"]]) {
-      const options = { version, extra };
-      const reference = await direct.fetch(httpRequest(repository, options));
-      const first = await worker.fetch(httpRequest(repository, options));
-      assert.equal(first.status, reference.status);
-      assert.equal(first.status, 200, `${repository.format} v${version} ${extra}`);
-      const expected = await bytes(reference);
-      const actual = await bytes(first);
-      assert.equal(digest(actual), digest(expected));
-      assert.equal(control(actual).toString("hex"), control(expected).toString("hex"));
-      const hit = await bytes(await worker.fetch(httpRequest(repository, options)));
-      assert.equal(Buffer.compare(hit, actual), 0);
+      await compareBoundedRequest({ worker, direct, repository, version, extra });
     }
   }
   assert.ok(policy.statistics().hits > 0);
+}
+
+async function compareBoundedRequest({ worker, direct, repository, version, extra }) {
+  const options = { version, extra };
+  const reference = await direct.fetch(httpRequest(repository, options));
+  const first = await worker.fetch(httpRequest(repository, options));
+  assert.equal(first.status, reference.status);
+  assert.equal(first.status, 200, `${repository.format} v${version} ${extra}`);
+  const expected = await bytes(reference);
+  const actual = await bytes(first);
+  assert.equal(digest(actual), digest(expected));
+  assert.equal(control(actual).toString("hex"), control(expected).toString("hex"));
+  const hit = await bytes(await worker.fetch(httpRequest(repository, options)));
+  assert.equal(Buffer.compare(hit, actual), 0);
 }
