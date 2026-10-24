@@ -1,0 +1,31 @@
+name: Publish benchmarks to Runnerless
+
+on:
+  workflow_run:
+    workflows: [Benchmarks]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: benchmarks
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      pull-requests: write
+    steps:
+      # Always execute the default branch publisher. Never check out or execute
+      # source from a PR, including scripts carried in the benchmark artifact.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Submit measurements or synchronize PR retention
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish-benchmarks.py
