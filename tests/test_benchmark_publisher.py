@@ -72,7 +72,7 @@ class PublicationTests(unittest.TestCase):
         run = {"pull_requests": [], "head_sha": "c" * 40, "head_branch": "main",
                "head_repository": {"full_name": "no-std-rs/git-zero"}}
         pull = {"number": 7, "merge_commit_sha": "c" * 40,
-                "head": {"sha": "b" * 40, "ref": "feature", "repo": {"full_name": "no-std-rs/git-zero"}},
+                "head": {"sha": "b" * 40, "ref": "feature", "repo": {"full_name": "contributor/git-zero"}},
                 "base": {"repo": {"full_name": "no-std-rs/git-zero"}}}
         with patch.object(publisher, "github", return_value=[pull]):
             self.assertEqual(publisher.resolve_pull(run, "no-std-rs/git-zero"), 7)
