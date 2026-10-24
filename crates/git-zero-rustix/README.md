@@ -19,7 +19,8 @@ Gzip uploads are decoded into the request storage after the wire bytes; headers,
 compressed body and expanded body must all fit. Inflation borrows a fixed 32 KiB
 stack history window and validates the gzip checksum and size before routing.
 Duplicate framing/selector headers, truncated bodies and unsupported transfer or
-content encodings are rejected. Chunked framing remains unsupported.
+content encodings are rejected. Chunked intake requires the explicit APIs
+described in [Native deadlines and chunked intake](#native-deadlines-and-chunked-intake).
 Header delimiter scanning retains three overlap bytes between reads, so each
 possible four-byte delimiter position is examined at most once. Header and body
 bytes still share the caller's fixed request storage; fragmentation does not
@@ -45,8 +46,9 @@ storage: close the connection and discard it before repository preparation.
 `respond_stream` sends a prepared `http::stream::ResponseEncoder` with HTTP/1.0
 close-delimited framing and caller-owned output staging. It writes all staged
 bytes before pulling again, cancels on errors, and requires the host to close the
-socket on return. It remains a blocking adapter; readiness polling, keep-alive,
-chunked input, TLS and HTTP/1.1 framing remain future work.
+socket on return. It remains a blocking adapter; keep-alive, TLS and HTTP/1.1
+response framing remain future work. Opt-in chunked request intake and
+deadline-driven readiness polling are described below.
 
 With `storage`, `cache::DiskCache` implements the core selected-pack cache backend.
 The host retains a trusted directory descriptor, a fixed resident byte buffer
@@ -84,7 +86,7 @@ The listener is unchanged, and configuration failure closes the accepted
 descriptor. These are per-blocking-call socket timeouts, with OS rounding;
 partial operations and retries can extend a whole request or response. They
 are not accept or aggregate deadlines. Hosts still own connection admission,
-polling and cancellation. The allocation-guarded `admission` socket tests cover
+scheduling and cancellation. The allocation-guarded `admission` socket tests cover
 quota precedence, gzip integrity at exact quotas, unread excess bytes, both IP
 families, timeout stalls, write backpressure and stream cancellation. The native
 `references` Git host uses explicit limits/timeouts and verifies rejection and
