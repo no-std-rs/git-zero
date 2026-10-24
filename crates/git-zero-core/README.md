@@ -1,12 +1,24 @@
 # git-zero-core
 
-`pack::write_indexed_with_scratch` streams a stored-block pack and a Git v2 index
+Allocation-free Git objects, repositories, packs, zlib, and delta primitives.
+Safe `no_std` Rust without `alloc`; the caller owns storage, scratch, and I/O.
+
+```toml
+[dependencies]
+git-zero-core = "0.1.0"
+```
+
+`read` enables decoding and repository validation; `write` enables snapshot
+construction and encoding. Both are enabled by default. Select only what the
+application needs, for example `default-features = false, features = ["read"]`.
+The [API reference](https://docs.rs/git-zero-core) describes the public types.
+Use [git-zero](https://docs.rs/git-zero) when client or server reexports are useful.
+
+With `write`, `pack::write_indexed_with_scratch` streams a stored-block pack and a Git v2 index
 using one caller-owned `pack::IndexEntry` per object and bounded read scratch.
 It supports SHA-1/SHA-256, selected object orders, wire CRCs and 64-bit offsets.
 Publish the pair only after success: errors invalidate both outputs. Existing
 verified entry metadata can be streamed separately with `pack::write_index`.
-
-Allocation-free Git objects, repositories, pack and zlib primitives. Safe `no_std` Rust without `alloc`.
 
 With `read`, `pack::Decoder` accepts fragmented SHA-1/SHA-256 packs without
 retaining a complete pack, object body, or object-count-sized index. The host
@@ -98,8 +110,12 @@ budgets before every call. Pass strictly ascending selected indices with
 control packets are generated separately.
 
 ```rust
-# use git_zero_core::{cache::selected::{self, Buffers, FixedCache, Selection}, ObjectId, Repository, io::Write, Result};
-# fn example(repository: &impl Repository, indices: &[usize], first_response: &mut impl Write, second_response: &mut impl Write) -> Result<()> {
+use git_zero_core::{
+    cache::selected::{self, Buffers, FixedCache, Selection},
+    io::Write,
+    ObjectId, Repository, Result,
+};
+
 fn serve(
     repository: &impl Repository,
     indices: &[usize],
@@ -116,16 +132,12 @@ fn serve(
     }, output)?;
     Ok(())
 }
-
-// The host retains this cache and supplies a fresh response sink for each call.
-let mut cache_bytes = [0; 8192];
-let mut cache = FixedCache::new(&mut cache_bytes);
-serve(repository, indices, &mut cache, first_response)?;
-serve(repository, indices, &mut cache, second_response)?;
-# assert_eq!(cache.statistics().hits, 1);
-# Ok(())
-# }
 ```
+
+Construct `FixedCache::new(&mut cache_bytes)` once from a host-owned byte buffer
+and retain it across calls to `serve`, supplying a fresh response sink each time.
+An unchanged authorized selection can reuse the verified pack;
+`cache.statistics().hits` records successful cache hits.
 
 Hits require ID scratch and a byte limit, with no pack staging or body reads
 when the provider supplies precomputed IDs. Both hits and misses validate the

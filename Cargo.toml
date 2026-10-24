@@ -7,7 +7,8 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Allocation-free Git HTTP client and server building blocks"
+description = "Allocation-free no_std Git toolkit for objects, packs, clients and servers"
+documentation = "https://docs.rs/git-zero"
 readme = "README.md"
 include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*"]
 

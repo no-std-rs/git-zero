@@ -7,7 +7,8 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Allocation-free Git objects, repositories, pack and zlib primitives"
+description = "Allocation-free no_std Git objects, repositories, packs, zlib and delta primitives"
+documentation = "https://docs.rs/git-zero-core"
 readme = "README.md"
 include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*"]
 

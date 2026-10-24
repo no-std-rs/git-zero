@@ -8,6 +8,20 @@ Use `git-zero` for the combined API, or depend on `git-zero-core`,
 `git-zero-client` and `git-zero-server` directly. All library crates are safe
 `no_std` Rust without `alloc`. Their default features preserve the existing API.
 
+```sh
+cargo add git-zero@0.1.0
+```
+
+The native adapter is `git-zero-rustix`; it supplies the `git-zero` binary:
+
+```sh
+cargo install git-zero-rustix --version 0.1.0 --locked
+```
+
+Native process startup and JavaScript hosts have separate allocation/runtime
+requirements. API references are published for each of the five crates on
+[docs.rs](https://docs.rs/git-zero).
+
 | Feature on `git-zero` | Enables |
 | --- | --- |
 | `read` | Zlib inflation, pack/delta decoding and repository validation |
@@ -22,7 +36,11 @@ crate depends on the core with `read`; the server crate uses `write`. A server
 that validates custom repositories or serves independent refs through
 `serve_with_selection` should also enable `read`. The facade forwards this
 feature to the server crate when it is selected. `write` creates
-and encodes objects; Git receive-pack/push remains future work.
+and encodes objects. The server's opt-in `http::receive` module supplies
+receive-pack control and report primitives. Hosts provide authentication,
+quarantine storage, object/graph validation, and atomic ref publication; the
+[Cloudflare repository host](../examples/repository-host/README.md) implements
+that integration. The native demonstration remains a read-only snapshot server.
 
 ```toml
 [dependencies]
