@@ -128,6 +128,10 @@ async function loadPack(storage, key, signal) {
   }
   aborted(signal);
   if (stored === null) return null;
+  return readPackRecord(storage, key, stored, signal);
+}
+
+async function readPackRecord(storage, key, stored, signal) {
   const stream = storage.backend === "kv" ? stored : stored.body;
   try {
     if (storage.backend === "r2" && stored.size > HEADER + storage.maxBytes + DIGEST) {
@@ -180,22 +184,7 @@ async function resolvePack(state, key, generate, authenticate, signal) {
     state.counters.producers++;
     state.counters.peakProducers = Math.max(state.counters.peakProducers, state.counters.producers);
     try {
-      let pack = await loadPack(state.storage, key, signal);
-      aborted(signal);
-      if (pack !== null) {
-        await authenticate(pack);
-        aborted(signal);
-        state.counters.hits++;
-        return "hit";
-      }
-      state.counters.misses++;
-      pack = await generate();
-      aborted(signal);
-      if (!(pack instanceof Uint8Array) || pack.length > state.storage.maxBytes) throw new PackCacheError("Generated pack exceeds cache limit", 413);
-      await authenticate(pack);
-      aborted(signal);
-      await storePack(state.storage, key, pack, signal);
-      return "miss";
+      return await resolveStoredPack(state.storage, key, generate, authenticate, signal);
     } finally {
       state.counters.producers--;
       state.flights.delete(key);
@@ -205,6 +194,25 @@ async function resolvePack(state, key, generate, authenticate, signal) {
     state.counters.failures++;
     throw error;
   }
+}
+
+async function resolveStoredPack(storage, key, generate, authenticate, signal) {
+  let pack = await loadPack(storage, key, signal);
+  aborted(signal);
+  if (pack !== null) {
+    await authenticate(pack);
+    aborted(signal);
+    storage.counters.hits++;
+    return "hit";
+  }
+  storage.counters.misses++;
+  pack = await generate();
+  aborted(signal);
+  if (!(pack instanceof Uint8Array) || pack.length > storage.maxBytes) throw new PackCacheError("Generated pack exceeds cache limit", 413);
+  await authenticate(pack);
+  aborted(signal);
+  await storePack(storage, key, pack, signal);
+  return "miss";
 }
 
 export function packCachePolicy(module, cache) {
