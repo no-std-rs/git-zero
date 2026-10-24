@@ -34,8 +34,7 @@
           { "context": "worker", "integration_id": 15368 },
           { "context": "Runnerless / Program execution", "integration_id": 4602759 },
           { "context": "Runnerless / PR title", "integration_id": 4602759 },
-          { "context": "Runnerless / Commit messages", "integration_id": 4602759 },
-          { "context": "Runnerless / LM-CC/token", "integration_id": 4602759 }
+          { "context": "Runnerless / Commit messages", "integration_id": 4602759 }
         ]
       }
     }
