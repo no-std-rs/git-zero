@@ -456,7 +456,7 @@ fn respond_stream_using(
 fn respond_body(
     writer: &mut impl Write,
     response: Response,
-    size: Option<u64>,
+    mut remaining: Option<u64>,
     staging: &mut [u8],
     mut read: impl FnMut(&mut [u8]) -> Result<usize>,
 ) -> Result<()> {
@@ -471,7 +471,7 @@ fn respond_body(
         response.status, response.content_type
     )
     .map_err(|_| Error::BufferTooSmall)?;
-    if let Some(size) = size {
+    if let Some(size) = remaining {
         write!(&mut header, "Content-Length: {size}\r\n").map_err(|_| Error::BufferTooSmall)?;
     }
     header.write_all(b"Cache-Control: no-store\r\nConnection: close\r\n\r\n")?;
@@ -479,9 +479,16 @@ fn respond_body(
     loop {
         writer.write_all(&[])?; // Deadline check before entering the provider.
         let count = read(staging)?;
+        if let Some(left) = &mut remaining {
+            *left = left.checked_sub(count as u64).ok_or(Error::Backend)?;
+        }
         writer.write_all(&staging[..count])?; // Also check EOF/late provider work.
         if count == 0 {
-            return Ok(());
+            return if remaining.unwrap_or(0) == 0 {
+                Ok(())
+            } else {
+                Err(Error::Backend)
+            };
         }
     }
 }
@@ -559,26 +566,15 @@ fn respond_known(
     response: Response,
     size: u64,
     staging: &mut [u8],
-    mut read: impl FnMut(&mut [u8]) -> Result<usize>,
+    read: impl FnMut(&mut [u8]) -> Result<usize>,
 ) -> Result<()> {
-    if staging.is_empty() {
-        return Err(Error::BufferTooSmall);
-    }
-    respond_headers(socket, response, size)?;
-    let mut remaining = size;
-    let mut writer = SocketWriter(socket.as_fd());
-    loop {
-        let count = read(staging)?;
-        if count == 0 {
-            return if remaining == 0 {
-                Ok(())
-            } else {
-                Err(Error::Backend)
-            };
-        }
-        remaining = remaining.checked_sub(count as u64).ok_or(Error::Backend)?;
-        writer.write_all(&staging[..count])?;
-    }
+    respond_body(
+        &mut SocketWriter(socket.as_fd()),
+        response,
+        Some(size),
+        staging,
+        read,
+    )
 }
 
 /// Write framing for a body streamed separately by the host. The host must

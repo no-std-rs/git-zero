@@ -103,6 +103,41 @@ fn known_length_pack_backpressure_cancels_its_publication_cursor() {
     with_repository(check_publication_backpressure);
 }
 
+#[test]
+fn publication_length_mismatch_is_rejected_and_cancels_with_or_without_deadlines() {
+    with_repository(check_publication_length_mismatch);
+}
+
+fn check_publication_length_mismatch(repository: &Snapshot<'_>) {
+    let mut entries = [git_zero::pack::IndexEntry::EMPTY; 3];
+    let publication = Publication::new(
+        repository,
+        &mut entries,
+        &mut [0; 4096],
+        LooseObjects::Disabled,
+    )
+    .unwrap();
+    for deadlines in [
+        ResponseDeadlines::default(),
+        ResponseDeadlines {
+            total: Some(Duration::from_secs(2)),
+            idle: None,
+        },
+    ] {
+        let mut encoder = publication
+            .prepare(request("objects/info/packs"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(encoder.read(&mut [0; 1]).unwrap(), 1);
+        let (socket, _peer) = pair();
+        assert_eq!(
+            respond_published_with_deadlines(&socket, &mut encoder, &mut [0; 17], deadlines,),
+            Err(Error::Backend)
+        );
+        assert_eq!(encoder.read(&mut [0; 1]), Err(Error::InvalidRequest));
+    }
+}
+
 struct Slow<'a, R> {
     repository: &'a R,
     reads: Cell<usize>,
