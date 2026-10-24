@@ -31,6 +31,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.85.0
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
@@ -42,7 +43,12 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_release*.py'
           python3 scripts/prepare-release.py "$RELEASE_TAG"
           python3 scripts/check-public-packages.py --release
-          cargo test --workspace --all-features --locked
+          cargo +1.85.0 check --all-features --locked --target-dir target/msrv \
+            -p git-zero-core -p git-zero-client -p git-zero-server \
+            -p git-zero -p git-zero-rustix
+          cargo test --all-features --locked \
+            -p git-zero-core -p git-zero-client -p git-zero-server \
+            -p git-zero -p git-zero-rustix
       - name: Capture verified Cargo uploads locally
         run: |
           python3 scripts/package-registry-uploads.py dist/registry

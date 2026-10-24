@@ -8,6 +8,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Bounded rustix HTTP and file storage adapters for git-zero"
+documentation = "https://docs.rs/git-zero-rustix"
 readme = "README.md"
 include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*", "/examples/**"]
 

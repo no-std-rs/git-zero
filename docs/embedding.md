@@ -99,7 +99,7 @@ Git checkout does not create directories for empty trees. Git's dumb HTTP walker
 can also omit the empty-tree object from disk (observed with Git 2.53), causing
 `fsck --strict` to report it missing. The loose-object endpoint serves it; clients
 needing a complete disk object store must explicitly fetch that object or use
-smart HTTP. See [tests/README.md](../tests/README.md) for the interoperability check.
+smart or packed dumb HTTP. See [tests/README.md](../tests/README.md) for the interoperability check.
 
 ## Supply repositories and refs
 
@@ -292,12 +292,19 @@ V0's initial shallow-list probe has no ACK/NAK; v2 uses a shallow-info section.
 Blob filters omit bodies of the selected size or larger and retain explicitly
 wanted blobs. An explicit visible-closure grant permits lazy retrieval of promised
 blobs for ordinary partial-clone checkout; strict hosts still require
-`--no-checkout`. Time/exclusion deepening
-(`deepen-since`/`deepen-not`), tree/sparse/combine filters, unknown/non-commit
-shallow IDs, malformed/duplicate options and exhausted budgets fail before
-output. Shallow probes also traverse within the graph budget; hosts must size
+`--no-checkout`. Ordinary selection also supports tree-depth and object-type
+filters. Sparse/combine filters, unknown/non-commit shallow IDs,
+malformed/duplicate options, and exhausted budgets fail before output.
+Shallow probes also traverse within the graph budget; hosts must size
 control storage for their boundary packets. No history or filter state persists
 between requests.
+
+Time/exclusion deepening (`deepen-since`/`deepen-not`) requires explicit
+`RevisionStorage`, through `http::serve_with_revisions` or the corresponding
+response-encoder constructors. Ordinary selection rejects these options.
+Revision cuts can combine with blob filters but currently reject tree-depth and
+object-type filters. See the [server API guide](../crates/git-zero-server/README.md#time-and-exclusion-deepening)
+for revision buffers, graph/exclusion budgets, and the independent want policy.
 
 Upload requests require the Git upload request media type. Known routes enforce
 methods and service/version selection, reject duplicate selectors and unsafe or
@@ -305,8 +312,12 @@ malformed paths, and accept at most one leading slash. Native and Worker hosts
 decode gzip uploads with bounded output; native compressed plus expanded bytes
 must fit the caller's request storage, with a fixed 32 KiB stack history window.
 Requests accumulate within bounded storage before parsing. Pull-based response
-streaming is implemented; chunked request decoding, keep-alive and nonblocking
-native I/O remain planned.
+streaming is implemented. Native hosts can opt into bounded chunked request
+decoding and monotonic total/idle intake and output deadlines. The deadline
+adapters use readiness polling with per-call nonblocking I/O while leaving
+socket settings intact. Keep-alive, TLS integration, and concurrent native
+connection scheduling remain host work; see the
+[native admission guide](../crates/git-zero-rustix/README.md#native-deadlines-and-chunked-intake).
 
 On a failed buffered upload, discard the complete failed body. A host can call
 `http::write_upload_error(error, output)` on an empty sink to produce a terminal
@@ -339,8 +350,12 @@ response before sending HTTP success, or abort an already started transport on
 failure. The bounded native `selected-cache` example shares its responder with
 the memory/disk real-Git tests and supports an explicit visible-closure grant.
 See the [native cache example](../crates/git-zero-rustix/README.md).
-Async Worker/pull-cursor caching and reuse of arbitrary prepacked closures remain
-roadmap work.
+For async Worker storage, `stream::preparation::PreparedResponse` retains the
+authorized selection and control bytes across awaits. The host generates or
+loads a complete raw pack, then verifies its exact set before attaching it to a
+response cursor. The [KV/R2 adapter](async-pack-cache.md) bounds records, awaits
+publication, and coordinates cold misses within an isolate. Reuse of arbitrary
+prepacked closures in this stored-pack cache remains separate work.
 
 ## Stream object bodies and packs
 
@@ -389,8 +404,10 @@ uses fixed resident buffers and atomic complete-file publication; optional
 `DiskCache::try_lease` guards coordinate cooperative producers, which recheck
 after acquisition. Hosts own private namespaces, disk quotas, retries/deadlines
 and crash cleanup. See the [native cache contract](../crates/git-zero-rustix/README.md).
-Worker KV/R2 bindings persist immutable metadata snapshots; asynchronous
-complete-pack caching remains planned.
+Worker KV/R2 metadata snapshots and selected-pack caches are separate opt-in
+storage features. The [async pack cache](async-pack-cache.md) preserves each
+request's authorization, control framing, and immutable repository across awaits;
+distributed coordination and larger host-backed providers remain open.
 
 Buffers are explicit limits. On capacity or protocol errors, discard partial
 output before sending a response. Hosts own authentication, HTTP framing,

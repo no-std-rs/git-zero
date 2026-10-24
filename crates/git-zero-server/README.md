@@ -2,7 +2,16 @@
 
 Allocation-free Git smart and dumb HTTP server routing. Safe `no_std` Rust without `alloc`.
 
-Smart HTTP discovery/upload-pack and dumb HTTP refs/loose-object routing.
+```toml
+[dependencies]
+git-zero-server = { version = "0.1.0", features = ["read"] }
+```
+
+See the [API reference](https://docs.rs/git-zero-server) for routing, streaming,
+selection, and opt-in receive-pack APIs. `read` enables validated selection and
+revision storage; omit it for the default HEAD-only serving APIs.
+
+Smart HTTP discovery/upload-pack and loose/packed dumb HTTP routing.
 The host supplies repository data, response output and HTTP framing.
 Depends on `git-zero-core` with only `write` enabled.
 
@@ -201,8 +210,9 @@ budget. Successful selection returns ascending provider indices; failures
 invalidate all output. Stream preparation returns no successful response on
 exhausted limits; failures after sending headers require transport abort.
 
-Native tests compare real Git with `http-backend` for both hashes and v0/v1/v2.
-The Worker example does not opt into revision storage yet.
+Native and bounded Worker tests compare real Git with `http-backend` for both
+hashes and v0/v1/v2. Worker hosts opt into revision storage through the trusted
+loader's explicit revision settings; default handlers leave it disabled.
 
 `dumb::Publication` adds immutable complete stored-pack publication with
 `objects/info/packs` and checksum-named `.pack`/`.idx` downloads. Preparation
@@ -211,7 +221,7 @@ without a complete buffer. It supports packed-only and loose fallthrough modes,
 shared route validation and independent response cancellation. Dispatch it before
 the ordinary handler over the exact same stable repository. Native and bounded
 Worker hosts pass unassisted real-Git packed/mixed clones in both object formats.
-See [the publication guide](../../docs/packed-dumb.md).
+See [the publication guide](https://github.com/no-std-rs/git-zero/blob/main/docs/packed-dumb.md).
 
 `ResponseEncoder::with_revision_storage_policy` combines explicit revision
 buffers/limits with an independent host want grant. Revision capability cannot
@@ -225,5 +235,5 @@ control bytes remain borrowed; request bytes and temporary validation metadata
 do not. Keep the authorized repository immutable across every await. Persist
 only raw `read_pack` output, then `attach` a complete pack to verify its exact set
 before obtaining a response cursor. Non-pack responses use `without_pack` and
-never need a backend. The [Worker adapter](../../docs/async-pack-cache.md) owns an
+never need a backend. The [Worker adapter](https://github.com/no-std-rs/git-zero/blob/main/docs/async-pack-cache.md) owns an
 isolated instance across awaits and demonstrates awaited KV/R2 publication.

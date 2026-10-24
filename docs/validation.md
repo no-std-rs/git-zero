@@ -22,7 +22,8 @@ Git upstream test runner. CI also checks the core against a bare-metal target,
 which has neither `std` nor an allocator.
 
 With Node 22.13 or newer, run `node --test tests/runnerless.test.mjs` from the
-repository root to check policy recovery and authenticated comparison reports.
+repository root to check required policy recovery. GPU complexity comparisons
+are retired; public CI uses GitHub-hosted runners.
 The hosting suite runs separately with `npm ci` and `npm run test:streamed` in
 `examples/repository-host/cloudflare`; it exercises local Wrangler R2/SQLite and
 direct workerd fault-injection fixtures with ordinary Git clients.

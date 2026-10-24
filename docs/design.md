@@ -10,7 +10,8 @@
 - Read-only smart HTTP discovery and `git-upload-pack` over protocol v0/v1/v2,
   including stateless v2 `ls-refs` and `fetch` with bounded selected packs.
 - Ordinary Git HTTP, usually called **dumb HTTP**: `HEAD`, `info/refs`, branch
-  refs, and zlib loose objects. No filesystem repository is needed.
+  refs, zlib loose objects, and immutable checksum-named packs/indexes. No
+  filesystem repository is needed for generated publication.
 - SHA-1 and SHA-256 repositories with format-specific object IDs, refs and packs.
   Smart HTTP advertises the repository's object-format capability.
 - Complete packs generated on demand from unpacked objects. The encoder
@@ -40,10 +41,11 @@
 - Complete pack materialization into caller-owned bodies and a sorted ID index,
   plus borrowed commit messages, tree entries and annotated-tag targets.
 - Streaming pack and Git v2 index generation with caller-owned metadata, in both
-  object formats. Publishing packed dumb HTTP repositories remains planned.
+  object formats, plus generated and verified-file packed dumb HTTP publication.
 - Optional complete-HEAD and selected-pack caches, with versioned closure/format/
   encoder keys, integrity checks, a caller-buffer cache, and a native disk backend
-  with atomic publication and cooperative per-key producer leases.
+  with atomic publication and cooperative per-key producer leases. Worker hosts
+  can opt into bounded KV/R2 records and isolate-local cold-miss coordination.
 - IPv4/IPv6 server listeners, an IPv4 client adapter and a Cloudflare Workers Wasm demo.
 - Native file-backed raw objects and verified prepacked responses, with positional
   reads and caller-owned scratch, using `rustix` without `std` or `alloc`.
@@ -58,23 +60,33 @@ checkout trees; the kernel example uses them to expose cached snapshots and refs
 Complete pack materialization currently supports SHA-1; the entry reader also
 supports SHA-256 packs.
 A complete native clone/checkout writer, dumb repository walker, client filters,
-client protocol v1/v2, push and standalone `git://` transport remain planned.
+client protocol v1/v2, a push client, and standalone `git://` transport remain planned.
+The server's opt-in receive-pack primitives and the separate Cloudflare repository
+host already support receiving pushes; they do not turn the native demo into a
+mutable Git server.
 
 Server partial clones can perform ordinary lazy checkout when the host explicitly
 grants retrieval from its immutable visible closure. The default advertised-ID
 want policy still requires `--no-checkout`; the grant never exposes objects
 outside the supplied validated repository view.
-Time/exclusion deepening and tree/sparse/combine filters remain unsupported.
+Explicit revision-storage APIs support time/exclusion deepening in v0/v1/v2;
+ordinary selection supports tree-depth and object-type filters as well as blob
+filters. Revision cuts currently reject tree-depth/object-type combinations.
+Sparse/combine filters remain unsupported.
 The native server uses blocking sockets and HTTP/1.0 close-delimited responses.
 Hosts can set inclusive complete-wire/decoded-body quotas and independent
 accepted-socket read/write timeouts; default quotas remain unset and timeouts
-remain ten seconds. TLS, chunked intake, keep-alive, request deadlines and
-poll-based concurrency remain host work. See the
+remain ten seconds. Opt-in total/idle request and response deadlines preserve
+socket settings; bounded HTTP/1.1 chunked intake is also available. TLS,
+keep-alive, pipelined/leftover-byte handling, and concurrent connection scheduling
+remain host work. See the
 [native admission contract](../crates/git-zero-rustix/README.md).
-The Worker has streamed responses and
-async snapshot persistence, but no complete-pack KV/R2 cache integration or
-deployed performance measurements. Server parity is still incomplete; further
-client and receive-pack work follows its completion gate.
+The Worker has streamed responses, async metadata snapshot persistence, and an
+instance-owned selected-pack cache boundary for opt-in KV/R2 storage. Each cache
+response retains its authorized selection across awaits and verifies the exact
+pack set before transport. Distributed coordination, larger host-backed providers,
+and deployed resource measurements remain open. See the
+[cache contract](async-pack-cache.md) and [roadmap](../ROADMAP.md).
 
 The repository host uses its own codec by default at
 `examples/repository-host/cloudflare/wrangler.toml`. Its Rust Wasm

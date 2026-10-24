@@ -7,7 +7,8 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Allocation-free Git smart and dumb HTTP server routing"
+description = "Allocation-free no_std Git smart/dumb HTTP serving and receive-pack primitives"
+documentation = "https://docs.rs/git-zero-server"
 readme = "README.md"
 include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-*"]
 

@@ -101,6 +101,7 @@ fixed output storage. The host verifies required exports before reading a body.
 The `stream_start_repository_packed` ABI uses `loose=0` for packed-only or `1`
 for loose fallthrough; `publication_length` returns the active complete length.
 
-This is synchronous bounded preparation of resident raw objects. It does not
-provide asynchronous selected-pack KV/R2 caching or a generated/remote provider.
-The metadata-capture demo retains its default loose layout.
+This publication mode prepares resident raw objects synchronously. The separate
+[selected-pack cache adapter](async-pack-cache.md) provides opt-in asynchronous
+KV/R2 storage; it does not add a generated/remote object provider. The
+metadata-capture demo retains its default loose layout.

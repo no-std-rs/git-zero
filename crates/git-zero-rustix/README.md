@@ -12,6 +12,24 @@ object manifests and file descriptors.
 All features are enabled by default. Disable defaults to select adapters.
 The library uses no `std` or `alloc`; the CLI uses `std` for process startup.
 
+Install the native demonstration executable with:
+
+```sh
+cargo install git-zero-rustix --version 0.1.0 --locked
+git-zero serve 8080
+```
+
+To embed only selected adapters:
+
+```toml
+[dependencies]
+git-zero-rustix = { version = "0.1.0", default-features = false, features = ["server", "storage"] }
+```
+
+The [API reference](https://docs.rs/git-zero-rustix) covers buffers, descriptors,
+limits, and deadlines. This adapter uses rustix's supported OS interfaces; the
+transport-independent crates let other hosts supply their own I/O.
+
 See [git-zero](https://github.com/no-std-rs/git-zero) for usage and limitations.
 
 The server reads `Git-Protocol` and `Content-Type` into shared request metadata.
@@ -179,7 +197,7 @@ out-of-range values fail before listening. The address, when present, comes
 first. These controls leave accepted-socket per-I/O timeouts unchanged and do not
 establish aggregate request/idle deadlines.
 
-Packed dumb publication is described in [the publication guide](../../docs/packed-dumb.md).
+Packed dumb publication is described in [the publication guide](https://github.com/no-std-rs/git-zero/blob/main/docs/packed-dumb.md).
 `respond_published` streams generated packs/indexes;
 `FilePublication::from_fds` verifies pinned complete files and
 `respond_file_published` streams them with independent offsets. Both cancel on
