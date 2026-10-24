@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/no-std-rs/git-zero/actions/workflows/ci.yml/badge.svg)](https://github.com/no-std-rs/git-zero/actions/workflows/ci.yml)
 [![Runnerless CI: slowest job](https://badges.runnerlesshq.com/github.com/no-std-rs/git-zero/badge.svg)](https://app.runnerlesshq.com)
+[![Git versus git-zero: discovery wall time](https://app.runnerlesshq.com/api/public/benchmark-ci/no-std-rs/git-zero/badge.svg)](https://app.runnerlesshq.com/api/public/benchmark-ci/no-std-rs/git-zero/main)
 
 An allocation-free Git toolkit in safe `no_std` Rust: objects, packs, clients,
 and servers. Callers supply repository data, buffers, storage, and I/O. The same
@@ -10,6 +11,16 @@ core runs on native systems, bare-metal targets, and WebAssembly.
 The library crates use neither `std` nor `alloc`. Native CLI startup and the
 JavaScript hosting layers have their own memory and runtime requirements.
 This is a set of Git building blocks, with a demonstration CLI and host examples.
+
+## Benchmarks
+
+[![Git versus git-zero benchmark report](https://app.runnerlesshq.com/api/public/benchmark-ci/no-std-rs/git-zero/main.svg)](https://app.runnerlesshq.com/api/public/benchmark-ci/no-std-rs/git-zero/main)
+
+Every main push and PR measures discovery, clone and fetch against pinned Git
+with matched compression and delta settings. Runnerless processes the original
+observations and publishes the report; PR runs also receive a benchmark comment.
+The chart shows warm-cache descriptive medians on GitHub-hosted Linux runners.
+See [collection, retention and manual reruns](docs/benchmarks.md) for the scope.
 
 ## Choose a crate
 
