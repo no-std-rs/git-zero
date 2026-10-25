@@ -15,6 +15,7 @@ import zipfile
 ORIGIN = "https://app.runnerlesshq.com"
 MARKER = "<!-- runnerless:git-zero-benchmarks -->"
 MAX_SUBMISSION = 1024 * 1024
+MAX_ARTIFACT_PAGES = 100
 
 
 def request(url, token, *, data=None, method=None, maximum=2 * MAX_SUBMISSION):
@@ -155,6 +156,34 @@ def resolve_pull(run, repository):
     return pulls[0]["number"]
 
 
+def find_benchmark_artifacts(run_id, run_attempt):
+    name = f"runnerless-benchmarks-{run_id}-{run_attempt}"
+    matches = {}
+    for page in range(1, MAX_ARTIFACT_PAGES + 1):
+        result = github(f"actions/runs/{run_id}/artifacts?per_page=100&page={page}")
+        entries = result["artifacts"]
+        for entry in entries:
+            if entry["name"] == name and not entry["expired"]:
+                # A concurrently uploaded artifact can shift pagination offsets.
+                # The same immutable ID appearing twice is still one artifact;
+                # distinct matching IDs remain duplicates for main() to reject.
+                matches[entry["id"]] = entry
+        if len(entries) < 100 or page * 100 >= result.get("total_count", float("inf")):
+            return list(matches.values())
+    raise ValueError("benchmark artifact history exceeds publisher budget")
+
+
+def lifecycle_only(run_id, run_attempt):
+    # Current PR state can change while its close-event run is queued. The
+    # immutable attempt's jobs identify the producer that intentionally has no
+    # measurements, including when the PR has already reopened.
+    result = github(f"actions/runs/{run_id}/attempts/{run_attempt}/jobs?per_page=100")
+    jobs = result["jobs"]
+    return (len(jobs) == 2 and result.get("total_count", len(jobs)) == len(jobs)
+            and {job["name"]: job["conclusion"] for job in jobs}
+            == {"lifecycle": "success", "benchmark": "skipped"})
+
+
 def main():
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
     source = event["workflow_run"]
@@ -167,18 +196,18 @@ def main():
         raise ValueError("invalid benchmark source commit")
     if run["event"] == "pull_request":
         number = resolve_pull(run, repository)
-        pull = sync_pull(number)
+        sync_pull(number)
     else:
         if run["head_branch"] != "main" or run["head_repository"]["full_name"] != repository:
             raise ValueError("only main can publish default-branch measurements")
         number = None
-    name = f"runnerless-benchmarks-{run['id']}-{run['run_attempt']}"
-    artifacts = github(f"actions/runs/{run['id']}/artifacts?per_page=100")
-    matches = [entry for entry in artifacts["artifacts"] if entry["name"] == name and not entry["expired"]]
-    if not matches and (run["conclusion"] != "success" or number is not None and pull["state"] == "closed"):
-        # A build failure has no measurements; the closed-event lifecycle job
-        # intentionally produces none. Other missing artifacts are errors.
-        return
+    matches = find_benchmark_artifacts(run["id"], run["run_attempt"])
+    if not matches:
+        # A build failure has no measurements. A successful lifecycle-only run
+        # also intentionally produces none; a successful benchmark must have its
+        # report even when its PR has subsequently closed.
+        if run["conclusion"] != "success" or number is not None and lifecycle_only(run["id"], run["run_attempt"]):
+            return
     if len(matches) != 1 or matches[0]["size_in_bytes"] > 2 * MAX_SUBMISSION:
         raise ValueError("expected one bounded benchmark artifact for this attempt")
     report = download(matches[0]["id"])

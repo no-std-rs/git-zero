@@ -1,5 +1,6 @@
 """Trust-boundary tests for the default-branch Runnerless publisher."""
 import importlib.util
+from contextlib import contextmanager
 import io
 import json
 import os
@@ -21,6 +22,27 @@ def archive(name="benchmark.json", body=b'{"source_revision":"a"}'):
     return output.getvalue()
 
 
+def producer_run(event="pull_request"):
+    return {"id": 100, "run_attempt": 2, "head_sha": "a" * 40,
+            "head_branch": "feature" if event == "pull_request" else "main",
+            "repository": {"full_name": "no-std-rs/git-zero"},
+            "head_repository": {"full_name": "no-std-rs/git-zero"},
+            "path": ".github/workflows/benchmarks.yml", "status": "completed", "conclusion": "success",
+            "event": event, "pull_requests": [{"number": 7}] if event == "pull_request" else []}
+
+
+@contextmanager
+def publisher_execution(run, responses):
+    with tempfile.TemporaryDirectory() as directory:
+        event_path = Path(directory) / "event.json"
+        event_path.write_text(json.dumps({"workflow_run": run}))
+        env = {"GITHUB_EVENT_NAME": "workflow_run", "GITHUB_EVENT_PATH": str(event_path),
+               "GITHUB_REPOSITORY": "no-std-rs/git-zero", "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary")}
+        with patch.dict(os.environ, env), patch.object(publisher, "github", side_effect=[run, *responses]) as github, \
+                patch.object(publisher, "submit", return_value={}) as submit:
+            yield github, submit
+
+
 class ArtifactTests(unittest.TestCase):
     def test_retains_original_observations(self):
         raw = {"results": [{"samples": {"git": [{"wall_s": 1, "extra": [2, 3]}]}}]}
@@ -35,6 +57,36 @@ class ArtifactTests(unittest.TestCase):
                 publisher.read_artifact(archive(body=raw))
         with self.assertRaises(ValueError):
             publisher.read_artifact(archive(body=b" " * (publisher.MAX_SUBMISSION + 1)))
+
+    def test_recovers_an_exact_attempt_artifact_beyond_the_first_page(self):
+        first = [{"id": number, "name": f"other-{number}", "expired": False} for number in range(100)]
+        expected = {"id": 101, "name": "runnerless-benchmarks-42-1", "expired": False, "size_in_bytes": 200}
+        with patch.object(publisher, "github", side_effect=[
+                {"total_count": 101, "artifacts": first},
+                {"total_count": 101, "artifacts": [expected]}]) as github:
+            self.assertEqual(publisher.find_benchmark_artifacts(42, 1), [expected])
+            self.assertEqual([call.args[0] for call in github.call_args_list], [
+                "actions/runs/42/artifacts?per_page=100&page=1",
+                "actions/runs/42/artifacts?per_page=100&page=2"])
+
+    def test_artifact_history_preserves_expiry_and_distinct_duplicate_checks(self):
+        expected = {"id": 101, "name": "runnerless-benchmarks-42-1", "expired": False}
+        duplicate = {**expected, "id": 102}
+        expired = {**expected, "id": 103, "expired": True}
+        first = [expected, expired] + [
+            {"id": number, "name": "unrelated", "expired": False} for number in range(98)]
+        with patch.object(publisher, "github", side_effect=[
+                {"total_count": 102, "artifacts": first},
+                {"total_count": 102, "artifacts": [expected, duplicate]}]):
+            self.assertEqual(publisher.find_benchmark_artifacts(42, 1), [expected, duplicate])
+
+    def test_artifact_history_fails_explicitly_if_pagination_exhausts_its_budget(self):
+        entries = [{"id": number, "name": "unrelated", "expired": False} for number in range(100)]
+        with patch.object(publisher, "MAX_ARTIFACT_PAGES", 2), \
+                patch.object(publisher, "github", return_value={"total_count": 300, "artifacts": entries}) as github, \
+                self.assertRaisesRegex(ValueError, "artifact history exceeds publisher budget"):
+            publisher.find_benchmark_artifacts(42, 1)
+        self.assertEqual(github.call_count, 2)
 
 
 class CommentTests(unittest.TestCase):
@@ -58,6 +110,43 @@ class CommentTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
+    def test_lifecycle_run_syncs_retention_even_if_the_pr_has_reopened(self):
+        jobs = [{"name": "lifecycle", "conclusion": "success"}, {"name": "benchmark", "conclusion": "skipped"}]
+        for state in ("open", "closed"):
+            with self.subTest(state=state):
+                pull = {"state": state, "updated_at": "2026-10-25T00:00:01Z",
+                        "closed_at": "2026-10-25T00:00:00Z" if state == "closed" else None}
+                with publisher_execution(producer_run(), [pull, {"artifacts": []}, {"total_count": 2, "jobs": jobs}]) as (github, submit):
+                    publisher.main()
+                    self.assertEqual(github.call_args.args, ("actions/runs/100/attempts/2/jobs?per_page=100",))
+                    self.assertEqual(submit.call_count, 1)
+                    self.assertEqual(submit.call_args.args[0], "pull")
+                    self.assertEqual(submit.call_args.args[1]["state"], state)
+
+    def test_successful_benchmark_missing_its_report_fails_even_after_pr_close(self):
+        jobs = [{"name": "lifecycle", "conclusion": "skipped"}, {"name": "benchmark", "conclusion": "success"}]
+        for state in ("open", "closed"):
+            with self.subTest(state=state):
+                pull = {"state": state, "updated_at": "2026-10-25T00:00:01Z",
+                        "closed_at": "2026-10-25T00:00:00Z" if state == "closed" else None}
+                with publisher_execution(producer_run(), [pull, {"artifacts": []}, {"total_count": 2, "jobs": jobs}]) as (_, submit), \
+                        self.assertRaisesRegex(ValueError, "expected one bounded benchmark artifact"):
+                    publisher.main()
+                self.assertEqual(submit.call_count, 1, "only retention may be synchronized without measurements")
+
+    def test_successful_main_benchmark_missing_its_report_fails(self):
+        with publisher_execution(producer_run("workflow_dispatch"), [{"artifacts": []}]) as (_, submit), \
+                self.assertRaisesRegex(ValueError, "expected one bounded benchmark artifact"):
+            publisher.main()
+        submit.assert_not_called()
+
+    def test_lifecycle_detection_requires_the_complete_expected_job_inventory(self):
+        jobs = [{"name": "lifecycle", "conclusion": "success"}, {"name": "benchmark", "conclusion": "skipped"}]
+        with patch.object(publisher, "github", return_value={"total_count": 3, "jobs": jobs}):
+            self.assertFalse(publisher.lifecycle_only(100, 2))
+        with patch.object(publisher, "github", return_value={"total_count": 3, "jobs": jobs + [{"name": "other", "conclusion": "success"}]}):
+            self.assertFalse(publisher.lifecycle_only(100, 2))
+
     def test_fork_and_superseded_head_runs_keep_their_pr_identity(self):
         run = {"pull_requests": [], "head_sha": "a" * 40, "head_branch": "feature",
                "head_repository": {"full_name": "contributor/git-zero"}}

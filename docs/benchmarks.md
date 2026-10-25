@@ -91,12 +91,15 @@ reads; retained private data keeps its lifecycle.
 Failed benchmark reports retain successful measurements and explicit failures.
 Builds that fail before producing measurements have no report to upload.
 Malformed or oversized data fails explicitly. Service outages fail the publisher
-job, preserving GitHub's source artifact for 90 days; rerun that publisher job to
-retry the same immutable dataset. Rerun **Benchmarks** to collect new data.
+job. GitHub keeps its source artifact for 90 days, while its supported workflow
+rerun window is 30 days; within that window, rerun the publisher job to retry the
+same immutable dataset. Rerun **Benchmarks** to collect new data.
 
-Roll out the Runnerless implementation and migration `0029_ci_benchmarks.sql`
-in `pawelchcki/my-infra` before merging the workflows and opt-in here. The
-repository must already be connected to an active Runnerless organization. If
+The Runnerless implementation was initially deployed from `pawelchcki/my-infra` revision
+`4ba59b7c6372a9f7b9220611791a3777f5499d80`. Migration
+`0029_ci_benchmarks.sql` was applied on 2026-10-25, and the production submission
+endpoint was verified to reach OIDC authentication with no pending migrations.
+The repository must already be connected to an active Runnerless organization. If
 the GitHub `benchmarks` environment has protection rules, its approvals also apply
 to the trusted publisher. The first post-merge main run populates the README
 images; pre-activation images return unavailable rather than fabricated results.
