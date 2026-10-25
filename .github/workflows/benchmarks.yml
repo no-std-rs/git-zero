@@ -1,0 +1,61 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keep every main run, including manual repeats. Do not cancel measurements when
+# another commit arrives. PR runs also have unique artifacts and sessions.
+jobs:
+  benchmark:
+    if: github.event.action != 'closed' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Git HTTP build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev zlib1g-dev time
+      - name: Build the pinned Git reference
+        run: |
+          set -eu
+          version="$(cat tests/git-version.txt)"
+          git clone --depth 1 --branch "v$version" https://github.com/git/git.git "$RUNNER_TEMP/benchmark-git-source"
+          make -C "$RUNNER_TEMP/benchmark-git-source" -j2 \
+            prefix="$RUNNER_TEMP/benchmark-git" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_OPENSSL=YesPlease NO_EXPAT=YesPlease
+          make -C "$RUNNER_TEMP/benchmark-git-source" install \
+            prefix="$RUNNER_TEMP/benchmark-git" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_OPENSSL=YesPlease NO_EXPAT=YesPlease
+      - name: Build release benchmark executables
+        run: cargo build --release --locked -p git-zero-rustix --bin git-zero --example benchmark-server
+      - name: Collect matched Git and git-zero measurements
+        run: |
+          python3 tests/benchmark.py \
+            --git "$RUNNER_TEMP/benchmark-git/bin/git" \
+            --samples 25 --warmup 3 --jobs 1 \
+            --files 64 --blob-bytes 16384 --commits 16 \
+            --case client-discovery-smart --case server-discovery-smart \
+            --case server-clone-smart --case server-fetch-smart \
+            --git-profile matched --output benchmark-artifacts/benchmark.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runnerless-benchmarks-${{ github.run_id }}-${{ github.run_attempt }}
+          path: benchmark-artifacts/benchmark.json
+          if-no-files-found: error
+          retention-days: 90
+  lifecycle:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo 'The trusted Runnerless publisher will synchronize PR retention.'

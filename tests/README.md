@@ -376,6 +376,10 @@ configuration through `GIT_ZERO_TEST_JOBS`, `GIT_ZERO_TEST_GIT` and
 The [shallow/filter regression comparison](shallow-filter-benchmarks.md) records
 before/after results for both existing profiles and a repeated smart-clone CPU check.
 
+The [Runnerless CI benchmarks](../docs/benchmarks.md) collect a fixed sequential
+suite on every main push and PR. Main also supports manual runs, with permanent
+raw-data retention; PR data remains through closure plus six months.
+
 Use optimized native binaries and opt into the Linux benchmark (Python's
 standard library plus GNU `time`). Python creates the fixture and runs clients;
 timed HTTP traffic passes through the Rust host. Correctness checks and
