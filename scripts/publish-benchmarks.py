@@ -16,6 +16,7 @@ ORIGIN = "https://app.runnerlesshq.com"
 MARKER = "<!-- runnerless:git-zero-benchmarks -->"
 MAX_SUBMISSION = 1024 * 1024
 MAX_ARTIFACT_PAGES = 100
+BENCHMARK_WORKFLOW = ".github/workflows/benchmarks.yml"
 
 
 def request(url, token, *, data=None, method=None, maximum=2 * MAX_SUBMISSION):
@@ -184,13 +185,27 @@ def lifecycle_only(run_id, run_attempt):
             == {"lifecycle": "success", "benchmark": "skipped"})
 
 
+def benchmark_workflow(run, repository):
+    if run["path"] == BENCHMARK_WORKFLOW:
+        return True
+    # GitHub also documents ref-qualified paths on workflow-run attempts.
+    # Confirm the immutable workflow ID's canonical path rather than trusting
+    # an '@' split that could also describe a different workflow filename.
+    path, separator, ref = run["path"].partition("@")
+    if not separator or not ref or path not in (BENCHMARK_WORKFLOW, f"{repository}/{BENCHMARK_WORKFLOW}"):
+        return False
+    workflow = github(f"actions/workflows/{run['workflow_id']}")
+    return workflow["id"] == run["workflow_id"] and workflow["path"] == BENCHMARK_WORKFLOW
+
+
 def main():
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
     source = event["workflow_run"]
     run = github(f"actions/runs/{source['id']}/attempts/{source['run_attempt']}")
     repository = os.environ["GITHUB_REPOSITORY"]
-    if (run["repository"]["full_name"] != repository or run["path"] != ".github/workflows/benchmarks.yml"
-            or run["status"] != "completed" or run["event"] not in ("push", "pull_request", "workflow_dispatch")):
+    if (run["repository"]["full_name"] != repository
+            or run["status"] != "completed" or run["event"] not in ("push", "pull_request", "workflow_dispatch")
+            or not benchmark_workflow(run, repository)):
         raise ValueError("unrecognized benchmark producer")
     if not re.fullmatch(r"[0-9a-f]{40}", run["head_sha"]):
         raise ValueError("invalid benchmark source commit")

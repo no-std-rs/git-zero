@@ -110,6 +110,43 @@ class CommentTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
+    def test_documented_qualified_workflow_paths_use_canonical_workflow_identity(self):
+        repository = "no-std-rs/git-zero"
+        run = producer_run()
+        with patch.object(publisher, "github") as github:
+            self.assertTrue(publisher.benchmark_workflow(run, repository))
+            github.assert_not_called()
+        for path in (".github/workflows/benchmarks.yml@main",
+                     "no-std-rs/git-zero/.github/workflows/benchmarks.yml@main"):
+            with self.subTest(path=path):
+                run = {**producer_run(), "path": path, "workflow_id": 123}
+                with patch.object(publisher, "github", return_value={"id": 123, "path": publisher.BENCHMARK_WORKFLOW}) as github:
+                    self.assertTrue(publisher.benchmark_workflow(run, repository))
+                    self.assertEqual(github.call_args.args, ("actions/workflows/123",))
+
+    def test_qualified_workflow_path_cannot_authorize_a_different_workflow(self):
+        repository = "no-std-rs/git-zero"
+        run = {**producer_run(), "path": ".github/workflows/benchmarks.yml@other.yml", "workflow_id": 123}
+        for workflow in ({"id": 123, "path": ".github/workflows/benchmarks.yml@other.yml"},
+                         {"id": 124, "path": publisher.BENCHMARK_WORKFLOW}):
+            with self.subTest(workflow=workflow), patch.object(publisher, "github", return_value=workflow):
+                self.assertFalse(publisher.benchmark_workflow(run, repository))
+        for path in (".github/workflows/other.yml@main", ".github/workflows/benchmarks.yml@",
+                     "other/repository/.github/workflows/benchmarks.yml@main"):
+            with self.subTest(path=path), patch.object(publisher, "github") as github:
+                self.assertFalse(publisher.benchmark_workflow({**run, "path": path}, repository))
+                github.assert_not_called()
+
+    def test_qualified_main_attempt_publishes_all_original_measurements(self):
+        run = {**producer_run("workflow_dispatch"), "path": ".github/workflows/benchmarks.yml@main", "workflow_id": 123}
+        report = {"source_revision": run["head_sha"], "all_original_measurements": [1, 2, 3]}
+        responses = [{"id": 123, "path": publisher.BENCHMARK_WORKFLOW}, {"artifacts": [{
+            "id": 1, "name": "runnerless-benchmarks-100-2", "expired": False, "size_in_bytes": 200}]}]
+        with publisher_execution(run, responses) as (_, submit), patch.object(publisher, "download", return_value=report):
+            submit.return_value = {"comment": "Runnerless comparison"}
+            publisher.main()
+            self.assertEqual(submit.call_args.args[1]["report"], report)
+
     def test_lifecycle_run_syncs_retention_even_if_the_pr_has_reopened(self):
         jobs = [{"name": "lifecycle", "conclusion": "success"}, {"name": "benchmark", "conclusion": "skipped"}]
         for state in ("open", "closed"):
