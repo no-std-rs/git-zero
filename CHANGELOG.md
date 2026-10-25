@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/no-std-rs/git-zero/compare/v0.1.0...v0.2.0) (2026-10-25)
+
+
+### Features
+
+* **ci:** publish Git comparisons through Runnerless on main and PRs ([#64](https://github.com/no-std-rs/git-zero/issues/64)) ([4daf207](https://github.com/no-std-rs/git-zero/commit/4daf207b41b1761bcdd1209e6c9e5a5bf5c5cd23))
+
 Release notes are maintained by Runnerless release-please.
 
 ## 0.1.0
