@@ -288,6 +288,12 @@ read/reconstruction work is at most 128 MiB and retains the hard object limits.
 Whole authenticated chunk cache misses have a separate 128 MiB storage-byte
 budget (readLimits.storageBytes), even when a lowered cache cannot retain a
 legacy extent; bounded storage retries can attempt each miss at most three times.
+Canonical output reservation follows the configured metadata plus blob bounds
+(up to their documented ceilings), rather than imposing a hidden 32 MiB cap.
+Blob output/object quotas are reserved/checked before streaming headers; an
+explicitly lower codec ceiling returns JSON 413. `browse-blob-budget.test.mjs`
+streams a generated 33 MiB blob in each format with zero SQL row writes, and
+verifies both lowered canonical/object ceilings fail before 200.
 A directory can be rescanned on each page; pagination bounds output and does
 not imply unbounded scan work.
 

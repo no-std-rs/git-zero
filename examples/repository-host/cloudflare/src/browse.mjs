@@ -56,7 +56,7 @@ export class ReadApi {
   }
   source() {
     if (!this.objects) {
-      const limits = { maxObjectBytes: 64 * 1024 * 1024, maxCanonicalBytes: 32 * 1024 * 1024, maxTemporaryBytes: 0, maxWorkBytes: this.limits.workBytes, maxTotalWorkBytes: this.limits.workBytes, maxLinks: this.limits.edges };
+      const limits = { maxObjectBytes: 64 * 1024 * 1024, maxCanonicalBytes: Math.max(32 * 1024 * 1024, this.limits.metadataBytes + this.limits.blobBytes), maxTemporaryBytes: 0, maxWorkBytes: this.limits.workBytes, maxTotalWorkBytes: this.limits.workBytes, maxLinks: this.limits.edges };
       for (const [key, value] of Object.entries(this.store.env?.CODEC_LIMITS ?? {})) limits[key] = key in limits ? Math.min(limits[key], value) : value;
       this.codec = new Codec(this.module, this.format, limits);
       this.objects = new ObjectSource(this.store, this.codec, `browse:${crypto.randomUUID()}`, { storageBytes: this.limits.storageBytes });
@@ -270,8 +270,13 @@ export class ReadApi {
         const row = params.has("oid") ? this.object(params.get("oid").toLowerCase()) : await this.atPath(params.get("rev") ?? "HEAD", params.get("path") ?? "");
         if (row.kind !== 3) throw new ApiError("object or path is not a blob", 422);
         if (row.size > number(params.get("maxBytes"), this.limits.blobBytes, this.limits.blobBytes)) throw new ApiError("blob exceeds byte limit", 413);
+        const source = this.source();
+        if (row.size > source.codec.limits.maxObjectBytes) throw new ApiError("blob exceeds codec object budget", 413);
+        // Reserve known output before constructing a streaming 200. The source
+        // then spends reconstruction work without charging canonical output twice.
+        source.codec.charge(0, row.size);
         const owner = this;
-        async function* body() { try { yield* owner.source().stream(row); } finally { owner.reset(); } }
+        async function* body() { try { yield* source.stream(row, null, { canonicalReserved: true }); } finally { owner.reset(); } }
         const response = stream(body(), "application/octet-stream", row.size);
         response.headers.set("Content-Length", String(row.size)); response.headers.set("X-Content-Type-Options", "nosniff"); response.headers.set("Content-Disposition", "attachment"); response.headers.set("X-Object-Id", row.oid);
         streaming = true; return response;

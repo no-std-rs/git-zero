@@ -1095,7 +1095,7 @@ not build the embedding product's workers-rs router or claim deployed costs.
 Focused second-review host regressions (after `npm run build:streamed`):
 
 ```sh
-node --test test/browse.test.mjs test/browse-scale.test.mjs
+node --test test/browse.test.mjs test/browse-scale.test.mjs test/browse-blob-budget.test.mjs
 node --test test/host-module.test.mjs test/response.test.mjs test/grant-queue.test.mjs
 node --test test/fetch-quota.test.mjs test/temporary-cleanup.test.mjs
 node --test test/large-refusal.test.mjs test/refusal-drain.test.mjs test/policy.test.mjs

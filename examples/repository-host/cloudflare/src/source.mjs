@@ -275,8 +275,8 @@ export class ObjectSource {
   // Stream a verified published object's complete body or bounded subrange.
   // Nested bases are described/read by range: no canonical base warming or
   // temporary reconstruction is required for the product read API.
-  async *stream(row, range = null) {
-    this.codec.charge(0, range?.length ?? row.size);
+  async *stream(row, range = null, { canonicalReserved = false } = {}) {
+    if (!canonicalReserved) this.codec.charge(0, range?.length ?? row.size);
     this.queryKeys = new Map(); this.queryRows = [];
     const root = this.key(row), descriptor = this.descriptor(row);
     this.codec.rangeInit(root, range);
