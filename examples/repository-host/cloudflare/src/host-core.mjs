@@ -1,14 +1,14 @@
 import { Codec, CodecError } from "./codec.mjs";
 import { Intake } from "./intake.mjs";
 import { ObjectSource } from "./source.mjs";
-import { Store } from "./storage.mjs";
+import { Store, assertStoragePrefix } from "./storage.mjs";
 import { bytes } from "./storage.mjs";
 import { publish } from "./publication.mjs";
 import { FetchJob } from "./fetch.mjs";
 import { streamResponse } from "./response.mjs";
 import { RequestError, isStorageFailure } from "./errors.mjs";
 
-import { Lifecycle } from "./lifecycle.mjs";
+import { Lifecycle, creationSettings } from "./lifecycle.mjs";
 import { ReadApi } from "./browse.mjs";
 import { changes } from "./changes.mjs";
 import { PolicyError, policyRoute } from "./policy.mjs";
@@ -134,12 +134,8 @@ export class RepositoryCore {
         const identity = this.ctx.storage.sql.exec("SELECT namespace FROM host_identity WHERE id=1").toArray()[0];
         if (identity && identity.namespace !== namespace) return json({ error: "unknown route" }, 404);
       }
-      if (this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='host_storage_config'").toArray().length) {
-        const stored = this.ctx.storage.sql.exec("SELECT prefix FROM host_storage_config WHERE id=1").toArray()[0];
-        if (stored && stored.prefix !== this.env.KEY_PREFIX) throw new ApiError("stored R2 key prefix differs from configuration", 409);
-      } else if (this.env.KEY_PREFIX && this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='host_identity'").toArray().length) {
-        throw new ApiError("legacy repository requires the original empty R2 key prefix", 409);
-      }
+      assertStoragePrefix(this.ctx, this.env.KEY_PREFIX);
+      if (this.lifecycle && this.lifecycle.namespace !== namespace) return json({ error: "unknown route" }, 404);
       this.lifecycle ??= new Lifecycle(this.ctx, this.env, namespace);
       await this.lifecycle.load();
       if (this.lifecycle.state) {
@@ -147,15 +143,25 @@ export class RepositoryCore {
         if (this.lifecycle.state.state === "deleted") this.store = null;
         return response;
       }
+      const url = new URL(request.url), parts = url.pathname.split("/"), route = apiRoute(request);
+      const tables = this.ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('repository','host_identity','host_storage_config')").toArray();
+      const exists = tables.some((row) => row.name === "repository") && this.ctx.storage.sql.exec("SELECT 1 FROM repository WHERE id=1").toArray().length;
+      let creation;
+      if (!exists) {
+        if (route === "repository" && request.method === "DELETE" && tables.length) {
+          const response = await this.lifecycle.beginDelete(); if (this.lifecycle.state.state === "deleted") this.store = null; return response;
+        }
+        if (route === "repository" && request.method === "PUT") creation = await creationSettings(request);
+        else if (!(parts[1] === "_test" && this.env.TEST_MODE === "true") && !(parts[1] !== "_test" && !route && this.env.AUTH_MODE === "token" && this.env.IMPLICIT_CREATE !== "false")) return json({ error: "unknown route" }, 404);
+      }
       if (!this.store) {
         const store = new Store(this.ctx, this.env, namespace);
         await store.recover(); this.store = store;
       }
       if (this.store.namespace !== namespace) throw new Error("repository identity differs");
       for (const field of ["r2FenceGets", "r2Failures", "r2Retries"]) { this.store.usage[field] += this.lifecycle.usage[field]; this.lifecycle.usage[field] = 0; }
-      const url = new URL(request.url), parts = url.pathname.split("/");
       if (apiRoute(request) === "repository") {
-        const response = await this.lifecycle.handle(request, this.store);
+        const response = await this.lifecycle.handle(request, this.store, creation);
         if (this.lifecycle.state?.state === "deleted") this.store = null;
         return response;
       }

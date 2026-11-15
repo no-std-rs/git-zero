@@ -7,7 +7,7 @@ const host = createRepositoryHost({
   codec: module, bindings: { repositories: "REPOSITORIES", objects: "BLOBS", token: "HOST_TOKEN", grantKey: "GRANT_KEY" },
   bucket, authMode: (env) => env.AUTH_MODE ?? "token", routePrefix: "", keyPrefix: "",
   healthPath: "/health", testPrefix: "/_test", testEnabled: (env) => env.TEST_MODE === "true",
-  implicitCreate: (env) => env.IMPLICIT_CREATE !== "false", objectFormat: (env) => Number(env.REPO_FORMAT ?? 0),
+  implicitCreate: (env) => env.IMPLICIT_CREATE ?? true, objectFormat: (env) => Number(env.REPO_FORMAT ?? 0),
   policy: (env) => ({ allowNonFastForward: env.ALLOW_NON_FAST_FORWARD === "true", maxStoredBytes: env.MAX_STORED_BYTES || null, maxPushBytes: env.MAX_PUSH_BYTES || null }),
   // Preserve the reference suite's independent concurrent idle-body requests.
   // Embedded scripts default to one active job and should budget their isolate.

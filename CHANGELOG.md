@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Repository host: validate storage prefixes during alarm recovery, support
+  configured EU namespace identity, parse environment booleans without truthiness,
+  avoid durable state for missing repositories and reclaim earlier schema-only
+  namespaces. Codec provenance references an immutable main ancestor and checks
+  its build-input fingerprint rather than relying on a PR-only commit.
+
 ## [0.2.0](https://github.com/no-std-rs/git-zero/compare/v0.1.0...v0.2.0) (2026-10-25)
 
 

@@ -612,7 +612,10 @@ fixed Content-Length prevents a partial blob from appearing as a complete file.
 
 Pin the full source commit and Cargo.lock, the compiler and target, and the
 hosting profile. The codec sources/ABI used here are unchanged from this tested
-pin: `c434b802558abf9a82639d5b367787191007177e`. In a build of that pinned source:
+pin: `9efd2f70da9247411feb6bd79d4b291cd618c6b6`. That pin is an existing ancestor of main, so squash merging this PR does not
+remove it. `cloudflare/codec-source-pin.json` records its build-input digest;
+the suite checks current codec sources and manifests against that digest.
+In a build of that pinned source:
 
 ```sh
 rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown
@@ -667,3 +670,27 @@ A separate module test holds one repository's response beyond a second
 repository grant's expiry: pre-gate admission succeeds, expired arrivals remain
 404 and excess valid arrivals receive 503. Lower page/cache/capture/chunk bounds
 are exercised; the reference gateway/HTTP/S3 runtimes remain independently tested.
+
+### Storage configuration and jurisdiction safety
+
+Every Store construction, including alarm recovery, checks prefix identity before
+creating schema or recording configuration. Legacy catalogs require the empty
+prefix on every path; an alarm cannot silently adopt a new prefix.
+
+The optional factory jurisdiction is null (unrestricted namespace) or `eu`.
+Both entry routing and the Durable Object identity check call the configured
+binding's jurisdiction("eu") before idFromName. Direct callers must use the
+same jurisdiction. A global/different object ID still returns the hidden 404.
+Jurisdiction is deployment identity: preserve it with the namespace/bucket/prefix;
+R2 location is configured separately by the embedder. Local workerd does not
+implement jurisdiction placement. Tests use a strict scoped-binding adapter with
+distinct native IDs and verify mismatch rejection; no live EU placement is claimed.
+
+Boolean configuration accepts only true/"true" as enabled, false/"false" as
+disabled. Other supplied values (including null/undefined from a selector) fail
+closed for testEnabled and implicitCreate. Omitted token implicitCreate retains
+its compatibility default. Gateway creation always requires explicit PUT.
+Authorized production reads of a nonexistent repository do not create tables,
+identity or KV records. Invalid creation is validated first. Old schema-only
+identities left by earlier versions can be purged with admin DELETE even when
+no repository row exists.

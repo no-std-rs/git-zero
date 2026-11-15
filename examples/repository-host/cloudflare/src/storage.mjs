@@ -3,6 +3,7 @@ import { bucket } from "./r2-s3.mjs";
 import { hex } from "./codec.mjs";
 import { RequestError, storageFailure } from "./errors.mjs";
 import { PolicyError, repositoryPolicy } from "./policy.mjs";
+import { ApiError } from "./api.mjs";
 export const CHUNK_BYTES = 1024 * 1024;
 const MAX_STORED_CHUNK_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 65536;
@@ -125,8 +126,21 @@ const SCHEMA = [
 ];
 const STAGE_METADATA = ["stage_objects", "stage_edges", "stage_names", "stage_blob_checks", "stage_commands", "stage_options", "stage_shallow"];
 
+// Run before any schema/configuration writes, including alarm recovery and
+// direct Store construction. A legacy catalog always belongs to the empty root.
+export function assertStoragePrefix(ctx, prefix = "") {
+  const exec = (sql, ...args) => ctx.storage.sql.exec(sql, ...args).toArray();
+  const tables = exec("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('host_storage_config','host_identity','repository','stages')");
+  if (tables.some((row) => row.name === "host_storage_config")) {
+    const stored = exec("SELECT prefix FROM host_storage_config WHERE id=1")[0];
+    if (stored) { if (stored.prefix !== prefix) throw new ApiError("stored R2 key prefix differs from configuration", 409); return; }
+  }
+  if (prefix && tables.some((row) => row.name !== "host_storage_config")) throw new ApiError("legacy repository requires the original empty R2 key prefix", 409);
+}
+
 export class Store {
   constructor(ctx, env, namespace) {
+    assertStoragePrefix(ctx, env.KEY_PREFIX ?? "");
     this.ctx = ctx; this.env = env; this.namespace = namespace; this.blobs = bucket(env);
     this.usage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2FenceGets: 0, r2Puts: 0, r2Deletes: 0, r2Failures: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
     this.observerUsage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0 };

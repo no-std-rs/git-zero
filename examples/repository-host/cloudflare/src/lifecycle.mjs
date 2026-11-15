@@ -9,6 +9,13 @@ export function branchRef(branch) {
   if (typeof branch !== "string" || encode(branch).length < 1 || encode(branch).length > 240 || (branch === "@" || branch === "HEAD") || /[\uD800-\uDFFF]/u.test(branch) || /[\x00-\x20\x7f~^:?*\[\\]/.test(branch) || branch.includes("..") || branch.includes("@{") || branch.endsWith(".") || branch.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock"))) throw new ApiError("invalid default branch (maximum 240 UTF-8 bytes)");
   return `refs/heads/${branch}`;
 }
+export async function creationSettings(request) {
+  const value = await readJson(request);
+  if (Object.keys(value).some((name) => !["objectFormat", "defaultBranch"].includes(name))) throw new ApiError("unknown create field");
+  const format = value.objectFormat ?? "sha1", branch = branchRef(value.defaultBranch ?? "main");
+  if (format !== "sha1" && format !== "sha256") throw new ApiError("objectFormat must be sha1 or sha256");
+  return { format, branch };
+}
 
 // Content is removed through R2 listing and native storage.deleteAll(), rather
 // than unbounded SQL DELETE loops. A separate permanent fence survives even a
@@ -53,14 +60,11 @@ export class Lifecycle {
       lastPublication: settings?.last_publication ?? null,
     };
   }
-  async handle(request, store) {
+  async handle(request, store, creation) {
     const current = this.describe(store);
     if (request.method === "GET") return current ? json(current) : hidden();
     if (request.method === "PUT") {
-      const value = await readJson(request);
-      if (Object.keys(value).some((name) => !["objectFormat", "defaultBranch"].includes(name))) throw new ApiError("unknown create field");
-      const format = value.objectFormat ?? "sha1", branch = branchRef(value.defaultBranch ?? "main");
-      if (format !== "sha1" && format !== "sha256") throw new ApiError("objectFormat must be sha1 or sha256");
+      const { format, branch } = creation ?? await creationSettings(request);
       if (current) {
         if (current.objectFormat !== format || (current.defaultBranch ?? current.head.symbolic.slice(11)) !== branch.slice(11)) throw new ApiError("repository already exists with different creation settings", 409);
         return json(current);
@@ -74,11 +78,14 @@ export class Lifecycle {
     }
     if (request.method === "DELETE") {
       if (!current) return hidden();
-      this.state = { state: "deleting", namespace: this.namespace, retiredAt: Date.now() };
-      await this.ctx.storage.put(STATE, this.state);
-      return this.purge();
+      return this.beginDelete();
     }
     return json({ error: "method not allowed" }, 405);
+  }
+  async beginDelete() {
+    this.state = { state: "deleting", namespace: this.namespace, retiredAt: Date.now() };
+    await this.ctx.storage.put(STATE, this.state);
+    return this.purge();
   }
   async purge() {
     // Await the external fence before removing any content. Retrying a lost

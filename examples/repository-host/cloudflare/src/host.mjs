@@ -24,6 +24,7 @@ function route(value, optional, name) {
   return value;
 }
 const resolve = (value, env) => typeof value === "function" ? value(env) : value;
+const enabled = (value) => value === true || value === "true";
 function semaphore(maxActive, maxPending) {
   let active = 0, pending = 0; const waiting = [];
   return { reserve() {
@@ -46,6 +47,8 @@ export function createRepositoryHost(options) {
   if (!(options?.codec instanceof WebAssembly.Module)) throw new TypeError("codec must be a compiled WebAssembly.Module");
   options = { ...options, bindings: options.bindings ? Object.freeze({ ...options.bindings }) : null };
   const { bindings, authMode } = options;
+  if (options.jurisdiction != null && options.jurisdiction !== "eu") throw new TypeError("jurisdiction must be null or eu");
+  const namespaceBinding = (env) => options.jurisdiction ? env[bindings.repositories].jurisdiction(options.jurisdiction) : env[bindings.repositories];
   if (!bindings || typeof bindings.repositories !== "string" || !bindings.repositories || (!options.bucket && (typeof bindings.objects !== "string" || !bindings.objects))) throw new TypeError("repository and object binding names are required");
   if (typeof authMode !== "function" && !["token", "gateway"].includes(authMode)) throw new TypeError("authMode must be supplied");
   for (const [key, value] of Object.entries(bindings)) if (!["repositories", "objects", "token", "grantKey"].includes(key) || typeof value !== "string" || !value) throw new TypeError("invalid binding name");
@@ -65,8 +68,8 @@ export function createRepositoryHost(options) {
   function environment(env) {
     const mode = resolve(authMode, env), policy = resolve(options.policy, env) ?? {};
     const internal = { AUTH_MODE: mode, HOST_TOKEN: bindings.token ? env[bindings.token] : undefined, GRANT_KEY: bindings.grantKey ? env[bindings.grantKey] : undefined,
-      KEY_PREFIX: options.keyPrefix, TEST_MODE: tests && resolve(options.testEnabled ?? true, env) ? "true" : "false",
-      IMPLICIT_CREATE: resolve(options.implicitCreate ?? true, env) ? "true" : "false", REPO_FORMAT: resolve(options.objectFormat ?? 0, env),
+      KEY_PREFIX: options.keyPrefix, TEST_MODE: tests && enabled(resolve(Object.hasOwn(options, "testEnabled") ? options.testEnabled : true, env)) ? "true" : "false",
+      IMPLICIT_CREATE: enabled(resolve(Object.hasOwn(options, "implicitCreate") ? options.implicitCreate : true, env)) ? "true" : "false", REPO_FORMAT: resolve(options.objectFormat ?? 0, env),
       MEMORY: memory, CODEC_LIMITS: codecLimits, READ_LIMITS: readLimits,
       ALLOW_NON_FAST_FORWARD: String(policy.allowNonFastForward ?? false), MAX_STORED_BYTES: policy.maxStoredBytes == null ? undefined : String(policy.maxStoredBytes), MAX_PUSH_BYTES: policy.maxPushBytes == null ? undefined : String(policy.maxPushBytes) };
     Object.defineProperty(internal, "BLOBS", { get: () => options.bucket ? options.bucket(env) : env[bindings.objects] });
@@ -74,7 +77,7 @@ export function createRepositoryHost(options) {
   }
   function canonical(request, env, direct) {
     const url = new URL(request.url); let path, isTest = false;
-    if (tests && resolve(options.testEnabled ?? true, env) && url.pathname.startsWith(tests + "/")) { path = "/_test/" + url.pathname.slice(tests.length + 1); isTest = true; }
+    if (tests && enabled(resolve(Object.hasOwn(options, "testEnabled") ? options.testEnabled : true, env)) && url.pathname.startsWith(tests + "/")) { path = "/_test/" + url.pathname.slice(tests.length + 1); isTest = true; }
     else if (!prefix || url.pathname.startsWith(prefix + "/")) path = url.pathname.slice(prefix.length);
     else return null;
     const parts = path.split("/"), namespace = isTest ? parts[2] : parts[1]?.endsWith(".git") ? parts[1].slice(0, -4) : null;
@@ -94,7 +97,7 @@ export function createRepositoryHost(options) {
     fetch(request) {
       const target = canonical(request, this.bindingsEnv, true);
       if (!target) return Promise.resolve(hidden());
-      if (this.ctx.id && this.bindingsEnv[bindings.repositories]?.idFromName(target.namespace).toString() !== this.ctx.id.toString()) return Promise.resolve(hidden());
+      if (this.ctx.id && namespaceBinding(this.bindingsEnv)?.idFromName(target.namespace).toString() !== this.ctx.id.toString()) return Promise.resolve(hidden());
       return super.fetch(target.request);
     }
   }
@@ -104,7 +107,7 @@ export function createRepositoryHost(options) {
     const target = canonical(request, env, false), access = await authorize(target?.request ?? request, internal, target?.namespace ?? null);
     if (access instanceof Response) return access;
     if (!target) return hidden();
-    const namespace = env[bindings.repositories];
+    const namespace = namespaceBinding(env);
     return namespace.get(namespace.idFromName(target.namespace)).fetch(new Request(request, { headers: target.request.headers }));
   }
   return Object.freeze({ fetch, Repository });
