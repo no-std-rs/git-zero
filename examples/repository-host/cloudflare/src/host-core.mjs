@@ -180,8 +180,8 @@ export class RepositoryCore {
         if (request.method === "POST" && parts[2] === "git-receive-pack" && parts.length === 3 && contentType === "application/x-git-receive-pack-request") return await this.receive(request, codec, access.actor);
         if (request.method === "POST" && parts[2] === "git-upload-pack" && parts.length === 3 && contentType === "application/x-git-upload-pack-request") {
           const fetch = new FetchJob(this.store, codec, version);
-          try { await fetch.decode(request); }
-          catch (error) { codec.uploadCancel(); fetch.reset(); throw error; }
+          try { await fetch.decode(request); await fetch.prepare(); }
+          catch (error) { await fetch.cleanup(); throw error; }
           return this.stream(fetch.response(), "application/x-git-upload-pack-result");
         }
         return json({ error: "unknown Git route" }, 404);

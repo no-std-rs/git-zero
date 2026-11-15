@@ -12,8 +12,8 @@ const info = (row) => ({ kind: row.kind, size: row.size });
 // reconstruction queries. Keeping verified bases resolved avoids repeatedly
 // interpreting the same deep delta chain for each requested output fragment.
 export class ObjectSource {
-  constructor(store, codec, stage, { ownedBuffers = false, storageBytes = null } = {}) {
-    this.store = store; this.codec = codec; this.stage = stage; this.ownsBuffers = ownedBuffers;
+  constructor(store, codec, stage, { ownedBuffers = false, storageBytes = null, readScratch = false } = {}) {
+    this.store = store; this.codec = codec; this.stage = stage; this.ownsBuffers = ownedBuffers; this.readScratch = readScratch;
     this.resources = { ...MEMORY_LIMITS, ...store.env?.MEMORY };
     this.storageBytes = storageBytes;
     // Owned views cannot escape beyond the next cache mutation. Intake consumes
@@ -76,7 +76,7 @@ export class ObjectSource {
   }
   cachedTemporary(row) {
     // process() captures these bodies; only larger objects create temp rows.
-    if (row.size <= this.resources.canonicalCaptureBytes) return undefined;
+    if (!this.readScratch && row.size <= this.resources.canonicalCaptureBytes) return undefined;
     const key = rowKey(row);
     if (this.temporary.has(key)) return this.temporary.get(key);
     const value = this.store.exec("SELECT * FROM temp_objects WHERE stage=? AND object=?", this.stage, key)[0];
@@ -299,12 +299,12 @@ export class ObjectSource {
     } finally { this.codec.rangeCancel(); this.codec.sourceCancel(); this.reader = null; }
   }
 
-  async process(row, scan = true, checks = 0) {
+  async process(row, scan = true, checks = 0, forceTemporary = false) {
     this.queries++;
     this.codec.charge(0, row.size);
     // Designated policies may rescan a body reconstructed earlier in this
     // request. Reuse its authenticated temporary object and reserve it once.
-    const createTemporary = row.size > this.resources.canonicalCaptureBytes && !this.cachedTemporary(row);
+    const createTemporary = (forceTemporary || row.size > this.resources.canonicalCaptureBytes) && !this.cachedTemporary(row);
     if (createTemporary) this.codec.charge(2, row.size);
     // Keys identify physical immutable representations within one query. An
     // identity delta may have the same canonical ID as its external base;
@@ -313,8 +313,8 @@ export class ObjectSource {
     const rootKey = this.key(row);
     const descriptor = this.descriptor(row);
     this.codec.rangeInit(rootKey); this.beginScan(row, scan, checks);
-    const captured = row.size <= this.resources.canonicalCaptureBytes ? new Uint8Array(row.size) : null;
-    const temporary = createTemporary ? new ChunkWriter(this.store, this.stage, rowKey(row)) : null;
+    const captured = !forceTemporary && row.size <= this.resources.canonicalCaptureBytes ? new Uint8Array(row.size) : null;
+    const temporary = createTemporary ? new ChunkWriter(this.store, this.stage, rowKey(row), this.readScratch) : null;
     let written = 0, digest, request = this.codec.rangeRequest();
     for (;;) {
       if (request.tag === 20) {

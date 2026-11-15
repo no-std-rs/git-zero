@@ -392,7 +392,7 @@ storage cleanup fails.
 
 maxStoredBytes bounds **unique, catalog-owned R2 payload bytes** under the
 repository content prefix. It includes published/unreachable retained chunks,
-quarantine and temporary reconstruction chunks. Shared content-addressed keys
+quarantine and **push-validation** temporary reconstruction chunks. Shared content-addressed keys
 count once. This is an object-storage cap: SQLite pages/indexes/journal rows,
 R2 metadata overhead and the permanent retirement fence are excluded. Native
 SQLite bytes remain separately reported where available and subject to platform
@@ -405,9 +405,23 @@ that is conservative. Space is released only after an acknowledged R2 deletion.
 Recovery retries lost acknowledgments without double charging. Lowering a cap
 below existing usage does not delete content: browse reads, deletion-only pushes and
 updates needing only already owned keys remain possible; new keys are refused.
-Git reconstruction needing new temporary keys also needs storage headroom.
-Temporary storage needs headroom inside the same cap. Whole repository DELETE
-still purges the prefix, including objects outside the known ledger.
+Read-only fetch reconstruction uses separately owned **read scratch**, excluded
+from stored-size accounting and its readiness gate. A clone/fetch can therefore
+serve existing content when usage exceeds the cap or legacy accounting is
+pending. Scratch markers and temporary ownership are committed together before
+PUT and retained until deletion is acknowledged; cold recovery reclaims them.
+Accounting backfill excludes these markers, including deferred-cleanup scratch.
+Push reconstruction still needs quota headroom. Whole repository DELETE purges
+all content, including scratch and objects outside the known ledger.
+
+Fetch preflights exact output pack size and every fallback reconstruction before
+sending 200. Small fallback bodies are pinned in owned scratch too, so cache
+eviction cannot trigger reconstruction/quota errors mid-stream. Codec canonical,
+work and temporary budgets remain enforced; a known preparation failure returns
+an HTTP error before response bytes and leaves refs unchanged. This moves work
+and temporary R2 writes earlier, increasing time to first byte for fallback
+fetches; reusable compressed packs keep their existing streaming path. Storage
+or transport failures after preparation remain unpredictable stream failures.
 
 New/empty catalogs have ready accounting immediately. Existing catalogs keep
 working uncapped without a table rewrite. Their old stage/temporary ownership
@@ -743,3 +757,9 @@ Authorized production reads of a nonexistent repository do not create tables,
 identity or KV records. Invalid creation is validated first. Old schema-only
 identities left by earlier versions can be purged with admin DELETE even when
 no repository row exists.
+
+The `fetch-quota.test.mjs` regression drives real Git against 9 MiB delta blobs
+in both formats with a zero stored-size cap, then reconstructs a cold catalog
+with pending legacy accounting and fetches again. Both complete and verify the
+Git object ID/size. A lowered temporary budget is refused before 200. Existing
+native workerd tests retain their EOF and deferred scratch recovery assertions.

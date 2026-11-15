@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fetch fallback reconstruction is prepared before response headers. Read
+  scratch is reclaimed separately and never blocked by stored-size caps or
+  pending legacy accounting; push-validation scratch retains write quotas.
+
 - Repository host: remove cross-repository admission blocking. Gateway jobs use
   smaller default caches and bounded per-repository queues/response lifetimes.
   Token deployments retain their previous uncapped queue, caches and idle limit;

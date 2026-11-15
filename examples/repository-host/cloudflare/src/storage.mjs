@@ -112,6 +112,7 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS stage_blob_checks (stage TEXT NOT NULL, oid TEXT NOT NULL, checks INTEGER NOT NULL DEFAULT 2, PRIMARY KEY(stage,oid)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS temp_chunks (stage TEXT NOT NULL, object TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,object,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS temp_chunk_offsets ON temp_chunks(stage,object,start)",
+  "CREATE TABLE IF NOT EXISTS read_scratch (key TEXT PRIMARY KEY) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS temp_objects (stage TEXT NOT NULL, object TEXT NOT NULL, oid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(stage,object)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS refs (name BLOB PRIMARY KEY, oid TEXT NOT NULL, peeled TEXT) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS proposed_refs (name BLOB PRIMARY KEY, seq INTEGER) WITHOUT ROWID",
@@ -341,7 +342,7 @@ export class Store {
       if (row.phase === 2) return;
       const page = row.phase === 0
         ? this.exec("SELECT stage,seq,key,length FROM stage_chunks WHERE (stage,seq)>(?,?) ORDER BY stage,seq LIMIT 64", row.last_stage, row.last_seq)
-        : this.exec("SELECT stage,object,seq,key,length FROM temp_chunks WHERE (stage,object,seq)>(?,?,?) ORDER BY stage,object,seq LIMIT 64", row.last_stage, row.last_object, row.last_seq);
+        : this.exec("SELECT stage,object,seq,key,length FROM temp_chunks WHERE NOT EXISTS(SELECT 1 FROM read_scratch r WHERE r.key=temp_chunks.key) AND (stage,object,seq)>(?,?,?) ORDER BY stage,object,seq LIMIT 64", row.last_stage, row.last_object, row.last_seq);
       for (const chunk of page) this.rememberChunk(chunk.key, chunk.length);
       if (page.length < 64) this.exec("UPDATE host_storage_usage SET phase=phase+1,last_stage='',last_object='',last_seq=-1 WHERE id=1");
       else { const last = page.at(-1); this.exec("UPDATE host_storage_usage SET last_stage=?,last_object=?,last_seq=? WHERE id=1", last.stage, last.object ?? "", last.seq); }
@@ -374,7 +375,12 @@ export class Store {
       if (!rows.length) break;
       const batch = rows.map((row) => row.key);
       await this.delete(batch);
-      for (const row of rows) this.exec("DELETE FROM temp_chunks WHERE stage=? AND object=? AND seq=?", stage, row.object, row.seq);
+      this.ctx.storage.transactionSync(() => {
+        for (const row of rows) {
+          this.exec("DELETE FROM temp_chunks WHERE stage=? AND object=? AND seq=?", stage, row.object, row.seq);
+          this.exec("DELETE FROM read_scratch WHERE key=?", row.key);
+        }
+      });
     }
     this.exec("DELETE FROM temp_objects WHERE stage=?", stage);
     return true;
@@ -446,8 +452,9 @@ export class Store {
 }
 
 export class ChunkWriter {
-  constructor(store, stage, temporary = null) {
-    this.store = store; this.stage = stage; this.temporary = temporary;
+  constructor(store, stage, temporary = null, readScratch = false) {
+    this.store = store; this.stage = stage; this.temporary = temporary; this.readScratch = readScratch;
+    if (readScratch && temporary === null) throw new Error("read scratch must be temporary");
     this.chunkBytes = store.env?.MEMORY?.chunkBytes ?? CHUNK_BYTES;
     this.buffer = new Uint8Array(this.chunkBytes); this.used = 0; this.position = 0; this.seq = 0;
   }
@@ -467,7 +474,8 @@ export class ChunkWriter {
     const key = this.temporary === null ? `${prefix}/chunks/${sha}` : `${prefix}/tmp/${this.stage}/${this.temporary}/${this.seq}`;
     const values = [this.stage, this.seq, key, this.position, this.used, sha];
     this.store.ctx.storage.transactionSync(() => {
-      this.store.claimChunk(key, this.used);
+      if (this.readScratch) this.store.exec("INSERT INTO read_scratch(key) VALUES(?)", key);
+      else this.store.claimChunk(key, this.used);
       if (this.temporary === null) this.store.exec("INSERT INTO stage_chunks(stage,seq,key,start,length,sha) VALUES(?,?,?,?,?,?)", ...values);
       else this.store.exec("INSERT INTO temp_chunks(stage,object,seq,key,start,length,sha) VALUES(?,?,?,?,?,?,?)", this.stage, this.temporary, ...values.slice(1));
     });

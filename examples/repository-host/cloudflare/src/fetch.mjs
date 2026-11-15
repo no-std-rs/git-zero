@@ -2,6 +2,7 @@ import { hex, integer } from "./codec.mjs";
 import { bytes, FETCH_TABLES, PAGE_BYTES } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
 import { requestBody, decodedBody } from "./body.mjs";
+import { ApiError } from "./api.mjs";
 import { RequestError } from "./errors.mjs";
 
 const encode = (value) => new TextEncoder().encode(value);
@@ -13,7 +14,7 @@ export class FetchJob {
   constructor(store, codec, version) {
     this.store = store; this.codec = codec; this.version = version;
     this.temporary = crypto.randomUUID();
-    this.source = new ObjectSource(store, codec, this.temporary, { ownedBuffers: true });
+    this.source = new ObjectSource(store, codec, this.temporary, { ownedBuffers: true, readScratch: true });
     this.steps = 0; this.allCommitWants = true;
   }
   reset() { for (const table of FETCH_TABLES) this.store.exec(`DELETE FROM ${table}`); }
@@ -173,6 +174,37 @@ export class FetchJob {
       this.historyWalk("fetch_selected");
     }
   }
+  async prepare() {
+    if (this.command !== 2 || !this.done || this.rawSources) return;
+    const count = this.store.exec("SELECT COUNT(*) AS count FROM fetch_selected WHERE included=1")[0].count;
+    if (count > this.codec.limits.maxObjects || count > 0xffffffff) throw new ApiError("fetch object count exceeds budget", 413);
+    let size = BigInt(12 + this.codec.idBytes), afterStage = "", afterNode = -1;
+    for (;;) {
+      const rows = this.store.exec("SELECT o.* FROM fetch_selected f JOIN stage_objects o ON o.stage=f.stage AND o.node=f.node WHERE f.included=1 AND (f.stage,f.node)>(?,?) ORDER BY f.stage,f.node LIMIT 128", afterStage, afterNode);
+      if (!rows.length) break;
+      for (const row of rows) {
+        afterStage = row.stage; afterNode = row.node;
+        const delta = row.wire_kind >= 5;
+        const baseSelected = delta && this.store.exec("SELECT 1 FROM fetch_selected WHERE oid=? AND included=1", row.base_oid).length > 0;
+        const fallback = delta && !baseSelected;
+        let inflated = BigInt(fallback ? row.size : row.packed_size), header = 1n;
+        for (let rest = inflated >> 4n; rest; rest >>= 7n) header++;
+        size += header + (delta && !fallback ? BigInt(this.codec.idBytes) : 0n) + (fallback ? inflated + ((inflated + 65534n) / 65535n) * 5n + 11n : BigInt(row.end_offset - row.compressed_offset));
+        if (size > BigInt(this.codec.limits.maxPackBytes)) throw new ApiError("fetch pack exceeds byte budget", 413);
+        if (fallback && !this.source.cachedTemporary(row)) {
+          await this.source.warm(this.source.base(row));
+          // Freeze every fallback before returning 200, even small objects that
+          // could otherwise be evicted from the byte cache during this stream.
+          await this.source.process(row, false, 0, true);
+        }
+      }
+    }
+  }
+  async cleanup() {
+    this.codec.uploadCancel(); this.codec.packCancel(); this.reset();
+    this.source.releaseCaches();
+    await this.store.clearTemporary(this.temporary, { defer: true });
+  }
   async *pack() {
     if (this.rawSources) { yield* this.reusedPack(); return; }
     const count = this.store.exec("SELECT COUNT(*) AS count FROM fetch_selected WHERE included=1")[0].count;
@@ -190,8 +222,6 @@ export class FetchJob {
         const fallback = delta && !baseSelected;
         yield this.codec.packEntry({ id: fromHex(row.oid), kind: fallback ? row.kind : delta ? 7 : row.kind, base: baseSelected ? fromHex(row.base_oid) : undefined, size: fallback ? row.size : row.packed_size, compressedSize: row.end_offset - row.compressed_offset, fallback });
         if (fallback) {
-          await this.source.warm(this.source.base(row));
-          await this.source.process(row, false);
           for (let offset = 0; offset < row.size;) {
             const data = await this.source.readRow(row, 0, offset, Math.min(PAGE_BYTES, row.size - offset));
             if (!data.length) throw new Error("canonical fallback made no progress");
@@ -267,9 +297,7 @@ export class FetchJob {
       yield this.codec.uploadAckFinish();
       if (this.done) yield* this.pack();
     } finally {
-      this.codec.uploadCancel(); this.codec.packCancel(); this.reset();
-      this.source.releaseCaches();
-      await this.store.clearTemporary(this.temporary, { defer: true });
+      await this.cleanup();
     }
   }
 }

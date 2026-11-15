@@ -3,7 +3,9 @@ export function sqliteContext(database) {
   const kv = new Map();
   return { storage: {
     sql: { exec(statement, ...bindings) {
-      const rows = database.prepare(statement).all(...bindings.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value));
+      // node:sqlite binds a zero-length ArrayBuffer view with a null native
+      // pointer as SQL NULL. Keep backing storage for the actual empty BLOB.
+      const rows = database.prepare(statement).all(...bindings.map((value) => value instanceof ArrayBuffer ? (value.byteLength ? new Uint8Array(value) : new Uint8Array(1).subarray(0, 0)) : value));
       return { toArray: () => rows };
     } },
     transactionSync(operation) {

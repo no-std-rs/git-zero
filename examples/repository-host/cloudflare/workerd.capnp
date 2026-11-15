@@ -11,6 +11,7 @@ const config :Workerd.Config = (
         (name = "src/host-core.mjs", esModule = embed "src/host-core.mjs"),
         (name = "src/resources.mjs", esModule = embed "src/resources.mjs"),
         (name = "src/browse.mjs", esModule = embed "src/browse.mjs"),
+        (name = "src/reachability.mjs", esModule = embed "src/reachability.mjs"),
         (name = "src/changes.mjs", esModule = embed "src/changes.mjs"),
         (name = "src/policy.mjs", esModule = embed "src/policy.mjs"),
         (name = "src/api.mjs", esModule = embed "src/api.mjs"),
