@@ -172,7 +172,11 @@ clients seeded with an older ancestor must receive missing history; strict fsck,
 reachable-object lists and archive bytes are checked outside the wire timer.
 Pushes update the main and historical refs atomically. The Git reference maintains
 MIDX bitmaps and a split commit graph after each push; its ready time includes
-that maintenance separately from wire time. Pair order alternates between samples.
+that maintenance separately from wire time. Automatic maintenance is disabled
+for this generated reference: its measured phase owns the MIDX/graph files, so
+a detached repack cannot delete their inputs concurrently. Git's explicit
+bitmap/graph optimizations and all correctness checks remain enabled. Pair order
+alternates between samples.
 The reference uses the test suite's threaded Python HTTP/CGI adapter; timings
 include the different local frontends and do not isolate codec execution speed.
 All pairs use one frozen host bundle; reports record its file sizes and SHA-256

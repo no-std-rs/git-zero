@@ -12,8 +12,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("--git", default="git")
+    parser.add_argument("--trace2", type=Path)
     args = parser.parse_args()
-    with reference_server(args.root, environment(args.git), True) as origin:
+    env = environment(args.git)
+    if args.trace2 is not None:
+        env["GIT_TRACE2_EVENT"] = str(args.trace2.resolve())
+    with reference_server(args.root, env, True) as origin:
         print(json.dumps({"origin": origin}), flush=True)
         sys.stdin.read()
 

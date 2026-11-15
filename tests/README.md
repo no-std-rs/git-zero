@@ -1113,3 +1113,12 @@ incompressible packs with ordinary/gzip bodies against both local runtimes and
 require a Git-readable reason without broken-pipe/RPC diagnostics. EU identity
 uses scoped distinct IDs through actual local stubs: workerd itself does not
 implement jurisdiction placement, and no deployed-EU residency is claimed.
+
+`test/benchmark-maintenance.test.mjs` traces real Git CGI receives in both formats
+and verifies no automatic writer runs outside the benchmark's explicit measured
+MIDX/bitmap and split-graph phase. It verifies those indexes, all received packs,
+strict fsck and source object IDs. The generated reference disables automatic
+maintenance because newer Git may otherwise detach geometric repacks while the
+measured MIDX writer reads their inputs. Tracing is opt-in for this regression,
+not enabled in performance measurements. `GIT_ZERO_BENCH_TEST_GIT` can select an
+independently built Git binary; Git 2.56.1 was also exercised locally.

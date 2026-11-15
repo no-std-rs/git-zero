@@ -793,3 +793,11 @@ replies. Removing that gate fixes concurrent idle-body interference, and the
 new refusal tests reproduce and prevent the early-upload-reset mechanism.
 Those facts do not establish the cause of the two historical socket resets;
 the unchanged original tests are rerun, without relaxing assertions/timeouts.
+
+The independent mixed-history benchmark reference disables automatic Git
+maintenance: its explicit measured MIDX/bitmap and split commit-graph phase owns
+those files. Detached geometric repacks in newer Git can otherwise rewrite/delete
+its inputs outside that phase. A real-Git trace regression fails before this
+configuration change and verifies no automatic writer, four retained incoming
+packs, valid MIDX/graph, strict fsck and matching source IDs afterward. Trace
+instrumentation is opt-in for the regression and absent from measured runs.
