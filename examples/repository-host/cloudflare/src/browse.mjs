@@ -2,13 +2,23 @@ import { Codec, CodecError, hex, integer } from "./codec.mjs";
 import { ObjectSource } from "./source.mjs";
 import { bytes, PAGE_BYTES } from "./storage.mjs";
 import { ApiError, encode, json } from "./api.mjs";
+import { proveRaw } from "./reachability.mjs";
 
 export const READ_LIMITS = Object.freeze({
-  visibleObjects: 20000, edges: 100000, refs: 20000, pageSize: 100,
+  visibleObjects: 1000000, edges: 10000000, indexSteps: 256, refs: 1000000, pageSize: 100,
   treeBytes: 1024 * 1024, headerBytes: 128 * 1024, messageBytes: 32 * 1024,
   metadataBytes: 8 * 1024 * 1024, blobBytes: 8 * 1024 * 1024,
   pathBytes: 4096, pathDepth: 64, tagDepth: 32, parents: 256,
   identityBytes: 4096, jsonBytes: 512 * 1024, workBytes: 128 * 1024 * 1024, storageBytes: 128 * 1024 * 1024,
+});
+// Request budgets may be raised to these deployment-independent safety ceilings.
+export const READ_HARD_LIMITS = Object.freeze({
+  ...READ_LIMITS, visibleObjects: 100000000, edges: 1000000000, indexSteps: 8192,
+  refs: 10000000, pageSize: 1000, treeBytes: 16 * 1024 * 1024,
+  headerBytes: 1024 * 1024, messageBytes: 1024 * 1024, metadataBytes: 32 * 1024 * 1024,
+  blobBytes: 64 * 1024 * 1024, pathBytes: 65536, pathDepth: 1024, tagDepth: 256,
+  parents: 4096, identityBytes: 65536, jsonBytes: 8 * 1024 * 1024,
+  workBytes: 1024 * 1024 * 1024, storageBytes: 1024 * 1024 * 1024,
 });
 const text = (data) => new TextDecoder("utf-8", { ignoreBOM: true }).decode(data);
 const fromHex = (id) => Uint8Array.from(id.match(/../g), (part) => Number.parseInt(part, 16));
@@ -42,7 +52,7 @@ export class ReadApi {
   constructor(store, module, format, limits = {}) {
     this.store = store; this.module = module; this.format = format;
     this.limits = { ...READ_LIMITS, ...limits }; this.generation = store.exec("SELECT generation FROM repository WHERE id=1")[0].generation;
-    this.metadataBytes = 0; this.metadata = new Map(); this.visible = false;
+    this.metadataBytes = 0; this.metadata = new Map(); this.proven = new Set();
   }
   source() {
     if (!this.objects) {
@@ -53,23 +63,30 @@ export class ReadApi {
     }
     return this.objects;
   }
-  reset() { this.objects?.releaseCaches(); this.store.exec("DELETE FROM browse_visible"); }
+  reset() { this.objects?.releaseCaches(); }
   result(value) {
     if (encode(JSON.stringify(value)).length > this.limits.jsonBytes) throw new ApiError("JSON response exceeds byte limit; lower page limit", 413);
     return json(value);
   }
-  cursor(op, value) { return b64(encode(JSON.stringify({ v: 1, op, namespace: this.store.namespace, generation: this.generation, ...value }))); }
-  decodeCursor(op, value) {
+  async cursorKey() {
+    return this.key ??= crypto.subtle.importKey("raw", encode(this.store.env.AUTH_MODE === "gateway" ? this.store.env.GRANT_KEY : this.store.env.HOST_TOKEN), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  }
+  async cursor(op, value) {
+    const payload = b64(encode(JSON.stringify({ v: 2, op, namespace: this.store.namespace, generation: this.generation, ...value })));
+    return payload + "." + b64(new Uint8Array(await crypto.subtle.sign("HMAC", await this.cursorKey(), encode("git-zero-browse-cursor-v2\n" + payload))));
+  }
+  async decodeCursor(op, value) {
     if (!value) return null;
-    if (value.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ApiError("invalid cursor");
+    if (value.length > 2048 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(value)) throw new ApiError("invalid cursor");
+    const [payload, signature] = value.split(".");
+    const decode = (input) => Uint8Array.from(atob(input.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
     let cursor;
     try {
-      const decoded = Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
-      if (b64(decoded) !== value) throw new Error();
+      const decoded = decode(payload), mac = decode(signature);
+      if (b64(decoded) !== payload || b64(mac) !== signature || !await crypto.subtle.verify("HMAC", await this.cursorKey(), mac, encode("git-zero-browse-cursor-v2\n" + payload))) throw new Error();
       cursor = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(decoded));
     } catch { throw new ApiError("invalid cursor"); }
-    if (!cursor || Array.isArray(cursor) || typeof cursor !== "object" || !Number.isSafeInteger(cursor.generation) || cursor.generation < 0) throw new ApiError("invalid cursor");
-    if (cursor.v !== 1 || cursor.op !== op || cursor.namespace !== this.store.namespace) throw new ApiError("invalid cursor");
+    if (!cursor || cursor.v !== 2 || cursor.op !== op || cursor.namespace !== this.store.namespace || !Number.isSafeInteger(cursor.generation) || cursor.generation < 0) throw new ApiError("invalid cursor");
     if (cursor.generation !== this.generation) throw new ApiError("cursor is stale after ref publication; restart pagination", 409);
     return cursor;
   }
@@ -77,8 +94,8 @@ export class ReadApi {
     const head = this.store.exec("SELECT head FROM repository WHERE id=1")[0].head;
     return { symbolic: utf8(bytes(head)), symbolic64: b64(bytes(head)), oid: this.store.exec("SELECT oid FROM refs WHERE name=?", head)[0]?.oid ?? null };
   }
-  refsPage(params) {
-    const limit = number(params.get("limit"), Math.min(20, this.limits.pageSize), this.limits.pageSize, 1), cursor = this.decodeCursor("refs", params.get("cursor"));
+  async refsPage(params) {
+    const limit = number(params.get("limit"), Math.min(20, this.limits.pageSize), this.limits.pageSize, 1), cursor = await this.decodeCursor("refs", params.get("cursor"));
     const offset = number(cursor?.offset, 0, this.limits.refs);
     const rows = this.store.exec("SELECT name,oid,peeled FROM refs ORDER BY name LIMIT ? OFFSET ?", limit + 1, offset);
     if (offset + rows.length > this.limits.refs) throw new ApiError("ref enumeration budget exceeded", 413);
@@ -89,57 +106,33 @@ export class ReadApi {
       if (refs.length && size + cost > this.limits.jsonBytes) break;
       refs.push(entry); size += cost;
     }
-    return this.result({ generation: this.generation, head, refs, nextCursor: rows.length > refs.length ? this.cursor("refs", { offset: offset + refs.length }) : null });
+    return this.result({ generation: this.generation, head, refs, nextCursor: rows.length > refs.length ? await this.cursor("refs", { offset: offset + refs.length }) : null });
   }
-  walk() {
-    if (this.visible) return;
-    this.store.exec("DELETE FROM browse_visible");
-    if (this.store.exec("SELECT 1 FROM refs ORDER BY name LIMIT 1 OFFSET ?", this.limits.refs).length) throw new ApiError("ref traversal budget exceeded", 413);
-    this.store.exec("INSERT OR IGNORE INTO browse_visible(oid) SELECT oid FROM refs");
-    let objects = this.store.exec("SELECT COUNT(*) AS n FROM browse_visible")[0].n, edges = 0;
-    if (objects > this.limits.visibleObjects) throw new ApiError("reachability budget exceeded", 413);
-    for (;;) {
-      const page = this.store.exec("SELECT oid FROM browse_visible WHERE walked=0 ORDER BY oid LIMIT 64");
-      if (!page.length) break;
-      for (const item of page) {
-        const row = this.store.published(item.oid);
-        if (!row?.scanned) throw new Error("published graph metadata is absent");
-        let relation = -1, after = this.store.binaryEdges ? new ArrayBuffer(0) : "";
-        for (;;) {
-          const links = this.store.exec(`SELECT dst,relation,${this.store.edgeTargetSQL()} AS oid FROM stage_edges WHERE stage=? AND node=? AND (relation,dst)>(?,?) ORDER BY relation,dst LIMIT 64`, this.store.edgeStage(row.stage), row.node, relation, after);
-          if (!links.length) break;
-          for (const link of links) {
-            if (++edges > this.limits.edges) throw new ApiError("reachability edge budget exceeded", 413);
-            if (this.store.exec("INSERT OR IGNORE INTO browse_visible(oid) VALUES(?) RETURNING oid", link.oid).length && ++objects > this.limits.visibleObjects) throw new ApiError("reachability budget exceeded", 413);
-            relation = link.relation; after = this.store.binaryEdges ? bytes(link.dst).slice().buffer : link.dst;
-          }
-        }
-        this.store.exec("UPDATE browse_visible SET walked=1 WHERE oid=?", item.oid);
-      }
-    }
-    this.visible = true;
-  }
+  // Only current refs, authenticated graph links, and signed current-generation
+  // cursors may add request-local proofs. A user-supplied oid never does.
+  prove(oid) { this.proven.add(oid); return this.object(oid); }
   object(oid) {
-    this.walk();
-    if (typeof oid !== "string" || !new RegExp(`^[0-9a-f]{${this.format ? 64 : 40}}$`).test(oid) || !this.store.exec("SELECT 1 FROM browse_visible WHERE oid=?", oid).length) throw missing();
-    const row = this.store.published(oid); if (!row?.scanned) throw missing(); return row;
+    if (typeof oid !== "string" || !new RegExp(`^[0-9a-f]{${this.format ? 64 : 40}}$`).test(oid)) throw missing();
+    const row = this.store.published(oid); if (!row?.scanned) throw missing();
+    if (!this.proven.has(oid) && !proveRaw(this.store, this.generation, oid, this.limits)) throw missing();
+    this.proven.add(oid); return row;
   }
   resolve(revision = "HEAD") {
     if (revision.startsWith("oid:")) return this.object(revision.slice(4).toLowerCase());
-    if (revision === "HEAD") { const id = this.head().oid; if (!id) throw missing(); return this.object(id); }
+    if (revision === "HEAD") { const id = this.head().oid; if (!id) throw missing(); return this.prove(id); }
     if (encode(revision).length > 65520) throw new ApiError("revision name exceeds byte limit", 413);
     const names = revision.startsWith("refs/") ? [revision] : [revision, `refs/${revision}`, `refs/heads/${revision}`, `refs/tags/${revision}`];
     const candidates = this.store.exec(`SELECT name,oid FROM refs WHERE name IN (${names.map(() => "?").join(",")})`, ...names.map((name) => encode(name).buffer));
-    this.walk();
-    const oid = new RegExp(`^[0-9a-fA-F]{${this.format ? 64 : 40}}$`).test(revision) && this.store.exec("SELECT 1 FROM browse_visible WHERE oid=?", revision.toLowerCase()).length ? revision.toLowerCase() : null;
-    if (candidates.length + Number(Boolean(oid)) > 1) throw new ApiError("ambiguous revision; use a full ref name or oid:<id>", 409);
-    return this.object(oid ?? candidates[0]?.oid);
+    const raw = new RegExp(`^[0-9a-fA-F]{${this.format ? 64 : 40}}$`).test(revision);
+    if (candidates.length > 1 || (candidates.length && raw)) throw new ApiError("ambiguous revision; use a full ref name or oid:<id>", 409);
+    if (candidates.length) return this.prove(candidates[0].oid);
+    return this.object(raw ? revision.toLowerCase() : null);
   }
   peel(row) {
     for (let depth = 0; row.kind === 4; depth++) {
       if (depth >= this.limits.tagDepth) throw new ApiError("tag depth budget exceeded", 413);
       const edge = this.store.exec(`SELECT ${this.store.edgeTargetSQL()} AS oid FROM stage_edges WHERE stage=? AND node=? AND relation=2 LIMIT 1`, this.store.edgeStage(row.stage), row.node)[0];
-      if (!edge) throw new Error("tag target metadata is absent"); row = this.object(edge.oid);
+      if (!edge) throw new Error("tag target metadata is absent"); row = this.prove(edge.oid);
     }
     return row;
   }
@@ -177,6 +170,7 @@ export class ReadApi {
     end = begin; while (end < lines.length && !/^[ \t\r]*$/.test(lines[end])) end++;
     body = end; while (body < lines.length && /^[ \t\r]*$/.test(lines[body])) body++;
     result.message = { subject: lines.slice(begin, end).map((line) => line.replace(/^[ \t\r]+|[ \t\r]+$/g, "")).join(" "), body: lines.slice(body).join("\n"), truncated: row.size - messageStart > message.length, raw64: b64(message) };
+    this.proven.add(result.tree); for (const parent of result.parents) this.proven.add(parent);
     this.metadata.set(row.oid, result); return result;
   }
   path(value) {
@@ -204,20 +198,21 @@ export class ReadApi {
     let row = this.peel(this.resolve(revision));
     if (row.kind === 1) {
       const tree = this.store.exec(`SELECT ${this.store.edgeTargetSQL()} AS oid FROM stage_edges WHERE stage=? AND node=? AND relation=0 LIMIT 1`, this.store.edgeStage(row.stage), row.node)[0];
-      if (!tree) throw new Error("commit tree metadata is absent"); row = this.object(tree.oid);
+      if (!tree) throw new Error("commit tree metadata is absent"); row = this.prove(tree.oid);
     }
     for (const part of this.path(path)) {
       let found;
       await this.treeEntries(row, (entry) => { if (utf8(entry.name) === part) found = entry; });
       if (!found) throw missing();
       if (!found.kind) throw new ApiError("submodule content belongs to another repository", 422);
-      row = this.object(found.oid);
+      row = this.prove(found.oid);
     }
     return row;
   }
   async history(params) {
-    const cursor = this.decodeCursor("history", params.get("cursor")), limit = number(params.get("limit"), Math.min(20, this.limits.pageSize), this.limits.pageSize, 1);
+    const cursor = await this.decodeCursor("history", params.get("cursor")), limit = number(params.get("limit"), Math.min(20, this.limits.pageSize), this.limits.pageSize, 1);
     if (!cursor && !params.has("rev") && !this.head().oid) return this.result({ generation: this.generation, commits: [], nextCursor: null });
+    if (cursor) { this.proven.add(cursor.start); this.proven.add(cursor.next); }
     const first = this.peel(this.resolve(params.get("rev") ?? (cursor ? `oid:${cursor.start}` : "HEAD")));
     if (cursor && cursor.start !== first.oid) throw new ApiError("cursor revision differs");
     let row = cursor ? this.object(cursor.next) : first, next = null, size = 256;
@@ -231,11 +226,12 @@ export class ReadApi {
       if (commits.length === limit) { next = parent ?? null; break; }
       row = parent ? this.object(parent) : null;
     }
-    return this.result({ generation: this.generation, commits, nextCursor: next ? this.cursor("history", { start: first.oid, next }) : null });
+    return this.result({ generation: this.generation, commits, nextCursor: next ? await this.cursor("history", { start: first.oid, next }) : null });
   }
   async tree(params) {
-    const cursor = this.decodeCursor("tree", params.get("cursor")), limit = number(params.get("limit"), Math.min(20, this.limits.pageSize), this.limits.pageSize, 1);
+    const cursor = await this.decodeCursor("tree", params.get("cursor")), limit = number(params.get("limit"), Math.min(20, this.limits.pageSize), this.limits.pageSize, 1);
     let row, revision;
+    if (cursor) { this.proven.add(cursor.revision); this.proven.add(cursor.directory); }
     if (cursor && !params.has("rev") && !params.has("path")) {
       row = this.object(cursor.directory); revision = cursor.revision;
     } else {
@@ -248,7 +244,7 @@ export class ReadApi {
     await this.treeEntries(row, (entry) => {
       if (count++ < offset || more) return;
       if (entries.length >= limit) { more = true; return; }
-      const child = entry.kind ? this.object(entry.oid) : null;
+      const child = entry.kind ? this.prove(entry.oid) : null;
       const type = entry.mode & 0o170000;
       const mode = type === 0o100000 ? 0o100644 | (entry.mode & 0o100 ? 0o111 : 0) : type;
       const result = { ...named(entry.name), mode: mode.toString(8).padStart(6, "0"), rawMode: entry.mode.toString(8).padStart(6, "0"), kind: entry.kind === 0 ? "submodule" : entry.kind === 2 ? "tree" : type === 0o120000 ? "symlink" : "blob", oid: entry.oid, size: child?.kind === 3 ? child.size : null };
@@ -256,7 +252,7 @@ export class ReadApi {
       if (entries.length && size + cost > this.limits.jsonBytes) { more = true; return; }
       entries.push(result); size += cost;
     });
-    return this.result({ generation: this.generation, oid: row.oid, entries, nextCursor: more ? this.cursor("tree", { revision, directory: row.oid, offset: offset + entries.length }) : null });
+    return this.result({ generation: this.generation, oid: row.oid, entries, nextCursor: more ? await this.cursor("tree", { revision, directory: row.oid, offset: offset + entries.length }) : null });
   }
   async handle(operation, request, stream) {
     let streaming = false;
@@ -265,7 +261,7 @@ export class ReadApi {
       const url = new URL(request.url);
       try { decodeURIComponent(url.search.replaceAll("+", "%20")); } catch { throw new ApiError("query must be valid UTF-8"); }
       const params = url.searchParams;
-      if (operation === "refs") return this.refsPage(params);
+      if (operation === "refs") return await this.refsPage(params);
       if (operation === "history") return await this.history(params);
       if (operation === "tree") return await this.tree(params);
       if (operation === "commit") return this.result(await this.commit(this.resolve(params.get("rev") ?? "HEAD")));

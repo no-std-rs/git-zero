@@ -240,7 +240,9 @@ export class RepositoryCore {
       }
       return json({ error: "unknown route" }, 404);
     } catch (error) {
-      return json({ error: String(error.message ?? error), codecError: error.code ?? null }, error instanceof ApiError ? error.status : error instanceof RequestError || error instanceof CodecError ? 400 : 500);
+      const response = json({ error: String(error.message ?? error), codecError: error.code ?? null }, error instanceof ApiError ? error.status : error instanceof RequestError || error instanceof CodecError ? 400 : 500);
+      if (error.code === "reachability_index_building") response.headers.set("Retry-After", "1");
+      return response;
     }
   }
 }

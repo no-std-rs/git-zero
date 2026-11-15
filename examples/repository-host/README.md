@@ -195,3 +195,9 @@ R2 written bytes count attempted uploads, while read bytes count completed bodie
 partial failed response bytes are unmeasured. Worker CPU, Durable Object duration
 and monthly SQLite storage remain unknown. These local measurements and the
 recorded database size do not establish a complete cloud bill or deployed latency.
+
+Ref-rooted browse reads scale with the requested page/path rather than total
+history. Raw-ID selectors reuse an incremental generation proof and may return
+503 with `reachability_index_building` until proof is available; retry advances
+the build. Read budgets can be raised within documented hard ceilings. The
+contract includes measured SQL costs at 25,000 commits in both object formats.

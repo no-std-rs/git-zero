@@ -1,7 +1,7 @@
 import { RepositoryCore } from "./host-core.mjs";
 import { REPOSITORY, accessReady, authorize } from "./access.mjs";
 import { CODEC_LIMITS } from "./codec.mjs";
-import { READ_LIMITS } from "./browse.mjs";
+import { READ_LIMITS, READ_HARD_LIMITS } from "./browse.mjs";
 import { MEMORY_LIMITS } from "./resources.mjs";
 import { apiRoute, hidden, json } from "./api.mjs";
 
@@ -9,12 +9,12 @@ function bounded(value, minimum, maximum, name) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new TypeError(`invalid ${name}`);
   return value;
 }
-function limits(value, defaults, name) {
+function limits(value, defaults, name, hard = defaults) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`invalid ${name}`);
   const result = { ...defaults };
   for (const [key, item] of Object.entries(value)) {
     if (!Object.hasOwn(defaults, key)) throw new TypeError(`unknown ${name}.${key}`);
-    result[key] = bounded(item, 0, defaults[key], `${name}.${key}`);
+    result[key] = bounded(item, 0, hard[key], `${name}.${key}`);
   }
   return Object.freeze(result);
 }
@@ -59,8 +59,8 @@ export function createRepositoryHost(options) {
   if (memory.chunkBytes < 65536) throw new TypeError("chunkBytes must be at least 65536");
   if (!memory.refPageRows) throw new TypeError("refPageRows must be positive");
   const codecLimits = limits(options.codecLimits ?? {}, CODEC_LIMITS, "codecLimits");
-  const readLimits = limits(options.readLimits ?? {}, READ_LIMITS, "readLimits");
-  for (const key of ["visibleObjects", "edges", "refs", "pageSize", "jsonBytes"]) if (!readLimits[key]) throw new TypeError(`readLimits.${key} must be positive`);
+  const readLimits = limits(options.readLimits ?? {}, READ_LIMITS, "readLimits", READ_HARD_LIMITS);
+  for (const key of ["visibleObjects", "edges", "indexSteps", "refs", "pageSize", "jsonBytes"]) if (!readLimits[key]) throw new TypeError(`readLimits.${key} must be positive`);
   const maxActive = bounded(options.maxActiveJobs ?? 1, 1, 32, "maxActiveJobs");
   const maxPending = bounded(options.maxPendingJobs ?? 64, maxActive, 1024, "maxPendingJobs");
   const maxRequests = bounded(options.maxRequestsPerRepository ?? 32, 1, maxPending, "maxRequestsPerRepository");

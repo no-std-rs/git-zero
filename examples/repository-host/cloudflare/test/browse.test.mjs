@@ -28,6 +28,8 @@ for (const format of [0, 1]) test(`bounded browse matches real Git and revokes u
     assert.equal((await call("api/v1/commit")).status, 404);
     const fixture = await source(root, format), all = refs(fixture), zero = "0".repeat(format ? 64 : 40);
     await push(receive(format, all.map((ref) => ({ name: ref.name, old: zero, new: ref.oid })), git(fixture.directory, ["pack-objects", "--stdout", "--all", "--delta-base-offset"])));
+    await assert.rejects(new ReadApi(host.store, module, format, { visibleObjects: 1 }).handle("commit", new Request(`http://host/browse.git/api/v1/commit?rev=oid:${fixture.first}`)), (error) => error.status === 503 && /configured budget/.test(error.message));
+    // A larger deployment budget resumes the same persisted build.
     await compare(fixture, get);
     // Preserve historical bytes using Git's literal-object fixture writer.
     // Existing host policy accepts these with warnings; ls-tree normalizes them.
@@ -36,9 +38,18 @@ for (const format of [0, 1]) test(`bounded browse matches real Git and revokes u
     await push(receive(format, [{ name: "refs/tags/historical-mode", old: zero, new: historical }], git(fixture.directory, ["pack-objects", "--stdout"], `${historical}\n`)));
     const oldMode = (await get("tree?rev=historical-mode")).entries[0];
     assert.equal(oldMode.mode, git(fixture.directory, ["ls-tree", historical]).toString().slice(0, 6)); assert.equal(oldMode.rawMode, "100664");
-    for (const [operation, limits] of [["commit", { visibleObjects: 1 }], ["commit", { edges: 1 }], ["tree", { treeBytes: 1 }], ["commit", { headerBytes: 32 }], ["commit", { metadataBytes: 1 }], ["commit", { storageBytes: 0 }], ["refs", { jsonBytes: 32 }]]) {
+    for (const [operation, limits] of [["tree", { treeBytes: 1 }], ["commit", { headerBytes: 32 }], ["commit", { metadataBytes: 1 }], ["commit", { storageBytes: 0 }], ["refs", { jsonBytes: 32 }]]) {
       await assert.rejects(new ReadApi(host.store, module, format, limits).handle(operation, new Request(`http://host/browse.git/api/v1/${operation}`)), (error) => error.status === 413, `${operation} ${JSON.stringify(limits)}`);
     }
+    // Global proof caps do not apply to walks rooted in current refs.
+    for (const limits of [{ visibleObjects: 1 }, { edges: 1 }]) {
+      const response = await new ReadApi(host.store, module, format, limits).handle("commit", new Request("http://host/browse.git/api/v1/commit"));
+      assert.equal(response.status, 200);
+    }
+    const signed = (await get("history?limit=1")).nextCursor;
+    const [cursorPayload, signature] = signed.split(".");
+    const forged = JSON.parse(Buffer.from(cursorPayload, "base64url")); forged.next = fixture.other;
+    assert.equal((await call(`api/v1/history?cursor=${Buffer.from(JSON.stringify(forged)).toString("base64url")}.${signature}`)).status, 400);
     for (const path of ["payload.html", "empty", "link", "src/analysis.py"]) {
       const response = await call(`api/v1/blob?path=${encodeURIComponent(path)}`);
       assert.equal(response.status, 200, await response.clone().text());

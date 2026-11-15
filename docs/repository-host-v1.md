@@ -222,13 +222,26 @@ Paths are relative, slash-separated UTF-8; empty means the revision's root.
 Empty components, dot, dot-dot and NUL are refused. Symlinks are returned as
 blobs and never followed; a submodule identifies content in another repository.
 
-Every object lookup, including a raw ID, is restricted to the closure of the
-**current refs**. Typed authenticated edges are traversed in bounded SQLite
-pages. Unreachable bytes retained from earlier generations cannot be read via
-this API. Git's existing whole-catalog fetch semantics are unchanged. The
-reachability walk has 20,000 object, 100,000 edge and 20,000 ref defaults and
-fails closed with 413 on exhaustion. It does not materialize a whole repository
-or shell out to Git. These limits also bound work on disconnected histories.
+All selectors are restricted to the closure of the **current refs**. A read
+rooted at HEAD, a branch or a tag follows already authenticated graph links;
+its cost depends on the requested history page and visited directories/objects,
+not the repository's total history. It does no reachability-index row writes.
+Git's existing whole-catalog fetch semantics are unchanged.
+
+Raw object IDs require a separate persisted proof index. Each request advances
+at most `readLimits.indexSteps` graph work units (default 256; an edge or node
+costs a unit, plus bounded bookkeeping). Proofs are reusable for the entire ref
+generation. Current-generation positive proofs may be used before completion.
+Until absence is proven, an unproven published ID returns 503,
+`codecError: "reachability_index_building"`, `Retry-After: 1`, and a message
+saying the index is being built. Retry the same request to advance it. After
+completion an unreachable ID returns 404. Unpublished, rejected and quarantined
+IDs return 404 immediately. Publication invalidates old proofs and signed
+browse cursors; stale proof rows are reclaimed in bounded batches. Defaults
+permit one million objects and ten million edges. At a configured index cap,
+503 explains which budgets to raise; ref-rooted reads continue to work. Neither
+selector shells out to Git or materializes a repository in memory. The
+persistent index grows with reachable object count.
 
 | Route | Parameters | Result |
 | --- | --- | --- |
@@ -238,12 +251,14 @@ or shell out to Git. These limits also bound work on disconnected histories.
 | commit | rev | one commit's metadata (tags peeled) |
 | blob | rev + path, **or** oid; maxBytes | streamed exact blob bytes |
 
-`limit` defaults to 20 and is at most 100. Opaque base64url cursors include the
+`limit` defaults to 20 and is at most 100 by default. Opaque signed v2 cursors include the
 operation, namespace and ref generation. Pass them unchanged; subsequent
 history/tree pages may omit rev/path. Changing those selectors is refused.
 After any ref publication, restart pagination on 409. Responses can contain
 fewer entries than limit to fit the byte budget. Cursors are not authorization:
-each request is granted and each selected object must still be reachable.
+each request requires a valid grant. HMAC-SHA-256 binds continuation proofs to
+the operation, namespace and generation using a domain-separated deployment
+authentication key. Tampered cursors fail with 400; key rotation invalidates them.
 
 Refs include branches, tags and other refs with name, name64, kind, oid and
 nullable peeled ID. HEAD includes symbolic, symbolic64 and nullable oid. Names
@@ -535,9 +550,10 @@ selectors must be deterministic for a deployment's env. policy supplies
 allowNonFastForward/maxStoredBytes/maxPushBytes as described above. The factory
 has no knowledge of the reference variable names.
 
-memory, codecLimits and readLimits accept known integer fields only. They can
-**lower** the defaults documented here/in the exported resource tables; attempts
-to raise them, unknown fields and invalid integers throw at construction.
+memory, codecLimits and readLimits accept known integer fields only. memory
+and codecLimits may lower their exported defaults. readLimits may be raised or
+lowered within the exported READ_HARD_LIMITS table. Unknown fields, unsafe
+integers and values beyond the respective ceilings throw at construction.
 Protocol capabilities and ABI frame sizes are not configurable. Source/cache
 payload controls are listed below. codecLimits correspond to resource fields in
 src/codec.mjs CODEC_LIMITS, including object/pack/control counts/bytes, ancestry,
@@ -545,6 +561,25 @@ canonical/work/temporary quotas; the same lowered limits apply to Git and browse
 operations. readLimits correspond to READ_LIMITS in src/browse.mjs; pageSize and
 jsonBytes also bound push-log pages. Lowering pageSize lowers its default too.
 Some extremely small bounds deliberately make an operation return 413.
+
+Read hard ceilings (defaults remain those above): 100 million proof objects,
+one billion proof edges, 8192 index work units/request, ten million refs,
+1000 rows/page, 16 MiB/tree, 1 MiB each commit headers/message, 32 MiB total
+metadata, 64 MiB/blob, 65536 path bytes, 1024 path components, 256 tag depth,
+4096 parents, 65536 identity bytes, 8 MiB JSON, and 1 GiB each reconstruction
+work/storage reads. Lower codec limits remain the hard outer limits. Raising
+metadata/output limits increases memory and CPU use. Ref-rooted reads remain
+available as history grows; individual oversized objects, directories or pages
+can still exceed request budgets and return 413.
+
+The generated `browse-scale.test.mjs` publishes 25,000 commits / 100,003 objects,
+several refs and a branch rewrite in both Git object formats. Against its
+1,000-commit / 4,003-object comparison, statement counts are unchanged: HEAD
+commit 10, first-parent history page of 20 commits 47, nested tree 15, nested
+blob 15; all four perform **zero row writes**. These counts include admission
+and lifecycle checks in the focused SQLite adapter. They are test-fixture
+measurements, not Cloudflare billing estimates. Real Git supplies object, tree,
+blob and history oracles; raw-ID proof progress and reuse are tested separately.
 
 ### Memory and shared-isolate scheduling
 
