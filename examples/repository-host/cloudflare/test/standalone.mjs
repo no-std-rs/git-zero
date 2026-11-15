@@ -2,7 +2,7 @@
 // test storage only; production workerd connects directly to the real R2 API.
 import assert from "node:assert/strict";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -28,7 +28,8 @@ async function s3(directory, getFailure, deleteFailures) {
       const auth = /^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/auto\/s3\/aws4_request, SignedHeaders=([^,]+), Signature=([0-9a-f]{64})$/.exec(request.headers.authorization ?? "");
       assert.ok(auth); assert.equal(auth[1], ACCESS); assert.equal(auth[2], date.slice(0, 8));
       assert.equal(auth[3], "host;x-amz-content-sha256;x-amz-date");
-      const canonical = [request.method, request.url, "", `host:${request.headers.host}\nx-amz-content-sha256:${payload}\nx-amz-date:${date}\n`, auth[3], payload].join("\n");
+      const url = new URL(request.url, "http://fixture");
+      const canonical = [request.method, url.pathname, url.search.slice(1), `host:${request.headers.host}\nx-amz-content-sha256:${payload}\nx-amz-date:${date}\n`, auth[3], payload].join("\n");
       let key = hmac(`AWS4${SECRET}`, auth[2]);
       for (const value of ["auto", "s3", "aws4_request"]) key = hmac(key, value);
       const expected = hmac(key, `AWS4-HMAC-SHA256\n${date}\n${auth[2]}/auto/s3/aws4_request\n${digest(canonical)}`);
@@ -36,10 +37,24 @@ async function s3(directory, getFailure, deleteFailures) {
       const path = join(directory, digest(request.url));
       if (request.method === "PUT") {
         const temporary = `${path}.pending`; await writeFile(temporary, body); await rename(temporary, path);
+        await writeFile(path + ".key", decodeURIComponent(url.pathname.slice("/bucket/".length)));
         response.writeHead(200); response.end();
       } else if (request.method === "DELETE") {
         if (faults.deleteFailures < deleteFailures) { faults.deleteFailures++; response.writeHead(503); response.end(); return; }
+        await rm(path + ".key", { force: true });
         await rm(path, { force: true }); response.writeHead(204); response.end();
+      } else if (request.method === "GET" && url.searchParams.get("list-type") === "2") {
+        assert.equal(url.searchParams.get("encoding-type"), "url");
+        const limit = Number(url.searchParams.get("max-keys")), prefix = url.searchParams.get("prefix");
+        assert.ok(limit >= 1 && limit <= 64);
+        const keys = [];
+        for (const file of await readdir(directory)) if (file.endsWith(".key")) {
+          const key = await readFile(join(directory, file), "utf8");
+          if (key.startsWith(prefix)) keys.push(key);
+        }
+        keys.sort();
+        const xml = `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>${keys.length > limit}</IsTruncated>${keys.slice(0, limit).map((key) => `<Contents><Key>${encodeURIComponent(key)}</Key></Contents>`).join("")}</ListBucketResult>`;
+        response.writeHead(200, { "Content-Type": "application/xml" }); response.end(xml);
       } else if (request.method === "GET") {
         try {
           const value = await readFile(path);

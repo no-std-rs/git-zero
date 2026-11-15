@@ -108,8 +108,9 @@ export async function publish(store, stage, codec) {
         }
       }
       const state = store.exec("SELECT head FROM repository WHERE id=1")[0];
-      let head = state.head;
-      if (!store.exec("SELECT 1 FROM refs WHERE name=?", head).length) {
+      const settings = store.exec("SELECT default_branch FROM host_settings WHERE id=1")[0];
+      let head = settings?.default_branch ?? state.head;
+      if (!settings?.default_branch && !store.exec("SELECT 1 FROM refs WHERE name=?", head).length) {
         const branch = store.exec("SELECT name FROM refs WHERE name=?", MASTER)[0]
           ?? store.exec("SELECT name FROM refs WHERE name>=? AND name<? ORDER BY name LIMIT 1", HEADS, HEADS_END)[0];
         head = branch?.name ?? MAIN;
@@ -123,6 +124,7 @@ export async function publish(store, stage, codec) {
         for (const table of ["stage_commands", "stage_options", "stage_shallow"]) store.exec(`DELETE FROM ${table} WHERE stage=?`, stage);
       }
       store.exec("UPDATE repository SET generation=generation+1,object_count=object_count+?,head=? WHERE id=1", added, head);
+      store.exec("INSERT INTO host_settings(id,last_publication) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET last_publication=excluded.last_publication", Date.now());
     }
     return outcomes.map(({ name, error }) => ({ name: bytes(name), error }));
     });

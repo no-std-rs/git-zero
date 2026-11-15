@@ -49,9 +49,12 @@ For an embedding gateway, select `AUTH_MODE=gateway` and configure the
 The host verifies namespace-scoped HMAC-SHA-256 grants with read/write/admin
 levels over both service bindings and plain HTTP. It sends no authentication
 challenge in this mode. See the [HTTP contract and test vector](../../docs/repository-host-v1.md)
-for exact minting, expiry, gateway header handling, and the current admin
-bootstrap requirement. Lifecycle, browse, push records, deployment policy and
-a configurable module boundary remain planned.
+for exact minting, expiry and gateway header handling. Gateway repositories
+require admin PUT creation at `/<namespace>.git/api/v1/repository`. The same
+endpoint describes repositories and performs bounded, resumable deletion with
+permanent namespace retirement. Token mode keeps implicit creation by default;
+`IMPLICIT_CREATE=false` disables it. Browse, push records, deployment policy and
+a configurable module boundary remain in progress.
 
 The current suite covers SHA-1/SHA-256 push, clone and fetch using Git protocol
 preferences 0/1/2, atomic updates, push options, deletes, thin pushes, annotated

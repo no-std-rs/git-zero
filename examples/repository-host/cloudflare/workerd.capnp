@@ -7,6 +7,8 @@ const config :Workerd.Config = (
     (name = "repository", worker = (
       modules = [
         (name = "src/streamed.mjs", esModule = embed "src/streamed.mjs"),
+        (name = "src/api.mjs", esModule = embed "src/api.mjs"),
+        (name = "src/lifecycle.mjs", esModule = embed "src/lifecycle.mjs"),
         (name = "src/access.mjs", esModule = embed "src/access.mjs"),
         (name = "src/codec.mjs", esModule = embed "src/codec.mjs"),
         (name = "src/storage.mjs", esModule = embed "src/storage.mjs"),

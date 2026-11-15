@@ -9,6 +9,8 @@ import { FetchJob } from "./fetch.mjs";
 import { streamResponse } from "./response.mjs";
 import { RequestError, isStorageFailure } from "./errors.mjs";
 
+import { Lifecycle } from "./lifecycle.mjs";
+import { ApiError, apiRoute } from "./api.mjs";
 import { REPOSITORY, accessReady, authorize } from "./access.mjs";
 const UUID = /^[0-9a-f-]{36}$/;
 const json = (body, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -36,7 +38,7 @@ export default {
     const namespace = test ? parts[2] : parts[1]?.endsWith(".git") ? parts[1].slice(0, -4) : null;
     const access = await authorize(request, env, namespace);
     if (access instanceof Response) return access;
-    if (!REPOSITORY.test(namespace ?? "") || (!test && parts.length > 4)) return json({ error: "unknown route" }, 404);
+    if (!REPOSITORY.test(namespace ?? "") || (!test && parts.length > 4 && !apiRoute(request))) return json({ error: "unknown route" }, 404);
     const headers = new Headers(request.headers);
     headers.set("x-git-zero-namespace", namespace);
     const stub = env.REPOSITORIES.get(env.REPOSITORIES.idFromName(namespace));
@@ -63,6 +65,8 @@ export class OwnRepository {
   }
   alarm() {
     const job = this.queue.then(async () => {
+      if (await this.ctx.storage.get("host.deletion.v1")) return;
+      if (!this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='host_identity'").toArray().length) return;
       const identity = this.ctx.storage.sql.exec("SELECT namespace FROM host_identity WHERE id=1").toArray()[0];
       if (!identity) return;
       this.store ??= new Store(this.ctx, this.env, identity.namespace);
@@ -127,15 +131,34 @@ export class OwnRepository {
       const routed = path[1] === "_test" ? path[2] : path[1]?.endsWith(".git") ? path[1].slice(0, -4) : null;
       if (routed !== namespace) return json({ error: "unknown route" }, 404);
       if (!REPOSITORY.test(namespace ?? "")) return json({ error: "invalid repository" }, 400);
+      if (this.store && this.store.namespace !== namespace) return json({ error: "unknown route" }, 404);
+      if (!this.store && this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='host_identity'").toArray().length) {
+        const identity = this.ctx.storage.sql.exec("SELECT namespace FROM host_identity WHERE id=1").toArray()[0];
+        if (identity && identity.namespace !== namespace) return json({ error: "unknown route" }, 404);
+      }
+      this.lifecycle ??= new Lifecycle(this.ctx, this.env, namespace);
+      await this.lifecycle.load();
+      if (this.lifecycle.state) {
+        const response = await this.lifecycle.retired(request);
+        if (this.lifecycle.state.state === "deleted") this.store = null;
+        return response;
+      }
       if (!this.store) {
         const store = new Store(this.ctx, this.env, namespace);
         await store.recover(); this.store = store;
       }
       if (this.store.namespace !== namespace) throw new Error("repository identity differs");
+      if (this.lifecycle.fenceRead) { this.store.usage.r2Gets++; this.lifecycle.fenceRead = false; }
       const url = new URL(request.url), parts = url.pathname.split("/");
+      if (apiRoute(request) === "repository") {
+        const response = await this.lifecycle.handle(request, this.store);
+        if (this.lifecycle.state?.state === "deleted") this.store = null;
+        return response;
+      }
+      if (apiRoute(request)) return json({ error: "unknown route" }, 404);
       if (parts[1] !== "_test") {
         const format = this.store.exec("SELECT format FROM repository WHERE id=1")[0]?.format ?? Number(this.env.REPO_FORMAT ?? 0);
-        if (this.env.AUTH_MODE === "gateway" && access.access !== "admin" && !this.store.exec("SELECT id FROM repository WHERE id=1").length) return json({ error: "unknown route" }, 404);
+        if ((this.env.AUTH_MODE === "gateway" || this.env.IMPLICIT_CREATE === "false") && !this.store.exec("SELECT id FROM repository WHERE id=1").length) return json({ error: "unknown route" }, 404);
         this.store.initialize(format);
         const codec = new Codec(module, format, { capabilities: RECEIVE_CAPABILITIES });
         if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-receive-pack") return this.stream(this.advertise(codec), "application/x-git-receive-pack-advertisement");
@@ -200,7 +223,7 @@ export class OwnRepository {
       }
       return json({ error: "unknown route" }, 404);
     } catch (error) {
-      return json({ error: String(error.message ?? error), codecError: error.code ?? null }, error instanceof RequestError || error instanceof CodecError ? 400 : 500);
+      return json({ error: String(error.message ?? error), codecError: error.code ?? null }, error instanceof ApiError ? error.status : error instanceof RequestError || error instanceof CodecError ? 400 : 500);
     }
   }
 }

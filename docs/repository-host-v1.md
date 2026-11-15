@@ -123,19 +123,78 @@ credentials. Git validation errors retain the existing HTTP 400 JSON shape
 `{"error":"...","codecError":null}` (a numeric codec code may replace null);
 storage failures use 500. Streamed protocol failures retain Git framing.
 
-Token mode continues implicitly creating repositories on an authenticated Git
-request. At this milestone, gateway mode requires an admin request to bootstrap
-that same initialization path; read/write requests to an absent repository get
-404. This transitional admin bootstrap is not an explicit lifecycle API.
-Repository object format is configured by `REPO_FORMAT=0` (SHA-1) or `1`
-(SHA-256), fixed after initialization; default HEAD is `refs/heads/main`.
-Only implemented host-backed receive/upload capabilities are advertised.
+## Explicit lifecycle
+
+All lifecycle routes use `/<namespace>.git/api/v1/repository` and require admin.
+They are available over either transport, independent of `TEST_MODE`.
+
+| Method | Operation | Success |
+| --- | --- | --- |
+| PUT | Create from an application/json object | 201 new, 200 identical existing settings |
+| GET | Describe an existing repository | 200 |
+| DELETE | Start or resume irreversible purge | 202 pending, 200 complete |
+
+Create accepts only `objectFormat` (`sha1`, default, or `sha256`) and
+`defaultBranch` (default `main`, a valid Git branch name up to 240 UTF-8 bytes).
+Repeat the same settings for idempotence; conflicting creation settings return
+409. The chosen symbolic HEAD stays on this branch even when it is unborn or
+deleted; pushing a different branch does not change an explicitly chosen HEAD.
+Existing implicit repositories retain their original HEAD-selection behavior.
+
+Describe returns `namespace`, `state`, `objectFormat`, `head` (`symbolic` and
+nullable `oid`), `defaultBranch`, `generation`, `objectCount`, `storedPackBytes`,
+`storedBytes` and `lastPublication`. Counts come from the catalog; storedPackBytes
+is the sum of published encoded pack sizes, with no deduplication credit. Actual
+physical R2 bytes (`storedBytes`) are unknown cheaply and therefore null. Times
+are Unix milliseconds. `lastPublication` and the original default branch of a
+legacy repository can be null when unknown; the next publication records its
+time atomically with refs. The existing schema is preserved; `host_settings`
+is an additive, idempotently created table.
+
+Gateway mode **always requires explicit PUT creation**, including admin Git
+requests. The transitional admin bootstrap has been removed. In token mode,
+implicit creation remains the default; `IMPLICIT_CREATE=false` disables it.
+An absent repository on a Git route returns the hidden 404. There is no global
+namespace enumeration: the gateway owns its product repository catalog and
+namespaces, rather than learning other tenants' identities from the host.
+
+### Purge and retirement
+
+DELETE first persists a deletion barrier and writes a permanent retirement
+fence at `repository-tombstones/v1/<namespace>` in the same R2 bucket, outside
+the repository content prefix. It then lists at most 64 objects under
+`repositories/<namespace>/` and deletes that batch. Repeat DELETE while the
+response is 202 (`state: deleting`, `complete: false`, `deletedObjects`). There
+is no cursor to lose: each retry lists the first remaining page. Partial delete
+failures return 500 and can be retried without losing progress. No content is
+readable or writable after retirement starts, including by an earlier admitted
+queued push. The repository queue finishes its previous owner before deletion.
+
+After a separate list confirms the prefix is empty, native Durable Object
+`storage.deleteAll()` reclaims the SQLite database and KV state. Only a tiny
+retirement tombstone is then saved. The external fence closes the crash window
+between native clearing and saving that tombstone. A cold instance checks the
+fence before opening repository state; an interrupted purge resumes even when
+its SQLite state or local tombstone has gone away. Alarms do not run ordinary
+recovery against a retired repository. All content objects, including orphaned
+quarantine/temporary objects under the prefix, are reclaimed. Objects in other
+namespace prefixes are untouched. The fence is intentionally retained.
+
+A retired namespace is never reusable: PUT returns 410, Git requests return 404,
+and repeated DELETE returns 200 once complete. GET during purge returns 202;
+a completed retirement returns 410 with its state. To reuse a product-level
+name, the gateway assigns a fresh opaque namespace, such as a new UUID.
+Each purge call has one bounded list, at most 64 object deletions, and at most
+one native database-clear operation. No repository-sized JS array or SQL row
+walk is used. Direct workerd's S3 adapter uses signed, bounded ListObjectsV2
+responses; Wrangler uses the native R2 binding. One additional R2 fence lookup
+is required on a cold instance. No deployment cost is inferred from this.
 
 ## Scope and verification
 
-This first slice implements access levels and grants. Explicit lifecycle,
-browse APIs, durable actor/push records, configurable policy and a configurable
-host-module boundary remain follow-up milestones. The actor is authenticated
+Access levels, grants and explicit lifecycle are implemented. Browse APIs,
+durable actor/push records, configurable policy and a configurable host-module
+boundary remain follow-up milestones. The actor is authenticated
 and available at the authorization seam but not yet persisted. Read grants,
 like token access, currently cover the published Git catalog, including older
 ref generations; there is no reachability-restricted browse API yet. LFS, SSH,

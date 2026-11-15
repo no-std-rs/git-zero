@@ -58,7 +58,7 @@ export async function verifyGrant(value, secret, namespace, now = Math.floor(Dat
 
 export function requiredAccess(request) {
   const url = new URL(request.url), parts = url.pathname.split("/");
-  if (parts[1] === "_test") return "admin";
+  if (parts[1] === "_test" || (parts[2] === "api" && parts[3] === "v1")) return "admin";
   if (parts[2] === "git-receive-pack" || url.searchParams.getAll("service").includes("git-receive-pack")) return "write";
   if (parts[2] === "git-upload-pack" || url.searchParams.get("service") === "git-upload-pack") return "read";
   return "admin";

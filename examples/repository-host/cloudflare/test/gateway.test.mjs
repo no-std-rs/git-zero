@@ -40,8 +40,11 @@ for (const binding of [true, false]) test(`gateway grants over ${binding ? "serv
     await ok(source, "", "init", "--initial-branch=main");
     await writeFile(join(source, "file.py"), "print('framework')\n");
     await ok(source, "", "add", "."); await ok(source, "", "commit", "-m", "initial");
-    // Milestone 1 bootstrap: an admin may initialize the existing implicit path.
-    await ok(source, auth("admin"), "ls-remote", remote);
+    const adminHeaders = binding ? { authorization: basic("owner") } : { "x-git-zero-grant": mint(ns, "admin") };
+    const absent = await fetch(`${remote}/info/refs?service=git-upload-pack`, { headers: adminHeaders });
+    assert.equal(absent.status, 404); await absent.arrayBuffer();
+    const created = await fetch(`${remote}/api/v1/repository`, { method: "PUT", headers: { ...adminHeaders, "content-type": "application/json" }, body: JSON.stringify({ objectFormat: "sha1", defaultBranch: "main" }) });
+    assert.equal(created.status, 201, await created.clone().text()); await created.arrayBuffer();
     await ok(source, auth("write"), "push", remote, "main");
     const first = await ok(source, "", "rev-parse", "HEAD");
     for (const version of [0, 1, 2]) {
