@@ -217,6 +217,7 @@ exhausted bounds 413. Storage failures remain 500.
 short branch/tag name; annotated tags are peeled. Use `refs/heads/name` to avoid
 short-name ambiguity, or `oid:<full-id>` to disambiguate an ID-shaped ref name.
 IDs have 40 hex digits in SHA-1 repositories and 64 in SHA-256 repositories.
+Returned IDs are lowercase, including links parsed from valid uppercase commit headers.
 Paths are relative, slash-separated UTF-8; empty means the revision's root.
 Empty components, dot, dot-dot and NUL are refused. Symlinks are returned as
 blobs and never followed; a submodule identifies content in another repository.
@@ -262,7 +263,8 @@ no untrusted HTML interpretation. The prefix is at most 32 KiB, commit headers
 large messages are explicitly truncated. History follows first parents, even
 when commits have multiple parents.
 
-Tree entries have name/name64, six-digit octal mode, kind (blob, tree, symlink,
+Tree entries have name/name64, six-digit canonical Git octal mode, rawMode
+(the stored numeric octal permissions, preserving historical aliases), kind (blob, tree, symlink,
 submodule), oid and nullable size. Blob sizes come from the verified catalog,
 without reading their bodies. Each visited directory is at most 1 MiB; paths
 are at most 4096 UTF-8 bytes and 64 components. Tag peeling is bounded to 32.

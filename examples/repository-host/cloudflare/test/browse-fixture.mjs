@@ -35,6 +35,7 @@ export async function source(root, format) {
   const rawTree = git(directory, ["mktree", "-z"], Buffer.concat([Buffer.from(`100644 blob ${blob}\t`), Buffer.from([255, 0])])).toString().trim(); git(directory, ["tag", "raw-tree", rawTree]);
   const tree = git(directory, ["rev-parse", "HEAD^{tree}"]).toString().trim();
   const longCommit = git(directory, ["hash-object", "-t", "commit", "-w", "--stdin"], `tree ${tree}\nauthor A <a@b> 1 +0000\ncommitter B <b@c> 2 -0130\n\nlong subject\n\n${"body\n".repeat(20000)}`).toString().trim(); git(directory, ["tag", "long-message", longCommit]);
+  const upper = git(directory, ["hash-object", "-t", "commit", "-w", "--stdin"], `tree ${tree.toUpperCase()}\nparent ${tip.toUpperCase()}\nauthor A <a@b> 1 +0000\ncommitter B <b@c> 2 -0130\n\nuppercase links\n`).toString().trim(); git(directory, ["tag", "upper-links", upper]);
   git(directory, ["checkout", "--orphan", "other"]); git(directory, ["rm", "-rf", "."]);
   await writeFile(join(directory, "different"), "unrelated root\n"); git(directory, ["add", "."]); git(directory, ["commit", "-m", "other root"]);
   const other = git(directory, ["rev-parse", "HEAD"]).toString().trim(); git(directory, ["checkout", "main"]);
@@ -64,6 +65,9 @@ export async function compare(fixture, get) {
   const wide = await get("tree?rev=wide-tree&limit=100"); assert.equal(wide.entries.length, 100); assert.ok(wide.nextCursor);
   assert.deepEqual((await get("tree?rev=raw-tree")).entries.map(({ name, name64 }) => ({ name, name64 })), [{ name: null, name64: "_w" }]);
   const long = await get("commit?rev=long-message"); assert.equal(long.message.truncated, true); assert.equal(long.message.subject, "long subject"); assert.equal(Buffer.from(long.message.raw64, "base64url").length, 32768);
+  const upper = await get("history?rev=upper-links&limit=3");
+  assert.deepEqual(upper.commits.map((commit) => commit.oid), git(directory, ["rev-list", "--first-parent", "upper-links"]).toString().trim().split("\n"));
+  assert.equal(upper.commits[0].tree, git(directory, ["rev-parse", "HEAD^{tree}"]).toString().trim()); assert.deepEqual(upper.commits[0].parents, [tip]);
   const commits = []; cursor = null;
   do { const page = await get(`history?limit=1${cursor ? `&cursor=${cursor}` : ""}`); commits.push(...page.commits); cursor = page.nextCursor; } while (cursor);
   assert.deepEqual(commits.map((entry) => entry.oid), git(directory, ["rev-list", "--first-parent", "HEAD"]).toString().trim().split("\n"));

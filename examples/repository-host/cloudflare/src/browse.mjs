@@ -163,8 +163,8 @@ export class ReadApi {
       if (end < 0 || end > this.limits.headerBytes) throw new ApiError("commit headers exceed byte limit", 413);
       if (end === start) { messageStart = end + 1; break; }
       const line = data.subarray(start, end), header = text(line.subarray(0, 10));
-      if (header.startsWith("tree ")) result.tree = text(line.subarray(5));
-      else if (header.startsWith("parent ")) { if (result.parents.length >= this.limits.parents) throw new ApiError("commit parent limit exceeded", 413); result.parents.push(text(line.subarray(7))); }
+      if (header.startsWith("tree ")) result.tree = text(line.subarray(5)).toLowerCase();
+      else if (header.startsWith("parent ")) { if (result.parents.length >= this.limits.parents) throw new ApiError("commit parent limit exceeded", 413); result.parents.push(text(line.subarray(7)).toLowerCase()); }
       else if (header.startsWith("author ")) result.author = identity(line, 7, this.limits.identityBytes);
       else if (header.startsWith("committer ")) result.committer = identity(line, 10, this.limits.identityBytes);
       else if (header.startsWith("encoding ")) result.encoding = text(line.subarray(9, Math.min(line.length, 137)));
@@ -249,7 +249,9 @@ export class ReadApi {
       if (count++ < offset || more) return;
       if (entries.length >= limit) { more = true; return; }
       const child = entry.kind ? this.object(entry.oid) : null;
-      const result = { ...named(entry.name), mode: entry.mode.toString(8).padStart(6, "0"), kind: entry.kind === 0 ? "submodule" : entry.kind === 2 ? "tree" : entry.mode === 0o120000 ? "symlink" : "blob", oid: entry.oid, size: child?.kind === 3 ? child.size : null };
+      const type = entry.mode & 0o170000;
+      const mode = type === 0o100000 ? 0o100644 | (entry.mode & 0o100 ? 0o111 : 0) : type;
+      const result = { ...named(entry.name), mode: mode.toString(8).padStart(6, "0"), rawMode: entry.mode.toString(8).padStart(6, "0"), kind: entry.kind === 0 ? "submodule" : entry.kind === 2 ? "tree" : type === 0o120000 ? "symlink" : "blob", oid: entry.oid, size: child?.kind === 3 ? child.size : null };
       const cost = encode(JSON.stringify(result)).length + 1;
       if (entries.length && size + cost > this.limits.jsonBytes) { more = true; return; }
       entries.push(result); size += cost;

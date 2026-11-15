@@ -29,6 +29,13 @@ for (const format of [0, 1]) test(`bounded browse matches real Git and revokes u
     const fixture = await source(root, format), all = refs(fixture), zero = "0".repeat(format ? 64 : 40);
     await push(receive(format, all.map((ref) => ({ name: ref.name, old: zero, new: ref.oid })), git(fixture.directory, ["pack-objects", "--stdout", "--all", "--delta-base-offset"])));
     await compare(fixture, get);
+    // Preserve historical bytes using Git's literal-object fixture writer.
+    // Existing host policy accepts these with warnings; ls-tree normalizes them.
+    const payload = git(fixture.directory, ["rev-parse", "HEAD:payload.html"]).toString().trim();
+    const historical = git(fixture.directory, ["hash-object", "--literally", "-t", "tree", "-w", "--stdin"], Buffer.concat([Buffer.from("100664 old-file\0"), Buffer.from(payload, "hex")])).toString().trim();
+    await push(receive(format, [{ name: "refs/tags/historical-mode", old: zero, new: historical }], git(fixture.directory, ["pack-objects", "--stdout"], `${historical}\n`)));
+    const oldMode = (await get("tree?rev=historical-mode")).entries[0];
+    assert.equal(oldMode.mode, git(fixture.directory, ["ls-tree", historical]).toString().slice(0, 6)); assert.equal(oldMode.rawMode, "100664");
     for (const [operation, limits] of [["commit", { visibleObjects: 1 }], ["commit", { edges: 1 }], ["tree", { treeBytes: 1 }], ["commit", { headerBytes: 32 }], ["commit", { metadataBytes: 1 }], ["commit", { storageBytes: 0 }], ["refs", { jsonBytes: 32 }]]) {
       await assert.rejects(new ReadApi(host.store, module, format, limits).handle(operation, new Request(`http://host/browse.git/api/v1/${operation}`)), (error) => error.status === 413, `${operation} ${JSON.stringify(limits)}`);
     }
