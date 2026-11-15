@@ -3,6 +3,7 @@ import { REPOSITORY, accessReady, authorize } from "./access.mjs";
 import { CODEC_LIMITS } from "./codec.mjs";
 import { READ_LIMITS, READ_HARD_LIMITS } from "./browse.mjs";
 import { MEMORY_LIMITS, GATEWAY_MEMORY } from "./resources.mjs";
+import { refusal } from "./body.mjs";
 import { apiRoute, hidden, json } from "./api.mjs";
 
 function bounded(value, minimum, maximum, name) {
@@ -50,12 +51,14 @@ export function createRepositoryHost(options) {
   const maxRequests = options.maxRequestsPerRepository === undefined ? null : bounded(options.maxRequestsPerRepository, 1, 65536, "maxRequestsPerRepository");
   const idleMs = options.responseIdleMs === undefined ? null : bounded(options.responseIdleMs, 1, 600000, "responseIdleMs");
   const totalMs = options.responseTotalMs === undefined ? null : bounded(options.responseTotalMs, 0, 3600000, "responseTotalMs");
+  const drainBytes = bounded(options.rejectionDrainBytes ?? 64 * 1024 * 1024, 65536, 256 * 1024 * 1024, "rejectionDrainBytes");
+  const drainMs = bounded(options.rejectionDrainMs ?? 30000, 1, 60000, "rejectionDrainMs");
   function environment(env) {
     const mode = resolve(authMode, env), policy = resolve(options.policy, env) ?? {};
     const internal = { AUTH_MODE: mode, HOST_TOKEN: bindings.token ? env[bindings.token] : undefined, GRANT_KEY: bindings.grantKey ? env[bindings.grantKey] : undefined,
       KEY_PREFIX: options.keyPrefix, TEST_MODE: tests && enabled(resolve(Object.hasOwn(options, "testEnabled") ? options.testEnabled : true, env)) ? "true" : "false",
       IMPLICIT_CREATE: enabled(resolve(Object.hasOwn(options, "implicitCreate") ? options.implicitCreate : true, env)) ? "true" : "false", REPO_FORMAT: resolve(options.objectFormat ?? 0, env),
-      MEMORY: mode === "gateway" ? gatewayMemory : memory, MAX_REQUESTS: maxRequests ?? (mode === "gateway" ? 32 : Infinity),
+      REJECTION_DRAIN_BYTES: drainBytes, REJECTION_DRAIN_MS: drainMs, MEMORY: mode === "gateway" ? gatewayMemory : memory, MAX_REQUESTS: maxRequests ?? (mode === "gateway" ? 32 : Infinity),
       RESPONSE_IDLE_MS: idleMs ?? (mode === "gateway" ? 10000 : 60000), RESPONSE_TOTAL_MS: totalMs ?? (mode === "gateway" ? 300000 : 0), CODEC_LIMITS: codecLimits, READ_LIMITS: readLimits,
       ALLOW_NON_FAST_FORWARD: String(policy.allowNonFastForward ?? false), MAX_STORED_BYTES: policy.maxStoredBytes == null ? undefined : String(policy.maxStoredBytes), MAX_PUSH_BYTES: policy.maxPushBytes == null ? undefined : String(policy.maxPushBytes) };
     Object.defineProperty(internal, "BLOBS", { get: () => options.bucket ? options.bucket(env) : env[bindings.objects] });
@@ -74,16 +77,16 @@ export function createRepositoryHost(options) {
     headers.set("x-git-zero-namespace", namespace);
     // Entry authorization needs only routing/headers. Do not consume/transfer
     // its body while constructing that view; the stub receives it exactly once.
+    if (!isTest && parts.length > 4 && !apiRoute(new Request(url, { method: request.method, headers }))) return null;
     const normalized = direct ? new Request(url, new Request(request, { headers })) : new Request(url, { method: request.method, headers });
-    if (!isTest && parts.length > 4 && !apiRoute(normalized)) return null;
     return { request: normalized, namespace };
   }
   class Repository extends RepositoryCore {
     constructor(ctx, env) { super(ctx, environment(env), options.codec); this.bindingsEnv = env; }
     fetch(request) {
       const target = canonical(request, this.bindingsEnv, true);
-      if (!target) return Promise.resolve(hidden());
-      if (this.ctx.id && namespaceBinding(this.bindingsEnv)?.idFromName(target.namespace).toString() !== this.ctx.id.toString()) return Promise.resolve(hidden());
+      if (!target) return refusal(request, hidden(), this.env);
+      if (this.ctx.id && namespaceBinding(this.bindingsEnv)?.idFromName(target.namespace).toString() !== this.ctx.id.toString()) return refusal(target.request, hidden(), this.env);
       return super.fetch(target.request);
     }
   }
@@ -91,8 +94,8 @@ export function createRepositoryHost(options) {
     const internal = environment(env), url = new URL(request.url);
     if (health && url.pathname === health) { const ready = accessReady(internal); return json({ ready, runtime: "workerd", codec: "no_std Wasm", durableStorage: "R2 and SQLite", gitReceive: ready, gitFetch: ready }, ready ? 200 : 503); }
     const target = canonical(request, env, false), access = await authorize(target?.request ?? request, internal, target?.namespace ?? null);
-    if (access instanceof Response) return access;
-    if (!target) return hidden();
+    if (access instanceof Response) return refusal(request, access, internal);
+    if (!target) return refusal(request, hidden(), internal);
     const namespace = namespaceBinding(env);
     return namespace.get(namespace.idFromName(target.namespace)).fetch(new Request(request, { headers: target.request.headers }));
   }

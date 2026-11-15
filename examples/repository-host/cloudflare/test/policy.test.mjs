@@ -37,7 +37,11 @@ for (const format of [0, 1]) test(`policy bounds decoded pushes and stored bytes
     const rewritten = object(format, 1, `tree ${tree}\nauthor A <a@b> 1 +0000\ncommitter A <a@b> 1 +0000\n\nnew root\n`), other = rewritten.id.toString("hex"), newPack = pack(format, [entry(1, rewritten.body)]);
     await patch({ maxStoredBytes: null, maxPushBytes: null });
     const update = [{ name: "refs/heads/main", old: tip, new: other }];
+    failDelete = true;
     assert.match(await push(update, newPack), /ng refs\/heads\/main non-fast-forward/);
+    assert.ok(host.store.exec("SELECT 1 FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE o.oid=? AND s.phase='failed'", other).length, "failed cleanup deliberately retains the rejected object's bytes and metadata");
+    assert.equal((await call(`api/v1/commit?rev=oid:${other}`, "GET", undefined, "read")).status, 404, "oid: cannot expose objects of a rejected publication");
+    failDelete = false;
     await patch({ allowNonFastForward: true }); assert.match(await push(update, newPack), /ok refs\/heads\/main/);
     assert.match(await push(update, newPack), /ng refs\/heads\/main stale ref/);
     assert.equal(host.store.exec("SELECT generation FROM repository")[0].generation, 3);

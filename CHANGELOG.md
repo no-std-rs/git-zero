@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Policy refusals drain bounded upload tails before Git status; early hidden,
+  read-only and busy POST replies also discard bounded transport bytes. Defaults
+  allow 64 MiB/30 seconds; larger or stalled rejected uploads may still disconnect.
+
 - Fetch fallback reconstruction is prepared before response headers. Read
   scratch is reclaimed separately and never blocked by stored-size caps or
   pending legacy accounting; push-validation scratch retains write quotas.

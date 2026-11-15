@@ -97,15 +97,34 @@ export class Intake {
     this.codec.receiveInit();
     // Allow gzip framing overhead while Rust retains its decoded byte quotas.
     const encodedLimit = 2n * (BigInt(this.codec.limits.maxPackBytes) + BigInt(this.codec.limits.maxControlBytes));
-    for await (const bytes of requestBody(decodedBody(request, encodedLimit, "receive bytes"))) {
-      let offset = 0;
-      while (offset < bytes.length) {
-        const input = bytes.subarray(offset, Math.min(offset + 65536, bytes.length));
-        const event = this.codec.receiveStep(input, false);
-        await this.event(event, input); offset += event.consumed;
-        if (event.consumed === 0 && event.written === 0 && event.tag === 1) throw new Error("input decoder made no progress");
+    let rejected = null, discarded = 0, deadline = 0;
+    const discardLimit = this.store.env.REJECTION_DRAIN_BYTES ?? 64 * 1024 * 1024;
+    const discardMs = this.store.env.REJECTION_DRAIN_MS ?? 30000;
+    try {
+      for await (const bytes of requestBody(decodedBody(request, encodedLimit, "receive bytes"), () => rejected ? Math.max(1, Math.min(10000, deadline - Date.now())) : 60000)) {
+        let offset = 0;
+        if (!rejected) {
+          try {
+            while (offset < bytes.length) {
+              const input = bytes.subarray(offset, Math.min(offset + 65536, bytes.length));
+              const event = this.codec.receiveStep(input, false);
+              await this.event(event, input); offset += event.consumed;
+              if (event.consumed === 0 && event.written === 0 && event.tag === 1) throw new Error("input decoder made no progress");
+            }
+          } catch (error) {
+            if (!(error instanceof PolicyError)) throw error;
+            rejected = error; deadline = Date.now() + discardMs;
+          }
+        }
+        if (rejected) {
+          // Stop all parsing, hashing and persistence. Only consume the upload
+          // tail, preserving the first policy error for Git's unpack report.
+          discarded += bytes.length - offset;
+          if (discarded > discardLimit || Date.now() >= deadline) break;
+        }
       }
-    }
+    } catch (error) { throw rejected ?? error; }
+    if (rejected) throw rejected;
     for (let attempts = 0; !this.eof && attempts < 128; attempts++) await this.event(this.codec.receiveStep(EMPTY, true), EMPTY);
     if (!this.eof || this.current || this.objects !== this.expected) throw new RequestError("intake did not close exactly");
     this.flushObjects();

@@ -4,6 +4,7 @@ import { ObjectSource } from "./source.mjs";
 import { Store, assertStoragePrefix } from "./storage.mjs";
 import { bytes } from "./storage.mjs";
 import { publish } from "./publication.mjs";
+import { refusal } from "./body.mjs";
 import { FetchJob } from "./fetch.mjs";
 import { streamResponse } from "./response.mjs";
 import { RequestError, isStorageFailure } from "./errors.mjs";
@@ -38,17 +39,17 @@ export class RepositoryCore {
     // recovery, alarm jobs and the lifetime of an earlier response stream.
     const namespace = request.headers.get("x-git-zero-namespace");
     const access = await authorize(request, this.env, namespace);
-    if (access instanceof Response) return this.env.AUTH_MODE === "gateway" ? access : json({ error: "unknown route" }, 404);
+    if (access instanceof Response) return refusal(request, this.env.AUTH_MODE === "gateway" ? access : json({ error: "unknown route" }, 404), this.env);
     if (this.pendingRequests >= this.maxRequests) {
       const response = json({ error: "repository host busy; retry later" }, 503);
-      response.headers.set("Retry-After", "1"); return response;
+      response.headers.set("Retry-After", "1"); return refusal(request, response, this.env);
     }
     this.pendingRequests++;
     // A single write/read job owns the request-local codec/cache view. Storage
     // and ref publication remain authoritative across instance reconstruction.
     const job = this.queue.then(async () => {
       this.streamDone = null;
-      try { return await this.handle(request, access); }
+      try { const response = await this.handle(request, access); return this.streamDone ? response : await refusal(request, response, this.env); }
       finally { Promise.resolve(this.streamDone).catch(() => {}).finally(() => { this.pendingRequests--; }); }
     });
     this.queue = job.then(() => this.streamDone).catch(() => {});

@@ -386,7 +386,24 @@ Gzip/x-gzip cannot evade it. A deletion-only request has zero pack bytes. A pack
 that exceeds the cap is refused before any excess bytes are persisted; accepted
 controls allow an unpack/ref status with “single-push size limit exceeded”.
 Stored-size rejection similarly reports “repository stored-size limit exceeded”
-to an ordinary pushing Git client. Rejection leaves refs/generation/log unchanged
+to an ordinary pushing Git client. On a policy failure during upload the host
+stops parsing/hashing/persisting and drains the remaining **decoded** body to
+EOF before returning Git's unpack/ref report. The default discard bound is
+64 MiB after refusal, 30 seconds wall clock and at most 10 seconds idle. Early
+hidden/authentication/read-only/busy/unknown-route POST replies instead discard
+bounded **encoded** bytes without interpreting unauthorized input. A bounded
+input chunk/lookahead may cross the byte limit. Invalid/cancelled transports,
+more than the discard bound, or a stalled peer may still see a reset/early
+response: unlimited upload draining is deliberately unsupported.
+
+`rejectionDrainBytes` configures 65536..268435456 bytes (default 67108864);
+`rejectionDrainMs` configures 1..60000 ms (default 30000). These apply to both
+entry and direct-stub refusals. Per-repository admission is checked before
+this discard; a rejected upload does not own a queued codec job. A successfully
+drained refusal leaves the connection usable. The generated large-refusal test
+uses real Git and 32 MiB incompressible packs, HTTP streaming and gzip, both
+object formats, under Wrangler R2/SQLite and direct workerd S3/SQLite. Git must
+show the size-limit reason without broken-pipe/RPC/disconnect diagnostics. Rejection leaves refs/generation/log unchanged
 and reclaims the private stage, or retains its claims for scheduled recovery if
 storage cleanup fails.
 
@@ -669,7 +686,7 @@ CPU/event-loop scheduling, platform connection limits and finite memory can
 still affect co-tenants; bound public load and measure the surrounding product.
 There is no measured production RSS or billing claim. After streamed headers,
 unpredictable I/O failures abort the stream; fixed Content-Length detects a
-partial blob. Known read-resource failures are checked before headers.
+partial blob. Known fetch fallback reconstruction/pack budget failures are checked before headers.
 
 ### Building and bundling the codec
 
@@ -763,3 +780,15 @@ in both formats with a zero stored-size cap, then reconstructs a cold catalog
 with pending legacy accounting and fetches again. Both complete and verify the
 Git object ID/size. A lowered temporary budget is refused before 200. Existing
 native workerd tests retain their EOF and deferred scratch recovery assertions.
+
+Review regressions additionally cover hidden/read-only/wrong-stub/busy upload
+draining, byte/time discard bounds, `oid:` of a rejected publication retained
+after failed cleanup, DELETE queued behind a live fetch, accounting-pending
+fetch, cross-repository queue starvation, alarm prefix changes, and configured
+jurisdiction identity. The earlier tree-depth/wanted-closure tests issue
+sequential, correctly authenticated requests and drain each response; their
+workload cannot fill the former four-job/64-request gate or reach hidden auth
+replies. Removing that gate fixes concurrent idle-body interference, and the
+new refusal tests reproduce and prevent the early-upload-reset mechanism.
+Those facts do not establish the cause of the two historical socket resets;
+the unchanged original tests are rerun, without relaxing assertions/timeouts.

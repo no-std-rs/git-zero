@@ -1086,6 +1086,30 @@ fixtures, and force/size policy refusals. `test/embedded.test.mjs` uses a second
 Worker entry that re-exports the configurable Durable Object under renamed
 bindings and calls its stub directly (bypassing the host fetch entry). It checks
 shared-bucket neighbor survival, lower chunk/cache bounds and cold retirement.
-`test/host-module.test.mjs` verifies grant admission before the isolate gate,
-overload and prefix identity. These fixtures are generated and local; they do
+`test/host-module.test.mjs` verifies arrival-time grant admission, independent
+repository queues, starvation resistance, token-mode load compatibility, stalled
+reader deadlines, overload and prefix identity. These fixtures are generated and local; they do
 not build the embedding product's workers-rs router or claim deployed costs.
+
+
+Focused second-review host regressions (after `npm run build:streamed`):
+
+```sh
+node --test test/browse.test.mjs test/browse-scale.test.mjs
+node --test test/host-module.test.mjs test/response.test.mjs test/grant-queue.test.mjs
+node --test test/fetch-quota.test.mjs test/temporary-cleanup.test.mjs
+node --test test/large-refusal.test.mjs test/refusal-drain.test.mjs test/policy.test.mjs
+node --test test/operability.test.mjs test/jurisdiction.test.mjs test/codec-source-pin.test.mjs
+```
+
+The scale generator creates 1,000 and 25,000 commits (4,003 and 100,003 stored
+objects), multiple refs and a rewritten branch, separately in SHA-1/SHA-256.
+Real Git supplies the oracle; measured statement/row-write counts must remain
+identical for the four ref-rooted reads. Raw-ID proof work advances in bounded
+persistent batches and is reused until publication. Quota tests use real Git to
+fetch a 9 MiB delta at a zero stored-size cap and with pending accounting;
+DELETE arrives while its stream remains open. Large refusal tests use 32 MiB
+incompressible packs with ordinary/gzip bodies against both local runtimes and
+require a Git-readable reason without broken-pipe/RPC diagnostics. EU identity
+uses scoped distinct IDs through actual local stubs: workerd itself does not
+implement jurisdiction placement, and no deployed-EU residency is claimed.
