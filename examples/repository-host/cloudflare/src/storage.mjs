@@ -71,6 +71,9 @@ export class ByteCache {
 }
 
 const SCHEMA = [
+  "CREATE TABLE IF NOT EXISTS publications (generation INTEGER PRIMARY KEY, time INTEGER NOT NULL, actor64 TEXT NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS publication_updates (generation INTEGER NOT NULL, seq INTEGER NOT NULL, name BLOB NOT NULL, old_oid TEXT NOT NULL, new_oid TEXT NOT NULL, PRIMARY KEY(generation,seq)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS publication_start (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)",
   "CREATE TABLE IF NOT EXISTS browse_visible (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS browse_visible_work ON browse_visible(walked,oid)",
   "CREATE TABLE IF NOT EXISTS host_settings (id INTEGER PRIMARY KEY, default_branch BLOB, last_publication INTEGER)",
@@ -123,6 +126,9 @@ export class Store {
     this.sqlKnown = true;
     this.edgeStages = new Map();
     for (const statement of SCHEMA) this.exec(statement);
+    // Older publications cannot be reconstructed. Record the coverage boundary
+    // once, before the next publication; never fabricate historical actors.
+    this.exec("INSERT OR IGNORE INTO publication_start(id,generation) VALUES(1,COALESCE((SELECT generation FROM repository WHERE id=1),0))");
     // Existing text catalogs retain their layout. Fresh catalogs intern the
     // opaque stage handle once instead of repeating its UUID in every edge.
     const edges = this.exec("PRAGMA table_info(stage_edges)");

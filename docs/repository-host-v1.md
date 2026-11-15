@@ -273,12 +273,67 @@ including delta bases; it does not warm or materialize entire canonical bases.
 No archive route is implemented; the optional archive was omitted to keep this
 bounded surface small.
 
+## Durable push record
+
+GET `/<namespace>.git/api/v1/changes` requires read. Every successful publication
+records generation, Unix-millisecond time, the verified grant's opaque actor,
+and every accepted **changed** ref in its original command order. Updates carry
+seq, name/name64, oldId and newId; creations/deletions use the format's all-zero
+ID for the absent side. No-op updates and rejected refs are omitted. A partially
+accepted non-atomic push records its accepted changes; a rejected atomic push
+has no publication. Ref-only updates are recorded even when their redundant
+private pack is subsequently reclaimed. Token mode records an empty actor.
+
+The record, ref updates, generation and lastPublication time commit in one SQLite
+transaction. A journal write failure rolls back publication. Actors are stored
+as canonical base64url of exact authenticated UTF-8, avoiding runtime SQL text
+truncation at NUL; returned labels preserve empty strings, NUL, BOM and whitespace
+without interpretation. Publication rows remain until repository deletion; there
+is no retention/pruning policy or outbound notification. Generation order is
+authoritative; wall-clock times need not be strictly monotonic.
+
+Parameters: after (completed generation, default 0), limit (maximum **update
+rows**, default 20, maximum 100), cursor. Responses are at most 512 KiB and have:
+
+```json
+{
+  "recordedAfterGeneration": 0,
+  "throughGeneration": 1,
+  "completedThrough": 0,
+  "publications": [{
+    "generation": 1, "time": 1700000000000, "actor": "opaque label",
+    "updates": [{"seq": 0, "name": "refs/heads/main", "name64": "cmVmcy9oZWFkcy9tYWlu", "oldId": "...", "newId": "..."}],
+    "complete": false
+  }],
+  "nextCursor": "opaque-base64url"
+}
+```
+
+A publication can span multiple pages. Accumulate its updates until complete is
+true; advance the durable completed generation only through completedThrough.
+While partial, persist nextCursor and any partial processing state together.
+Retrying a page is safe; consumers should deduplicate by (generation, seq).
+When nextCursor is null, resume later with after=completedThrough. The cursor
+snapshots throughGeneration and remains valid when later pushes arrive; unlike
+browse cursors it does **not** expire on ref publication. A new after request
+then catches those newer pushes. Cursors are namespace/operation-bound but are
+not credentials; every request still needs a valid read grant. after beyond the
+current generation returns 409; malformed/contradictory parameters return 400.
+
+On upgrading an existing repository, recordedAfterGeneration is its generation
+before the journal became available. Earlier events/actors cannot be recovered.
+An after below that boundary returns 409 with recordedAfterGeneration; reconcile
+the repository snapshot, then begin at that boundary. New repositories start at
+zero. Existing SQLite tables are unchanged: publication tables and the coverage
+boundary are additive and initialized idempotently. The log contains historical
+ref names, IDs and actors even if those objects are no longer browse-readable.
+The gateway can restrict its public product routes further if needed.
+
 ## Scope and verification
 
 Access levels, grants, explicit lifecycle and the reachability-restricted read
-API are implemented. Durable actor/push records, configurable policy and a
-configurable host-module boundary remain follow-up milestones. The actor is
-authenticated and available at authorization but not yet persisted. LFS, SSH,
+API and durable actor/push records are implemented. Configurable policy and a
+configurable host-module boundary remain follow-up milestones. LFS, SSH,
 application hooks, unreachable-object garbage collection, and a native
 push-capable host are not implemented.
 

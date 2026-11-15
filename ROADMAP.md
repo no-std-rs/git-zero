@@ -317,8 +317,10 @@ to every read-only repository adapter.
   Wrangler and signed-S3/workerd tests cover crash safety and namespace isolation.
 - [x] Bounded, reachability-restricted refs/history/tree/blob/commit HTTP reads,
   generation-bound cursors and raw-byte names; real Git oracles in both formats.
-- [ ] Durable push/actor records, configurable repository policy and a
-  configurable composable host-module boundary.
+- [x] Transactional generation/time/opaque-actor/ref-update records with bounded,
+  resumable catch-up pages and an explicit legacy coverage boundary.
+- [ ] Configurable repository policy and a configurable composable host-module
+  boundary.
 - [ ] LFS, SSH, application hooks, unreachable-object garbage collection and a
   native push-capable host. Authentication and product identity stay host-owned.
 - [ ] Complete a full Linux push, clone, incremental fetch and strict fsck through

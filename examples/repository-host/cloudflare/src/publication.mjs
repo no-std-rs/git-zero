@@ -54,7 +54,7 @@ function conflicts(store, value) {
 
 // Storage visibility is one SQLite transaction. Objects keep their immutable
 // physical stage/offset keys; publication never copies the object/edge catalog.
-export async function publish(store, stage, codec) {
+export async function publish(store, stage, codec, actor = "") {
   try {
     return store.ctx.storage.transactionSync(() => {
     const pack = store.exec("SELECT * FROM stages WHERE id=? AND phase='verified'", stage)[0];
@@ -123,8 +123,19 @@ export async function publish(store, stage, codec) {
         // request, while objects and graph edges remain the published catalog.
         for (const table of ["stage_commands", "stage_options", "stage_shallow"]) store.exec(`DELETE FROM ${table} WHERE stage=?`, stage);
       }
-      store.exec("UPDATE repository SET generation=generation+1,object_count=object_count+?,head=? WHERE id=1", added, head);
-      store.exec("INSERT INTO host_settings(id,last_publication) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET last_publication=excluded.last_publication", Date.now());
+      const generation = store.exec("UPDATE repository SET generation=generation+1,object_count=object_count+?,head=? WHERE id=1 RETURNING generation", added, head)[0].generation;
+      const time = Date.now();
+      store.exec("INSERT INTO host_settings(id,last_publication) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET last_publication=excluded.last_publication", time);
+      // Encode the exact UTF-8 bytes: SQLite bindings in some runtimes truncate
+      // text at NUL. Empty actors and embedded NUL/BOM must round-trip too.
+      const actor64 = btoa(String.fromCharCode(...new TextEncoder().encode(actor))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+      store.exec("INSERT INTO publications(generation,time,actor64) VALUES(?,?,?)", generation, time, actor64);
+      // Bound SQLite bindings and preserve the original command order, including
+      // creations/deletions. Ref-only publications outlive private-pack cleanup.
+      for (let at = 0; at < accepted.length; at += 16) {
+        const page = accepted.slice(at, at + 16);
+        store.exec(`INSERT INTO publication_updates(generation,seq,name,old_oid,new_oid) VALUES${page.map(() => "(?,?,?,?,?)").join(",")}`, ...page.flatMap((command) => [generation, command.seq, command.name, command.old_oid, command.new_oid]));
+      }
     }
     return outcomes.map(({ name, error }) => ({ name: bytes(name), error }));
     });

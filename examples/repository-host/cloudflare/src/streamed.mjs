@@ -11,6 +11,7 @@ import { RequestError, isStorageFailure } from "./errors.mjs";
 
 import { Lifecycle } from "./lifecycle.mjs";
 import { ReadApi } from "./browse.mjs";
+import { changes } from "./changes.mjs";
 import { ApiError, apiRoute, READ_ROUTES } from "./api.mjs";
 import { REPOSITORY, accessReady, authorize } from "./access.mjs";
 const UUID = /^[0-9a-f-]{36}$/;
@@ -95,7 +96,7 @@ export class OwnRepository {
     for (const outcome of outcomes) yield codec.statusRef(bytes(outcome.name), outcome.error ? encode(outcome.error) : new Uint8Array());
     yield codec.statusFinish();
   }
-  async receive(request, codec) {
+  async receive(request, codec, actor) {
     const stage = this.store.stage(codec.format);
     try {
       await new Intake(this.store, codec, stage).run(request);
@@ -109,7 +110,7 @@ export class OwnRepository {
       const outcomes = names.map((row) => ({ ...row, error: "unpacker error" }));
       return this.stream(this.report(codec, selected, outcomes, true), "application/x-git-receive-pack-result");
     }
-    const outcomes = await publish(this.store, stage, codec);
+    const outcomes = await publish(this.store, stage, codec, actor);
     const publication = this.store.exec("SELECT selected,phase FROM stages WHERE id=?", stage)[0];
     if (publication.phase !== "published") {
       try { await this.store.abandon(stage); }
@@ -159,6 +160,7 @@ export class OwnRepository {
       if (READ_ROUTES.has(apiRoute(request))) {
         const state = this.store.exec("SELECT format FROM repository WHERE id=1")[0];
         if (!state) return json({ error: "unknown route" }, 404);
+        if (apiRoute(request) === "changes") return changes(this.store, request);
         return await new ReadApi(this.store, module, state.format).handle(apiRoute(request), request, (generator, type, length) => this.stream(generator, type, length));
       }
       if (apiRoute(request)) return json({ error: "unknown route" }, 404);
@@ -171,7 +173,7 @@ export class OwnRepository {
         const version = codec.uploadVersion(request.headers.get("git-protocol"));
         if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-upload-pack") return this.stream(this.uploadAdvertisement(codec, version), "application/x-git-upload-pack-advertisement");
         const contentType = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
-        if (request.method === "POST" && parts[2] === "git-receive-pack" && parts.length === 3 && contentType === "application/x-git-receive-pack-request") return await this.receive(request, codec);
+        if (request.method === "POST" && parts[2] === "git-receive-pack" && parts.length === 3 && contentType === "application/x-git-receive-pack-request") return await this.receive(request, codec, access.actor);
         if (request.method === "POST" && parts[2] === "git-upload-pack" && parts.length === 3 && contentType === "application/x-git-upload-pack-request") {
           const fetch = new FetchJob(this.store, codec, version);
           try { await fetch.decode(request); }

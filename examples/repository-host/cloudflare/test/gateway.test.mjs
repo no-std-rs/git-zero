@@ -47,6 +47,12 @@ for (const binding of [true, false]) test(`gateway grants over ${binding ? "serv
     assert.equal(created.status, 201, await created.clone().text()); await created.arrayBuffer();
     await ok(source, auth("write"), "push", remote, "main");
     const first = await ok(source, "", "rev-parse", "HEAD");
+    const readHeaders = binding ? { authorization: basic("reader") } : { "x-git-zero-grant": mint(ns) };
+    const record = await fetch(`${remote}/api/v1/changes?after=0`, { headers: readHeaders });
+    assert.equal(record.status, 200);
+    const initial = await record.json(); assert.equal(initial.completedThrough, 1);
+    assert.deepEqual(initial.publications[0].updates.map(({ name, oldId, newId }) => [name, oldId, newId]), [["refs/heads/main", "0".repeat(40), first]]);
+    assert.equal(initial.publications[0].actor, binding ? "owner" : "fixture-user");
     for (const version of [0, 1, 2]) {
       const clone = join(directory, `clone-${version}`);
       await ok(directory, auth("read"), "-c", `protocol.version=${version}`, "clone", remote, clone);
