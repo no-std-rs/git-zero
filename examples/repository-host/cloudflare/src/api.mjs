@@ -24,3 +24,5 @@ export function apiRoute(request) {
   const parts = new URL(request.url).pathname.split("/");
   return parts.length === 5 && parts[2] === "api" && parts[3] === "v1" ? parts[4] : null;
 }
+
+export const READ_ROUTES = new Set(["refs", "history", "tree", "blob", "commit"]);

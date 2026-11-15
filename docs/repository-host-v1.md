@@ -194,14 +194,91 @@ is required on a cold instance. Diagnostics count it separately as
 both counters. S3 fixture key-index sidecars are mock metadata, not payload.
 No deployment cost is inferred from this.
 
+## Read API
+
+GET `/<namespace>.git/api/v1/{refs,history,tree,blob,commit}` requires read.
+Write and admin include read. These operations never create a repository.
+JSON responses use application/json and no-store; errors are
+`{"error":"description"}` (codec failures can add `codecError`). Missing or
+unreachable objects/paths return 404, ambiguous revisions or stale cursors 409,
+wrong object kinds and submodule descent 422, malformed parameters 400, and
+exhausted bounds 413. Storage failures remain 500.
+
+`rev` defaults to HEAD. It accepts a full object ID, full ref name, or unambiguous
+short branch/tag name; annotated tags are peeled. Use `refs/heads/name` to avoid
+short-name ambiguity, or `oid:<full-id>` to disambiguate an ID-shaped ref name.
+IDs have 40 hex digits in SHA-1 repositories and 64 in SHA-256 repositories.
+Paths are relative, slash-separated UTF-8; empty means the revision's root.
+Empty components, dot, dot-dot and NUL are refused. Symlinks are returned as
+blobs and never followed; a submodule identifies content in another repository.
+
+Every object lookup, including a raw ID, is restricted to the closure of the
+**current refs**. Typed authenticated edges are traversed in bounded SQLite
+pages. Unreachable bytes retained from earlier generations cannot be read via
+this API. Git's existing whole-catalog fetch semantics are unchanged. The
+reachability walk has 20,000 object, 100,000 edge and 20,000 ref defaults and
+fails closed with 413 on exhaustion. It does not materialize a whole repository
+or shell out to Git. These limits also bound work on disconnected histories.
+
+| Route | Parameters | Result |
+| --- | --- | --- |
+| refs | limit, cursor | generation, head, refs, nextCursor |
+| history | rev, limit, cursor | generation, first-parent commits, nextCursor |
+| tree | rev, path, limit, cursor | generation, directory oid, entries, nextCursor |
+| commit | rev | one commit's metadata (tags peeled) |
+| blob | rev + path, **or** oid; maxBytes | streamed exact blob bytes |
+
+`limit` defaults to 20 and is at most 100. Opaque base64url cursors include the
+operation, namespace and ref generation. Pass them unchanged; subsequent
+history/tree pages may omit rev/path. Changing those selectors is refused.
+After any ref publication, restart pagination on 409. Responses can contain
+fewer entries than limit to fit the byte budget. Cursors are not authorization:
+each request is granted and each selected object must still be reachable.
+
+Refs include branches, tags and other refs with name, name64, kind, oid and
+nullable peeled ID. HEAD includes symbolic, symbolic64 and nullable oid. Names
+use a nullable strict UTF-8 string plus exact unpadded base64url bytes (name64),
+so non-UTF-8 Git names are preserved. Empty repositories return empty refs and
+history; other absent HEAD reads return 404. An explicit missing revision also
+returns 404 in an empty repository.
+
+Commit entries have oid, tree, parents, author, committer and message, plus an
+optional encoding label. Identities have name/email (UTF-8 replacement decoding),
+exact name64/email64, time as a decimal Unix-seconds **string** and timezone as
+Git's signed four-digit offset. Strings preserve Git's wide integer timestamps.
+Message has subject (first paragraph joined with spaces), body, raw64 and
+truncated. raw64 is the exact prefix; text is UTF-8 replacement decoding, with
+no untrusted HTML interpretation. The prefix is at most 32 KiB, commit headers
+128 KiB, identities 4 KiB and parent count 256. Oversized headers return 413;
+large messages are explicitly truncated. History follows first parents, even
+when commits have multiple parents.
+
+Tree entries have name/name64, six-digit octal mode, kind (blob, tree, symlink,
+submodule), oid and nullable size. Blob sizes come from the verified catalog,
+without reading their bodies. Each visited directory is at most 1 MiB; paths
+are at most 4096 UTF-8 bytes and 64 components. Tag peeling is bounded to 32.
+Metadata reads total at most 8 MiB per request and JSON at most 512 KiB. Codec
+read/reconstruction work is at most 128 MiB and retains the hard object limits.
+A directory can be rescanned on each page; pagination bounds output and does
+not imply unbounded scan work.
+
+Blobs default to an 8 MiB maximum. maxBytes can lower that bound; exceeding it
+returns 413 before any bytes. Responses carry Content-Length and X-Object-Id,
+Content-Type: application/octet-stream, Content-Disposition: attachment,
+X-Content-Type-Options: nosniff, and Cache-Control: no-store. A fixed-length
+stream makes the length visible through workerd without buffering the file.
+Serve this response unchanged: do not infer an executable browser media type
+from repository filenames. Range reconstruction streams in codec pages,
+including delta bases; it does not warm or materialize entire canonical bases.
+No archive route is implemented; the optional archive was omitted to keep this
+bounded surface small.
+
 ## Scope and verification
 
-Access levels, grants and explicit lifecycle are implemented. Browse APIs,
-durable actor/push records, configurable policy and a configurable host-module
-boundary remain follow-up milestones. The actor is authenticated
-and available at the authorization seam but not yet persisted. Read grants,
-like token access, currently cover the published Git catalog, including older
-ref generations; there is no reachability-restricted browse API yet. LFS, SSH,
+Access levels, grants, explicit lifecycle and the reachability-restricted read
+API are implemented. Durable actor/push records, configurable policy and a
+configurable host-module boundary remain follow-up milestones. The actor is
+authenticated and available at authorization but not yet persisted. LFS, SSH,
 application hooks, unreachable-object garbage collection, and a native
 push-capable host are not implemented.
 
@@ -213,3 +290,9 @@ fetch, strict fsck, denied reader pushes and hidden outsider responses with
 real Git in v0/v1/v2, including gzip controls. It repeats grant use against
 plain HTTP `wrangler dev`. Existing token-mode tests remain unchanged in meaning.
 No deployed latency, billing cost or production Cloudflare behavior is claimed.
+
+Browse fixtures are generated by real Git in both object formats and compared
+with for-each-ref, ls-tree, cat-file, log/show and rev-list. Both local runtimes
+accept real Git pushes and serve the same metadata and bytes. Negative coverage
+includes unreachable retained objects after ref deletion/recreation, stale
+cursors, ambiguity, raw names, large trees, truncated messages and work limits.

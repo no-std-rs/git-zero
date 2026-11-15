@@ -71,6 +71,8 @@ export class ByteCache {
 }
 
 const SCHEMA = [
+  "CREATE TABLE IF NOT EXISTS browse_visible (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS browse_visible_work ON browse_visible(walked,oid)",
   "CREATE TABLE IF NOT EXISTS host_settings (id INTEGER PRIMARY KEY, default_branch BLOB, last_publication INTEGER)",
   "CREATE TABLE IF NOT EXISTS host_identity (id INTEGER PRIMARY KEY, namespace TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS repository (id INTEGER PRIMARY KEY, format INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0, object_count INTEGER NOT NULL DEFAULT 0, head BLOB NOT NULL)",

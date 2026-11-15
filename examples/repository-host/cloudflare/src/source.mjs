@@ -264,6 +264,33 @@ export class ObjectSource {
     return digest;
   }
 
+  // Stream a verified published object's complete body or bounded subrange.
+  // Nested bases are described/read by range: no canonical base warming or
+  // temporary reconstruction is required for the product read API.
+  async *stream(row, range = null) {
+    this.codec.charge(0, range?.length ?? row.size);
+    this.queryKeys = new Map(); this.queryRows = [];
+    const root = this.key(row), descriptor = this.descriptor(row);
+    this.codec.rangeInit(root, range);
+    let written = 0, request = this.codec.rangeRequest();
+    try {
+      for (;;) {
+        if (request.tag === 20) {
+          const current = request.key.staged !== undefined && integer(request.key.staged) === root.staged ? row : this.lookup(request.key);
+          this.codec.rangeDescribe(current === row ? descriptor : this.descriptor(current));
+          request = this.codec.rangeRequest();
+        } else if (request.tag === 21) {
+          const current = request.key.staged !== undefined && integer(request.key.staged) === root.staged ? row : this.lookup(request.key);
+          request = this.codec.rangeFeed(await this.readRow(current, request.flags, integer(request.a), integer(request.b)));
+          this.codec.charge(1, request.consumed); written += request.written;
+          if (request.data.length) yield request.data;
+        } else if (request.tag === 22) break;
+        else throw new Error("unexpected streaming range event");
+      }
+      if (written !== (range?.length ?? row.size)) throw new Error("streamed object length differs");
+    } finally { this.codec.rangeCancel(); this.codec.sourceCancel(); this.reader = null; }
+  }
+
   async process(row, scan = true, checks = 0) {
     this.queries++;
     this.codec.charge(0, row.size);

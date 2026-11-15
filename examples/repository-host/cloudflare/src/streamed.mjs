@@ -10,7 +10,8 @@ import { streamResponse } from "./response.mjs";
 import { RequestError, isStorageFailure } from "./errors.mjs";
 
 import { Lifecycle } from "./lifecycle.mjs";
-import { ApiError, apiRoute } from "./api.mjs";
+import { ReadApi } from "./browse.mjs";
+import { ApiError, apiRoute, READ_ROUTES } from "./api.mjs";
 import { REPOSITORY, accessReady, authorize } from "./access.mjs";
 const UUID = /^[0-9a-f-]{36}$/;
 const json = (body, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -74,8 +75,8 @@ export class OwnRepository {
     });
     this.queue = job.catch(() => {}); return job;
   }
-  stream(generator, type) {
-    const result = streamResponse(generator, type);
+  stream(generator, type, length) {
+    const result = streamResponse(generator, type, 60000, length);
     this.streamDone = result.done;
     return result.response;
   }
@@ -154,6 +155,11 @@ export class OwnRepository {
         const response = await this.lifecycle.handle(request, this.store);
         if (this.lifecycle.state?.state === "deleted") this.store = null;
         return response;
+      }
+      if (READ_ROUTES.has(apiRoute(request))) {
+        const state = this.store.exec("SELECT format FROM repository WHERE id=1")[0];
+        if (!state) return json({ error: "unknown route" }, 404);
+        return await new ReadApi(this.store, module, state.format).handle(apiRoute(request), request, (generator, type, length) => this.stream(generator, type, length));
       }
       if (apiRoute(request)) return json({ error: "unknown route" }, 404);
       if (parts[1] !== "_test") {

@@ -1,6 +1,6 @@
 // A response owns repository scratch until its generator has finished cleanup.
 // Bound idle backpressure, while allowing an actively drained pack to run long.
-export function streamResponse(generator, type, idleMs = 60000) {
+export function streamResponse(generator, type, idleMs = 60000, length) {
   let finish, controller, timer, stopping, closed = false;
   const done = new Promise((resolve) => { finish = resolve; });
   const complete = () => { closed = true; clearTimeout(timer); finish(); };
@@ -28,5 +28,14 @@ export function streamResponse(generator, type, idleMs = 60000) {
     },
     cancel() { return stop(); },
   });
-  return { response: new Response(body, { headers: { "Content-Type": type, "Cache-Control": "no-store" } }), done };
+  // workerd derives Content-Length from FixedLengthStream, ignoring a manually
+  // supplied length for an ordinary ReadableStream. Cancellation propagates to
+  // the producer, including its scratch cleanup.
+  let output = body;
+  if (length !== undefined && typeof FixedLengthStream !== "undefined") {
+    const fixed = new FixedLengthStream(length);
+    body.pipeTo(fixed.writable).catch(() => {});
+    output = fixed.readable;
+  }
+  return { response: new Response(output, { headers: { "Content-Type": type, "Cache-Control": "no-store", ...(length === undefined ? {} : { "Content-Length": String(length) }) } }), done };
 }

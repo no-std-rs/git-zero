@@ -53,8 +53,10 @@ for exact minting, expiry and gateway header handling. Gateway repositories
 require admin PUT creation at `/<namespace>.git/api/v1/repository`. The same
 endpoint describes repositories and performs bounded, resumable deletion with
 permanent namespace retirement. Token mode keeps implicit creation by default;
-`IMPLICIT_CREATE=false` disables it. Browse, push records, deployment policy and
-a configurable module boundary remain in progress.
+`IMPLICIT_CREATE=false` disables it. Read grants can browse refs, first-parent
+history, trees, commits and safe streamed blobs under `api/v1/`; only objects
+reachable from current refs are visible there. Push records, deployment policy
+and a configurable module boundary remain in progress.
 
 The current suite covers SHA-1/SHA-256 push, clone and fetch using Git protocol
 preferences 0/1/2, atomic updates, push options, deletes, thin pushes, annotated

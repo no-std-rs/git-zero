@@ -315,8 +315,10 @@ to every read-only repository adapter.
   bounded, resumable R2-prefix purge plus native SQLite clearing with a permanent
   retirement fence. Explicit creation is mandatory in gateway mode. Local
   Wrangler and signed-S3/workerd tests cover crash safety and namespace isolation.
-- [ ] Reachability-restricted browse APIs, durable push/actor records, configurable
-  repository policy and a configurable composable host-module boundary.
+- [x] Bounded, reachability-restricted refs/history/tree/blob/commit HTTP reads,
+  generation-bound cursors and raw-byte names; real Git oracles in both formats.
+- [ ] Durable push/actor records, configurable repository policy and a
+  configurable composable host-module boundary.
 - [ ] LFS, SSH, application hooks, unreachable-object garbage collection and a
   native push-capable host. Authentication and product identity stay host-owned.
 - [ ] Complete a full Linux push, clone, incremental fetch and strict fsck through
