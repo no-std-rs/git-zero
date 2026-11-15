@@ -17,10 +17,18 @@ test("versioned grant vector and bounded opaque UTF-8 actor", async () => {
 
 test("invalid grants fail closed: expiry, encoding, key, scope, tampering, upgrade", async () => {
   const now = Math.floor(Date.now() / 1000), valid = mint("repo");
-  for (const value of [null, "", "x".repeat(513), valid + ".extra", valid.replace("v1.", "v2."), valid.replace(".read.", ".write."), valid.replace(".read.", ".admin."), valid.replace(Buffer.from("fixture-user").toString("base64url"), Buffer.from("other-user").toString("base64url")), valid.slice(0, -2) + "AA", mint("repo", "read", { expiry: now }), mint("repo", "read", { expiry: now - 1 }), mint("repo", "read", { expiry: now + 301 }), mint("other"), mint("repo", "owner"), mint("repo", "toString"), mint("repo", "read", { actor: Buffer.from([255]) }), mint("repo", "read", { expiry: "02000000120" }), mint("repo", "read", { secret: "wrong-key" }), valid.replace(/\.[^.]+$/, ".%%%"), valid.replace(/\.[^.]+$/, "."), valid.replace(/\.([^.]+)\.([^.]+)$/, ".$1=.$2")]) {
-    if (value === valid) continue;
-    assert.equal(await verifyGrant(value, GRANT_KEY, "repo", now), null, String(value));
-  }
+  const tamperedMac = valid.slice(0, -43) + (valid.at(-43) === "A" ? "B" : "A") + valid.slice(-42);
+  const invalid = [
+    null, "", "x".repeat(513), valid + ".extra", valid.replace("v1.", "v2."),
+    valid.replace(".read.", ".write."), valid.replace(".read.", ".admin."),
+    valid.replace(Buffer.from("fixture-user").toString("base64url"), Buffer.from("other-user").toString("base64url")),
+    tamperedMac, mint("repo", "read", { expiry: now }), mint("repo", "read", { expiry: now - 1 }),
+    mint("repo", "read", { expiry: now + 301 }), mint("other"), mint("repo", "owner"), mint("repo", "toString"),
+    mint("repo", "read", { actor: Buffer.from([255]) }), mint("repo", "read", { expiry: "02000000120" }),
+    mint("repo", "read", { secret: "wrong-key" }), valid.replace(/\.[^.]+$/, ".%%%"),
+    valid.replace(/\.[^.]+$/, "."), valid.replace(/\.([^.]+)\.([^.]+)$/, ".$1=.$2"),
+  ];
+  for (const value of invalid) assert.equal(await verifyGrant(value, GRANT_KEY, "repo", now), null, String(value));
   assert.equal(await verifyGrant(valid, "short", "repo"), null);
   for (const AUTH_MODE of ["gateway", "typo"]) assert.equal(accessReady({ AUTH_MODE, HOST_TOKEN: "configured" }), false);
 });
