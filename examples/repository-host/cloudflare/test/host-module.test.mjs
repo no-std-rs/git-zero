@@ -60,7 +60,7 @@ test("grant admission precedes the shared-isolate gate and overload bounds", { t
     const expiry = Math.floor(Date.now() / 1000) + 2;
     const pending = f.repo("b").fetch(f.request("b", "api/v1/refs", "read", {}, expiry));
     while (!f.repo("b").pendingRequests) await delay(1);
-    const overload = await f.repo("b").fetch(f.request("b", "api/v1/refs")); assert.equal(overload.status, 503); assert.equal(overload.headers.get("retry-after"), "1");
+    const overload = await f.repo("b").fetch(f.request("b", "api/v1/refs")); assert.equal(overload.status, 503); assert.equal(overload.headers.get("retry-after"), "1"); assert.match((await overload.json()).error, /host busy/);
     await delay(Math.max(0, expiry * 1000 - Date.now()) + 30);
     assert.equal((await f.repo("b").fetch(f.request("b", "api/v1/refs", "read", {}, expiry))).status, 404, "expired arrivals are refused even while the gate is full");
     await held.arrayBuffer(); held = null;

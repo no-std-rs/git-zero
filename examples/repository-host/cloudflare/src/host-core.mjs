@@ -40,7 +40,10 @@ export class RepositoryCore {
     const access = await authorize(request, this.env, namespace);
     if (access instanceof Response) return this.env.AUTH_MODE === "gateway" ? access : json({ error: "unknown route" }, 404);
     const ticket = this.pendingRequests < this.maxRequests ? this.gate.reserve() : null;
-    if (!ticket) return new Response("repository host busy; retry later", { status: 503, headers: { "Retry-After": "1", "Cache-Control": "no-store" } });
+    if (!ticket) {
+      const response = json({ error: "repository host busy; retry later" }, 503);
+      response.headers.set("Retry-After", "1"); return response;
+    }
     this.pendingRequests++;
     // A single write/read job owns the request-local codec/cache view. Storage
     // and ref publication remain authoritative across instance reconstruction.
