@@ -32,6 +32,10 @@ for (const binding of [true, false]) test(`gateway grants over ${binding ? "serv
     const ns = binding ? "YWxwaGEvYW5hbHlzaXM" : "550e8400-e29b-41d4-a716-446655440000";
     const remote = `${server.origin}/${binding ? "alpha/analysis" : ns}.git`;
     const auth = (level) => binding ? `Authorization: ${basic(level === "read" ? "reader" : "owner")}` : `X-Git-Zero-Grant: ${mint(ns, level)}`;
+    if (binding) {
+      const bad = await fetch(`${remote}/info/refs?service=git-upload-pack`, { headers: { authorization: `Basic ${Buffer.from("owner:owner-development:extra").toString("base64")}` } });
+      assert.equal(bad.status, 401); await bad.arrayBuffer();
+    }
     const source = join(directory, "source"); await mkdir(source);
     await ok(source, "", "init", "--initial-branch=main");
     await writeFile(join(source, "file.py"), "print('framework')\n");

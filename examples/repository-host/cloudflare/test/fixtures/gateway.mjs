@@ -6,7 +6,10 @@ export default {
   async fetch(request, env) {
     const hidden = () => Response.json({ error: "unknown route" }, { status: 404, headers: { "Cache-Control": "no-store" } });
     let name, password;
-    try { [name, password] = atob(request.headers.get("authorization")?.replace(/^Basic /i, "") ?? "").split(":"); } catch {}
+    try {
+      const decoded = atob(request.headers.get("authorization")?.replace(/^Basic /i, "") ?? ""), split = decoded.indexOf(":");
+      if (split >= 0) { name = decoded.slice(0, split); password = decoded.slice(split + 1); }
+    } catch {}
     const user = Object.hasOwn(users, name ?? "") ? users[name] : null;
     if (!user || user.password !== password) return new Response("gateway authentication required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="fixture gateway"' } });
     const url = new URL(request.url), match = /^\/alpha\/analysis\.git(\/.*)?$/.exec(url.pathname);
