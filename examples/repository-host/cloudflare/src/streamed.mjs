@@ -49,10 +49,15 @@ export class OwnRepository {
     this.ctx = ctx; this.env = env; this.store = null;
     this.queue = Promise.resolve(); this.streamDone = null; this.epoch = crypto.randomUUID();
   }
-  fetch(request) {
+  async fetch(request) {
+    // Capture authorization at arrival, independently of scratch ownership,
+    // recovery, alarm jobs and the lifetime of an earlier response stream.
+    const namespace = request.headers.get("x-git-zero-namespace");
+    const access = await authorize(request, this.env, namespace);
+    if (access instanceof Response) return this.env.AUTH_MODE === "gateway" ? access : json({ error: "unknown route" }, 404);
     // A single write/read job owns the request-local codec/cache view. Storage
     // and ref publication remain authoritative across instance reconstruction.
-    const job = this.queue.then(() => { this.streamDone = null; return this.handle(request); });
+    const job = this.queue.then(() => { this.streamDone = null; return this.handle(request, access); });
     this.queue = job.then(() => this.streamDone).catch(() => {});
     return job;
   }
@@ -115,11 +120,9 @@ export class OwnRepository {
     yield codec.uploadAdvert(version, true);
     if (version !== 2) yield* new FetchJob(this.store, codec, version).references();
   }
-  async handle(request) {
+  async handle(request, access) {
     try {
       const namespace = request.headers.get("x-git-zero-namespace");
-      const access = await authorize(request, this.env, namespace);
-      if (access instanceof Response) return this.env.AUTH_MODE === "gateway" ? access : json({ error: "unknown route" }, 404);
       const path = new URL(request.url).pathname.split("/");
       const routed = path[1] === "_test" ? path[2] : path[1]?.endsWith(".git") ? path[1].slice(0, -4) : null;
       if (routed !== namespace) return json({ error: "unknown route" }, 404);

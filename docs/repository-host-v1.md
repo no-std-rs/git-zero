@@ -37,8 +37,19 @@ v1.<namespace>.<access>.<expiry>.<actor64>.<mac64>
 Unix seconds (1–10 digits, no leading zero). The host accepts it only while
 `now < expiry <= now + 300`; there is no clock-skew allowance. Mint for about
 120 seconds with synchronized clocks. A request is checked at Worker entry and
-again when its Durable Object job starts; an accepted long stream can finish
-after expiry. Grants are bearer capabilities, reusable until expiry within
+again immediately on arrival at the Durable Object, before joining its job
+queue. The verified access and actor are carried into the queued job; waiting
+behind a clone, push, recovery or alarm does not expire an accepted request.
+An accepted request and its response can finish after expiry. HTTP/service-binding
+transport before Durable Object arrival still requires a valid grant: there is
+no unverified timestamp header or transport trust shortcut.
+
+The lower bound deliberately remains strict: an already expired grant is refused
+on arrival. Both verification sites are on the host clock; a gateway should use
+synchronized clocks and the documented 120-second minting lifetime (rather than
+near-expiry grants). Queue waiting is handled by admission-time verification,
+not by extending the replay window with clock-skew tolerance. The upper bound
+also remains 300 seconds. The compatibility vector is unchanged. Grants are bearer capabilities, reusable until expiry within
 their namespace and access level. They do not bind a body, HTTP method, nonce
 or single operation. Use a separate host key per deployment to prevent replay
 across deployments. Revocation requires waiting for expiry or rotating the key;
