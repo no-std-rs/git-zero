@@ -29,7 +29,7 @@ Pass `observability: true` to the test launcher when investigating traces.
 Test-only routes are disabled in normal development and deployment.
 Repositories are addressed by namespace, for example
 `http://127.0.0.1:8787/demo.git`, and are created on their first authenticated
-request. Use ordinary clients:
+request in the default token mode. Use ordinary clients:
 
 ```sh
 git -c http.extraHeader='Authorization: Bearer local-development-token' \
@@ -43,6 +43,15 @@ objects from earlier ref generations. Basic authentication
 also accepts it as the password. Store a deployed token as a secret. For a new
 SHA-256 repository, start with `--var REPO_FORMAT:1`; an existing repository's
 format is fixed. Preserve the local Wrangler state across restarts.
+
+For an embedding gateway, select `AUTH_MODE=gateway` and configure the
+`GRANT_KEY` secret (at least 32 UTF-8 bytes of high-entropy key material).
+The host verifies namespace-scoped HMAC-SHA-256 grants with read/write/admin
+levels over both service bindings and plain HTTP. It sends no authentication
+challenge in this mode. See the [HTTP contract and test vector](../../docs/repository-host-v1.md)
+for exact minting, expiry, gateway header handling, and the current admin
+bootstrap requirement. Lifecycle, browse, push records, deployment policy and
+a configurable module boundary remain planned.
 
 The current suite covers SHA-1/SHA-256 push, clone and fetch using Git protocol
 preferences 0/1/2, atomic updates, push options, deletes, thin pushes, annotated

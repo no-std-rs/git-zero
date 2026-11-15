@@ -306,6 +306,16 @@ to every read-only repository adapter.
   stale IDs, multiple refs, force policy and atomic failures.
 - [x] Corrupt/truncated/disconnected input, denied updates, storage failure,
   concurrent writers, interruption and exact resource limits.
+- [x] Opt-in gateway HMAC-SHA-256 grants scoped to one opaque namespace,
+  read/write/admin levels, constant-time MAC/token verification, hidden invalid
+  grants and readable Git write refusals. Real-Git service-binding and plain-HTTP
+  local fixtures cover protocol v0/v1/v2 and gzip controls; the versioned HTTP
+  contract publishes an independent cross-language test vector.
+- [ ] Explicit repository lifecycle with resumable irreversible storage purge.
+- [ ] Reachability-restricted browse APIs, durable push/actor records, configurable
+  repository policy and a configurable composable host-module boundary.
+- [ ] LFS, SSH, application hooks, unreachable-object garbage collection and a
+  native push-capable host. Authentication and product identity stay host-owned.
 - [ ] Complete a full Linux push, clone, incremental fetch and strict fsck through
   Wrangler, and resolve the documented managed-Cloudflare ingress, isolate and
   SQLite catalog limits before claiming deployed Linux-scale compatibility.

@@ -91,8 +91,8 @@ and deployed resource measurements remain open. See the
 The repository host uses its own codec by default at
 `examples/repository-host/cloudflare/wrangler.toml`. Its Rust Wasm
 module has fixed memory and no allocator/imports. Runtime glue streams incoming
-packs into 8 MiB authenticated R2 chunks and records private object metadata in
-SQLite. Rust resolves delta ranges, hashes canonical objects and scans typed
+packs into 1 MiB authenticated R2 chunks and records private object metadata in
+SQLite. Legacy chunks up to 8 MiB remain readable. Rust resolves delta ranges, hashes canonical objects and scans typed
 graph links before a SQLite transaction publishes refs. The catalog stays in
 place when published; refs and stage visibility change atomically. No Git
 executable or external codec service participates in this path.
@@ -110,7 +110,10 @@ atomic updates, push options, deletion, HTTP chunking, concurrent stale updates,
 invalid graphs and cold restarts. The config defaults to `TEST_MODE=false`;
 private fixture endpoints require both test mode and authentication. Public
 receive requests use `/<repository>.git/info/refs?service=git-receive-pack` and
-`/<repository>.git/git-receive-pack`, with `HOST_TOKEN` supplied as a secret.
+`/<repository>.git/git-receive-pack`, with `HOST_TOKEN` supplied as a secret,
+or scoped gateway grants in `AUTH_MODE=gateway`.
+See the [versioned host contract](repository-host-v1.md) for grant minting and
+the cross-language test vector.
 
 The own-codec path also serves full clone/fetch in protocols 0/1/2, including
 SHA-256, raw ref prefixes, symbolic HEAD, annotated-tag peeling, gzip control

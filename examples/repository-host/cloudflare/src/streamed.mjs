@@ -9,7 +9,7 @@ import { FetchJob } from "./fetch.mjs";
 import { streamResponse } from "./response.mjs";
 import { RequestError, isStorageFailure } from "./errors.mjs";
 
-const REPOSITORY = /^[A-Za-z0-9_-]{1,80}$/;
+import { REPOSITORY, accessReady, authorize } from "./access.mjs";
 const UUID = /^[0-9a-f-]{36}$/;
 const json = (body, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 const encode = (value) => new TextEncoder().encode(value);
@@ -24,28 +24,18 @@ function testFormat(request, fallback = 0) {
   return format;
 }
 
-function authorized(request, env) {
-  if (!env.HOST_TOKEN) return false;
-  const authorization = /^([^ ]+) +(.+)$/.exec(request.headers.get("authorization") ?? "");
-  if (!authorization) return false;
-  const scheme = authorization[1].toLowerCase(), credentials = authorization[2];
-  if (scheme === "bearer") return credentials === env.HOST_TOKEN;
-  if (scheme !== "basic") return false;
-  try { const decoded = atob(credentials); const split = decoded.indexOf(":"); return split >= 0 && decoded.slice(split + 1) === env.HOST_TOKEN; }
-  catch { return false; }
-}
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
-      const ready = !!env.HOST_TOKEN;
+      const ready = accessReady(env);
       return json({ ready, runtime: "workerd", codec: "no_std Wasm", durableStorage: "R2 and SQLite", gitReceive: ready, gitFetch: ready }, ready ? 200 : 503);
     }
-    if (!authorized(request, env)) return new Response("authentication required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="git-zero"' } });
     const parts = url.pathname.split("/");
     const test = env.TEST_MODE === "true" && parts[1] === "_test";
     const namespace = test ? parts[2] : parts[1]?.endsWith(".git") ? parts[1].slice(0, -4) : null;
+    const access = await authorize(request, env, namespace);
+    if (access instanceof Response) return access;
     if (!REPOSITORY.test(namespace ?? "") || (!test && parts.length > 4)) return json({ error: "unknown route" }, 404);
     const headers = new Headers(request.headers);
     headers.set("x-git-zero-namespace", namespace);
@@ -127,8 +117,12 @@ export class OwnRepository {
   }
   async handle(request) {
     try {
-      if (!authorized(request, this.env)) return json({ error: "unknown route" }, 404);
       const namespace = request.headers.get("x-git-zero-namespace");
+      const access = await authorize(request, this.env, namespace);
+      if (access instanceof Response) return this.env.AUTH_MODE === "gateway" ? access : json({ error: "unknown route" }, 404);
+      const path = new URL(request.url).pathname.split("/");
+      const routed = path[1] === "_test" ? path[2] : path[1]?.endsWith(".git") ? path[1].slice(0, -4) : null;
+      if (routed !== namespace) return json({ error: "unknown route" }, 404);
       if (!REPOSITORY.test(namespace ?? "")) return json({ error: "invalid repository" }, 400);
       if (!this.store) {
         const store = new Store(this.ctx, this.env, namespace);
@@ -138,6 +132,7 @@ export class OwnRepository {
       const url = new URL(request.url), parts = url.pathname.split("/");
       if (parts[1] !== "_test") {
         const format = this.store.exec("SELECT format FROM repository WHERE id=1")[0]?.format ?? Number(this.env.REPO_FORMAT ?? 0);
+        if (this.env.AUTH_MODE === "gateway" && access.access !== "admin" && !this.store.exec("SELECT id FROM repository WHERE id=1").length) return json({ error: "unknown route" }, 404);
         this.store.initialize(format);
         const codec = new Codec(module, format, { capabilities: RECEIVE_CAPABILITIES });
         if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-receive-pack") return this.stream(this.advertise(codec), "application/x-git-receive-pack-advertisement");

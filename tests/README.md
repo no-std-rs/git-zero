@@ -189,6 +189,11 @@ linear-memory ceiling, including immutable upload controls. The read-only demo
 keeps its existing independent budget. The same suite drives ordinary Git
 push/clone/fetch against actual Wrangler R2/SQLite and direct workerd S3/SQLite,
 with atomic refs, graph validation, stale updates, cold restarts and reclamation.
+The gateway fixture adds a second Wrangler Worker with a Basic user table and
+a service binding, plus independent plain-HTTP grant requests. Real Git checks
+owner push/reader clone and fetch, readable denied pushes, hidden outsiders,
+v0/v1/v2 and gzip controls. Focused iteration: `node --test test/grants.test.mjs
+test/gateway.test.mjs` from the host Cloudflare directory after building Wasm.
 The former native Git hosting experiment and its tests have been replaced by
 these durable runtime tests; live deployment verification is outside this task.
 
