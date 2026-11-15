@@ -143,9 +143,10 @@ Existing implicit repositories retain their original HEAD-selection behavior.
 
 Describe returns `namespace`, `state`, `objectFormat`, `head` (`symbolic` and
 nullable `oid`), `defaultBranch`, `generation`, `objectCount`, `storedPackBytes`,
-`storedBytes` and `lastPublication`. Counts come from the catalog; storedPackBytes
+`storedBytes`, `databaseBytes` and `lastPublication`. Counts come from the catalog; storedPackBytes
 is the sum of published encoded pack sizes, with no deduplication credit. Actual
-physical R2 bytes (`storedBytes`) are unknown cheaply and therefore null. Times
+physical R2 bytes (`storedBytes`) are unknown cheaply and therefore null.
+`databaseBytes` reports the native SQLite size when the runtime exposes it. Times
 are Unix milliseconds. `lastPublication` and the original default branch of a
 legacy repository can be null when unknown; the next publication records its
 time atomically with refs. The existing schema is preserved; `host_settings`
@@ -188,7 +189,10 @@ Each purge call has one bounded list, at most 64 object deletions, and at most
 one native database-clear operation. No repository-sized JS array or SQL row
 walk is used. Direct workerd's S3 adapter uses signed, bounded ListObjectsV2
 responses; Wrangler uses the native R2 binding. One additional R2 fence lookup
-is required on a cold instance. No deployment cost is inferred from this.
+is required on a cold instance. Diagnostics count it separately as
+`r2FenceGets`, preserving `r2Gets` for data-chunk reads; benchmark reports retain
+both counters. S3 fixture key-index sidecars are mock metadata, not payload.
+No deployment cost is inferred from this.
 
 ## Scope and verification
 

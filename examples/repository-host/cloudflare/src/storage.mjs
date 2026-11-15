@@ -7,7 +7,7 @@ const MAX_STORED_CHUNK_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 65536;
 export const FETCH_TABLES = ["fetch_wants", "fetch_haves", "fetch_shallow", "fetch_probe", "fetch_common", "fetch_selected"];
 
-async function retryStorage(operation, usage) {
+export async function retryStorage(operation, usage) {
   for (let attempt = 0; ; attempt++) {
     try { return await operation(); }
     catch (error) {
@@ -116,7 +116,7 @@ const STAGE_METADATA = ["stage_objects", "stage_edges", "stage_names", "stage_bl
 export class Store {
   constructor(ctx, env, namespace) {
     this.ctx = ctx; this.env = env; this.namespace = namespace; this.blobs = bucket(env);
-    this.usage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2Puts: 0, r2Deletes: 0, r2Failures: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
+    this.usage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2FenceGets: 0, r2Puts: 0, r2Deletes: 0, r2Failures: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
     this.observerUsage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0 };
     this.sqlKnown = true;
     this.edgeStages = new Map();

@@ -148,7 +148,7 @@ export class OwnRepository {
         await store.recover(); this.store = store;
       }
       if (this.store.namespace !== namespace) throw new Error("repository identity differs");
-      if (this.lifecycle.fenceRead) { this.store.usage.r2Gets++; this.lifecycle.fenceRead = false; }
+      for (const field of ["r2FenceGets", "r2Failures", "r2Retries"]) { this.store.usage[field] += this.lifecycle.usage[field]; this.lifecycle.usage[field] = 0; }
       const url = new URL(request.url), parts = url.pathname.split("/");
       if (apiRoute(request) === "repository") {
         const response = await this.lifecycle.handle(request, this.store);

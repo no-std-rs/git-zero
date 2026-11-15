@@ -40,6 +40,8 @@ for (const format of [0, 1]) test(`lifecycle creation, metadata and real codec p
     }
     const settings = { objectFormat: format ? "sha256" : "sha1", defaultBranch: "main" };
     const first = await value(await f.call("PUT", "api/v1/repository", settings), 201);
+    assert.equal(f.repository.store.usage.r2FenceGets, 1);
+    assert.equal(f.repository.store.usage.r2Gets, 0, "a namespace fence lookup is separate from pack reads");
     assert.equal(first.objectFormat, settings.objectFormat); assert.equal(first.generation, 0); assert.equal(first.head.oid, null);
     assert.equal(first.objectCount, 0); assert.equal(first.storedPackBytes, 0); assert.equal(first.lastPublication, null);
     assert.deepEqual(await value(await f.call("PUT", "api/v1/repository", settings)), first);
@@ -139,5 +141,17 @@ test("a cold object refuses a different namespace before touching retirement sta
     const response = await f.repository.fetch(new Request("http://host/other.git/api/v1/repository", { method: "DELETE", headers: { "x-git-zero-namespace": "other", "x-git-zero-grant": mint("other", "admin") } }));
     assert.equal(response.status, 404);
     assert.equal((await value(await f.call())).state, "active");
+  } finally { f.database.close(); }
+});
+
+test("cold retirement-fence reads use the same bounded transient retries as data reads", async () => {
+  const f = fixture(), get = f.BLOBS.get; let attempts = 0;
+  try {
+    f.BLOBS.get = async (key) => { if (attempts++ < 2) { const error = new Error("network connection lost"); error.retryable = true; throw error; } return get(key); };
+    await value(await f.call("PUT", "api/v1/repository", {}), 201);
+    assert.equal(f.repository.store.usage.r2FenceGets, 3);
+    assert.equal(f.repository.store.usage.r2Gets, 0);
+    assert.equal(f.repository.store.usage.r2Retries, 2);
+    assert.equal(f.repository.store.usage.r2Failures, 2);
   } finally { f.database.close(); }
 });

@@ -1,5 +1,5 @@
 import { bucket } from "./r2-s3.mjs";
-import { bytes, blob } from "./storage.mjs";
+import { bytes, blob, retryStorage } from "./storage.mjs";
 import { ApiError, apiRoute, readJson, json, hidden, encode } from "./api.mjs";
 
 const STATE = "host.deletion.v1";
@@ -19,12 +19,12 @@ export class Lifecycle {
     this.prefix = `repositories/${namespace}/`;
     this.fence = `repository-tombstones/v1/${namespace}`;
     this.loaded = false; this.state = null;
+    this.usage = { r2FenceGets: 0, r2Failures: 0, r2Retries: 0 };
   }
   async load() {
     if (this.loaded) return;
     this.state = await this.ctx.storage.get(STATE) ?? null;
-    this.fenceRead = !this.state;
-    const fence = this.state ? null : await this.blobs.get(this.fence);
+    const fence = this.state ? null : await retryStorage(async () => { this.usage.r2FenceGets++; return this.blobs.get(this.fence); }, this.usage);
     if (fence) {
       await fence.body?.cancel();
       this.state = { state: "deleting", namespace: this.namespace };
@@ -48,7 +48,7 @@ export class Lifecycle {
       head: { symbolic: text(row.head), oid: store.exec("SELECT oid FROM refs WHERE name=?", row.head)[0]?.oid ?? null },
       defaultBranch: settings?.default_branch ? text(settings.default_branch).slice(11) : null,
       generation: row.generation, objectCount: row.object_count,
-      storedBytes: null, storedPackBytes: store.exec("SELECT COALESCE(SUM(bytes),0) AS size FROM stages WHERE phase='published'")[0].size,
+      storedBytes: null, databaseBytes: store.ctx.storage.sql.databaseSize ?? null, storedPackBytes: store.exec("SELECT COALESCE(SUM(bytes),0) AS size FROM stages WHERE phase='published'")[0].size,
       lastPublication: settings?.last_publication ?? null,
     };
   }
