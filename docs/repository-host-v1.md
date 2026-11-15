@@ -746,9 +746,10 @@ Real Git in both formats exercises push/clone/fetch, read/write denial, safe
 blob reads and journal actors. It writes foreign objects adjacent to the host
 prefix, purges the repository and proves those objects survive, including cold
 restart retirement. A forced wrong-stub request cannot poison another namespace.
-A separate module test holds one repository's response beyond a second
-repository grant's expiry: per-repository admission succeeds, expired arrivals remain
-404 and excess valid arrivals receive 503. Lower page/cache/capture/chunk bounds
+A separate module test holds responses and fills queues in two repositories
+while a third completes independently. An admitted short grant survives its
+own repository's queue; expired arrivals remain 404 and excess valid arrivals
+receive 503 only for the saturated repository. Lower page/cache/capture/chunk bounds
 are exercised; the reference gateway/HTTP/S3 runtimes remain independently tested.
 
 ### Storage configuration and jurisdiction safety
