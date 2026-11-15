@@ -29,7 +29,7 @@ for (const format of [0, 1]) test(`bounded browse matches real Git and revokes u
     const fixture = await source(root, format), all = refs(fixture), zero = "0".repeat(format ? 64 : 40);
     await push(receive(format, all.map((ref) => ({ name: ref.name, old: zero, new: ref.oid })), git(fixture.directory, ["pack-objects", "--stdout", "--all", "--delta-base-offset"])));
     await compare(fixture, get);
-    for (const [operation, limits] of [["commit", { visibleObjects: 1 }], ["commit", { edges: 1 }], ["tree", { treeBytes: 1 }], ["commit", { headerBytes: 32 }], ["commit", { metadataBytes: 1 }], ["refs", { jsonBytes: 32 }]]) {
+    for (const [operation, limits] of [["commit", { visibleObjects: 1 }], ["commit", { edges: 1 }], ["tree", { treeBytes: 1 }], ["commit", { headerBytes: 32 }], ["commit", { metadataBytes: 1 }], ["commit", { storageBytes: 0 }], ["refs", { jsonBytes: 32 }]]) {
       await assert.rejects(new ReadApi(host.store, module, format, limits).handle(operation, new Request(`http://host/browse.git/api/v1/${operation}`)), (error) => error.status === 413, `${operation} ${JSON.stringify(limits)}`);
     }
     for (const path of ["payload.html", "empty", "link", "src/analysis.py"]) {

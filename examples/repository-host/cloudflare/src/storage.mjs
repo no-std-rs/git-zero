@@ -72,6 +72,7 @@ export class ByteCache {
 }
 
 const SCHEMA = [
+  "CREATE TABLE IF NOT EXISTS host_storage_config (id INTEGER PRIMARY KEY, prefix TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS host_policy (id INTEGER PRIMARY KEY, allow_non_ff INTEGER, max_stored INTEGER, max_push INTEGER)",
   "CREATE TABLE IF NOT EXISTS host_storage_usage (id INTEGER PRIMARY KEY, bytes INTEGER NOT NULL DEFAULT 0, phase INTEGER NOT NULL DEFAULT 0, last_stage TEXT NOT NULL DEFAULT '', last_object TEXT NOT NULL DEFAULT '', last_seq INTEGER NOT NULL DEFAULT -1)",
   "CREATE TABLE IF NOT EXISTS host_chunk_sizes (key TEXT PRIMARY KEY, length INTEGER NOT NULL) WITHOUT ROWID",
@@ -132,6 +133,8 @@ export class Store {
     this.sqlKnown = true;
     this.edgeStages = new Map();
     for (const statement of SCHEMA) this.exec(statement);
+    this.exec("INSERT OR IGNORE INTO host_storage_config(id,prefix) VALUES(1,?)", env.KEY_PREFIX ?? "");
+    if (this.exec("SELECT prefix FROM host_storage_config WHERE id=1")[0].prefix !== (env.KEY_PREFIX ?? "")) throw new Error("stored R2 key prefix differs");
     // Older publications cannot be reconstructed. Record the coverage boundary
     // once, before the next publication; never fabricate historical actors.
     this.exec("INSERT OR IGNORE INTO publication_start(id,generation) VALUES(1,COALESCE((SELECT generation FROM repository WHERE id=1),0))");
@@ -205,7 +208,9 @@ export class Store {
   }
   rememberEdgeStage(stage, id) {
     if (!Number.isSafeInteger(id) || id <= 0) throw new Error("invalid graph stage ID");
-    if (!this.edgeStages.has(stage) && this.edgeStages.size >= 256) this.edgeStages.delete(this.edgeStages.keys().next().value);
+    const limit = this.env.MEMORY?.metadataEntries ?? 256;
+    if (!limit) return;
+    if (!this.edgeStages.has(stage) && this.edgeStages.size >= limit) this.edgeStages.delete(this.edgeStages.keys().next().value);
     this.edgeStages.set(stage, id);
   }
   edgeStage(stage) {
@@ -250,7 +255,7 @@ export class Store {
   *references() {
     let after = new Uint8Array();
     for (;;) {
-      const rows = this.exec("SELECT name,oid,peeled FROM refs WHERE name>? ORDER BY name LIMIT 128", blob(after));
+      const rows = this.exec("SELECT name,oid,peeled FROM refs WHERE name>? ORDER BY name LIMIT ?", blob(after), this.env.MEMORY?.refPageRows ?? 128);
       if (!rows.length) return;
       for (const row of rows) { after = bytes(row.name); yield { ...row, name: after }; }
     }
@@ -426,21 +431,22 @@ export class Store {
 export class ChunkWriter {
   constructor(store, stage, temporary = null) {
     this.store = store; this.stage = stage; this.temporary = temporary;
-    this.buffer = new Uint8Array(CHUNK_BYTES); this.used = 0; this.position = 0; this.seq = 0;
+    this.chunkBytes = store.env?.MEMORY?.chunkBytes ?? CHUNK_BYTES;
+    this.buffer = new Uint8Array(this.chunkBytes); this.used = 0; this.position = 0; this.seq = 0;
   }
   async write(bytes) {
     let offset = 0;
     while (offset < bytes.length) {
-      const count = Math.min(bytes.length - offset, CHUNK_BYTES - this.used);
+      const count = Math.min(bytes.length - offset, this.chunkBytes - this.used);
       this.buffer.set(bytes.subarray(offset, offset + count), this.used); this.used += count; offset += count;
-      if (this.used === CHUNK_BYTES) await this.flush();
+      if (this.used === this.chunkBytes) await this.flush();
     }
   }
   async flush() {
     if (this.used === 0) return;
     const data = this.buffer.subarray(0, this.used);
     const sha = await sha256(data);
-    const prefix = `repositories/${this.store.namespace}`;
+    const prefix = `${this.store.env?.KEY_PREFIX ?? ""}repositories/${this.store.namespace}`;
     const key = this.temporary === null ? `${prefix}/chunks/${sha}` : `${prefix}/tmp/${this.stage}/${this.temporary}/${this.seq}`;
     const values = [this.stage, this.seq, key, this.position, this.used, sha];
     this.store.ctx.storage.transactionSync(() => {

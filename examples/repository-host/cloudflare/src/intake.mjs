@@ -4,9 +4,9 @@ import { ObjectSource } from "./source.mjs";
 import { requestBody, decodedBody } from "./body.mjs";
 import { RequestError } from "./errors.mjs";
 import { PolicyError, repositoryPolicy } from "./policy.mjs";
+import { MEMORY_LIMITS } from "./resources.mjs";
 
 const EMPTY = new Uint8Array();
-const REPRESENTATION_LIMIT = 1024 * 1024;
 // Four complete records use 60 bindings, below the SQLite binding limit.
 const OBJECT_COLUMNS = "stage,node,wire_kind,packed_size,compressed_offset,wire_base_offset,wire_base_id,kind,size,depth,end_offset,crc,oid,verified,scanned";
 const OBJECT_VALUES = "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
@@ -63,7 +63,7 @@ export class Intake {
         if (kind < 5) this.codec.charge(0, size);
         this.hasOfs ||= kind === 6;
         this.hasRefs ||= kind === 7;
-        this.current = { node, size, kind, structural: kind < 5 && kind !== 3, digest: null, written: 0, body: size <= REPRESENTATION_LIMIT ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
+        this.current = { node, size, kind, structural: kind < 5 && kind !== 3, digest: null, written: 0, body: size <= (this.store.env?.MEMORY?.representationCaptureBytes ?? MEMORY_LIMITS.representationCaptureBytes) ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
         if (this.current.structural) this.source.beginScan(this.current);
         this.objects++; break;
       }

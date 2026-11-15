@@ -1079,3 +1079,13 @@ The `native_http` libFuzzer target shares its parser driver with ordinary native
 admission tests. CI adds the same bounded 5,000-run ASan smoke budget used for the
 other nine targets. This is bounded regression coverage, not a sustained fuzzing
 or full concurrent-host-state claim.
+
+The repository-host suite also generates real-Git SHA-1/SHA-256 browse oracles,
+publication catch-up/rollback cases, resumable lifecycle and size-accounting
+fixtures, and force/size policy refusals. `test/embedded.test.mjs` uses a second
+Worker entry that re-exports the configurable Durable Object under renamed
+bindings and calls its stub directly (bypassing the host fetch entry). It checks
+shared-bucket neighbor survival, lower chunk/cache bounds and cold retirement.
+`test/host-module.test.mjs` verifies grant admission before the isolate gate,
+overload and prefix identity. These fixtures are generated and local; they do
+not build the embedding product's workers-rs router or claim deployed costs.

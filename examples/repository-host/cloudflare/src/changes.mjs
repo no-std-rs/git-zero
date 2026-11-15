@@ -29,10 +29,11 @@ function name(value) {
 export function changes(store, request) {
   if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
   const params = new URL(request.url).searchParams;
+  const maximum = store.env?.READ_LIMITS?.jsonBytes ?? MAX_JSON, pageSize = store.env?.READ_LIMITS?.pageSize ?? 100;
   const current = store.exec("SELECT generation FROM repository WHERE id=1")[0].generation;
   const floor = store.exec("SELECT generation FROM publication_start WHERE id=1")[0].generation;
   const cursor = params.has("cursor") ? unpack(params.get("cursor")) : null;
-  const after = count(params.get("after"), cursor?.after ?? 0), limit = count(params.get("limit"), 20, 100);
+  const after = count(params.get("after"), cursor?.after ?? 0), limit = count(params.get("limit"), Math.min(20, pageSize), pageSize);
   if (!limit) throw new ApiError("changes limit must be positive");
   if (after < floor) return json({ error: "push records unavailable before coverage boundary", recordedAfterGeneration: floor }, 409);
   if (after > current) throw new ApiError("after is beyond the current generation", 409);
@@ -46,7 +47,7 @@ export function changes(store, request) {
     const update = { seq: row.seq, ...name(row.name), oldId: row.old_oid, newId: row.new_oid };
     const actor = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Uint8Array.from(atob(row.actor64.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0)));
     const cost = encode(JSON.stringify(update)).length + encode(JSON.stringify(actor)).length + 128;
-    if (used + cost > MAX_JSON) { if (!taken) throw new ApiError("push record exceeds JSON byte limit", 413); break; }
+    if (used + cost > maximum) { if (!taken) throw new ApiError("push record exceeds JSON byte limit", 413); break; }
     let event = publications.at(-1);
     if (event?.generation !== row.generation) { event = { generation: row.generation, time: row.time, actor, updates: [], complete: true }; publications.push(event); }
     event.updates.push(update); used += cost; last = row; taken++;

@@ -59,7 +59,20 @@ reachable from current refs are visible there. `api/v1/changes` provides durable
 generation/time/actor/ref updates with resumable pages for reliable catch-up.
 Admin `api/v1/policy` configures force permission and optional decoded-push/R2
 payload byte caps (deployment ceilings still apply). Legacy size accounting can
-be resumed in bounded POST pages. A configurable module boundary remains in progress.
+be resumed in bounded POST pages.
+
+For a product Worker, import `createRepositoryHost` from
+`cloudflare/src/host.mjs`, pass your compiled codec and explicit binding names,
+route prefix, auth mode and R2 key prefix, and re-export the returned Repository
+class under your own name. Its fetch handler can serve a separate Worker, or a
+Rust workers-rs router can mint a grant and call the stub directly without that
+handler. The [v1 contract](../../docs/repository-host-v1.md#composing-the-host-in-another-worker)
+defines the exact forwarded URL/namespace/grant shape, shared-bucket purge,
+codec build pin, disabled-by-default health/test routes, memory controls and
+isolate admission. The reference `streamed.mjs` is only a thin deployment.
+Use one active job and lower cache/capture/ref-page bounds for an embedded
+script; the reference explicitly retains four active jobs for its independent
+concurrent-request tests, which is not a worst-case 128 MB memory guarantee.
 
 The current suite covers SHA-1/SHA-256 push, clone and fetch using Git protocol
 preferences 0/1/2, atomic updates, push options, deletes, thin pushes, annotated

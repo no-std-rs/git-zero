@@ -16,8 +16,8 @@ export function branchRef(branch) {
 export class Lifecycle {
   constructor(ctx, env, namespace) {
     this.ctx = ctx; this.blobs = bucket(env); this.namespace = namespace;
-    this.prefix = `repositories/${namespace}/`;
-    this.fence = `repository-tombstones/v1/${namespace}`;
+    this.prefix = `${env.KEY_PREFIX ?? ""}repositories/${namespace}/`;
+    this.fence = `${env.KEY_PREFIX ?? ""}repository-tombstones/v1/${namespace}`;
     this.loaded = false; this.state = null;
     this.usage = { r2FenceGets: 0, r2Failures: 0, r2Retries: 0 };
   }

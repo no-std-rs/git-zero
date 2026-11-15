@@ -8,7 +8,7 @@ export const READ_LIMITS = Object.freeze({
   treeBytes: 1024 * 1024, headerBytes: 128 * 1024, messageBytes: 32 * 1024,
   metadataBytes: 8 * 1024 * 1024, blobBytes: 8 * 1024 * 1024,
   pathBytes: 4096, pathDepth: 64, tagDepth: 32, parents: 256,
-  identityBytes: 4096, jsonBytes: 512 * 1024, workBytes: 128 * 1024 * 1024,
+  identityBytes: 4096, jsonBytes: 512 * 1024, workBytes: 128 * 1024 * 1024, storageBytes: 128 * 1024 * 1024,
 });
 const text = (data) => new TextDecoder("utf-8", { ignoreBOM: true }).decode(data);
 const fromHex = (id) => Uint8Array.from(id.match(/../g), (part) => Number.parseInt(part, 16));
@@ -46,8 +46,10 @@ export class ReadApi {
   }
   source() {
     if (!this.objects) {
-      this.codec = new Codec(this.module, this.format, { maxObjectBytes: 64 * 1024 * 1024, maxCanonicalBytes: 32 * 1024 * 1024, maxTemporaryBytes: 0, maxWorkBytes: this.limits.workBytes, maxTotalWorkBytes: this.limits.workBytes, maxLinks: this.limits.edges });
-      this.objects = new ObjectSource(this.store, this.codec, `browse:${crypto.randomUUID()}`);
+      const limits = { maxObjectBytes: 64 * 1024 * 1024, maxCanonicalBytes: 32 * 1024 * 1024, maxTemporaryBytes: 0, maxWorkBytes: this.limits.workBytes, maxTotalWorkBytes: this.limits.workBytes, maxLinks: this.limits.edges };
+      for (const [key, value] of Object.entries(this.store.env?.CODEC_LIMITS ?? {})) limits[key] = key in limits ? Math.min(limits[key], value) : value;
+      this.codec = new Codec(this.module, this.format, limits);
+      this.objects = new ObjectSource(this.store, this.codec, `browse:${crypto.randomUUID()}`, { storageBytes: this.limits.storageBytes });
     }
     return this.objects;
   }
@@ -76,7 +78,7 @@ export class ReadApi {
     return { symbolic: utf8(bytes(head)), symbolic64: b64(bytes(head)), oid: this.store.exec("SELECT oid FROM refs WHERE name=?", head)[0]?.oid ?? null };
   }
   refsPage(params) {
-    const limit = number(params.get("limit"), 20, this.limits.pageSize, 1), cursor = this.decodeCursor("refs", params.get("cursor"));
+    const limit = number(params.get("limit"), Math.min(20, this.limits.pageSize), this.limits.pageSize, 1), cursor = this.decodeCursor("refs", params.get("cursor"));
     const offset = number(cursor?.offset, 0, this.limits.refs);
     const rows = this.store.exec("SELECT name,oid,peeled FROM refs ORDER BY name LIMIT ? OFFSET ?", limit + 1, offset);
     if (offset + rows.length > this.limits.refs) throw new ApiError("ref enumeration budget exceeded", 413);
@@ -214,7 +216,7 @@ export class ReadApi {
     return row;
   }
   async history(params) {
-    const cursor = this.decodeCursor("history", params.get("cursor")), limit = number(params.get("limit"), 20, this.limits.pageSize, 1);
+    const cursor = this.decodeCursor("history", params.get("cursor")), limit = number(params.get("limit"), Math.min(20, this.limits.pageSize), this.limits.pageSize, 1);
     if (!cursor && !params.has("rev") && !this.head().oid) return this.result({ generation: this.generation, commits: [], nextCursor: null });
     const first = this.peel(this.resolve(params.get("rev") ?? (cursor ? `oid:${cursor.start}` : "HEAD")));
     if (cursor && cursor.start !== first.oid) throw new ApiError("cursor revision differs");
@@ -232,7 +234,7 @@ export class ReadApi {
     return this.result({ generation: this.generation, commits, nextCursor: next ? this.cursor("history", { start: first.oid, next }) : null });
   }
   async tree(params) {
-    const cursor = this.decodeCursor("tree", params.get("cursor")), limit = number(params.get("limit"), 20, this.limits.pageSize, 1);
+    const cursor = this.decodeCursor("tree", params.get("cursor")), limit = number(params.get("limit"), Math.min(20, this.limits.pageSize), this.limits.pageSize, 1);
     let row, revision;
     if (cursor && !params.has("rev") && !params.has("path")) {
       row = this.object(cursor.directory); revision = cursor.revision;

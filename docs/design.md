@@ -88,7 +88,10 @@ pack set before transport. Distributed coordination, larger host-backed provider
 and deployed resource measurements remain open. See the
 [cache contract](async-pack-cache.md) and [roadmap](../ROADMAP.md).
 
-The repository host uses its own codec by default at
+The repository host factory accepts a caller-supplied compiled codec and explicit
+bindings, routes, auth mode, shared-bucket key prefix and resource bounds. Its
+Durable Object independently verifies direct-stub requests without relying on
+the outer entry. The thin reference deployment uses its own codec at
 `examples/repository-host/cloudflare/wrangler.toml`. Its Rust Wasm
 module has fixed memory and no allocator/imports. Runtime glue streams incoming
 packs into 1 MiB authenticated R2 chunks and records private object metadata in
@@ -121,7 +124,11 @@ bodies and incremental negotiation. The existing Rust request parsers and ACK
 encoder serve both repository adapters and the external catalog. A fixed 4 MiB
 control arena keeps validated packet storage immutable while iterating wants and
 haves. Total Wasm linear memory is bounded at 6 MiB; object bodies remain outside
-that arena and the runtime caches remain bounded at 48 MiB.
+that arena and the default runtime byte caches are bounded at 48 MiB per active
+job. Embedders can lower caches, capture thresholds, chunk writers and ref pages,
+and limit active/pending jobs (factory default: one active job). These payload
+bounds exclude VM/runtime/SQL/GC overhead and the surrounding product. See the
+[v1 memory envelope](repository-host-v1.md#memory-and-shared-isolate-scheduling).
 Each byte cache also has an independent 8,192-entry cap, so empty or tiny
 representations cannot exhaust memory through map metadata.
 
@@ -225,3 +232,11 @@ The core and native adapter libraries never enable `std` or `alloc`. The native
 CLI uses `std` for startup arguments, stdout, and diagnostics. JavaScript and the
 test harnesses use their host runtimes' memory management; the no-allocation
 guarantee applies to Rust core/adapter operations, not the surrounding platform.
+
+The v1 product API adds explicit format/default-branch creation, description and
+bounded retirement/purge, current-ref-reachable browse reads, a transactional
+actor/ref-update journal and per-repository force/byte policy. New state is
+additive; legacy R2 payload accounting is resumable without rewriting catalogs.
+Every R2 content/tmp/fence key is under the configured host prefix; repository
+delete clears only its own content prefix and native database, preserving other
+product objects and a permanent retirement fence.

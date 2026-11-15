@@ -8,12 +8,16 @@ outside local loopback. Do not forward grants to clients or log them.
 
 ## Configuration and identity
 
-`AUTH_MODE=token` (also the unset default) preserves the existing `HOST_TOKEN`
+The thin reference deployment uses the variable/binding names in this section.
+A composed deployment supplies its own names through createRepositoryHost below;
+no binding, route or auth mode is implicitly selected by the library.
+
+`AUTH_MODE=token` (also the reference unset default) preserves the existing `HOST_TOKEN`
 secret: Bearer credentials or the password in HTTP Basic grant full access.
 Invalid credentials receive HTTP 401 with the existing Basic challenge.
 `AUTH_MODE=gateway` ignores `HOST_TOKEN` and requires the `GRANT_KEY` secret,
 a UTF-8 string of at least 32 bytes. Generate a high-entropy key, unique to this
-host deployment. Unknown modes fail closed. `/health` reports readiness without
+host deployment. Unknown modes fail closed. The reference `/health` reports auth readiness without
 exposing configuration values. Store actual keys in deployment secrets, never
 in a committed Wrangler `[vars]` section.
 
@@ -23,7 +27,9 @@ these namespaces (an injective encoding or a stored identifier). It must strip
 client-supplied grants and the internal `x-git-zero-namespace` header before
 forwarding, and replace the grant with one minted from its own authorization
 decision. Namespace identity comes from the URL; the Worker overwrites the
-internal header and the Durable Object checks both again.
+internal header and the Durable Object checks both again, including its own
+binding-derived object identity. All route tables below describe suffixes under
+the configured routePrefix (empty only in the reference deployment).
 
 ## Grants
 
@@ -262,6 +268,9 @@ without reading their bodies. Each visited directory is at most 1 MiB; paths
 are at most 4096 UTF-8 bytes and 64 components. Tag peeling is bounded to 32.
 Metadata reads total at most 8 MiB per request and JSON at most 512 KiB. Codec
 read/reconstruction work is at most 128 MiB and retains the hard object limits.
+Whole authenticated chunk cache misses have a separate 128 MiB storage-byte
+budget (readLimits.storageBytes), even when a lowered cache cannot retain a
+legacy extent; bounded storage retries can attempt each miss at most three times.
 A directory can be rescanned on each page; pagination bounds output and does
 not imply unbounded scan work.
 
@@ -377,8 +386,9 @@ A durable per-key ledger and byte counter reserve space in the same transaction
 as chunk ownership, before R2 PUT. Failed/lost PUT acknowledgments can overcount;
 that is conservative. Space is released only after an acknowledged R2 deletion.
 Recovery retries lost acknowledgments without double charging. Lowering a cap
-below existing usage does not delete content: reads, deletion-only pushes and
+below existing usage does not delete content: browse reads, deletion-only pushes and
 updates needing only already owned keys remain possible; new keys are refused.
+Git reconstruction needing new temporary keys also needs storage headroom.
 Temporary storage needs headroom inside the same cap. Whole repository DELETE
 still purges the prefix, including objects outside the known ledger.
 
@@ -393,11 +403,240 @@ api/v1/policy” and cannot bypass the cap. New writes/deletes update the ledger
 during migration, so concurrent requests/restarts cannot undercount a ready
 catalog. No repository-sized JS array or unbounded migration scan is required.
 
+## Composing the host in another Worker
+
+Import `createRepositoryHost` from
+`examples/repository-host/cloudflare/src/host.mjs`. Its only public export is the
+factory. It returns `{ fetch, Repository }`: a Worker-compatible request handler
+and a Durable Object class to re-export under **your** chosen name. It imports
+no Wasm asset and assumes no external binding or route. `streamed.mjs` is the
+thin reference deployment, selecting its historical names, modes and routes.
+The same factory supports embedded and separate Worker deployments.
+
+```js
+import codec from "./assets/git_zero_host_wasm.wasm";
+import { createRepositoryHost } from "./vendor/git-zero/cloudflare/src/host.mjs";
+import productWorker from "./pkg/product_worker.js";
+
+const repositories = createRepositoryHost({
+  codec,                         // compiled WebAssembly.Module, bundled by you
+  bindings: {
+    repositories: "PRODUCT_REPOS",
+    objects: "PRODUCT_BUCKET",   // can be your existing shared R2 bucket
+    grantKey: "PRODUCT_GRANT_KEY" // secret binding, never a public variable
+  },
+  authMode: "gateway",
+  routePrefix: "/internal/git",
+  keyPrefix: "product/git/",
+  memory: {
+    canonicalCacheBytes: 2 * 1024 * 1024,
+    representationCacheBytes: 1024 * 1024,
+    chunkCacheBytes: 2 * 1024 * 1024,
+    cacheEntries: 128,
+    canonicalCaptureBytes: 1024 * 1024,
+    representationCaptureBytes: 256 * 1024,
+    chunkBytes: 65536,
+    refPageRows: 16
+  },
+  maxActiveJobs: 1,
+  maxPendingJobs: 32,
+  maxRequestsPerRepository: 16
+  // healthPath/testPrefix omitted: no library health or diagnostic routes
+});
+export const ProductRepository = repositories.Repository;
+export default { fetch: (request, env, ctx) => productWorker.fetch(request, env, ctx) };
+```
+
+Your Wrangler configuration binds PRODUCT_REPOS to the re-exported
+ProductRepository class, declares it in new_sqlite_classes in a migration, binds
+PRODUCT_BUCKET to your existing R2 bucket and supplies PRODUCT_GRANT_KEY as a
+secret. Each repository gets a **dedicated** instance of this class/database;
+its irreversible deleteAll must not share a Durable Object database with
+unrelated product state. The surrounding Worker script/isolate and R2 bucket
+can be shared. A workers-rs router calls the namespace binding directly using
+the contract below; the JS wrapper need not call repositories.fetch at all.
+The fixture uses a tiny JS router as the Rust caller stand-in, not a workers-rs
+integration/build test.
+
+For a separate Worker, export `{ fetch: repositories.fetch }` as its default and
+re-export the class exactly the same way. A gateway invokes that fetch handler
+via a service binding or plain HTTP with the configured route prefix and grant.
+The outer handler overwrites the namespace header from the URL. It does not
+provide privileged context unavailable to the Durable Object.
+
+### Direct Durable Object request contract
+
+1. Map your product name to its opaque namespace. Obtain the stub using the
+   **configured repository binding's idFromName(namespace)** (the bare namespace,
+   without `.git`, prefix, team name or any other transformation).
+2. Send the stub a Request with the original method and this URL path:
+   `<routePrefix>/<namespace>.git/<Git-or-api/v1-route>`. The URL authority is
+   arbitrary; use a syntactically valid absolute URL, for example
+   `https://repository.internal/internal/git/<namespace>.git/api/v1/refs`.
+3. Supply `X-Git-Zero-Namespace: <namespace>` and `X-Git-Zero-Grant: <fresh grant>`.
+   The header, URL namespace, grant namespace and the stub's binding-derived
+   object ID must agree. An absent/mismatched value returns the hidden 404.
+   Token mode instead forwards its configured Bearer/Basic credential; the
+   namespace header is still required. No trusted-binding shortcut exists.
+4. Preserve Git-Protocol, Content-Type, Content-Encoding, query selectors and
+   **body bytes/stream**. Use the Git POST media types in the route table. JSON
+   create/PATCH requests use application/json; read requests use GET. Return the
+   host response and its safe content headers unchanged to the client.
+
+The Durable Object independently normalizes its configured path and verifies
+access immediately in fetch, before the repository queue **or** isolate job
+gate. No entry-only marker, prior initialization call, secret forwarded header,
+or preverified access object is needed. It checks stored namespace/prefix
+identity before recovery or retirement lookup. Calling the wrong stub with an
+otherwise valid grant cannot poison either repository's state. Recovery and
+alarm work run after authorization in the same bounded scheduling scheme.
+
+### Factory options
+
+Required: codec, bindings.repositories, bindings.objects, authMode, routePrefix,
+keyPrefix. For a custom storage adapter, bucket(env) can supply the object store
+instead of bindings.objects; it must implement native-R2-compatible get/put/list/
+delete semantics (including bounded prefix listing). The reference uses that
+seam for its local signed-S3/workerd adapter. Token/gateway auth reads only the
+explicit bindings.token/bindings.grantKey respectively. Missing secrets fail
+closed; unknown modes fail closed.
+
+routePrefix is an explicit empty string or a slash-prefixed sequence of ASCII
+letters/digits/underscore/dash segments, with no trailing slash. keyPrefix is an
+explicit empty string or a slash-terminated sequence of ASCII letters/digits/
+underscore/dash/slash (no double slash), at most 240 characters. Namespaces
+remain single segments. Every content/tmp key and retirement fence uses that
+prefix. Only `<keyPrefix>repositories/<namespace>/` is purged; neighboring
+product keys, other repository prefixes and retirement fences survive.
+
+Preserve the bucket, binding's Durable Object namespace and key prefix for a
+stored deployment. An additive host_storage_config row records the prefix;
+changing it on an existing object returns 409 rather than reading/deleting a
+new location. Legacy catalogs require their original empty prefix. No automatic
+bucket/prefix migration is implemented. A new logical host prefix/binding is a
+different deployment identity and should use its own grant key.
+
+Optional healthPath and testPrefix default to disabled. When explicitly set,
+each is an absolute path with the same safe-segment rules. testPrefix must not
+overlap routePrefix. testEnabled defaults to true when testPrefix is supplied;
+it can be a trusted env-to-boolean function (the reference gates it on TEST_MODE).
+Diagnostics require admin and must be enabled only for local/test deployments.
+They are never enabled merely because an embedding Worker has TEST_MODE set.
+healthPath is handled only by the Worker fetch entry, not by a repository stub.
+It reports authentication readiness, not an end-to-end storage probe.
+
+implicitCreate defaults to true for token mode; gateway mode always requires
+explicit PUT. objectFormat is 0 (SHA-1, default) or 1 (SHA-256) for new implicit
+repositories. authMode, implicitCreate, objectFormat, testEnabled and policy may
+be trusted functions of env for deployments with configuration variables. These
+selectors must be deterministic for a deployment's env. policy supplies
+allowNonFastForward/maxStoredBytes/maxPushBytes as described above. The factory
+has no knowledge of the reference variable names.
+
+memory, codecLimits and readLimits accept known integer fields only. They can
+**lower** the defaults documented here/in the exported resource tables; attempts
+to raise them, unknown fields and invalid integers throw at construction.
+Protocol capabilities and ABI frame sizes are not configurable. Source/cache
+payload controls are listed below. codecLimits correspond to resource fields in
+src/codec.mjs CODEC_LIMITS, including object/pack/control counts/bytes, ancestry,
+canonical/work/temporary quotas; the same lowered limits apply to Git and browse
+operations. readLimits correspond to READ_LIMITS in src/browse.mjs; pageSize and
+jsonBytes also bound push-log pages. Lowering pageSize lowers its default too.
+Some extremely small bounds deliberately make an operation return 413.
+
+### Memory and shared-isolate scheduling
+
+The following are payload/element bounds **per active job**, not a measurement
+of the complete JavaScript VM. Reserve space for the embedding Rust Wasm, its
+allocator, HTTP/runtime buffers, SQL result objects, V8 metadata and garbage
+collection inside the isolate's 128 MB limit. Multiple factories have independent
+gates and their live envelopes add together. Inactive repository instances retain
+Store/lifecycle/configuration metadata, not byte caches or codec instances. A
+compiled module and its engine code metadata are shared per factory, outside
+linear-memory totals. The runtime controls how many Durable Object instances
+stay resident; that count is not capped by maxActiveJobs. Per-instance metadata
+and SQLite/runtime handles must also be budgeted. memory.metadataEntries lowers
+the stage-alias cache retained by each Store.
+
+| Component | Default bound | Lowering/configuration |
+| --- | --- | --- |
+| Rust codec instance, including control arena and graph/name scratch | fixed 6 MiB linear memory, one per Git/body-read job | ABI fixed; reduce concurrent jobs |
+| Canonical byte cache | 24 MiB | memory.canonicalCacheBytes |
+| Representation byte cache | 8 MiB | memory.representationCacheBytes |
+| Authenticated chunk byte cache | 16 MiB | memory.chunkCacheBytes |
+| Entries per each byte cache (including empty values) | 8192 | memory.cacheEntries; zero disables caching |
+| One canonical reconstruction capture | 8 MiB | memory.canonicalCaptureBytes; larger objects use bounded temp R2 |
+| Intake/current representation capture | 1 MiB | memory.representationCaptureBytes |
+| Each active encoded/temp chunk writer | 1 MiB | memory.chunkBytes, minimum 64 KiB |
+| Git ref SQL page | 128 raw names, each bounded by Git control framing | memory.refPageRows, minimum 1; lower codecLimits.maxControlBytes/maxCommands too |
+| Codec input/output frames and source pin | 64 KiB / 128 KiB / 64 KiB | fixed ABI pages |
+| R2 chunk miss, outside cache while authenticating | up to 8 MiB for legacy chunks; new chunks up to chunkBytes | historical extents remain readable; runtime digest/copy overhead also applies |
+| Delta/base aliases, temporary descriptors and Store stage aliases | at most 256 entries each; range depth default 128 | memory.metadataEntries (zero disables alias caching), codecLimits.maxDepth |
+| Commit/tree metadata prefixes | total 8 MiB per browse request, plus text/base64/JSON copies | readLimits.metadataBytes/headerBytes/messageBytes/treeBytes |
+| JSON page | 512 KiB; up to 100 rows plus one lookahead | readLimits.jsonBytes/pageSize; string escaping/base64 use additional transient buffers |
+| Publication command/outcome/peel metadata | at most 16384 commands in 4 MiB incoming controls | codecLimits.maxCommands/maxControlBytes; SQL/V8 per-row overhead is additional |
+
+Caches have independent byte and entry caps. Captures are additional to caches;
+lower both if reducing the envelope. Owned intake buffers can be shared by two
+caches and are released when their last owner retires them. Authentication and
+metadata-only lifecycle/refs/log requests allocate no codec. Delta streaming uses
+range queries, not whole-repository buffers. Ordinary SQL work pages are at most
+128 rows (cleanup ownership pages at most 1000 small records); graph frontiers
+live in SQLite. Configurable ref pages bound the large raw-name case. A chunk
+miss can transiently coexist with cached chunks and runtime cryptographic copies.
+A lower new-chunk size does not shrink an existing 8 MiB legacy extent.
+
+maxActiveJobs defaults to **1**, maxPendingJobs to 64, and
+maxRequestsPerRepository to 32 (including its active job). Allowed maxima are
+32/1024/maxPendingJobs respectively. The isolate gate includes stream lifetime
+and alarm/recovery jobs. It releases scratch after generator cleanup, including
+client cancellation and idle readers. A full gate/repository admission bound
+returns 503 with Retry-After: 1; invalid grants are still hidden immediately.
+Admission verifies grants before both queues, so an accepted request may wait
+past expiry. Bodies are not intentionally buffered while waiting, although the
+platform has its own transport buffers. Active draining streams can run longer
+than the 60-second idle deadline. Lower codec byte/work quotas bound their work.
+
+The thin reference explicitly chooses four active jobs to preserve its existing
+independent concurrent idle-body behavior. Four simultaneous worst-case default
+cache/capture envelopes can exceed 128 MB; that setting is **not** a guarantee
+for an embedding script. Use one active job and lower caches/captures/ref pages,
+as in the embedded example, then budget/measure the co-resident product and
+runtime. There is no measured production total-isolate RSS or billing claim.
+After streamed headers are sent, work/storage failures abort the stream; the
+fixed Content-Length prevents a partial blob from appearing as a complete file.
+
+### Building and bundling the codec
+
+Pin the full source commit and Cargo.lock, the compiler and target, and the
+hosting profile. The codec sources/ABI used here are unchanged from this tested
+pin: `c434b802558abf9a82639d5b367787191007177e`. In a build of that pinned source:
+
+```sh
+rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown
+RUSTFLAGS='' CARGO_ENCODED_RUSTFLAGS='' cargo +1.99.1 build --locked \
+  --profile hosting -p git-zero-host-wasm --target wasm32-unknown-unknown
+sha256sum target/wasm32-unknown-unknown/hosting/git_zero_host_wasm.wasm
+```
+
+Copy that artifact to your own asset directory and import it as a compiled
+WebAssembly.Module in your JS entry, passing it as codec. The library does not
+compile bytes at runtime or know this repository's build/ path. Vendor the host
+JS and matching codec ABI together; keep the compiler/lock/profile pin in your
+product's build manifest and verify its artifact digest. This workflow adds no
+runtime npm or no_std dependency. Local independent build roots with Rust
+1.99.1 with the explicit empty flag environment above produced byte-identical
+artifacts, SHA-256
+`3b7ad4b3646070a22534481a9ce93aa9f5fb047a02887fddcbfcc15953617c5a`.
+The independently built artifact is also tested against the codec and product
+APIs. Other compiler/flag selections can change that digest; no prebuilt release
+is downloaded.
+
 ## Scope and verification
 
 Access levels, grants, explicit lifecycle and the reachability-restricted read
-API, durable actor/push records and repository policy are implemented. A
-configurable host-module boundary remains the final milestone. LFS, SSH,
+API, durable actor/push records, policy and configurable composition are
+implemented for embedded and separate Workers. LFS, SSH,
 application hooks, unreachable-object garbage collection, and a native
 push-capable host are not implemented.
 
@@ -415,3 +654,14 @@ with for-each-ref, ls-tree, cat-file, log/show and rev-list. Both local runtimes
 accept real Git pushes and serve the same metadata and bytes. Negative coverage
 includes unreachable retained objects after ref deletion/recreation, stale
 cursors, ambiguity, raw names, large trees, truncated messages and work limits.
+
+The embedded fixture re-exports ProductRepository under renamed bindings,
+uses a product-owned health route, and normally forwards directly to its stub.
+Real Git in both formats exercises push/clone/fetch, read/write denial, safe
+blob reads and journal actors. It writes foreign objects adjacent to the host
+prefix, purges the repository and proves those objects survive, including cold
+restart retirement. A forced wrong-stub request cannot poison another namespace.
+A separate module test holds one repository's response beyond a second
+repository grant's expiry: pre-gate admission succeeds, expired arrivals remain
+404 and excess valid arrivals receive 503. Lower page/cache/capture/chunk bounds
+are exercised; the reference gateway/HTTP/S3 runtimes remain independently tested.

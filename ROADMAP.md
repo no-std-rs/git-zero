@@ -321,7 +321,9 @@ to every read-only repository adapter.
   resumable catch-up pages and an explicit legacy coverage boundary.
 - [x] Per-repository force policy and deployment-ceiling push/stored-payload
   caps, readable Git refusals and resumable legacy byte accounting.
-- [ ] A configurable composable host-module boundary.
+- [x] Configurable host factory for embedded or separate Workers, explicit
+  compiled codec input, direct-stub contract, renamed bindings/routes, isolated
+  shared-bucket prefixes and lowerable resource/isolate admission bounds.
 - [ ] LFS, SSH, application hooks, unreachable-object garbage collection and a
   native push-capable host. Authentication and product identity stay host-owned.
 - [ ] Complete a full Linux push, clone, incremental fetch and strict fsck through

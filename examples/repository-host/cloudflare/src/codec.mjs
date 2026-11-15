@@ -13,6 +13,9 @@ const DEFAULTS = Object.freeze({
   maxCanonicalBytes: 1024 ** 4, maxTotalWorkBytes: 16 * 1024 ** 4, maxTemporaryBytes: 64 * 1024 ** 3,
   capabilities: 0,
 });
+// Embedders may lower resource budgets; capabilities and ABI sizes are fixed by
+// each operation, not configurable protocol features.
+export const CODEC_LIMITS = Object.freeze(Object.fromEntries(Object.entries(DEFAULTS).filter(([name]) => !["capabilities", "maxReadBytes", "nameScratch"].includes(name))));
 
 export class CodecError extends Error {
   constructor(code, operation) { super(`Rust codec ${operation} failed (${code})`); this.code = code; }
