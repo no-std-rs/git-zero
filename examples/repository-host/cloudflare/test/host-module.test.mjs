@@ -18,7 +18,7 @@ function fixture(extra = {}) {
   const request = (ns, route, level = "read", init = {}, expiry) => new Request(`http://host/private/git/${ns}.git/${route}`, { ...init, headers: { "x-git-zero-namespace": ns, "x-git-zero-grant": mint(ns, level, expiry ? { expiry } : {}), ...init.headers } });
   return { host, env, objects, instances, request, repo: (ns) => env.CUSTOM_REPOS.get(env.CUSTOM_REPOS.idFromName(ns)), close: () => databases.forEach((db) => db.close()) };
 }
-test("factory requires explicit deployment identity and only lowers resource budgets", () => {
+test("factory requires explicit deployment identity and validates resource budgets", () => {
   for (const extra of [{ codec: undefined }, { bindings: {} }, { authMode: undefined }, { routePrefix: undefined }, { keyPrefix: undefined }, { keyPrefix: "shared" }, { memory: { canonicalCacheBytes: 25 * 1024 * 1024 } }, { memory: { chunkBytes: 4096 } }, { codecLimits: { maxPackBytes: 2 ** 40 } }, { readLimits: { pageSize: 0 } }]) assert.throws(() => createRepositoryHost({ ...options, ...extra }));
   assert.doesNotThrow(() => createRepositoryHost({ ...options, memory: { cacheEntries: 0, canonicalCaptureBytes: 0 }, readLimits: { pageSize: 1 } }));
 });
@@ -52,19 +52,54 @@ test("direct stub, renamed bindings, lowered caches and shared-prefix deletion a
   } finally { f.close(); }
 });
 
-test("grant admission precedes the shared-isolate gate and overload bounds", { timeout: 15000 }, async () => {
-  const f = fixture({ maxActiveJobs: 1, maxPendingJobs: 2, maxRequestsPerRepository: 2 }); let held;
+test("stalled repositories cannot starve a co-tenant; admission and expiry are per repository", { timeout: 15000 }, async () => {
+  const f = fixture({ maxRequestsPerRepository: 2 }); const held = [];
   try {
-    for (const name of ["a", "b"]) assert.equal((await f.repo(name).fetch(f.request(name, "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201);
-    held = await f.repo("a").fetch(f.request("a", "info/refs?service=git-upload-pack"));
+    for (const name of ["a", "b", "c"]) assert.equal((await f.repo(name).fetch(f.request(name, "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201);
+    for (const name of ["a", "b"]) held.push(await f.repo(name).fetch(f.request(name, "info/refs?service=git-upload-pack")));
     const expiry = Math.floor(Date.now() / 1000) + 2;
-    const pending = f.repo("b").fetch(f.request("b", "api/v1/refs", "read", {}, expiry));
-    while (!f.repo("b").pendingRequests) await delay(1);
-    const overload = await f.repo("b").fetch(f.request("b", "api/v1/refs")); assert.equal(overload.status, 503); assert.equal(overload.headers.get("retry-after"), "1"); assert.match((await overload.json()).error, /host busy/);
+    const pending = [f.repo("a").fetch(f.request("a", "api/v1/refs", "read", {}, expiry)), f.repo("b").fetch(f.request("b", "api/v1/refs"))];
+    while (f.repo("a").pendingRequests < 2 || f.repo("b").pendingRequests < 2) await delay(1);
+    for (const name of ["a", "b"]) {
+      const overload = await f.repo(name).fetch(f.request(name, "api/v1/refs")); assert.equal(overload.status, 503); assert.equal(overload.headers.get("retry-after"), "1");
+    }
+    const other = await Promise.race([f.repo("c").fetch(f.request("c", "api/v1/refs")), delay(1000).then(() => { throw new Error("co-tenant blocked by another repository's readers"); })]);
+    assert.equal(other.status, 200); assert.deepEqual((await other.json()).refs, []);
     await delay(Math.max(0, expiry * 1000 - Date.now()) + 30);
-    assert.equal((await f.repo("b").fetch(f.request("b", "api/v1/refs", "read", {}, expiry))).status, 404, "expired arrivals are refused even while the gate is full");
-    await held.arrayBuffer(); held = null;
-    const response = await pending; assert.equal(response.status, 200); assert.deepEqual((await response.json()).refs, []);
+    assert.equal((await f.repo("a").fetch(f.request("a", "api/v1/refs", "read", {}, expiry))).status, 404);
+    for (const response of held) await response.arrayBuffer(); held.length = 0;
+    for (const response of await Promise.all(pending)) assert.equal(response.status, 200, "admitted grant survives its own repository queue");
     for (const repo of f.instances.values()) await repo.queue;
+  } finally { for (const response of held) await response.body.cancel().catch(() => {}); f.close(); }
+});
+
+test("token defaults preserve an uncapped queue and independent repository progress", { timeout: 10000 }, async () => {
+  const f = fixture({ authMode: "token", bindings: { ...options.bindings, token: "TOKEN" } }); f.env.TOKEN = "public-test-token";
+  const request = (ns, route) => f.request(ns, route, "read", { headers: { authorization: "Bearer public-test-token" } });
+  let held;
+  try {
+    held = await f.repo("a").fetch(request("a", "info/refs?service=git-upload-pack"));
+    const pending = Array.from({ length: 100 }, () => f.repo("a").fetch(request("a", "api/v1/refs")));
+    while (f.repo("a").pendingRequests < 101) await delay(1);
+    assert.equal((await f.repo("b").fetch(request("b", "api/v1/refs"))).status, 404, "missing read still completes independently");
+    await held.arrayBuffer(); held = null;
+    assert.ok((await Promise.all(pending)).every((response) => response.status === 200));
+    assert.equal(f.repo("a").env.RESPONSE_IDLE_MS, 60000); assert.equal(f.repo("a").env.RESPONSE_TOTAL_MS, 0);
+    assert.equal(f.repo("a").env.MEMORY.canonicalCacheBytes, 24 * 1024 * 1024);
+    for (const repo of f.instances.values()) await repo.queue;
+  } finally { await held?.body.cancel().catch(() => {}); f.close(); }
+});
+
+test("a stalled reader times out and releases only its repository's scratch", { timeout: 3000 }, async () => {
+  const f = fixture({ responseIdleMs: 30 }); let held;
+  try {
+    assert.equal((await f.repo("a").fetch(f.request("a", "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201);
+    held = await f.repo("a").fetch(f.request("a", "info/refs?service=git-upload-pack"));
+    const pending = f.repo("a").fetch(f.request("a", "api/v1/refs"));
+    assert.equal((await pending).status, 200);
+    await assert.rejects(held.arrayBuffer(), /response reader idle/); held = null;
+    assert.equal(f.repo("a").env.RESPONSE_TOTAL_MS, 300000);
+    assert.equal(f.repo("a").env.MEMORY.canonicalCacheBytes, 2 * 1024 * 1024);
+    await f.repo("a").queue;
   } finally { await held?.body.cancel().catch(() => {}); f.close(); }
 });

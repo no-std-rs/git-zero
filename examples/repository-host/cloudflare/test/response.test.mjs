@@ -46,3 +46,12 @@ test("reader cancellation and generator failures both settle ownership", async (
   const failed = streamResponse(broken(), "application/octet-stream");
   await assert.rejects(failed.response.arrayBuffer(), /storage failed/); await failed.done;
 });
+
+
+test("an actively drained response still has a configurable total lifetime", async () => {
+  let cleaned = false;
+  async function* chunks() { try { for (;;) { await delay(5); yield Uint8Array.of(1); } } finally { cleaned = true; } }
+  const { response, done } = streamResponse(chunks(), "application/octet-stream", 1000, undefined, 40);
+  await assert.rejects(response.arrayBuffer(), /response time limit exceeded/);
+  await done; assert.equal(cleaned, true);
+});

@@ -455,8 +455,6 @@ const repositories = createRepositoryHost({
     chunkBytes: 65536,
     refPageRows: 16
   },
-  maxActiveJobs: 1,
-  maxPendingJobs: 32,
   maxRequestsPerRepository: 16
   // healthPath/testPrefix omitted: no library health or diagnostic routes
 });
@@ -502,7 +500,7 @@ provide privileged context unavailable to the Durable Object.
 
 The Durable Object independently normalizes its configured path and verifies
 access immediately in fetch, before the repository queue **or** isolate job
-gate. No entry-only marker, prior initialization call, secret forwarded header,
+queue. No entry-only marker, prior initialization call, secret forwarded header,
 or preverified access object is needed. It checks stored namespace/prefix
 identity before recovery or retirement lookup. Calling the wrong stub with an
 otherwise valid grant cannot poison either repository's state. Recovery and
@@ -586,29 +584,29 @@ blob and history oracles; raw-ID proof progress and reuse are tested separately.
 The following are payload/element bounds **per active job**, not a measurement
 of the complete JavaScript VM. Reserve space for the embedding Rust Wasm, its
 allocator, HTTP/runtime buffers, SQL result objects, V8 metadata and garbage
-collection inside the isolate's 128 MB limit. Multiple factories have independent
-gates and their live envelopes add together. Inactive repository instances retain
+collection inside the isolate's 128 MB limit. Concurrent repository jobs
+have independent envelopes which add together. Inactive repository instances retain
 Store/lifecycle/configuration metadata, not byte caches or codec instances. A
 compiled module and its engine code metadata are shared per factory, outside
 linear-memory totals. The runtime controls how many Durable Object instances
-stay resident; that count is not capped by maxActiveJobs. Per-instance metadata
+stay resident; the host does not impose an isolate-wide instance/job cap. Per-instance metadata
 and SQLite/runtime handles must also be budgeted. memory.metadataEntries lowers
 the stage-alias cache retained by each Store.
 
-| Component | Default bound | Lowering/configuration |
+| Component | Token / gateway default bound | Configuration (ceiling: token default) |
 | --- | --- | --- |
 | Rust codec instance, including control arena and graph/name scratch | fixed 6 MiB linear memory, one per Git/body-read job | ABI fixed; reduce concurrent jobs |
-| Canonical byte cache | 24 MiB | memory.canonicalCacheBytes |
-| Representation byte cache | 8 MiB | memory.representationCacheBytes |
-| Authenticated chunk byte cache | 16 MiB | memory.chunkCacheBytes |
-| Entries per each byte cache (including empty values) | 8192 | memory.cacheEntries; zero disables caching |
-| One canonical reconstruction capture | 8 MiB | memory.canonicalCaptureBytes; larger objects use bounded temp R2 |
-| Intake/current representation capture | 1 MiB | memory.representationCaptureBytes |
+| Canonical byte cache | 24 / 2 MiB | memory.canonicalCacheBytes |
+| Representation byte cache | 8 / 1 MiB | memory.representationCacheBytes |
+| Authenticated chunk byte cache | 16 / 2 MiB | memory.chunkCacheBytes |
+| Entries per each byte cache (including empty values) | 8192 / 1024 | memory.cacheEntries; zero disables caching |
+| One canonical reconstruction capture | 8 / 1 MiB | memory.canonicalCaptureBytes; larger objects use bounded temp R2 |
+| Intake/current representation capture | 1 MiB / 256 KiB | memory.representationCaptureBytes |
 | Each active encoded/temp chunk writer | 1 MiB | memory.chunkBytes, minimum 64 KiB |
-| Git ref SQL page | 128 raw names, each bounded by Git control framing | memory.refPageRows, minimum 1; lower codecLimits.maxControlBytes/maxCommands too |
+| Git ref SQL page | 128 / 16 raw names, each bounded by Git control framing | memory.refPageRows, minimum 1; lower codecLimits.maxControlBytes/maxCommands too |
 | Codec input/output frames and source pin | 64 KiB / 128 KiB / 64 KiB | fixed ABI pages |
 | R2 chunk miss, outside cache while authenticating | up to 8 MiB for legacy chunks; new chunks up to chunkBytes | historical extents remain readable; runtime digest/copy overhead also applies |
-| Delta/base aliases, temporary descriptors and Store stage aliases | at most 256 entries each; range depth default 128 | memory.metadataEntries (zero disables alias caching), codecLimits.maxDepth |
+| Delta/base aliases, temporary descriptors and Store stage aliases | 256 / 128 entries each; range depth default 128 | memory.metadataEntries (zero disables alias caching), codecLimits.maxDepth |
 | Commit/tree metadata prefixes | total 8 MiB per browse request, plus text/base64/JSON copies | readLimits.metadataBytes/headerBytes/messageBytes/treeBytes |
 | JSON page | 512 KiB; up to 100 rows plus one lookahead | readLimits.jsonBytes/pageSize; string escaping/base64 use additional transient buffers |
 | Publication command/outcome/peel metadata | at most 16384 commands in 4 MiB incoming controls | codecLimits.maxCommands/maxControlBytes; SQL/V8 per-row overhead is additional |
@@ -623,25 +621,41 @@ live in SQLite. Configurable ref pages bound the large raw-name case. A chunk
 miss can transiently coexist with cached chunks and runtime cryptographic copies.
 A lower new-chunk size does not shrink an existing 8 MiB legacy extent.
 
-maxActiveJobs defaults to **1**, maxPendingJobs to 64, and
-maxRequestsPerRepository to 32 (including its active job). Allowed maxima are
-32/1024/maxPendingJobs respectively. The isolate gate includes stream lifetime
-and alarm/recovery jobs. It releases scratch after generator cleanup, including
-client cancellation and idle readers. A full gate/repository admission bound
-returns 503 with Retry-After: 1; invalid grants are still hidden immediately.
-Admission verifies grants before both queues, so an accepted request may wait
-past expiry. Bodies are not intentionally buffered while waiting, although the
-platform has its own transport buffers. Active draining streams can run longer
-than the 60-second idle deadline. Lower codec byte/work quotas bound their work.
+There is **no isolate-wide semaphore or admission queue**. Each repository
+serializes its own mutable scratch, codec and response lifetime. A stalled
+reader of A holds only A's active slot, never B's admission or queue. A caller
+filling A and B cannot cause a host-generated busy response for C. Every
+repository's queue is FIFO, including alarms/recovery and deletion. Authorization
+is captured before that queue. An admitted grant may expire while queued.
 
-The thin reference explicitly chooses four active jobs to preserve its existing
-independent concurrent idle-body behavior. Four simultaneous worst-case default
-cache/capture envelopes can exceed 128 MB; that setting is **not** a guarantee
-for an embedding script. Use one active job and lower caches/captures/ref pages,
-as in the embedded example, then budget/measure the co-resident product and
-runtime. There is no measured production total-isolate RSS or billing claim.
-After streamed headers are sent, work/storage failures abort the stream; the
-fixed Content-Length prevents a partial blob from appearing as a complete file.
+Gateway mode permits 32 outstanding requests **per repository**, including the
+active one. Excess requests to that repository return 503 and Retry-After: 1.
+`maxRequestsPerRepository` can set an explicit 1..65536 bound in either mode.
+Token mode has **no new admission bound by default**, retaining its earlier
+queue/load behavior. Removed experimental maxActiveJobs/maxPendingJobs options
+are rejected at construction so a stale configuration cannot silently change.
+
+Gateway streams have a 10-second client-idle deadline and a five-minute total
+lifetime. `responseIdleMs` accepts 1..600000 ms; `responseTotalMs` accepts
+0..3600000 ms (zero disables the total deadline). The legacy token defaults
+remain 60 seconds idle and no total deadline. Active consumers reset only the
+idle deadline. Timeout/cancellation aborts the stream and releases scratch after
+generator cleanup; an outstanding storage operation must settle before cleanup
+can finish. Slow uploads have the independent request-body idle bounds. Bodies
+are not intentionally buffered while queued; platform transport buffers exist.
+DELETE waits behind an active fetch until completion/cancellation/timeout.
+
+Gateway defaults reduce the three byte caches from 48 MiB to 5 MiB per job,
+canonical/representation captures to 1 MiB/256 KiB, and ref pages to 16 rows.
+Explicit memory values may increase these to the token ceilings or lower them.
+This avoids a cross-tenant admission bottleneck; it is not a total-isolate RSS
+reservation or a guarantee against exhaustion. Multiple active namespaces add
+codec, cache, object metadata, SQLite and runtime overhead inside 128 MB. Shared
+CPU/event-loop scheduling, platform connection limits and finite memory can
+still affect co-tenants; bound public load and measure the surrounding product.
+There is no measured production RSS or billing claim. After streamed headers,
+unpredictable I/O failures abort the stream; fixed Content-Length detects a
+partial blob. Known read-resource failures are checked before headers.
 
 ### Building and bundling the codec
 
@@ -702,7 +716,7 @@ blob reads and journal actors. It writes foreign objects adjacent to the host
 prefix, purges the repository and proves those objects survive, including cold
 restart retirement. A forced wrong-stub request cannot poison another namespace.
 A separate module test holds one repository's response beyond a second
-repository grant's expiry: pre-gate admission succeeds, expired arrivals remain
+repository grant's expiry: per-repository admission succeeds, expired arrivals remain
 404 and excess valid arrivals receive 503. Lower page/cache/capture/chunk bounds
 are exercised; the reference gateway/HTTP/S3 runtimes remain independently tested.
 

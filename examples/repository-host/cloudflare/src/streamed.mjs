@@ -11,7 +11,6 @@ const host = createRepositoryHost({
   policy: (env) => ({ allowNonFastForward: env.ALLOW_NON_FAST_FORWARD === "true", maxStoredBytes: env.MAX_STORED_BYTES || null, maxPushBytes: env.MAX_PUSH_BYTES || null }),
   // Preserve the reference suite's independent concurrent idle-body requests.
   // Embedded scripts default to one active job and should budget their isolate.
-  maxActiveJobs: 4,
 });
 export const OwnRepository = host.Repository;
 export default { fetch: host.fetch };

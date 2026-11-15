@@ -69,10 +69,13 @@ Rust workers-rs router can mint a grant and call the stub directly without that
 handler. The [v1 contract](../../docs/repository-host-v1.md#composing-the-host-in-another-worker)
 defines the exact forwarded URL/namespace/grant shape, shared-bucket purge,
 codec build pin, disabled-by-default health/test routes, memory controls and
-isolate admission. The reference `streamed.mjs` is only a thin deployment.
-Use one active job and lower cache/capture/ref-page bounds for an embedded
-script; the reference explicitly retains four active jobs for its independent
-concurrent-request tests, which is not a worst-case 128 MB memory guarantee.
+per-repository admission. The reference `streamed.mjs` is only a thin deployment.
+Repositories progress independently; a slow reader holds its own queue. Gateway
+mode defaults to 32 outstanding requests per repository, 10 seconds response
+idle, five minutes total stream lifetime and smaller caches. Token mode retains
+its prior uncapped queue, 60-second idle deadline and cache defaults. There is
+no isolate-wide semaphore: budget simultaneous namespaces within 128 MB,
+including the surrounding product. The contract states the limits explicitly.
 
 The current suite covers SHA-1/SHA-256 push, clone and fetch using Git protocol
 preferences 0/1/2, atomic updates, push options, deletes, thin pushes, annotated

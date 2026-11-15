@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Repository host: remove cross-repository admission blocking. Gateway jobs use
+  smaller default caches and bounded per-repository queues/response lifetimes.
+  Token deployments retain their previous uncapped queue, caches and idle limit;
+  the experimental isolate-wide four-job/64-request limits are removed.
+- Browse reads rooted at refs no longer rebuild repository-wide reachability.
+  Raw IDs reuse an incremental generation index, returning a retryable building
+  response while proof is unavailable; signed cursors preserve continuation safety.
+
 - Repository host: validate storage prefixes during alarm recovery, support
   configured EU namespace identity, parse environment booleans without truthiness,
   avoid durable state for missing repositories and reclaim earlier schema-only

@@ -29,8 +29,8 @@ function testFormat(request, fallback = 0) {
 }
 
 export class RepositoryCore {
-  constructor(ctx, env, module, gate, maxRequests) {
-    this.ctx = ctx; this.env = env; this.module = module; this.gate = gate; this.maxRequests = maxRequests; this.pendingRequests = 0; this.store = null;
+  constructor(ctx, env, module) {
+    this.ctx = ctx; this.env = env; this.module = module; this.maxRequests = env.MAX_REQUESTS; this.pendingRequests = 0; this.store = null;
     this.queue = Promise.resolve(); this.streamDone = null; this.epoch = crypto.randomUUID();
   }
   async fetch(request) {
@@ -39,8 +39,7 @@ export class RepositoryCore {
     const namespace = request.headers.get("x-git-zero-namespace");
     const access = await authorize(request, this.env, namespace);
     if (access instanceof Response) return this.env.AUTH_MODE === "gateway" ? access : json({ error: "unknown route" }, 404);
-    const ticket = this.pendingRequests < this.maxRequests ? this.gate.reserve() : null;
-    if (!ticket) {
+    if (this.pendingRequests >= this.maxRequests) {
       const response = json({ error: "repository host busy; retry later" }, 503);
       response.headers.set("Retry-After", "1"); return response;
     }
@@ -48,31 +47,27 @@ export class RepositoryCore {
     // A single write/read job owns the request-local codec/cache view. Storage
     // and ref publication remain authoritative across instance reconstruction.
     const job = this.queue.then(async () => {
-      const release = await ticket.acquire(); this.streamDone = null;
+      this.streamDone = null;
       try { return await this.handle(request, access); }
-      finally { Promise.resolve(this.streamDone).catch(() => {}).finally(() => { this.pendingRequests--; release(); }); }
+      finally { Promise.resolve(this.streamDone).catch(() => {}).finally(() => { this.pendingRequests--; }); }
     });
     this.queue = job.then(() => this.streamDone).catch(() => {});
     return job;
   }
   alarm() {
-    const ticket = this.gate.reserve();
-    if (!ticket) return this.ctx.storage.setAlarm(Date.now() + 60000);
     const job = this.queue.then(async () => {
-      const release = await ticket.acquire();
-      try {
+
       if (await this.ctx.storage.get("host.deletion.v1")) return;
       if (!this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='host_identity'").toArray().length) return;
       const identity = this.ctx.storage.sql.exec("SELECT namespace FROM host_identity WHERE id=1").toArray()[0];
       if (!identity) return;
       this.store ??= new Store(this.ctx, this.env, identity.namespace);
       await this.store.recover();
-      } finally { release(); }
     });
     this.queue = job.catch(() => {}); return job;
   }
   stream(generator, type, length) {
-    const result = streamResponse(generator, type, 60000, length);
+    const result = streamResponse(generator, type, this.env.RESPONSE_IDLE_MS, length, this.env.RESPONSE_TOTAL_MS);
     this.streamDone = result.done;
     return result.response;
   }
