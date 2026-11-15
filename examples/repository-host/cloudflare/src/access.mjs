@@ -50,7 +50,7 @@ export async function verifyGrant(value, secret, namespace, now = Math.floor(Dat
   try {
     const label = decode(actor), signature = decode(mac);
     if (label.length > 128 || signature.length !== 32) return null;
-    const actorLabel = new TextDecoder("utf-8", { fatal: true }).decode(label);
+    const actorLabel = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(label);
     const valid = await crypto.subtle.verify("HMAC", await key(secret, ["verify"]), signature, encode(canonicalGrant(scope, access, expiry, actor)));
     return valid ? { access, actor: actorLabel, expires } : null;
   } catch { return null; }
