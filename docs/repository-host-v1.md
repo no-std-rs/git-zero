@@ -144,8 +144,11 @@ Existing implicit repositories retain their original HEAD-selection behavior.
 Describe returns `namespace`, `state`, `objectFormat`, `head` (`symbolic` and
 nullable `oid`), `defaultBranch`, `generation`, `objectCount`, `storedPackBytes`,
 `storedBytes`, `databaseBytes` and `lastPublication`. Counts come from the catalog; storedPackBytes
-is the sum of published encoded pack sizes, with no deduplication credit. Actual
-physical R2 bytes (`storedBytes`) are unknown cheaply and therefore null.
+is the sum of published encoded pack sizes, with no deduplication credit. `storedBytes` is the conservative size of unique catalog-owned R2 payload
+keys (including temporary/quarantine data), once storage accounting is ready;
+it is null while a legacy catalog is still being indexed. storageAccounting
+reports ready and knownBytes during that bounded migration. Lost acknowledgments
+can conservatively overcount until recovery. See policy below for exclusions.
 `databaseBytes` reports the native SQLite size when the runtime exposes it. Times
 are Unix milliseconds. `lastPublication` and the original default branch of a
 legacy repository can be null when unknown; the next publication records its
@@ -329,11 +332,72 @@ boundary are additive and initialized idempotently. The log contains historical
 ref names, IDs and actors even if those objects are no longer browse-readable.
 The gateway can restrict its public product routes further if needed.
 
+## Repository policy and storage bounds
+
+Admin GET/PATCH `/<namespace>.git/api/v1/policy` reads/changes policy for an
+existing repository. PATCH is an application/json object containing any of:
+allowNonFastForward (boolean), maxPushBytes and maxStoredBytes (nonnegative safe
+JSON integers). Null removes an override. Unknown fields/types return 400.
+GET/PATCH responses have policy (effective values), overrides (nullable),
+deployment (defaults/ceilings), and storage (ready, knownBytes). Policy changes
+do not change the ref generation. Read/write grants cannot change or read policy.
+
+The reference deployment uses ALLOW_NON_FAST_FORWARD (`true`/`false`, default
+false), MAX_PUSH_BYTES and MAX_STORED_BYTES (canonical decimal, absent/empty means
+uncapped). Per-repository force permission overrides its deployment default.
+Effective size caps are the smaller of repository and deployment caps: admin
+cannot raise a deployment's ceiling. Existing codec/protocol quotas remain hard
+outer limits even when these optional caps are absent or higher.
+
+Force permission skips branch ancestry rejection only. Current old-ID
+compare-and-swap, target type, full pack/graph verification, ref-name conflicts
+and atomic failure semantics still apply. The default continues to reject
+non-fast-forward branch moves. Tag updates keep their existing semantics.
+
+maxPushBytes counts the **decoded Git pack**, including its pack header and
+trailer, excluding independently bounded command controls and transport framing.
+Gzip/x-gzip cannot evade it. A deletion-only request has zero pack bytes. A pack
+that exceeds the cap is refused before any excess bytes are persisted; accepted
+controls allow an unpack/ref status with “single-push size limit exceeded”.
+Stored-size rejection similarly reports “repository stored-size limit exceeded”
+to an ordinary pushing Git client. Rejection leaves refs/generation/log unchanged
+and reclaims the private stage, or retains its claims for scheduled recovery if
+storage cleanup fails.
+
+maxStoredBytes bounds **unique, catalog-owned R2 payload bytes** under the
+repository content prefix. It includes published/unreachable retained chunks,
+quarantine and temporary reconstruction chunks. Shared content-addressed keys
+count once. This is an object-storage cap: SQLite pages/indexes/journal rows,
+R2 metadata overhead and the permanent retirement fence are excluded. Native
+SQLite bytes remain separately reported where available and subject to platform
+limits. External/manual bucket writes are not host-owned claims. This explicit
+payload definition avoids pretending to know physical R2 billing or SQL overhead.
+
+A durable per-key ledger and byte counter reserve space in the same transaction
+as chunk ownership, before R2 PUT. Failed/lost PUT acknowledgments can overcount;
+that is conservative. Space is released only after an acknowledged R2 deletion.
+Recovery retries lost acknowledgments without double charging. Lowering a cap
+below existing usage does not delete content: reads, deletion-only pushes and
+updates needing only already owned keys remain possible; new keys are refused.
+Temporary storage needs headroom inside the same cap. Whole repository DELETE
+still purges the prefix, including objects outside the known ledger.
+
+New/empty catalogs have ready accounting immediately. Existing catalogs keep
+working uncapped without a table rewrite. Their old stage/temporary ownership
+rows are indexed **64 at a time**, with a durable composite cursor and deduped
+physical keys. Admin POST `api/v1/policy` (no body) advances one page and returns
+202 until storage.ready is true, then 200. It is idempotent after completion.
+A capped push advances one page before writing; if accounting is still pending,
+it reports “stored-size accounting pending; administrator must resume POST
+api/v1/policy” and cannot bypass the cap. New writes/deletes update the ledger
+during migration, so concurrent requests/restarts cannot undercount a ready
+catalog. No repository-sized JS array or unbounded migration scan is required.
+
 ## Scope and verification
 
 Access levels, grants, explicit lifecycle and the reachability-restricted read
-API and durable actor/push records are implemented. Configurable policy and a
-configurable host-module boundary remain follow-up milestones. LFS, SSH,
+API, durable actor/push records and repository policy are implemented. A
+configurable host-module boundary remains the final milestone. LFS, SSH,
 application hooks, unreachable-object garbage collection, and a native
 push-capable host are not implemented.
 

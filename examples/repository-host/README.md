@@ -57,7 +57,9 @@ permanent namespace retirement. Token mode keeps implicit creation by default;
 history, trees, commits and safe streamed blobs under `api/v1/`; only objects
 reachable from current refs are visible there. `api/v1/changes` provides durable
 generation/time/actor/ref updates with resumable pages for reliable catch-up.
-Deployment policy and a configurable module boundary remain in progress.
+Admin `api/v1/policy` configures force permission and optional decoded-push/R2
+payload byte caps (deployment ceilings still apply). Legacy size accounting can
+be resumed in bounded POST pages. A configurable module boundary remains in progress.
 
 The current suite covers SHA-1/SHA-256 push, clone and fetch using Git protocol
 preferences 0/1/2, atomic updates, push options, deletes, thin pushes, annotated

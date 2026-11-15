@@ -3,6 +3,7 @@ import { ChunkWriter, blob } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
 import { requestBody, decodedBody } from "./body.mjs";
 import { RequestError } from "./errors.mjs";
+import { PolicyError, repositoryPolicy } from "./policy.mjs";
 
 const EMPTY = new Uint8Array();
 const REPRESENTATION_LIMIT = 1024 * 1024;
@@ -18,6 +19,7 @@ export class Intake {
     this.commands = 0; this.options = 0; this.objects = 0; this.expected = 0;
     this.pendingObjects = []; this.hasOfs = false; this.hasRefs = false;
     this.current = null; this.lastEnd = 12; this.eof = false;
+    this.policy = repositoryPolicy(store).policy; this.receivedPackBytes = 0;
   }
   flushObjects() {
     if (!this.pendingObjects.length) return;
@@ -26,7 +28,11 @@ export class Intake {
   }
   async event(event, input) {
     if ((event.tag === 9 || event.tag === 10) && event.written) this.codec.charge(1, event.written);
-    if (this.inPack && event.consumed) await this.writer.write(input.subarray(0, event.consumed));
+    if (this.inPack && event.consumed) {
+      this.receivedPackBytes += event.consumed;
+      if (this.policy.maxPushBytes !== null && this.receivedPackBytes > this.policy.maxPushBytes) throw new PolicyError("single-push size limit exceeded");
+      await this.writer.write(input.subarray(0, event.consumed));
+    }
     if ((event.tag === 9 || event.tag === 10) && event.written) {
       if (!this.current) throw new Error("body has no staged object");
       if (this.current.body) this.current.body.set(event.data, this.current.written);
@@ -47,6 +53,7 @@ export class Intake {
       case 6:
         this.inPack = !!event.flags;
         this.store.exec("UPDATE stages SET selected=? WHERE id=?", this.codec.receiveCapabilities(), stage);
+        if (this.inPack && this.policy.maxStoredBytes !== null && !this.store.storageAccounting().ready) this.store.advanceStorageAccounting();
         if (this.inPack) this.writer = new ChunkWriter(this.store, stage);
         break;
       case 7:

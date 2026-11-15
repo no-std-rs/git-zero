@@ -43,12 +43,13 @@ export class Lifecycle {
     const row = store.exec("SELECT * FROM repository WHERE id=1")[0];
     if (!row) return null;
     const settings = store.exec("SELECT * FROM host_settings WHERE id=1")[0];
+    const accounting = store.storageAccounting();
     return {
       namespace: this.namespace, state: "active", objectFormat: row.format ? "sha256" : "sha1",
       head: { symbolic: text(row.head), oid: store.exec("SELECT oid FROM refs WHERE name=?", row.head)[0]?.oid ?? null },
       defaultBranch: settings?.default_branch ? text(settings.default_branch).slice(11) : null,
       generation: row.generation, objectCount: row.object_count,
-      storedBytes: null, databaseBytes: store.ctx.storage.sql.databaseSize ?? null, storedPackBytes: store.exec("SELECT COALESCE(SUM(bytes),0) AS size FROM stages WHERE phase='published'")[0].size,
+      storedBytes: accounting.ready ? accounting.knownBytes : null, storageAccounting: accounting, databaseBytes: store.ctx.storage.sql.databaseSize ?? null, storedPackBytes: store.exec("SELECT COALESCE(SUM(bytes),0) AS size FROM stages WHERE phase='published'")[0].size,
       lastPublication: settings?.last_publication ?? null,
     };
   }

@@ -9,6 +9,7 @@ const config :Workerd.Config = (
         (name = "src/streamed.mjs", esModule = embed "src/streamed.mjs"),
         (name = "src/browse.mjs", esModule = embed "src/browse.mjs"),
       (name = "src/changes.mjs", esModule = embed "src/changes.mjs"),
+      (name = "src/policy.mjs", esModule = embed "src/policy.mjs"),
         (name = "src/api.mjs", esModule = embed "src/api.mjs"),
         (name = "src/lifecycle.mjs", esModule = embed "src/lifecycle.mjs"),
         (name = "src/access.mjs", esModule = embed "src/access.mjs"),

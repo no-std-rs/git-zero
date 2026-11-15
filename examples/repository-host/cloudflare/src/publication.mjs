@@ -1,5 +1,6 @@
 import { bytes } from "./storage.mjs";
 import { CodecError } from "./codec.mjs";
+import { repositoryPolicy } from "./policy.mjs";
 
 const refBytes = (name) => new TextEncoder().encode(name).buffer;
 const MAIN = refBytes("refs/heads/main"), MASTER = refBytes("refs/heads/master");
@@ -60,6 +61,7 @@ export async function publish(store, stage, codec, actor = "") {
     const pack = store.exec("SELECT * FROM stages WHERE id=? AND phase='verified'", stage)[0];
     if (!pack) throw new Error("stage is not ready for publication");
     const commands = store.exec("SELECT * FROM stage_commands WHERE stage=? ORDER BY seq", stage);
+    const policy = repositoryPolicy(store).policy;
     codec?.ancestryInit();
     const outcomes = commands.map((command) => {
       const current = store.exec("SELECT oid FROM refs WHERE name=?", command.name)[0];
@@ -69,7 +71,7 @@ export async function publish(store, stage, codec, actor = "") {
       if ((current?.oid ?? null) !== old) error = "stale ref";
       else if (!command.deletion && !target) error = "missing target";
       else if (target && command.branch && target.kind !== 1) error = "branch target is not a commit";
-      else if (command.branch && !command.creation && !command.deletion && command.old_oid !== command.new_oid) {
+      else if (!policy.allowNonFastForward && command.branch && !command.creation && !command.deletion && command.old_oid !== command.new_oid) {
         try { if (!fastForward(store, stage, command, codec)) error = "non-fast-forward"; }
         catch (failure) {
           if (!(failure instanceof CodecError) || failure.code !== -14) throw failure;

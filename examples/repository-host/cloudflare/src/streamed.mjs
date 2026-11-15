@@ -12,6 +12,7 @@ import { RequestError, isStorageFailure } from "./errors.mjs";
 import { Lifecycle } from "./lifecycle.mjs";
 import { ReadApi } from "./browse.mjs";
 import { changes } from "./changes.mjs";
+import { PolicyError, policyRoute } from "./policy.mjs";
 import { ApiError, apiRoute, READ_ROUTES } from "./api.mjs";
 import { REPOSITORY, accessReady, authorize } from "./access.mjs";
 const UUID = /^[0-9a-f-]{36}$/;
@@ -92,7 +93,7 @@ export class OwnRepository {
     yield codec.advertFinish();
   }
   async *report(codec, selected, outcomes, failure) {
-    yield codec.statusStart(selected, failure ? encode("invalid pack or object graph") : new Uint8Array());
+    yield codec.statusStart(selected, failure ? encode(typeof failure === "string" ? failure : "invalid pack or object graph") : new Uint8Array());
     for (const outcome of outcomes) yield codec.statusRef(bytes(outcome.name), outcome.error ? encode(outcome.error) : new Uint8Array());
     yield codec.statusFinish();
   }
@@ -107,8 +108,9 @@ export class OwnRepository {
       const names = error.commands ?? this.store.exec("SELECT name FROM stage_commands WHERE stage=? ORDER BY seq", stage);
       // Intake has already reclaimed the stage or scheduled its recovery.
       // Report the original validation failure without retrying cleanup here.
-      const outcomes = names.map((row) => ({ ...row, error: "unpacker error" }));
-      return this.stream(this.report(codec, selected, outcomes, true), "application/x-git-receive-pack-result");
+      const reason = error instanceof PolicyError ? error.message : null;
+      const outcomes = names.map((row) => ({ ...row, error: reason ?? "unpacker error" }));
+      return this.stream(this.report(codec, selected, outcomes, reason ?? true), "application/x-git-receive-pack-result");
     }
     const outcomes = await publish(this.store, stage, codec, actor);
     const publication = this.store.exec("SELECT selected,phase FROM stages WHERE id=?", stage)[0];
@@ -157,6 +159,7 @@ export class OwnRepository {
         if (this.lifecycle.state?.state === "deleted") this.store = null;
         return response;
       }
+      if (apiRoute(request) === "policy") return await policyRoute(this.store, request);
       if (READ_ROUTES.has(apiRoute(request))) {
         const state = this.store.exec("SELECT format FROM repository WHERE id=1")[0];
         if (!state) return json({ error: "unknown route" }, 404);

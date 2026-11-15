@@ -2,6 +2,7 @@
 import { bucket } from "./r2-s3.mjs";
 import { hex } from "./codec.mjs";
 import { RequestError, storageFailure } from "./errors.mjs";
+import { PolicyError, repositoryPolicy } from "./policy.mjs";
 export const CHUNK_BYTES = 1024 * 1024;
 const MAX_STORED_CHUNK_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 65536;
@@ -71,6 +72,11 @@ export class ByteCache {
 }
 
 const SCHEMA = [
+  "CREATE TABLE IF NOT EXISTS host_policy (id INTEGER PRIMARY KEY, allow_non_ff INTEGER, max_stored INTEGER, max_push INTEGER)",
+  "CREATE TABLE IF NOT EXISTS host_storage_usage (id INTEGER PRIMARY KEY, bytes INTEGER NOT NULL DEFAULT 0, phase INTEGER NOT NULL DEFAULT 0, last_stage TEXT NOT NULL DEFAULT '', last_object TEXT NOT NULL DEFAULT '', last_seq INTEGER NOT NULL DEFAULT -1)",
+  "CREATE TABLE IF NOT EXISTS host_chunk_sizes (key TEXT PRIMARY KEY, length INTEGER NOT NULL) WITHOUT ROWID",
+  "CREATE TRIGGER IF NOT EXISTS host_chunk_add AFTER INSERT ON host_chunk_sizes BEGIN UPDATE host_storage_usage SET bytes=bytes+NEW.length WHERE id=1; END",
+  "CREATE TRIGGER IF NOT EXISTS host_chunk_remove AFTER DELETE ON host_chunk_sizes BEGIN UPDATE host_storage_usage SET bytes=bytes-OLD.length WHERE id=1; END",
   "CREATE TABLE IF NOT EXISTS publications (generation INTEGER PRIMARY KEY, time INTEGER NOT NULL, actor64 TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS publication_updates (generation INTEGER NOT NULL, seq INTEGER NOT NULL, name BLOB NOT NULL, old_oid TEXT NOT NULL, new_oid TEXT NOT NULL, PRIMARY KEY(generation,seq)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS publication_start (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)",
@@ -129,6 +135,9 @@ export class Store {
     // Older publications cannot be reconstructed. Record the coverage boundary
     // once, before the next publication; never fabricate historical actors.
     this.exec("INSERT OR IGNORE INTO publication_start(id,generation) VALUES(1,COALESCE((SELECT generation FROM repository WHERE id=1),0))");
+    // Empty/new repositories are ready immediately. Existing ownership records
+    // are indexed in resumable pages, without rewriting or scanning old tables.
+    this.exec("INSERT OR IGNORE INTO host_storage_usage(id,phase) SELECT 1,CASE WHEN EXISTS(SELECT 1 FROM stage_chunks LIMIT 1) OR EXISTS(SELECT 1 FROM temp_chunks LIMIT 1) THEN 0 ELSE 2 END");
     // Existing text catalogs retain their layout. Fresh catalogs intern the
     // opaque stage handle once instead of repeating its UUID in every edge.
     const edges = this.exec("PRAGMA table_info(stage_edges)");
@@ -290,6 +299,38 @@ export class Store {
       this.usage.r2Deletes += Array.isArray(keys) ? keys.length : 1;
       await this.blobs.delete(keys);
     }, this.usage);
+    this.ctx.storage.transactionSync(() => {
+      for (const key of typeof keys === "string" ? [keys] : keys) this.exec("DELETE FROM host_chunk_sizes WHERE key=?", key);
+    });
+  }
+  storageAccounting() {
+    const row = this.exec("SELECT bytes,phase FROM host_storage_usage WHERE id=1")[0];
+    if (!Number.isSafeInteger(row.bytes) || row.bytes < 0) throw new Error("stored size exceeds safe integer range");
+    return { ready: row.phase === 2, knownBytes: row.bytes };
+  }
+  rememberChunk(key, length) {
+    const existing = this.exec("SELECT length FROM host_chunk_sizes WHERE key=?", key)[0];
+    if (existing && existing.length !== length) throw new Error("stored key length differs");
+    if (!existing) this.exec("INSERT INTO host_chunk_sizes(key,length) VALUES(?,?)", key, length);
+  }
+  advanceStorageAccounting() {
+    this.ctx.storage.transactionSync(() => {
+      const row = this.exec("SELECT * FROM host_storage_usage WHERE id=1")[0];
+      if (row.phase === 2) return;
+      const page = row.phase === 0
+        ? this.exec("SELECT stage,seq,key,length FROM stage_chunks WHERE (stage,seq)>(?,?) ORDER BY stage,seq LIMIT 64", row.last_stage, row.last_seq)
+        : this.exec("SELECT stage,object,seq,key,length FROM temp_chunks WHERE (stage,object,seq)>(?,?,?) ORDER BY stage,object,seq LIMIT 64", row.last_stage, row.last_object, row.last_seq);
+      for (const chunk of page) this.rememberChunk(chunk.key, chunk.length);
+      if (page.length < 64) this.exec("UPDATE host_storage_usage SET phase=phase+1,last_stage='',last_object='',last_seq=-1 WHERE id=1");
+      else { const last = page.at(-1); this.exec("UPDATE host_storage_usage SET last_stage=?,last_object=?,last_seq=? WHERE id=1", last.stage, last.object ?? "", last.seq); }
+    });
+  }
+  claimChunk(key, length) {
+    const { policy, storage } = repositoryPolicy(this);
+    const existing = this.exec("SELECT length FROM host_chunk_sizes WHERE key=?", key)[0];
+    if (policy.maxStoredBytes !== null && !storage.ready) throw new PolicyError("stored-size accounting pending; administrator must resume POST api/v1/policy");
+    if (!existing && policy.maxStoredBytes !== null && length > policy.maxStoredBytes - storage.knownBytes) throw new PolicyError("repository stored-size limit exceeded");
+    this.rememberChunk(key, length);
   }
   async get(chunk, cache) {
     const hit = cache.get(chunk.key);
@@ -402,8 +443,11 @@ export class ChunkWriter {
     const prefix = `repositories/${this.store.namespace}`;
     const key = this.temporary === null ? `${prefix}/chunks/${sha}` : `${prefix}/tmp/${this.stage}/${this.temporary}/${this.seq}`;
     const values = [this.stage, this.seq, key, this.position, this.used, sha];
-    if (this.temporary === null) this.store.exec("INSERT INTO stage_chunks(stage,seq,key,start,length,sha) VALUES(?,?,?,?,?,?)", ...values);
-    else this.store.exec("INSERT INTO temp_chunks(stage,object,seq,key,start,length,sha) VALUES(?,?,?,?,?,?,?)", this.stage, this.temporary, ...values.slice(1));
+    this.store.ctx.storage.transactionSync(() => {
+      this.store.claimChunk(key, this.used);
+      if (this.temporary === null) this.store.exec("INSERT INTO stage_chunks(stage,seq,key,start,length,sha) VALUES(?,?,?,?,?,?)", ...values);
+      else this.store.exec("INSERT INTO temp_chunks(stage,object,seq,key,start,length,sha) VALUES(?,?,?,?,?,?,?)", this.stage, this.temporary, ...values.slice(1));
+    });
     await this.store.put(key, data);
     this.position += this.used; this.seq++; this.used = 0;
   }
