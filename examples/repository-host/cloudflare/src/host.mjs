@@ -47,6 +47,7 @@ export function createRepositoryHost(options) {
   if (memory.chunkBytes < 65536) throw new TypeError("chunkBytes must be at least 65536");
   if (!memory.refPageRows) throw new TypeError("refPageRows must be positive");
   const codecLimits = limits(options.codecLimits ?? {}, CODEC_LIMITS, "codecLimits");
+  const gatewayCodecLimits = { ...codecLimits, maxPackBytes: options.codecLimits?.maxPackBytes ?? 1024 ** 3 };
   const readLimits = limits(options.readLimits ?? {}, authMode === "gateway" ? { ...READ_LIMITS, metadataBytes: 2 * 1048576 } : READ_LIMITS, "readLimits", READ_HARD_LIMITS);
   const gatewayReadLimits = limits(options.readLimits ?? {}, { ...READ_LIMITS, metadataBytes: 2 * 1048576 }, "readLimits", READ_HARD_LIMITS);
   for (const key of ["visibleObjects", "edges", "indexSteps", "refs", "pageSize", "jsonBytes"]) if (!readLimits[key]) throw new TypeError(`readLimits.${key} must be positive`);
@@ -78,6 +79,7 @@ export function createRepositoryHost(options) {
   const memoryWaitMs = bounded(options.memoryWaitMs ?? 15000, 1, 600000, "memoryWaitMs");
   const contentionMs = bounded(options.memoryContentionMs ?? 10000, 1, 600000, "memoryContentionMs");
   const byteBudget = options.memoryBudget ?? new ByteBudget(memoryBytes, memoryWaitMs, contentionMs);
+  if (authMode !== "token" && byteBudget.codecSlots < 3) throw new TypeError("gateway fairness requires at least three codec slots");
   const metadataBytes = (m) => Math.ceil((6 * 1048576 + Math.max(codecLimits.maxControlBytes, m.refPageRows * 65536) + 1048576) / 1048576) * 1048576;
   const jsonBytes = Math.ceil(((readLimits.pageSize + 2) * 65536 + 3 * readLimits.jsonBytes) / 1048576) * 1048576;
   const gatewayJobBytes = jobMemoryBytes(gatewayMemory, codecLimits, readLimits, pinBytes, pinEntries);
@@ -96,10 +98,16 @@ export function createRepositoryHost(options) {
   };
   const fairWorking = memoryBytes - byteBudget.codecSlots * 6 * MiB - byteBudget.headroom;
   if ((typeof authMode === "function" || authMode === "gateway") && (Math.max(gatewayJobBytes + legacyExtra(gatewayMemory), metadataBytes(gatewayMemory), ...Object.values(browseBytes)) - 6 * MiB > fairWorking || jsonBytes > fairWorking)) throw new TypeError("isolateMemoryBytes cannot fit one configured host job with fair headroom");
+  const explicitPool = options.isolateMemoryBytes !== undefined || options.memoryBudget !== undefined;
+  const validateTokenPool = () => {
+    if (explicitPool && (Math.max(tokenJobBytes + legacyExtra(memory), metadataBytes(memory)) - 6 * MiB > fairWorking || jsonBytes > fairWorking)) throw new TypeError("isolateMemoryBytes cannot fit one token job with fair headroom");
+  };
+  if (authMode === "token") validateTokenPool();
   const tokenCodecs = [];
   const entryDrains = { active: 0 };
   function environment(env) {
     const mode = resolve(authMode, env), policy = resolve(options.policy, env) ?? {};
+    if (mode === "token") validateTokenPool();
     if ((options.isolateMemoryBytes !== undefined || options.memoryBudget !== undefined) && Math.max(mode === "gateway" ? gatewayJobBytes + legacyExtra(gatewayMemory) : tokenJobBytes + legacyExtra(memory), metadataBytes(mode === "gateway" ? gatewayMemory : memory), jsonBytes) > memoryBytes) throw new TypeError("isolateMemoryBytes cannot fit one configured host job");
     const internal = { WANT_POLICY: options.wantPolicy ?? (mode === "gateway" ? "reachable" : "catalog"), AUTH_MODE: mode, HOST_TOKEN: bindings.token ? env[bindings.token] : undefined, GRANT_KEY: bindings.grantKey ? env[bindings.grantKey] : undefined,
       RESPONSE_MINIMUM_RATE: minimumRate ?? (mode === "gateway" ? 16384 : 0), RESPONSE_RATE_WINDOW_MS: rateWindow,
@@ -112,8 +120,8 @@ export function createRepositoryHost(options) {
       SIGNING_CONTEXT: options.signingContext ?? "", KEY_PREFIX: options.keyPrefix, TEST_MODE: tests && enabled(resolve(Object.hasOwn(options, "testEnabled") ? options.testEnabled : true, env)) ? "true" : "false",
       IMPLICIT_CREATE: enabled(resolve(Object.hasOwn(options, "implicitCreate") ? options.implicitCreate : true, env)) ? "true" : "false", REPO_FORMAT: resolve(options.objectFormat ?? 0, env),
       REJECTION_DRAIN_BYTES: drainBytes, REJECTION_DRAIN_MS: drainMs, MEMORY: mode === "gateway" ? gatewayMemory : memory, MAX_REQUESTS: maxRequests ?? Infinity,
-      RESPONSE_IDLE_MS: idleMs ?? (mode === "gateway" ? 10000 : 60000), RESPONSE_TOTAL_MS: totalMs ?? 0, CODEC_LIMITS: codecLimits, READ_LIMITS: mode === "gateway" ? gatewayReadLimits : readLimits,
-      ALLOW_NON_FAST_FORWARD: String(policy.allowNonFastForward ?? false), MAX_STORED_BYTES: policy.maxStoredBytes == null ? undefined : String(policy.maxStoredBytes), MAX_PUSH_BYTES: policy.maxPushBytes == null ? undefined : String(policy.maxPushBytes) };
+      RESPONSE_IDLE_MS: idleMs ?? (mode === "gateway" ? 10000 : 60000), RESPONSE_TOTAL_MS: totalMs ?? 0, CODEC_LIMITS: mode === "gateway" ? gatewayCodecLimits : codecLimits, READ_LIMITS: mode === "gateway" ? gatewayReadLimits : readLimits,
+      ALLOW_NON_FAST_FORWARD: String(policy.allowNonFastForward ?? false), MAX_STORED_BYTES: policy.maxStoredBytes == null ? undefined : String(policy.maxStoredBytes), MAX_PUSH_BYTES: policy.maxPushBytes == null ? mode === "gateway" ? String(256 * MiB) : undefined : String(policy.maxPushBytes) };
     Object.defineProperty(internal, "BLOBS", { get: () => options.bucket ? options.bucket(env) : env[bindings.objects] });
     return internal;
   }

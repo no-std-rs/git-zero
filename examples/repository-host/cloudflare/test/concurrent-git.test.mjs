@@ -18,7 +18,7 @@ async function git(args, { input, allowFailure = false } = {}) {
   const [code] = await once(child, "exit"); if (!allowFailure) assert.equal(code, 0, `${args.join(" ")}\n${stderr}`);
   return { code, stdout: stdout.trim(), stderr };
 }
-async function gateway(origin, { namespace = "workshop", token } = {}) {
+async function gateway(origin, { namespace = "workshop", token, beforePack, packStarted, linkDelayMs = 100 } = {}) {
   let barrier = null;
   const server = createServer(async (incoming, outgoing) => {
     let reader;
@@ -34,11 +34,19 @@ async function gateway(origin, { namespace = "workshop", token } = {}) {
       outgoing.writeHead(result.status, Object.fromEntries(result.headers));
       if (!result.body) { outgoing.end(); return; }
       reader = result.body.getReader(); outgoing.on("close", () => { if (!outgoing.writableEnded) reader.cancel().catch(() => {}); });
+      let detectedPack = false, tail = Buffer.alloc(0);
       for (;;) {
         const part = await reader.read(); if (part.done) break;
+        // v2 ls-refs also POSTs to upload-pack: pause only an actual pack,
+        // while the host still owns its codec, never the small ref response.
+        if (route === "git-upload-pack" && !detectedPack && (packStarted || beforePack)) {
+          const prefix = Buffer.concat([tail, part.value]);
+          if (prefix.includes(Buffer.from("PACK"))) { detectedPack = true; packStarted?.(); await beforePack?.(); }
+          tail = prefix.subarray(Math.max(0, prefix.length - 3));
+        }
         for (let at = 0; at < part.value.length; at += 65536) {
           // ~5 Mbit/s per link; concurrent clients have independent links.
-          if (route === "git-upload-pack") await delay(100);
+          if (route === "git-upload-pack") await delay(linkDelayMs);
           if (outgoing.destroyed) { await reader.cancel(); return; }
           if (!outgoing.write(part.value.subarray(at, at + 65536))) await once(outgoing, "drain");
         }
@@ -120,17 +128,24 @@ test("token mode: two repositories clone concurrently with real Git and independ
   try {
     const source = join(dir, "source"); await mkdir(source); await git(["init", "--quiet", "-b", "main", source]);
     await git(["-C", source, "config", "user.name", "Token"]); await git(["-C", source, "config", "user.email", "token@example.test"]);
-    await writeFile(join(source, "data.bin"), randomBytes(8 * 1048576)); await git(["-C", source, "add", "."]); await git(["-C", source, "commit", "--quiet", "-m", "token clone"]);
-    worker = await startStandalone(join(dir, "state")); a = await gateway(worker.origin, { namespace: "token-a", token: TOKEN }); b = await gateway(worker.origin, { namespace: "token-b", token: TOKEN });
+    await writeFile(join(source, "data.bin"), randomBytes(16 * 1048576)); await git(["-C", source, "add", "."]); await git(["-C", source, "commit", "--quiet", "-m", "token clone"]);
+    worker = await startStandalone(join(dir, "state"));
+    let release, markA, markB; const blocked = new Promise((r) => { release = r; }), aStarted = new Promise((r) => { markA = r; }), bStarted = new Promise((r) => { markB = r; });
+    a = await gateway(worker.origin, { namespace: "token-a", token: TOKEN, linkDelayMs: 50, packStarted: markA, beforePack: () => blocked });
+    b = await gateway(worker.origin, { namespace: "token-b", token: TOKEN, linkDelayMs: 50, packStarted: markB });
     await git(["-C", source, "push", "--quiet", a.url, "main"]); await git(["-C", source, "push", "--quiet", b.url, "main"]);
     let done = 0; const started = performance.now();
-    const clones = [a, b].map((proxy, i) => git(["clone", "--quiet", proxy.url, join(dir, `clone-${i}`)]).then(() => { done++; }));
+    const clones = [git(["clone", "--quiet", a.url, join(dir, "clone-0")]).then(() => { done++; })];
+    await aStarted;
+    clones.push(git(["clone", "--quiet", b.url, join(dir, "clone-1")]).then(() => { done++; }));
+    try { await Promise.race([bStarted, delay(5000).then(() => { throw new Error("second token clone could not start while first link is paused"); })]); assert.equal(done, 0); }
+    finally { release(); }
     const state = async (ns) => (await fetch(`${worker.origin}/_test/${ns}/state`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
     let overlapping = false;
     for (let tries = 0; tries < 100 && !done; tries++) { const [aa, bb] = await Promise.all([state("token-a"), state("token-b")]); if (aa.jobs.active >= 2 && bb.jobs.active >= 2) { overlapping = true; break; } await delay(20); }
     assert.equal(overlapping, true, "both token fetch streams must be live at once");
     await Promise.all(clones); assert.equal(done, 2);
-    const elapsedMs = performance.now() - started; assert.ok(elapsedMs < 30000, `two clones took ${elapsedMs}ms`);
+    const elapsedMs = performance.now() - started; assert.ok(elapsedMs < 30000, `two 16 MiB clones took ${elapsedMs}ms`);
     for (let i = 0; i < 2; i++) await git(["-C", join(dir, `clone-${i}`), "fsck", "--no-dangling"]);
     t.diagnostic(JSON.stringify({ tokenConcurrentClones: 2, elapsedMs }));
   } finally { await a?.close(); await b?.close(); await worker?.stop(); await rm(dir, { recursive: true, force: true }); }

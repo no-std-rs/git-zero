@@ -45,8 +45,9 @@ export class ByteBudget {
     if (item.fair && (ownWorking + item.working > this.limit - this.codecSlots * CODEC_BYTES - this.headroom || (item.codec && slots >= this.codecSlots - 1))) return false;
     if (item.heavy && item.codec) {
       const activeHeavy = this.arenas.filter((arena) => arena.busy && arena.lease?.heavy);
-      // Keep an arena for bounded browse/control work. Once another namespace
-      // waits for heavy work, incumbents cannot replenish their heavy share.
+      // Never lend the last co-tenant heavy slot to an incumbent: a newly
+      // arriving namespace must not wait for hours-long uploads to retire.
+      if ([...owner].filter((lease) => lease.heavy && lease.arena).length >= Math.max(1, this.codecSlots - 2)) return false;
       if (activeHeavy.length >= this.codecSlots - 1) return false;
       if ([...owner].some((lease) => lease.heavy) && (waitingHeavy.size > 1 || (waitingHeavy.size === 1 && !waitingHeavy.has(item.namespace)))) return false;
     }
@@ -68,6 +69,8 @@ export class ByteBudget {
       const namespaces = [...groups.keys()];
       const last = namespaces.indexOf(this.lastNamespace);
       if (last >= 0) namespaces.push(...namespaces.splice(0, last + 1));
+      const hasHeavy = (ns) => [...(this.owners.get(ns) ?? [])].some((lease) => lease.heavy && lease.arena);
+      namespaces.sort((a, b) => Number(hasHeavy(a)) - Number(hasHeavy(b)));
       let item;
       for (const ns of namespaces) {
         // An expensive queued job cannot hide an admissible light read. FIFO

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
-import { createRepositoryHost } from "../src/host.mjs";
+import { createRepositoryHost, ByteBudget } from "../src/host.mjs";
 import { sqliteContext } from "./sqlite.mjs";
 import { GRANT_KEY, mint } from "./grant-fixture.mjs";
 import { project, packet, pack, receiveReport } from "./fixture.mjs";
@@ -11,7 +11,11 @@ import { receive } from "./browse-fixture.mjs";
 const codec = await WebAssembly.compile(await readFile(new URL("../build/git_zero_host_wasm.wasm", import.meta.url)));
 
 test("same-repository fetches own independent scratch and publication does not wait for them", { timeout: 10000 }, async () => {
+  // This workload holds two uncached encoders and publishes concurrently.
+  // Five arenas permit three heavy leases here plus a co-tenant and metadata;
+  // the default four-arena profile intentionally caps one namespace at two.
   const factory = createRepositoryHost({ codec, authMode: "gateway", bindings: { repositories: "R", objects: "B", grantKey: "K" }, routePrefix: "", keyPrefix: "", packCacheEnabled: false,
+    memoryBudget: new ByteBudget(64 * 1048576, 15000, 10000, { codecSlots: 5 }),
     memory: { canonicalCacheBytes: 0, representationCacheBytes: 0, chunkCacheBytes: 0, canonicalCaptureBytes: 65536, representationCaptureBytes: 65536, chunkBytes: 65536 },
     codecLimits: { maxControlBytes: 1024 * 1024 }, readLimits: { metadataBytes: 1024 * 1024, jsonBytes: 128 * 1024 }, readPinBytes: 1024 * 1024 });
   const db = new DatabaseSync(":memory:"), objects = new Map(), ctx = sqliteContext(db);

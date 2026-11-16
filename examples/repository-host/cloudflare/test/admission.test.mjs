@@ -32,25 +32,25 @@ test("namespace-fair byte admission leaves room for browse, never preempts a clo
 test("a namespace cannot spend co-tenant headroom on sustained push leases; round robin skips an oversized waiter", async () => {
   const budget = new ByteBudget(64 * MiB), options = { codec: true, heavy: true, fair: true }, held = [];
   try {
-    for (let i = 0; i < 3; i++) held.push(await budget.acquire("pushes", 14 * MiB, null, options));
+    for (let i = 0; i < 2; i++) held.push(await budget.acquire("pushes", 14 * MiB, null, options));
     const controller = new AbortController();
     const pending = budget.acquire("pushes", 14 * MiB, null, { ...options, signal: controller.signal }).catch((e) => e);
     const before = performance.now(), read = await budget.acquire("other", 18 * MiB, null, { ...options, heavy: false });
-    assert.ok(performance.now() - before < 50); read(); assert.equal(budget.owners.get("pushes").size, 3);
+    assert.ok(performance.now() - before < 50); read(); assert.equal(budget.owners.get("pushes").size, 2);
     controller.abort(); assert.match((await pending).message, /cancelled/);
   } finally { held.forEach((release) => release()); }
 });
 
 test("an incumbent cannot replenish heavy leases ahead of a larger co-tenant waiter", async () => {
   const budget = new ByteBudget(64 * MiB), options = { codec: true, heavy: true, fair: true }, held = [];
-  for (let i = 0; i < 3; i++) held.push(await budget.acquire("busy", 14 * MiB, null, options));
+  for (let i = 0; i < 2; i++) held.push(await budget.acquire("busy", 18 * MiB, null, options));
   let admitted = false;
   const larger = budget.acquire("other", 22 * MiB, null, options).then((release) => { admitted = true; return release; });
   const replenishing = budget.acquire("busy", 14 * MiB, null, options);
   held.shift()(); await delay(1); assert.equal(admitted, false);
-  assert.equal(budget.owners.get("busy").size, 2, "new busy work must not consume bytes needed by the larger waiter");
+  assert.equal(budget.owners.get("busy").size, 1, "new busy work must not consume bytes needed by the larger waiter");
   held.shift()(); const release = await larger; assert.equal(admitted, true); release();
-  (await replenishing)(); held.shift()();
+  (await replenishing)();
   assert.equal(budget.used, budget.residentBytes);
 });
 
@@ -71,9 +71,13 @@ test("blob streams use small reservations but cannot spend the metadata arena", 
       await f.repo(ns).fetch(f.request(ns, "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }));
       await (await holdFetch(f, ns)).arrayBuffer(); await f.repo(ns).queue;
     }
-    held.push(...await Promise.all(Array.from({ length: 3 }, () => f.repo("blobs").fetch(f.request("blobs", "api/v1/blob?path=file")))));
+    held.push(...await Promise.all(Array.from({ length: 2 }, () => f.repo("blobs").fetch(f.request("blobs", "api/v1/blob?path=file")))));
+    // Keep the original three-stream saturation workload across namespaces;
+    // one namespace can now hold at most two of those heavy streams.
+    held.push(await f.repo("reader").fetch(f.request("reader", "api/v1/blob?path=file")));
     const pool = f.repo("blobs").env.BYTE_BUDGET;
-    assert.equal([...pool.owners.get("blobs")].filter((lease) => lease.heavy && lease.arena).length, 3);
+    assert.equal([...pool.owners.get("blobs")].filter((lease) => lease.heavy && lease.arena).length, 2);
+    assert.equal(pool.arenas.filter((arena) => arena.busy && arena.lease.heavy).length, 3);
     const read = await Promise.race([f.repo("reader").fetch(f.request("reader", "api/v1/history")), delay(1000).then(() => { throw new Error("blob streams consumed metadata capacity"); })]);
     assert.equal(read.status, 200); await read.json();
     for (const response of held) assert.equal(await response.text(), "file contents\n"); held.length = 0;
@@ -110,4 +114,23 @@ test("neither a repository gate wait nor the prefix-to-pack memory wait spends t
     await delay(100); await held.arrayBuffer(); held = null;
     const response = await pending; assert.equal(response.status, 200); assert.match(receiveReport(await response.arrayBuffer()), /ok refs\/tags\/after-waits/);
   } finally { await held?.body.cancel().catch(() => {}); for (const repo of f.instances.values()) await repo.queue; f.close(); }
+});
+
+// Saturate A with real held fetches, then exercise both Git heavy phases in B.
+test("a namespace at its heavy maximum cannot starve another namespace's clone or push", { timeout: 5000 }, async (t) => {
+  const f = fixture({ packCacheEnabled: false, memoryWaitMs: 1000 }), held = [];
+  try {
+    for (const ns of ["a", "b"]) { await f.repo(ns).fetch(f.request(ns, "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" })); await (await holdFetch(f, ns)).arrayBuffer(); await f.repo(ns).queue; }
+    held.push(...await Promise.all([holdFetch(f, "a"), holdFetch(f, "a")]));
+    const a = f.repo("a"), pool = a.env.BYTE_BUDGET;
+    assert.equal([...pool.owners.get("a")].filter((l) => l.heavy && l.arena).length, pool.codecSlots - 2);
+    const third = new AbortController();
+    const incumbent = pool.acquire("a", a.env.JOB_MEMORY_BYTES, null, { codec: true, heavy: true, fair: true, signal: third.signal }).catch((e) => e);
+    const started = performance.now(); const clone = await holdFetch(f, "b"); assert.equal(clone.status, 200); await clone.arrayBuffer(); await f.repo("b").queue;
+    const tip = f.repo("b").store.exec("SELECT oid FROM refs")[0].oid;
+    const response = await f.repo("b").fetch(f.request("b", "git-receive-pack", "write", { method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" }, body: receive(0, [{ name: "refs/tags/tenant", old: "0".repeat(40), new: tip }], Buffer.from("5041434b0000000200000000029d08823bd8a8eab510ad6ac75c823cfd3ed31e", "hex")) }));
+    assert.equal(response.status, 200); assert.match(receiveReport(await response.arrayBuffer()), /ok refs\/tags\/tenant/);
+    assert.ok(performance.now() - started < 1000); third.abort(); assert.match((await incumbent).message, /cancelled/);
+    t.diagnostic(JSON.stringify({ heavyCoTenantCloneAndPushMs: performance.now() - started }));
+  } finally { for (const r of held) await r.arrayBuffer(); for (const r of f.instances.values()) await r.queue; f.close(); }
 });

@@ -14,7 +14,7 @@ const options = { codec, bindings: { repositories: "CUSTOM_REPOS", objects: "SHA
 async function holdFetch(f, name) {
   const data = project(0), tip = data.root.id.toString("hex");
   const pushed = await f.repo(name).fetch(f.request(name, "git-receive-pack", "write", { method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" }, body: receive(0, [{ name: "refs/heads/main", old: "0".repeat(40), new: tip }], data.pack) }));
-  assert.doesNotMatch(receiveReport(await pushed.arrayBuffer()), /ng /);
+  assert.equal(pushed.status, 200, await pushed.clone().text()); assert.doesNotMatch(receiveReport(await pushed.arrayBuffer()), /ng /);
   return f.repo(name).fetch(f.request(name, "git-upload-pack", "read", { method: "POST", headers: { "content-type": "application/x-git-upload-pack-request" }, body: Buffer.concat([packet(`want ${tip} side-band-64k\n`), Buffer.from("0000"), packet("done\n")]) }));
 }
 function fixture(extra = {}) {
@@ -191,4 +191,31 @@ test("metadata reservations include worst-case raw ref-name pages as well as JSO
     }
     assert.throws(() => createRepositoryHost({ ...options, isolateMemoryBytes: 64 * 1048576, readLimits: { pageSize: 1000 } }), /cannot fit/);
   } finally { f.close(); }
+});
+
+test("explicit token pools reject profiles unable to admit one complete job", async () => {
+  const token = { ...options, authMode: "token", bindings: { ...options.bindings, token: "TOKEN" } };
+  for (const size of [64, 96, 99]) assert.throws(() => createRepositoryHost({ ...token, isolateMemoryBytes: size * 1048576 }), /token job.*fair headroom/);
+  assert.doesNotThrow(() => createRepositoryHost({ ...token, isolateMemoryBytes: 100 * 1048576 }));
+  const f = fixture({ ...token, isolateMemoryBytes: 101 * 1048576 }); f.env.TOKEN = "public-test-token";
+  try {
+    const request = f.request; f.request = (ns, route, level, init = {}) => request(ns, route, level, { ...init, headers: { ...init.headers, authorization: "Bearer public-test-token" } });
+    const r = await holdFetch(f, "token"); assert.equal(r.status, 200, await r.clone().text()); assert.ok((await r.arrayBuffer()).byteLength > 0); await f.repo("token").queue;
+    assert.equal(f.repo("token").env.BYTE_BUDGET.limit, 101 * 1048576);
+    // Reopen the already-published repository at the exact fetch minimum.
+    const minimum = createRepositoryHost({ ...token, isolateMemoryBytes: 100 * 1048576 });
+    const reopened = new minimum.Repository(f.repo("token").ctx, f.env), tip = f.repo("token").store.exec("SELECT oid FROM refs")[0].oid;
+    const cloned = await reopened.fetch(f.request("token", "git-upload-pack", "read", { method: "POST", headers: { "content-type": "application/x-git-upload-pack-request" }, body: Buffer.concat([packet(`want ${tip} side-band-64k\n`), Buffer.from("0000"), packet("done\n")]) }));
+    assert.equal(cloned.status, 200, await cloned.clone().text()); assert.ok((await cloned.arrayBuffer()).byteLength > 0); await reopened.queue;
+  } finally { f.close(); }
+});
+
+test("gateway defaults bound pack-held transport time in hours while token codec limits stay compatible", () => {
+  const f = fixture(), token = fixture({ authMode: "token", bindings: { ...options.bindings, token: "TOKEN" } }); token.env.TOKEN = "public-test-token";
+  try {
+    assert.equal(f.repo("gateway").env.MAX_PUSH_BYTES, String(256 * 1048576));
+    assert.equal(f.repo("gateway").env.CODEC_LIMITS.maxPackBytes, 1024 ** 3);
+    assert.equal(token.repo("token").env.CODEC_LIMITS.maxPackBytes, 64 * 1024 ** 3);
+    assert.equal(token.repo("token").env.BYTE_BUDGET, null);
+  } finally { f.close(); token.close(); }
 });
