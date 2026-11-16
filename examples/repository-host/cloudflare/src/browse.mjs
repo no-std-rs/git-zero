@@ -223,12 +223,16 @@ export class ReadApi {
     if (cursor) { this.proven.add(cursor.start); this.proven.add(cursor.next); }
     const first = this.peel(this.resolve(params.get("rev") ?? (cursor ? `oid:${cursor.start}` : "HEAD")));
     if (cursor && cursor.start !== first.oid) throw new ApiError("cursor revision differs");
-    let row = cursor ? this.object(cursor.next) : first, next = null, size = 256;
+    let row = cursor ? this.object(cursor.next) : first, next = null;
+    // Every commit ID has the same encoded width in this repository. Reserve
+    // a real signed cursor before filling the page, including long namespaces.
+    const reserveCursor = await this.cursor("history", { start: first.oid, next: first.oid });
+    let size = encode(JSON.stringify({ generation: this.generation, commits: [], nextCursor: reserveCursor })).length;
     const commits = [];
     while (row) {
       if (commits.length && this.metadataBytes + Math.min(row.size, this.limits.headerBytes + this.limits.messageBytes) > this.limits.metadataBytes) { next = row.oid; break; }
-      const entry = await this.commit(row), entrySize = encode(JSON.stringify(entry)).length;
-      if (commits.length && size + entrySize > this.limits.jsonBytes - 256) { next = row.oid; break; }
+      const entry = await this.commit(row), entrySize = encode(JSON.stringify(entry)).length + 1;
+      if (commits.length && size + entrySize > this.limits.jsonBytes) { next = row.oid; break; }
       commits.push(entry); size += entrySize;
       const parent = entry.parents[0];
       if (commits.length === limit) { next = parent ?? null; break; }

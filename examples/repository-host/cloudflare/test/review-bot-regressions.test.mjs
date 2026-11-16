@@ -91,3 +91,33 @@ for (const format of [0, 1]) test(`tree byte pagination includes proofs and curs
     assert.deepEqual(names, git(directory, ["ls-tree", "--name-only", "HEAD"]).toString().trim().split("\n"));
   } finally { await repo.queue; f.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test("SHA-256 history byte pagination budgets the signed cursor for long namespaces", { timeout: 10000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "git-zero-history-envelope-")), directory = join(root, "source");
+  const f = fixture({ readLimits: { jsonBytes: 8192 } }), ns = "h".repeat(80), repo = f.repo(ns);
+  try {
+    await mkdir(directory); git(directory, ["init", "--initial-branch=main", "--object-format=sha256"]);
+    for (let i = 0; i < 4; i++) { await writeFile(join(directory, "analysis.py"), `# revision ${i}\n`); git(directory, ["add", "."]); git(directory, ["commit", "-m", `revision ${i}`]); }
+    const expected = git(directory, ["rev-list", "--first-parent", "HEAD"]).toString().trim().split("\n");
+    assert.equal((await repo.fetch(f.request(ns, "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ objectFormat: "sha256" }) }))).status, 201);
+    const pushed = await repo.fetch(f.request(ns, "git-receive-pack", "write", { method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" }, body: receive(1, [{ name: "refs/heads/main", old: "0".repeat(64), new: expected[0] }], git(directory, ["pack-objects", "--stdout", "--all"])) }));
+    assert.equal(pushed.status, 200); assert.doesNotMatch(receiveReport(await pushed.arrayBuffer()), /ng /);
+    const referenceResponse = await repo.fetch(f.request(ns, "api/v1/history?limit=3")); assert.equal(referenceResponse.status, 200);
+    const referenceBytes = new Uint8Array(await referenceResponse.arrayBuffer()), reference = JSON.parse(new TextDecoder().decode(referenceBytes));
+    assert.equal(reference.commits.length, 3); assert.ok(reference.nextCursor);
+    // Choose a valid cap exactly where the old 512-byte allowance admitted
+    // these three real records. Their actual signed envelope is larger.
+    const budget = 512 + reference.commits.reduce((size, entry) => size + Buffer.byteLength(JSON.stringify(entry)), 0);
+    assert.ok(referenceBytes.length > budget); assert.ok(budget < 8192);
+    repo.env.READ_LIMITS = { ...repo.env.READ_LIMITS, jsonBytes: budget };
+    const actual = []; let cursor, pages = 0;
+    do {
+      const response = await repo.fetch(f.request(ns, `api/v1/history${cursor ? `?cursor=${cursor}` : ""}`));
+      const data = new Uint8Array(await response.arrayBuffer()); assert.equal(response.status, 200, new TextDecoder().decode(data)); assert.ok(data.length <= budget);
+      const page = JSON.parse(new TextDecoder().decode(data)); assert.ok(page.commits.length > 0);
+      if (!pages) { assert.ok(page.commits.length < 3); assert.ok(page.nextCursor); }
+      actual.push(...page.commits.map((entry) => entry.oid)); cursor = page.nextCursor; pages++; assert.ok(pages <= 4);
+    } while (cursor);
+    assert.deepEqual(actual, expected);
+  } finally { await repo.queue; f.close(); await rm(root, { recursive: true, force: true }); }
+});
