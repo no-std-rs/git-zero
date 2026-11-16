@@ -125,14 +125,18 @@ encoder serve both repository adapters and the external catalog. A fixed 4 MiB
 control arena keeps validated packet storage immutable while iterating wants and
 haves. Total Wasm linear memory is bounded at 6 MiB; object bodies remain outside
 that arena. Token deployments retain 48 MiB default byte caches; gateway mode
-uses 5 MiB, bounded pins and a FIFO byte reservation across repository instances
-(default 33 MiB/heavy job plus legacy-miss copies, 96 MiB pool). Each fetch has
+uses 1.75 MiB, bounded pins and namespace-fair byte reservations across instances
+(default 14 MiB/fetch plus up-front legacy copies, 64 MiB pool). Four reused
+codec arenas remain charged while idle; one arena/working allowance is protected
+for bounded metadata. Routes reserve different envelopes; waiters never preempt
+active streams. Token mode is exempt from byte admission unless explicitly configured. Each fetch has
 private SQL scratch and a generation snapshot; reads and private pushes overlap.
 Only the short ref compare-and-swap publishes exclusively. Identical full clones
-share one generation-keyed R2 pack build and small reader buffers. Delete fences
+share an independent generation-keyed R2 pack build and 192 KiB reader
+buffers, outside processing-job slots. Pre-header builder failure permits fallback. Delete fences
 and cancels live jobs, then waits for their I/O before reclaiming bytes. There is no default absolute
-stream lifetime: idle, minimum-throughput, body-total and contention bounds have
-separate purposes. Embedders can lower caches, captures, chunks, page limits and
+stream lifetime: idle, minimum-throughput pack transfers and control-prefix
+deadlines have separate purposes. Fetch preparation/builds use progress bounds. Embedders can lower caches, captures, chunks, page limits and
 the reservation pool to leave room for Rust and the surrounding product. Bounds
 exclude unrelated VM/runtime/SQL allocations; see the
 [v1 memory envelope](repository-host-v1.md#memory-and-shared-isolate-scheduling).

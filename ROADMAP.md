@@ -325,7 +325,7 @@ to every read-only repository adapter.
 - [x] Configurable host factory for embedded or separate Workers, explicit
   compiled codec input, direct-stub contract, renamed bindings/routes, isolated
   shared-bucket prefixes and configurable byte reservations with cross-repository
-  FIFO byte fairness, per-job scratch/ref snapshots, concurrent reads/private
+  namespace-fair bytes, reusable charged arenas, per-job scratch/ref snapshots, concurrent reads/private
   pushes, short publication CAS and generation-keyed full-clone pack reuse;
   separate body/throughput bounds and delete cancellation protect live I/O.
 - [x] Gateway wants restricted to current reachability by default, bounded memory

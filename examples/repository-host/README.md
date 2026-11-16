@@ -74,23 +74,41 @@ Clones, fetches, browse and private push stages run concurrently on one
 repository. Only the ref compare-and-swap transaction is exclusive. Reads retain
 consistent generation snapshots; delete fences, cancels live jobs and defers
 purging until their I/O settles. Gateway defaults allow 32 active jobs plus
-64 FIFO waiters (15-second admission wait). A 96 MiB isolate byte pool reserves
-33 MiB per heavy codec/cache job (up to 12 MiB extra for legacy chunk misses),
-12 MiB for gateway negotiation, 8 MiB for refs/log raw-name and JSON pages,
-and 1 MiB per cached-pack reader. Identical full clones
-share one generation-keyed R2 pack build, so a workshop does not encode the same
-pack 30 times. Lower caches/bounds and share a ByteBudget across host factories
-to leave room for the product's Rust Wasm. See the contract's full memory formula.
-Streams default to 10 seconds idle, a 16 KiB/s floor over 30-second windows and
-**no absolute lifetime**: a 300 MB clone at 5 Mbit/s can finish in about 480 s.
-Git/JSON bodies have a separate 120-second total deadline in gateway mode.
-Token mode retains unlimited queued admission, 60-second idle deadline, cache
-sizes and no new body/admission timeouts or contention preemption; it now
-accounts codec/cache bytes in the isolate pool. Enable PACK_CACHE_ENABLED=true
-for concurrent repeated clones in a token deployment (gateway default: enabled).
+64 FIFO waiters (15-second admission wait), plus 64 cached-reader slots that do
+not consume processing slots. A **64 MiB** namespace-fair isolate pool reuses
+four codec arenas; idle arenas remain charged. Default fetches reserve 14 MiB,
+pushes add control/report copies, and commit/tree/history/blob reserve
+14/17/19/14 MiB respectively (12 MiB for a blob by oid). A cached reader needs 192 KiB and no codec.
+One namespace cannot spend the last ordinary metadata allowance or all arenas;
+waiters never preempt anyone's clone. Existing jobs retire naturally and larger
+waiters cannot be overtaken indefinitely by new incumbent heavy jobs. Multiple
+saturated namespaces can still receive retryable 503 after 15 seconds. Legacy
+8 MiB chunks need an up-front allowance (up to 13 MiB extra); no holder waits for
+a memory top-up. Share a ByteBudget and the same compiled codec module between
+host factories. Budget the product's Rust/Wasm, V8, SQL, HTTP and GC alongside
+these payload bounds inside 128 MB; see the contract's measured memory profile.
+
+Identical full clones share a builder independent of the first client, with
+fallback for pre-header builder failures and a progress-based build bound.
+Streams use 10 seconds idle, a 16 KiB/s floor over 30-second windows and **no
+absolute lifetime**: 300 MB at 5 Mbit/s can finish in about 480 s. Control/JSON
+input has a separate 120-second deadline starting after admission; pack input
+uses minimum throughput instead. A 300 MB first push at 10 Mbit/s (~240 s) can
+finish. Scratch contention gets retryable 503 before headers. Graph preparation
+also uses a progress bound: the generated 25k-commit / 150k-object cold gateway
+clone prepared in 26.0 s locally after batching private scratch writes, shared by identical followers rather than
+repeated for each. Ref-rooted browser requests do not perform that closure walk.
+
+Token mode is **exempt from the byte pool by default**, preserving its unlimited
+pending queue, cache sizes, 60-second idle and lack of new body/admission/rate
+bounds. Explicit isolateMemoryBytes/memoryBudget opts in. Enable
+PACK_CACHE_ENABLED=true for repeated token-mode clones (gateway default: on).
 
 Gateway fetches default to current-reachable wants. Rewritten objects remain
-physically stored; force-pushing does not erase data. `wantPolicy: "catalog"`
+physically stored, including old IDs in the push log and historical ref
+versions; force-pushing does not erase data. After a rewrite, non-tip raw-ID
+fetches are refused while alarms rebuild reachability (about a minute in the
+25k fixture). `wantPolicy: "catalog"`
 opts into historic whole-catalog access (the token-mode default). There is no
 unreachable-object garbage collector: complete repository DELETE reclaims its
 content and permanently retires the namespace, including old packs and scratch.

@@ -1134,3 +1134,33 @@ maintenance because newer Git may otherwise detach geometric repacks while the
 measured MIDX writer reads their inputs. Tracing is opt-in for this regression,
 not enabled in performance measurements. `GIT_ZERO_BENCH_TEST_GIT` can select an
 independently built Git binary; Git 2.56.1 was also exercised locally.
+
+
+For repository-host measurements, keep generated scratch under this checkout:
+from its root, create `.scratch/test-tmp` and set `TMPDIR` to that absolute path
+before running the commands in `examples/repository-host/cloudflare`. Remove
+generated repositories/packs after each run; retain small evidence logs only.
+
+Additional focused regressions:
+
+```sh
+node --test test/admission.test.mjs test/ref-scaling.test.mjs test/sql-rewrite.test.mjs
+node --test test/clone-scale.test.mjs test/workerd-memory.test.mjs
+```
+
+The admission fixture checks 300 browse reads behind live clones, co-tenant
+latency, a larger waiter's fair admission, protected metadata capacity and body
+wait/throughput phases. Real Git also runs concurrent token-mode clones of two
+repositories. The 25k/150k default-packed clone is imported and compared with
+Git's complete reachable object set, including a rewritten branch. Job SQL
+compiles once per template, and private graph writes use bounded synchronous
+transactions. The inspector test reports route samples, two live generation
+streams, thirty cached readers and one hundred further cached-fetch admissions,
+with charged reusable arenas and a post-burst GC sample. No production Rust
+backend, deployed isolate RSS or WAN/CPU SLA is inferred from these fixtures.
+
+On an otherwise idle machine, build an archive of `origin/main` under `.scratch/`
+with its own codec, then run `scripts/review-tree-timings.mjs` with the absolute
+path to its `examples/repository-host/cloudflare` directory. It interleaves five
+main/head runs, records both runtimes and machine load, and reports medians.
+The original test deadlines are retained. Delete the archive after measurement.

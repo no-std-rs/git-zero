@@ -17,3 +17,7 @@ stays with each crate or example's README.
 - [Immutable packed dumb HTTP](packed-dumb.md): generated/verified-file publication, Worker modes and URL identity.
 
 - [Asynchronous selected-pack cache](async-pack-cache.md): preparation ownership, KV/R2 records, cancellation and coordination scope.
+
+[Repository host review verification](repository-host-review4.md) records the
+namespace-fair memory profiles, realistic scale measurements and repeatable
+local verification commands for the embeddable host.

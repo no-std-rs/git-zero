@@ -14,10 +14,13 @@
   full clones coalesce into one bounded generation-keyed R2 pack build.
 - Browse runs alongside fetch streams/private intake. Gateway streams use a
   throughput floor instead of a default five-minute cutoff; request bodies have
-  a configurable total deadline. Byte reservations bound live codecs/caches
-  across repositories with FIFO fairness and reader preemption under contention.
+  a control-prefix deadline and minimum-throughput pack bound after admission.
+  A 64 MiB namespace-fair pool reuses charged codec arenas, sizes reservations
+  by route, protects metadata capacity and never preempts active jobs. Cached
+  readers use a separate concurrency ceiling. Shared builds outlive their first
+  client and use progress bounds; failed pre-header followers can fall back.
 - Small fetch fallbacks use bounded memory pins; gateway read scratch defaults
-  to 32 MiB per request/64 MiB per repository, with pre-header preparation bounds.
+  to 32 MiB per request/64 MiB per repository, with pre-header progress bounds and retryable 503 on scratch contention.
   Refusal tails drain after releasing repository jobs, at most two per object;
   unauthenticated tails are limited to 1 MiB/5 seconds.
 
@@ -32,7 +35,7 @@
 - Repository host: remove cross-repository admission blocking. Gateway jobs use
   smaller default caches and bounded per-repository queues/response throughput.
   Token deployments retain their previous unlimited pending queue, caches and idle
-  limit, with byte accounting but no new admission timeout/contention preemption;
+  limit, exempt from byte admission by default (explicit pool configuration opts in);
   the experimental isolate-wide four-job/64-request limits are removed.
 - Browse reads rooted at refs no longer rebuild repository-wide reachability.
   Raw IDs reuse an incremental generation index, returning a retryable building

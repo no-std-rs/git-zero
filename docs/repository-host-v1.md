@@ -487,22 +487,24 @@ scratch. Gateway defaults bound it to 32 MiB/request (`readScratchBytes`) and
 both are configurable from zero to the codec's 64 GiB outer temporary bound.
 Scratch accounting/ownership precedes PUT and is released only after acknowledged
 DELETE, independently of the stored-size policy. Token scratch defaults retain
-the codec outer limit. `fetchPrepareMs` bounds graph selection/preparation
-(default 30 seconds gateway, no new deadline token; explicit 1..3600000 ms).
-SQL selection yields between bounded pages; preparation checks its deadline
-between pages/objects and after awaited storage I/O. Known failures precede
+the codec outer limit. `fetchPrepareMs` bounds lack of graph-selection/preparation progress
+(default 30 seconds gateway, no new bound token; explicit 1..3600000 ms).
+Successful bounded graph/object steps renew it; SQL selection yields between
+128-node pages. Preparation checks before/after storage I/O. Known failures precede
 headers. Uncancellable platform storage calls must settle before cleanup can
 finish; no timeout releases ownership while a PUT may still land.
 
 Gateway `wantPolicy` defaults to `reachable`: advertised tips, their authenticated
 ancestry/tree/blob closure, or current persisted membership. Unproven older IDs
-may need index progress and return a Git ERR asking the caller to retry. Objects
+need index progress after a destructive publication: non-tip `git fetch origin <sha>`
+wants are refused until alarms rebuild that membership (about a minute / 63
+steps on the 25k default-packed fixture). The Git ERR asks the caller to retry. Objects
 outside current reachability are refused with a Git-readable ERR before a pack.
 Whole-catalog compressed-pack reuse is disabled in this mode, so it cannot send
 extra unreachable objects. `wantPolicy: "catalog"` explicitly restores historic
 whole-catalog wants; token mode retains that compatibility default.
-**Rewriting refs does not erase stored bytes.** Packs, push-log old IDs and
-backups remain. Unreachable-object garbage collection is not implemented. To
+**Rewriting refs does not erase stored bytes.** Packs, historical ref versions, push-log old IDs and backups remain. Even
+after version pruning, the publication log retains old IDs. Unreachable-object garbage collection is not implemented. To
 purge retained objects, an admin deletes the entire repository, completes the
 resumable purge, and creates replacement content under a fresh namespace; the
 old namespace stays permanently retired. Operators must also handle backups and
@@ -666,8 +668,9 @@ one billion proof edges, 65536 index work units/request, ten million refs,
 metadata, 64 MiB/blob, 65536 path bytes, 1024 path components, 256 tag depth,
 4096 parents, 65536 identity bytes, 8 MiB JSON, and 1 GiB each reconstruction
 work/storage reads. Lower codec limits remain the hard outer limits. Raising
-metadata/output limits increases memory and CPU use. Ref-rooted reads remain
-available as history grows; individual oversized objects, directories or pages
+metadata/output limits increases memory and CPU use; raise the byte profile as
+needed too. Ref-rooted reads are independent of total history size for a bounded
+page/path, but cost grows with tag/path and reconstructed delta-chain depth; individual oversized objects, directories or pages
 can still exceed request budgets and return 413.
 
 The generated `browse-scale.test.mjs` compares 1,000 and 25,000 commits in both
@@ -678,9 +681,12 @@ modules, a three-level path and delta chains up to depth 50, published in
 Read assertions are
 bounded in terms of requested rows/path and delta depth, not unrelated history;
 all four ref-rooted operations write zero rows. Measured at 25k commits: the
-undeltified SHA-1/SHA-256 fixture uses 13/69/17/17 SQL statements for commit,
+undeltified SHA-1/SHA-256 fixture uses 14/70/18/18 SQL statements for commit,
 20-entry history, nested tree and blob. The default-packed 150,028-object fixture
-(depth up to 50) uses 13/69/69/75. Full raw absence proof completes in **18**
+(depth up to 50) uses 14/70/70/76. The regression bound is 24 + 5 times the
+sum of (1 + verified delta depth) for returned/walked metadata and blob ranges;
+the realistic 1k-to-25k growth check permits only this depth-dependent cost
+difference plus 32 fixed statements, with zero row writes. Full raw absence proof completes in **18**
 requests for 100,003 undeltified objects, **63** for the default-packed wide/deep
 fixture, including two deliberately 256-unit batches; remaining requests use
 8192. The index is fully driven to completion in the test. Browser navigation
@@ -691,203 +697,221 @@ publication needs at most one further batch, never a full history rebuild.
 
 ### Memory and shared-isolate scheduling
 
-The following are payload/element bounds **per active job**, not a measurement
-of the complete JavaScript VM. Reserve space for the embedding Rust Wasm, its
-allocator, HTTP/runtime buffers, SQL result objects, V8 metadata and garbage
-collection inside the isolate's 128 MB limit. Concurrent repository jobs
-have independent envelopes which add together. Inactive repository instances retain
-Store/lifecycle/configuration metadata, not byte caches or codec instances. A
-compiled module and its engine code metadata are shared per factory, outside
-linear-memory totals. The runtime controls how many Durable Object instances
-stay resident; the host does not impose an isolate-wide instance-count cap. Per-instance metadata
-and SQLite/runtime handles must also be budgeted. memory.metadataEntries lowers
-the stage-alias cache retained by each Store.
+The gateway default is a **64 MiB payload pool**, shared by every Durable Object
+of this factory in its isolate. This is deliberately smaller than the isolate's
+128 MB limit: budget the embedding Rust/Wasm backend, its allocator, V8, HTTP,
+SQLite, compiled code and GC in the remaining space. A byte ledger is not an RSS
+limit. Measure the combined application before choosing a larger profile.
+`isolateMemoryBytes` accepts 1..112 MiB; configurations unable to fit a job are
+rejected. Lower caches/captures, codec controls, JSON/pages and pins together
+when lowering the pool. Large configured pages or legacy extents can require a
+larger pool, or receive retryable admission refusals.
 
-| Component | Token / gateway default bound | Configuration (ceiling: token default) |
-| --- | --- | --- |
-| Rust codec instance, including control arena and graph/name scratch | fixed 6 MiB linear memory, one per Git/body-read job | ABI fixed; reduce concurrent jobs |
-| Canonical byte cache | 24 / 2 MiB | memory.canonicalCacheBytes |
-| Representation byte cache | 8 / 1 MiB | memory.representationCacheBytes |
-| Authenticated chunk byte cache | 16 / 2 MiB | memory.chunkCacheBytes |
-| Entries per each byte cache (including empty values) | 8192 / 1024 | memory.cacheEntries; zero disables caching |
-| One canonical reconstruction capture | 8 / 1 MiB | memory.canonicalCaptureBytes; larger objects use bounded temp R2 |
-| Intake/current representation capture | 1 MiB / 256 KiB | memory.representationCaptureBytes |
-| Each active encoded/temp chunk writer | 1 MiB | memory.chunkBytes, minimum 64 KiB |
-| Git ref SQL page | 128 / 16 raw names, each bounded by Git control framing | memory.refPageRows, minimum 1; lower codecLimits.maxControlBytes/maxCommands too |
-| Codec input/output frames and source pin | 64 KiB / 128 KiB / 64 KiB | fixed ABI pages |
-| R2 chunk miss, outside cache while authenticating | up to 8 MiB for legacy chunks; new chunks up to chunkBytes | historical extents remain readable; runtime digest/copy overhead also applies |
-| Delta/base aliases, temporary descriptors and Store stage aliases | 256 / 128 entries each; range depth default 128 | memory.metadataEntries (zero disables alias caching), codecLimits.maxDepth |
-| Commit/tree metadata prefixes | total 8 MiB per browse request, plus text/base64/JSON copies | readLimits.metadataBytes/headerBytes/messageBytes/treeBytes |
-| JSON page | 512 KiB; up to 100 rows plus one lookahead | readLimits.jsonBytes/pageSize; string escaping/base64 use additional transient buffers |
-| Publication command/outcome/peel metadata | at most 16384 commands in 4 MiB incoming controls | codecLimits.maxCommands/maxControlBytes; SQL/V8 per-row overhead is additional |
+Multiple factory instances must share a `memoryBudget` and the **same compiled
+codec module object**. For example:
 
-Caches have independent byte and entry caps. Captures are additional to caches;
-lower both if reducing the envelope. Owned intake buffers can be shared by two
-caches and are released when their last owner retires them. Authentication and
-metadata-only lifecycle/refs/log requests allocate no codec. Delta streaming uses
-range queries, not whole-repository buffers. Ordinary SQL work pages are at most
-128 rows (cleanup ownership pages at most 1000 small records); graph frontiers
-live in SQLite. Configurable ref pages bound the large raw-name case. A chunk
-miss can transiently coexist with cached chunks and runtime cryptographic copies.
-A lower new-chunk size does not shrink an existing 8 MiB legacy extent.
+```js
+const memoryBudget = new ByteBudget(64 * 1024 * 1024, 15000, 10000, {
+  codecSlots: 4, readHeadroomBytes: 13 * 1024 * 1024,
+});
+```
 
-Every fetch owns private SQLite selection/negotiation tables and a codec;
-scratch slots are reused only after cleanup, bounded by admission plus two
-internal builders, so sequential requests do not recreate schemas; private
-push stages/intake/validation also run concurrently. There is **no execution
-FIFO per repository**. Immutable reads run alongside each other and alongside
-pushes. Publication precomputes bounded ancestry outside its transaction; only
-the short ref compare-and-swap, catalog/publication log and generation/proof
-update are exclusive. Different-ref pushes both land; same-ref contenders get
-one success and one Git-readable stale-ref/lock refusal. Policy writes are
-synchronous and publication rechecks policy. Warm maintenance excludes active
-jobs; cold activation recovery is shared and checked after authorization.
+The first arguments are bytes and admission-wait milliseconds. The third is a
+validated legacy argument, now ignored; `memoryContentionMs` is also accepted
+but has no effect. **No job is preempted for memory contention**: neither a
+shared builder, cached reader, blob stream nor browse request. Deletion,
+cancellation, transport idle/throughput limits and actual errors can still stop
+jobs. Waiters receive 503 + `Retry-After: 1` after `memoryWaitMs` (default 15000,
+1..600000), or when the isolate's 1024-waiter bound is full.
 
-Each read captures a generation/HEAD/proof-lineage snapshot. An additive
-ref_versions table preserves ref visibility, and publication generation on
-stages hides newer catalog entries from older jobs. An in-flight fetch continues
-against its captured refs after publication. Separate HTTP discovery/fetch
-requests are separate snapshots: if a rewrite makes an old advertised want
-unreachable before the next request, reachable-want policy refuses it and Git
-must restart discovery. Proofs likewise cannot revive revoked history.
+Admission rotates between namespaces and keeps FIFO order within a resource
+class. A fitting light request can pass an oversized heavy waiter. Once another
+namespace waits for heavy work, an incumbent cannot replenish its heavy leases;
+its existing leases must retire naturally. This prevents a stream of small jobs
+from indefinitely overtaking a larger co-tenant. There is no cross-tenant abort.
+The default profile allows at most three active codecs per namespace and three
+long-lived codec jobs across the isolate; the fourth arena remains available
+for bounded commit/tree/history work. Long-lived jobs include Git discovery,
+negotiation, pack intake, fetch generation and blob streaming. Small completed
+advertisements release their codec before streaming their copied bytes.
 
-`maxConcurrentJobs` bounds active client jobs (default 32, range 1..1024).
-Additional requests wait FIFO up to `maxPendingRequests` (gateway default 64,
-range 0..65536) and `admissionWaitMs` (gateway default 15000, range 1..600000).
-Overflow/expired waits get retryable 503. `maxRequestsPerRepository` optionally
-adds a total active+pending ceiling (1..65536); it has no default. These limits
-are per repository; no repository holds an isolate-wide job-count ticket.
-Token mode retains unlimited pending admission and no admission timeout by
-default; its 32 active jobs interleave rather than introducing new overload
-failures. Removed maxActiveJobs/maxPendingJobs options remain rejected.
+The pool reserves four 6 MiB arena allowances and 13 MiB of working-byte
+headroom when admitting data-phase jobs. Bounded control phases can borrow
+working headroom while still obeying the arena and namespace ceilings; this
+lets new cache hits parse behind many cached streams. A namespace cannot own more than
+`pool - arena allowances - headroom` working bytes (27 MiB by default).
+Consequently **one saturated namespace cannot prevent another namespace's
+ordinary metadata read** (up to 13 MiB working bytes plus one arena) from being
+admitted, or kill its live clone. Several saturated namespaces, raised read
+limits and legacy 8 MiB extents can exhaust the pool; bounded waits/503s remain
+possible. This is admission fairness, not a CPU, storage or network SLA.
 
-All modes reserve payload **bytes** from a FIFO isolate budget while a codec or
-cache is live. `isolateMemoryBytes` defaults to 96 MiB (maximum 112 MiB).
-The formula in jobMemoryBytes includes the 6 MiB codec, all configured
-caches/captures, two new-chunk authentication/copy buffers, two chunk writers,
-max(controls, metadata), max(pins, three JSON pages), bounded pin descriptors
-and 4 MiB headroom. Gateway heavy jobs reserve **33 MiB** (token **83 MiB**).
-A legacy 8 MiB miss first empties the chunk cache and borrows that allowance;
-additional bytes are reserved for its transient copies (default gateway up to
-12 MiB extra; token needs none). The returned legacy fragment is copied before
-releasing the extra reservation. Default gateway profiles therefore admit at
-most two heavy codecs, including their worst legacy misses, in the 96 MiB pool.
+Arenas are reused, including across object formats, and reset all parser,
+source, graph, upload, pack and accounting state. Idle arenas stay charged;
+dropping a codec and assuming GC freed its linear memory is not permitted.
+There are at most four retained gateway instances (the bundled artifact uses
+5.6875 MiB linear memory each, reserved as 6 MiB). `codecSlots` accepts 2..16
+through `ByteBudget`; its reserve and concurrency tradeoff must fit the pool.
+Inactive objects retain bounded Store/SQLite metadata, not their own codec
+pools. A legacy read reserves its worst existing chunk size **up front** using
+an indexed maximum, never by queuing a top-up while holding a lease. An 8 MiB
+extent adds up to 13 MiB with the default gateway cache profile. Legacy buffers
+are copied to a 64 KiB fragment before that extent is released.
 
-Negotiation/advertisement uses a smaller **12 MiB gateway / 16 MiB token**
-codec envelope, including its worst-case raw ref-name SQL page; small
-advertisements release the codec and shrink to at most 512 KiB before streaming
-(usually 64 KiB). Ref/log JSON reserves its worst-case raw-name page plus three configured JSON
-pages (8 MiB by default); a cached
-pack reader reserves **1 MiB** (four cache chunks), with no codec or object
-cache. Such readers need no heavy-codec slot. A namespace has a ledger set of
-independent per-job leases; jobs release one phase before reserving the next,
-so cache followers do not retain negotiation codecs while waiting for a build.
-Gateway mode bounds byte waiters to 1024 across repositories; token mode
-retains unlimited FIFO waiters by default, matching its existing admission. Configuration
-must fit a heavy job and its possible legacy miss. The payload pool leaves
-32 MiB of the 128 MiB isolate outside host reservations; embedders must budget
-Rust, runtime/HTTP/SQL/GC and inactive instances in that space. It is not a
-measurement or guarantee of whole-isolate RSS. All host classes created by one
-factory share its pool; multiple factories in one script must receive the same
-exported ByteBudget through memoryBudget, e.g.
-`new ByteBudget(64 * 1024 * 1024, 15000, 10000)` (bytes, wait ms, contention ms).
+Default route reservations, including an active arena where needed:
 
-For a larger Rust wrapper, a 64 MiB pool with zero byte caches, 64 KiB captures
-and chunks, 1 MiB control/metadata limits, 128 KiB JSON and 1 MiB pins reserves
-13 MiB/heavy job, plus at most about 16 MiB while authenticating legacy chunks.
-Two such legacy-heavy jobs fit below 58 MiB. Lowering payload bounds trades
-extra storage reads and smaller pages for more space outside the host.
+| Work | Reservation |
+| --- | --- |
+| Commit metadata | 14 MiB |
+| Directory/tree metadata | 17 MiB |
+| History (2 MiB cumulative metadata, bounded JSON) | 19 MiB |
+| Blob stream | 12 MiB by oid, 14 MiB by path |
+| Refs or push-log JSON | 8 MiB; no codec |
+| Git negotiation/advertisement | 11 MiB |
+| Fetch generation | 14 MiB |
+| Push intake/validation/report | 14 MiB + four times its validated control-prefix bytes |
+| Upload transport staging | maxControlBytes + 1.25 MiB; no codec |
+| Cached-pack reader | 192 KiB; no codec (three 64 KiB chunks) |
+
+Reservations add working buffers to charged resident arenas; the same arena is
+not charged twice. A phase releases its lease before acquiring the next.
+`jobMemoryBytes` covers configured caches/captures, three chunk buffers, fallback
+pins/descriptors and 1.5 MiB of metadata/frame headroom, in addition to an arena.
+Push control/report copies are reserved separately from actual prefix length.
+Browse uses the configured small caches/captures with owned-buffer reclamation,
+and detaches parsed prefix buffers promptly. Its envelopes also scale with
+configured metadata, JSON, parents, tree and cache bounds. Source payload defaults
+(token / gateway) are: canonical cache 24 MiB / 512 KiB, representation cache
+8 MiB / 256 KiB, chunk cache 16 MiB / 1 MiB, canonical capture 8 MiB / 256 KiB,
+representation capture 1 MiB / 256 KiB, chunk writer 1 MiB, cache entries
+8192 / 512, metadata aliases 256 / 128 and ref-name page 128 / 16 rows.
+`memory` can lower these or raise gateway values to token ceilings; chunk size
+is 64 KiB..1 MiB. Larger profiles reserve more bytes. Gateway browse cumulative
+metadata defaults to 2 MiB; other `readLimits` defaults remain as listed above.
+All limits remain within their documented codec/read hard ceilings.
+
+**Token compatibility:** token mode does not use the shared byte pool by
+default. Its prior cache sizes, unbounded pending queue, lack of new body or
+admission deadlines, and lack of a throughput floor remain. Explicit
+`isolateMemoryBytes`/`memoryBudget` opts it into bounded admission; configure a
+suitable smaller cache profile if concurrency is required. At most four idle
+token codecs are reused per factory; active codecs are not capped by that idle
+cache. Mixed token/gateway factories must budget both profiles.
+
+`maxConcurrentJobs` limits active processing jobs per repository (default 32,
+1..1024). Cached readers release that slot and use a separate `maxCachedReaders`
+ceiling (default 64, 1..4096), so a 30-person workshop does not leave only two
+processing slots for browse or push. Size these ceilings for expected clients,
+then size the byte pool for actual simultaneous generation/intake; increasing
+job counts alone does not create memory. Beyond a ceiling, requests wait FIFO
+up to `maxPendingRequests` (gateway default 64, 0..65536) and
+`admissionWaitMs` (default 15000, 1..600000), then receive 503. Optional
+`maxRequestsPerRepository` limits active plus pending jobs (1..65536).
+Token defaults keep unlimited pending admission and no admission timeout.
+Removed isolate job-count options remain rejected.
+
+`workerd-memory.test.mjs` samples `Runtime.getHeapUsage` through the inspector
+with two **live** generation streams, thirty live cached readers, and one
+hundred further cache-hit fetch admissions, cancelled after their first chunk. It records JS used/total heap, embedder heap,
+backing storage and the separately measured Wasm linear bytes, both before and
+after forced GC. These are samples of a generated workload, not a measured
+worst-case process RSS. The test checks live jobs, at most four retained arenas,
+the 64 MiB ledger ceiling and a 96 MiB sampled combined envelope. Measurements
+and repeatable commands are in [the review verification record](repository-host-review4.md).
 
 ### Concurrent clone pack cache
 
-A Durable Object is single-threaded: concurrent cold pack encoders still share
-CPU. Gateway mode therefore coalesces identical full-clone requests into one
-bounded pack build, then streams immutable framed pack chunks from R2. The key
-includes repository epoch/generation, sorted wants, protocol/capability flags,
-want policy and codec limits. Authorization and wants are rechecked before
-lookup. At most two distinct builds run per repository; followers release
-codecs while waiting. The first reader can stream ready chunks before the
-build finishes. Later readers use only a small chunk buffer and R2 GETs; they
-never repeat graph selection/pack encoding. Incremental, shallow and filtered
-fetches retain independent bounded codecs and scratch. A cache miss outside
-capacity falls back to ordinary bounded generation.
+A Durable Object is single-threaded. Identical gateway full clones coalesce
+into one generation-keyed pack build and then stream immutable framed R2 chunks.
+The key includes epoch/generation, sorted wants, protocol/capabilities, want
+policy and codec limits; authorization and wants are checked before lookup.
+At most two distinct builds run per repository. Incremental, shallow and
+filtered fetches have independent codecs/scratch. A miss outside cache capacity
+falls back to ordinary bounded generation.
 
-`packCacheEnabled` defaults to true in gateway mode, false in token mode;
-it also accepts a trusted env selector with strict boolean parsing. The thin
-reference exposes PACK_CACHE_ENABLED for either mode. Defaults are 512 MiB per
-pack (`packCacheBytes`, 0..8 GiB), 1 GiB/repository (`packCacheTotalBytes`,
-0..64 GiB), eight entries (`packCacheEntries`, 1..256), and 256 KiB chunks
-(`packCacheChunkBytes`, 64 KiB..1 MiB). An upper-bound reservation is checked
-before generation; the builder deadline is 120 seconds (`packCacheBuildMs`,
-1..3600000), separate from client throughput. Derived pack cache, like read
-scratch, is outside stored-size write policy and bounded independently.
-Interrupted builds fail closed; owned keys are recorded before PUT. Old or
-failed caches are reclaimed in bounded alarm pages, deferring any pinned entry.
-DELETE cancels builders/readers and purges cache keys with the rest of the
-repository. Durable build counters are test diagnostics; no delivery guarantee
-or public cache URL bypasses grant verification.
+The builder has its own job, snapshot, controls, codec lease and abort signal
+**before selection/preparation begins**. It never belongs to its first client's
+connection. Cancelling that client leaves followers running. Pre-header builder
+failure or bypass lets each follower generate its original snapshot instead;
+no unrelated admission/cancellation error is broadcast as a failed clone.
+After headers, a genuine storage/generation failure can still truncate a pack.
+Builders are never preempted for another namespace's memory wait.
 
-The real-Git concurrent-git test runs sixteen clones on independent ~5 Mbit/s
-links, requires all sixteen host streams to overlap, and compares against a
-single clone. It also checks prompt browse, publication before clone EOF,
-consistent old clone tips/fsck, different-ref and same-ref push races, and
-DELETE during concurrent readers on both local storage runtimes. Timings are
-local experiments, not production throughput promises. In the final full run,
-an 8 MiB incompressible framework at ~5 Mbit/s/client took 14.156 s for one
-Wrangler clone and 15.136 s for sixteen (1.07x); browse took 40 ms and a
-simultaneous push 139 ms. Direct workerd/S3 took 13.425 s and 14.106 s (1.05x),
-browse 19 ms and push 44 ms. Each group used one new pack build. Reservation
-peaks stayed at or below 96 MiB. The complete local suite passed 233/233.
+Gateway caching defaults on, token caching off (`packCacheEnabled`, strict
+boolean/env selector; reference `PACK_CACHE_ENABLED`). Defaults: 512 MiB per
+entry (`packCacheBytes`, 0..8 GiB), 1 GiB/repository (`packCacheTotalBytes`,
+0..64 GiB), eight entries (`packCacheEntries`, 1..256) and **64 KiB** chunks
+(`packCacheChunkBytes`, 64 KiB..1 MiB). A reader may consume ready chunks before
+completion. The build bound is progress based: `packCacheBuildMs` is initial
+grace (default 120000, 1..3600000), plus generated bytes divided by
+`packCacheMinimumBytesPerSecond` (default 65536, 1..1048576). Thus 300 MiB gets
+120 + 4800 seconds at the minimum rate, rather than a flat two-minute cutoff.
+The 256-chunk test deliberately exceeds a shortened initial grace while making
+progress. Underlying storage operations have their own bounded retries.
 
-A subsequent paired run of the unchanged tree-depth tests on this machine took
-62.568/82.117 s on main and 89.653/77.814 s on this implementation
-(Wrangler/direct workerd). Earlier runs were 24.757/22.001 s and
-16.712/13.575 s respectively. All passed without changing original deadlines;
-shared-machine timing varies substantially, so these are not controlled CPU or
-latency comparisons. The incremental test's R2-operation assertions provide
-separate evidence that small fallbacks do not create scratch objects. Distinct uncached
-requests still contend for the byte pool, single-threaded CPU and storage;
-bounded FIFO waits and retryable refusal remain necessary under overload.
+Cache and read scratch do not consume stored-size policy. Scratch exhaustion
+under concurrent reads returns retryable **503 + Retry-After**, before headers.
+Ownership precedes PUT; failed/stale caches are reclaimed in bounded alarm
+pages after readers retire. DELETE cancels live jobs and waits for their I/O
+before purge. No public cache URL bypasses grants. Cached clients spend a small
+buffer/GET budget and no encoder CPU; repeated cold misses still share CPU.
 
-A stalled reader is stopped by `responseIdleMs` (10 seconds gateway, 60 seconds
-token; configurable 1..600000). A slow **active** reader has no default total
-lifetime. Gateway mode requires 16 KiB/s averaged over 30-second windows
+A generated 25,000-commit / 150,028-object default-packed full gateway clone on
+local workerd/S3 took **22.410 s selection + 3.633 s preparation**, with first
+headers at 26.058 s and an 11,774,780-byte wire pack. Earlier unbatched runs exceeded the former 30-second total (162 s).
+Scratch work now commits up to 128 graph nodes per synchronous transaction,
+and full unfiltered traversal uses the pending depth index without unnecessary
+shortest-distance layers. No transaction crosses an await. `fetchPrepareMs` now bounds **lack of progress**, default 30 s
+in gateway mode (token has no new bound); successful graph/object work extends
+it. Selection yields every 128 nodes and parsing/include-tag yield every 128
+controls/refs. Work remains capped by codec object/work/byte limits. The pending
+selection frontier has a partial depth index. There is no tested guarantee for
+larger repositories or a production CPU/storage SLA. Identical full clones share
+this cold work, but a new generation or non-cacheable request can pay it again.
+
+Job-scoped SQL compiles each template once (bounded 256-template cache), rather
+than repeating six regex rewrites per statement. The full-clone measurement
+compiled **21** templates with **537,840** cache hits. A Node 24 microbenchmark
+of 50,000 statements/sample measured a median 1.42 microseconds for the former
+rewrite versus 0.016 microseconds for a cached template, excluding SQLite/I/O.
+These microbenchmarks do not predict production billing or total clone time.
+Snapshot tip wants use covering oid/peeled indexes, not a per-ref MAX scan.
+Alarms prune up to 512 ref versions per step, preserving every interval visible
+to the oldest live snapshot. The 5,000-distinct-tag/include-tag test also clones with real Git and models
+10,000 closed versions, verifying indexed live/peeled lookup, yielding and safe
+pruning. Live intervals are probed before historical intervals, so a heavily
+pushed ref does not impose a scan of its retired versions on each current want.
+
+A stalled response reader is stopped by `responseIdleMs` (10 seconds gateway,
+60 seconds token, 1..600000). A slow active reader has no default total lifetime.
+Gateway output requires 16 KiB/s over 30-second windows
 (`responseMinimumBytesPerSecond`, 0..1 MiB/s; `responseThroughputWindowMs`,
-10..600000 ms). Token mode has no new throughput floor. For example 300 MB at
-5 Mbit/s takes about **480 seconds** and can complete: 625 kB/s exceeds the floor
-and progressing pulls reset idle timeouts. Operators can explicitly impose
-`responseTotalMs` (0..3600000, default 0); doing so can truncate otherwise valid
-large clones. Under byte-budget contention only, readers may be preempted after
-`memoryContentionMs` (default 10 seconds, 1..600000); this aborts a pack and frees
-its reservation **after** generator/storage cleanup. An unrelated active reader
-cannot retain a needed reservation indefinitely. Pushes are not preempted for
-memory contention. Reservation waits are bounded by `memoryWaitMs` (default
-15 seconds, 1..600000), then return retryable 503. Shared CPU, platform I/O and
-uncancellable storage cleanup still affect latency. Small metadata requests need no heavy-codec slot; their JSON byte reservations
-still obey the pool. Token mode waits without new memory-admission timeouts or
-contention preemption by default, preserving its earlier load behavior.
+10..600000). For example 300 MB at 5 Mbit/s takes **480 seconds** and can finish.
+Explicit `responseTotalMs` (0..3600000, default 0) can truncate legitimate clones.
+No contention timeout aborts an otherwise progressing reader.
 
-The **request-body phase** has separate bounds: 60 seconds idle for Git and
-10 seconds for JSON, plus `requestBodyTotalMs` (gateway default 120 seconds,
-explicit 1..3600000; token retains no new total deadline). It covers trickling
-upload-pack, receive-pack and JSON input, including decoded gzip negotiation.
-Upload negotiation stages at most maxControlBytes in memory, then writes
-16-page SQL batches after EOF (at most four writes for the default 4 MiB bound).
-Its transport-only reservation is maxControlBytes + 1.25 MiB, including bounded
-bind copies; fragmentation cannot force a durable write per arriving chunk.
-The gateway total deadline starts at Durable Object admission and is preserved
-across memory waits and replay. Receive controls are Rust-validated under the
-small envelope, saved as bounded wire pages, then replayed into an independently
-admitted heavy intake; incomplete headers do not reserve maximum push caches.
-Only that heavy intake creates quarantine metadata. Plain/gzip and one-byte
-fragments replay exactly. Policy/hidden/overload refusal tails drain outside admission and byte reservations and
-release codec reservations first. At most two drains run per object. Before
-authentication/identity verification, discard is bounded to 1 MiB/5 seconds;
-authorized refusals use configurable 64 MiB/30 seconds by default. One crossing
-transport chunk and platform/Request lookahead may already exist. Beyond these
-bounds a peer can still see a reset; no Git parser, hash or persistence runs while
-discarding. A vanished peer or pending platform operation cannot be made to
-consume a status. Drain bounds never justify retaining an active job slot.
+The **request-body phase** is separate. Git input has 60 seconds idle, JSON
+10 seconds. `requestBodyTotalMs` (gateway default 120000, 1..3600000) bounds only
+control/negotiation or JSON, starting when reading actually begins, **after
+admission**, never at arrival. Receive controls are Rust-validated, saved in
+bounded SQL pages and replayed exactly, including gzip/one-byte fragmentation.
+Admission waits between prefix and pack do not consume a transfer allowance.
+Pack data uses `requestBodyMinimumBytesPerSecond` (gateway 16384, token 0,
+0..1048576) and `requestBodyThroughputWindowMs` (default 30000, 10..600000), with
+one window of initial credit. Only time waiting for transport input spends
+credit; codec/storage work and memory waits do not. A 300 MB first push at
+10 Mbit/s takes about **240 seconds**, and at 5 Mbit/s about **480 seconds**;
+both exceed the old total but easily exceed 16 KiB/s. A below-rate trickle is
+refused, while a progressing pack can exceed any number of windows.
+
+Upload negotiation stages maxControlBytes + 1.25 MiB of transport/bind buffers,
+then persists at most four 16-page SQL batches at the default 4 MiB control cap.
+Fragmentation cannot force a durable write per arriving byte. Only admitted
+heavy intake creates quarantine. Refusal tails drain outside admission and
+codec reservations. At most two drains run per object: before authentication,
+1 MiB/5 seconds; after authentication, configurable 64 MiB/30 seconds. Beyond
+these bounds a client may still see a reset; discarded data is never parsed or
+persisted. No drain retains a processing slot.
 
 ### Building and bundling the codec
 
