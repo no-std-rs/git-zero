@@ -152,3 +152,36 @@ for (const temporary of [false, true]) test(`recovery preserves cleanup schedule
     assert.equal(store.exec("SELECT bytes FROM read_scratch_usage WHERE id=1")[0].bytes, 0);
   } finally { resume(); Date.now = now; if (live) repo.jobs.delete(live.id); await repo.queue; f.close(); }
 });
+
+for (const first of ["request", "alarm"]) test(`cold ${first} recovery is shared with overlapping requests and alarms`, { timeout: 5000 }, async () => {
+  const f = fixture(), ns = "cold-recovery", initial = f.repo(ns), pending = [];
+  let entered, resume, cold;
+  const deleting = new Promise((resolve) => { entered = resolve; }), resumed = new Promise((resolve) => { resume = resolve; });
+  try {
+    assert.equal((await initial.fetch(f.request(ns, "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201); await initial.queue;
+    const orphan = initial.store.stage(0), writer = new ChunkWriter(initial.store, orphan);
+    await writer.write(Uint8Array.of(1, 2, 3)); await writer.finish();
+    initial.store.exec("UPDATE stages SET phase='failed' WHERE id=?", orphan);
+    const remove = f.env.SHARED_DATA.delete.bind(f.env.SHARED_DATA); let deletions = 0;
+    f.env.SHARED_DATA.delete = async (keys) => { if (++deletions === 1) { entered(); await resumed; } return remove(keys); };
+    cold = new f.host.Repository(initial.ctx, f.env); f.instances.set(ns, cold);
+    const read = () => cold.fetch(f.request(ns, "api/v1/refs"));
+    pending.push(first === "request" ? read() : cold.alarm()); await deleting;
+    pending.push(first === "request" ? cold.alarm() : read());
+    let served = false; pending.push(read().then((response) => { served = true; return response; }));
+    await delay(25);
+    assert.equal(cold.store, null, "cold recovery must not expose a partially initialized store");
+    assert.equal(served, false, "new jobs must wait for the same cold recovery");
+    assert.equal(deletions, 1, "requests and alarms must share one cleanup pass");
+    resume(); const results = await Promise.all(pending);
+    for (const response of results) if (response instanceof Response) { assert.equal(response.status, 200); await response.arrayBuffer(); }
+    assert.equal(f.objects.size, 0); assert.equal(cold.store.exec("SELECT 1 FROM stages WHERE id=?", orphan).length, 0);
+    const live = { ...owner(), stages: new Set(), temporaries: new Set(), finished: Promise.resolve() };
+    cold.jobs.set(live.id, live);
+    const stage = cold.store.stage(0); live.stages.add(stage);
+    const active = new ChunkWriter(jobStore(cold.store, live), stage); await active.write(Uint8Array.of(4, 5, 6)); await active.finish();
+    cold.store.recoveryDue = 0; await cold.alarm();
+    assert.equal(cold.store.exec("SELECT 1 FROM stages WHERE id=?", stage).length, 1, "post-initialization live stages remain protected");
+    assert.equal(f.objects.size, 1); cold.jobs.delete(live.id); await cold.store.abandon(stage);
+  } finally { resume(); await Promise.allSettled(pending); await cold?.queue; f.close(); }
+});

@@ -153,6 +153,18 @@ export class RepositoryCore {
     });
     this.deletions = work.catch(() => {}); return work;
   }
+  async open(namespace) {
+    if (!this.store) {
+      // Requests and alarms share cold recovery. Keep the Store private until
+      // orphan cleanup finishes, before any new job can create live stages.
+      this.opening ??= (async () => {
+        try { const store = new Store(this.ctx, this.env, namespace); await store.recover(); this.store = store; }
+        catch (error) { this.opening = null; throw error; }
+      })();
+      await this.opening;
+    }
+    if (this.store.namespace !== namespace) throw new Error("repository identity differs");
+  }
   alarm() {
     const coldStart = !this.store;
     const maintenance = { id: crypto.randomUUID(), internal: true, stages: new Set(), temporaries: new Set(), abort: new AbortController() };
@@ -161,8 +173,8 @@ export class RepositoryCore {
       if (await this.ctx.storage.get("host.deletion.v1")) return;
       if (!this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='host_identity'").toArray().length) return;
       const identity = this.ctx.storage.sql.exec("SELECT namespace FROM host_identity WHERE id=1").toArray()[0]; if (!identity) return;
-      const cold = !this.store; this.store ??= new Store(this.ctx, this.env, identity.namespace);
-      if (cold || (this.store.recoveryDue ?? Infinity) <= Date.now()) {
+      await this.open(identity.namespace);
+      if ((this.store.recoveryDue ?? Infinity) <= Date.now()) {
         await this.store.recover(() => [...this.jobs.values()].flatMap((owner) => [owner.id, ...owner.stages, ...owner.temporaries]));
       }
       if (maintenance.abort.signal.aborted) return;
@@ -364,11 +376,7 @@ export class RepositoryCore {
         if (route === "repository" && request.method === "PUT") creation = await creationSettings(request);
         else if (!(parts[1] === "_test" && this.env.TEST_MODE === "true") && !(parts[1] !== "_test" && !route && this.env.AUTH_MODE === "token" && this.env.IMPLICIT_CREATE !== "false")) return json({ error: "unknown route" }, 404);
       }
-      if (!this.store) {
-        this.opening ??= (async () => { try { const store = new Store(this.ctx, this.env, namespace); await store.recover(); this.store = store; } catch (error) { this.opening = null; throw error; } })();
-        await this.opening;
-      }
-      if (this.store.namespace !== namespace) throw new Error("repository identity differs");
+      await this.open(namespace);
       for (const field of ["r2FenceGets", "r2Failures", "r2Retries"]) { this.store.usage[field] += this.lifecycle.usage[field]; this.lifecycle.usage[field] = 0; }
       if (apiRoute(request) === "repository") {
         if (request.method === "DELETE") return this.retire(owner);
