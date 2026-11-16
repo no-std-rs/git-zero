@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Gateway heavy work reserves a co-tenant slot; namespaces without a heavy lease
+  take priority, without preempting active jobs. Fairness remains per repository.
+- Uncacheable clones prepare once; shared builders reserve capacity before graph
+  selection, cancel abandoned stalls, and report mid-stream errors through Git
+  sideband. Explicit token pools reject profiles too small to admit a job.
+- Gateway defaults now cap decoded pushes at 256 MiB and codec packs at 1 GiB,
+  bounding transport occupancy to hours at the configured floor. Token defaults
+  retain their compatibility behavior with no isolate-wide memory bound.
+
 - Repository browse results carry incarnation-bound, HKDF-derived object proofs
   for immediate raw-ID navigation. Additive publications retain proof/index
   progress; rewrites/deletions rebuild outward from current tips. Commit graph

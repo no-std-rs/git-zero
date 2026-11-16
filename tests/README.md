@@ -1145,7 +1145,8 @@ Additional focused regressions:
 
 ```sh
 node --test test/admission.test.mjs test/ref-scaling.test.mjs test/sql-rewrite.test.mjs
-node --test test/clone-scale.test.mjs test/workerd-memory.test.mjs
+node --test --test-concurrency=1 test/clone-scale.test.mjs test/workerd-memory.test.mjs
+node --test test/shared-pack.test.mjs test/shared-failure-git.test.mjs
 ```
 
 The admission fixture checks 300 browse reads behind live clones, co-tenant
@@ -1164,3 +1165,11 @@ with its own codec, then run `scripts/review-tree-timings.mjs` with the absolute
 path to its `examples/repository-host/cloudflare` directory. It interleaves five
 main/head runs, records both runtimes and machine load, and reports medians.
 The original test deadlines are retained. Delete the archive after measurement.
+
+Fifth-review regressions hold one repository's maximum heavy leases while a
+co-tenant clones/pushes, count preparations for one/three uncacheable clones and
+a full cache, abandon every follower before output, and inject a mid-stream
+shared-build failure checked by real Git. Token clones use independent throttled
+links and pause the first upstream response until the second starts; the original
+30-second completion assertion is retained. Browse cost bounds use an independent
+Git-selected page/path walk and pre-request delta depths, not observed work.

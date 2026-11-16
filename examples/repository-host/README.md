@@ -79,6 +79,10 @@ not consume processing slots. A **64 MiB** namespace-fair isolate pool reuses
 four codec arenas; idle arenas remain charged. Default fetches reserve 14 MiB,
 pushes add control/report copies, and commit/tree/history/blob reserve
 14/17/19/14 MiB respectively (12 MiB for a blob by oid). A cached reader needs 192 KiB and no codec.
+A namespace holds at most two heavy codec leases, leaving another heavy slot
+for a namespace with none and an arena for metadata. Fairness is per repository;
+a team owning many namespaces gets many turns. Admission groups are not yet
+supported, so gateways must enforce team-wide limits themselves.
 One namespace cannot spend the last ordinary metadata allowance or all arenas;
 waiters never preempt anyone's clone. Existing jobs retire naturally and larger
 waiters cannot be overtaken indefinitely by new incumbent heavy jobs. Multiple
@@ -90,18 +94,29 @@ these payload bounds inside 128 MB; see the contract's measured memory profile.
 
 Identical full clones share a builder independent of the first client, with
 fallback for pre-header builder failures and a progress-based build bound.
+Cache capacity is reserved from a conservative catalog bound before preparation;
+uncacheable clones prepare once each. An abandoned builder with no output for a
+throughput window is cancelled. Mid-stream shared failures reach followers as
+a Git-readable fatal sideband error requiring a new fetch.
 Streams use 10 seconds idle, a 16 KiB/s floor over 30-second windows and **no
 absolute lifetime**: 300 MB at 5 Mbit/s can finish in about 480 s. Control/JSON
 input has a separate 120-second deadline starting after admission; pack input
 uses minimum throughput instead. A 300 MB first push at 10 Mbit/s (~240 s) can
-finish. Scratch contention gets retryable 503 before headers. Graph preparation
+finish when its configured push cap permits it. Gateway push policy defaults to 256 MiB and the codec pack ceiling to
+1 GiB: about 4.55/18.20 hours at the floor, excluding processing/I/O. Raising
+caps extends that bound (64 GiB is roughly 48.5 days); configure rates and caps
+together. Scratch contention gets retryable 503 before headers. Graph preparation
 also uses a progress bound: the generated 25k-commit / 150k-object cold gateway
-clone prepared in 26.0 s locally after batching private scratch writes, shared by identical followers rather than
+clone prepared in 20.7 s locally after batching private scratch writes, shared by identical followers rather than
 repeated for each. Ref-rooted browser requests do not perform that closure walk.
 
 Token mode is **exempt from the byte pool by default**, preserving its unlimited
 pending queue, cache sizes, 60-second idle and lack of new body/admission/rate
-bounds. Explicit isolateMemoryBytes/memoryBudget opts in. Enable
+bounds. This means no isolate-wide memory bound by default, plus up to four idle
+codecs/factory (24 MiB allowance, 22.75 MiB actual linear memory). Explicit
+isolateMemoryBytes/memoryBudget opts in; the default token cache profile needs
+at least 100 MiB for one fetch, more for push controls, and lower caches for
+concurrency. An insufficient pool is rejected. Enable
 PACK_CACHE_ENABLED=true for repeated token-mode clones (gateway default: on).
 
 Gateway fetches default to current-reachable wants. Rewritten objects remain

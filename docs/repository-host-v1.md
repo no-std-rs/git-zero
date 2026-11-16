@@ -424,6 +424,17 @@ compare-and-swap, target type, full pack/graph verification, ref-name conflicts
 and atomic failure semantics still apply. The default continues to reject
 non-fast-forward branch moves. Tag updates keep their existing semantics.
 
+Gateway defaults are **256 MiB maxPushBytes** and **1 GiB codec maxPackBytes**
+(the latter also bounds fetch output). Token mode retains its previous uncapped
+policy and 64 GiB codec pack ceiling. Both gateway defaults may be raised
+explicitly, up to the existing hard codec ceilings. At the default 16 KiB/s
+transport floor, 256 MiB / 16384 is 16,384 seconds (**4.55 hours**) and 1 GiB /
+16384 is 65,536 seconds (**18.20 hours**), plus initial credit and bounded
+control/admission waits. These are transport-input/output time bounds; storage,
+CPU and cleanup retain their separate progress/work/I/O limits. A raised 64 GiB
+ceiling permits roughly **48.5 days** at that floor. Size limits and throughput
+must be configured together; disabling the floor removes that time bound.
+
 maxPushBytes counts the **decoded Git pack**, including its pack header and
 trailer, excluding independently bounded command controls and transport framing.
 Gzip/x-gzip cannot evade it. A deletion-only request has zero pack bytes. A pack
@@ -684,9 +695,11 @@ all four ref-rooted operations write zero rows. Measured at 25k commits: the
 undeltified SHA-1/SHA-256 fixture uses 14/70/18/18 SQL statements for commit,
 20-entry history, nested tree and blob. The default-packed 150,028-object fixture
 (depth up to 50) uses 14/70/70/76. The regression bound is 24 + 5 times the
-sum of (1 + verified delta depth) for returned/walked metadata and blob ranges;
-the realistic 1k-to-25k growth check permits only this depth-dependent cost
-difference plus 32 fixed statements, with zero row writes. Full raw absence proof completes in **18**
+sum of (1 + verified delta depth) for an **independent Git-selected reference
+walk**, computed before the request. The fixture fixes the exact twenty commits
+and root/path trees/blob; streamed work must equal that reference. Extra unrelated
+walks cannot raise either bound. The realistic 1k-to-25k growth check permits
+only the reference depth-dependent difference plus 32 fixed statements, with zero row writes. Full raw absence proof completes in **18**
 requests for 100,003 undeltified objects, **63** for the default-packed wide/deep
 fixture, including two deliberately 256-unit batches; remaining requests use
 8192. The index is fully driven to completion in the test. Browser navigation
@@ -729,8 +742,18 @@ class. A fitting light request can pass an oversized heavy waiter. Once another
 namespace waits for heavy work, an incumbent cannot replenish its heavy leases;
 its existing leases must retire naturally. This prevents a stream of small jobs
 from indefinitely overtaking a larger co-tenant. There is no cross-tenant abort.
-The default profile allows at most three active codecs per namespace and three
-long-lived codec jobs across the isolate; the fourth arena remains available
+The default profile allows at most three active codecs per namespace, **two
+heavy codecs per namespace** and three heavy codec jobs across the isolate.
+The co-tenant heavy slot is never lent to an incumbent, even before another
+namespace arrives. Namespaces holding no heavy lease are considered before
+incumbents. With custom arena counts the per-namespace heavy ceiling is
+codecSlots - 2; gateway profiles require at least three arenas. Admission still
+requires sufficient working bytes; oversized profiles and several saturated
+namespaces can time out rather than preempt anyone. Admission is **per repository
+namespace**, not per product team: a team with many repositories receives many
+turns. Admission-group/team keys are not implemented; the gateway must impose
+its own group limits if needed. This key would only affect scheduling, never
+authorization. With the default profile, the fourth arena remains available
 for bounded commit/tree/history work. Long-lived jobs include Git discovery,
 negotiation, pack intake, fetch generation and blob streaming. Small completed
 advertisements release their codec before streaming their copied bytes.
@@ -751,7 +774,7 @@ source, graph, upload, pack and accounting state. Idle arenas stay charged;
 dropping a codec and assuming GC freed its linear memory is not permitted.
 There are at most four retained gateway instances (the bundled artifact uses
 5.6875 MiB linear memory each, reserved as 6 MiB). `codecSlots` accepts 2..16
-through `ByteBudget`; its reserve and concurrency tradeoff must fit the pool.
+through `ByteBudget` (gateway factories require 3..16); its reserve and concurrency tradeoff must fit the pool.
 Inactive objects retain bounded Store/SQLite metadata, not their own codec
 pools. A legacy read reserves its worst existing chunk size **up front** using
 an indexed maximum, never by queuing a top-up while holding a lease. An 8 MiB
@@ -791,12 +814,22 @@ metadata defaults to 2 MiB; other `readLimits` defaults remain as listed above.
 All limits remain within their documented codec/read hard ceilings.
 
 **Token compatibility:** token mode does not use the shared byte pool by
-default. Its prior cache sizes, unbounded pending queue, lack of new body or
+default: **there is no isolate-wide memory bound in default token mode**.
+Its prior cache sizes, unbounded pending queue, lack of new body or
 admission deadlines, and lack of a throughput floor remain. Explicit
 `isolateMemoryBytes`/`memoryBudget` opts it into bounded admission; configure a
-suitable smaller cache profile if concurrency is required. At most four idle
-token codecs are reused per factory; active codecs are not capped by that idle
-cache. Mixed token/gateway factories must budget both profiles.
+suitable smaller cache profile if concurrency is required. With the default
+four-arena/13 MiB-headroom pool, a token fetch reserves 69 MiB (63 MiB working)
+and needs at least **100 MiB** total pool (24 + 13 + 63). Smaller configured pools
+are rejected at configuration, including 96 MiB. A push also reserves four times
+its actual control prefix, so needs correspondingly more space (the fixture
+push/clone runs at 101 MiB); lower caches for large prefixes or concurrency.
+At 112 MiB this legacy profile still fits only one heavy fetch. Custom arena,
+headroom and cache values change the minimum and are validated together.
+At most four idle token codecs are reused per factory: **24 MiB reserved /
+22.75 MiB actual pinned-codec linear memory** even with no active requests.
+Active codecs have no isolate-wide cap in this compatibility mode. Mixed
+token/gateway factories must budget both profiles.
 
 `maxConcurrentJobs` limits active processing jobs per repository (default 32,
 1..1024). Cached readers release that slot and use a separate `maxCachedReaders`
@@ -817,7 +850,7 @@ backing storage and the separately measured Wasm linear bytes, both before and
 after forced GC. These are samples of a generated workload, not a measured
 worst-case process RSS. The test checks live jobs, at most four retained arenas,
 the 64 MiB ledger ceiling and a 96 MiB sampled combined envelope. Measurements
-and repeatable commands are in [the review verification record](repository-host-review4.md).
+and repeatable commands are in [the latest review verification record](repository-host-review5.md).
 
 ### Concurrent clone pack cache
 
@@ -826,16 +859,30 @@ into one generation-keyed pack build and then stream immutable framed R2 chunks.
 The key includes epoch/generation, sorted wants, protocol/capabilities, want
 policy and codec limits; authorization and wants are checked before lookup.
 At most two distinct builds run per repository. Incremental, shallow and
-filtered fetches have independent codecs/scratch. A miss outside cache capacity
-falls back to ordinary bounded generation.
+filtered fetches have independent codecs/scratch. A conservative cached SQL
+aggregate of the snapshot's published representations bounds full-pack size
+before graph preparation. It includes duplicates/unreachable objects, so can
+skip caching an otherwise fitting selection. A miss outside entry/total/count
+capacity goes straight to one ordinary preparation: one walk per request, never
+an abandoned extra builder walk. The bound requires no graph traversal, object
+reads or repository-sized JS allocation.
 
 The builder has its own job, snapshot, controls, codec lease and abort signal
 **before selection/preparation begins**. It never belongs to its first client's
 connection. Cancelling that client leaves followers running. Pre-header builder
-failure or bypass lets each follower generate its original snapshot instead;
+failure lets each follower generate its original snapshot instead;
 no unrelated admission/cancellation error is broadcast as a failed clone.
-After headers, a genuine storage/generation failure can still truncate a pack.
-Builders are never preempted for another namespace's memory wait.
+After headers, a storage/generation failure fails every follower of that build.
+Shared caching requires negotiated sideband. Readers buffer incomplete pkt-lines
+(maximum 64 KiB) and emit a fatal channel-3 packet at a complete framing boundary:
+“git-zero: shared pack generation failed; retry fetch”. Git displays that remote
+error; the incomplete pack is rejected and the client must retry. Raw non-sideband
+requests use ordinary generation instead. This is not transparent resume/retry.
+Builders are never preempted for another namespace's memory wait. When all
+followers leave, a builder with no output for one response throughput window
+(default 30 s) is cancelled and releases its slot/arena after bounded I/O cleanup.
+A still-producing cacheable orphan may finish its bounded cache entry. Oversized
+or full-cache requests never start a shared builder.
 
 Gateway caching defaults on, token caching off (`packCacheEnabled`, strict
 boolean/env selector; reference `PACK_CACHE_ENABLED`). Defaults: 512 MiB per
@@ -857,8 +904,8 @@ before purge. No public cache URL bypasses grants. Cached clients spend a small
 buffer/GET budget and no encoder CPU; repeated cold misses still share CPU.
 
 A generated 25,000-commit / 150,028-object default-packed full gateway clone on
-local workerd/S3 took **22.410 s selection + 3.633 s preparation**, with first
-headers at 26.058 s and an 11,774,780-byte wire pack. Earlier unbatched runs exceeded the former 30-second total (162 s).
+local workerd/S3 took **17.979 s selection + 2.753 s preparation**, with first
+headers at 20.747 s and an 11,774,780-byte wire pack. Earlier unbatched runs exceeded the former 30-second total (162 s).
 Scratch work now commits up to 128 graph nodes per synchronous transaction,
 and full unfiltered traversal uses the pending depth index without unnecessary
 shortest-distance layers. No transaction crosses an await. `fetchPrepareMs` now bounds **lack of progress**, default 30 s

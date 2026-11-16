@@ -21,3 +21,7 @@ stays with each crate or example's README.
 [Repository host review verification](repository-host-review4.md) records the
 namespace-fair memory profiles, realistic scale measurements and repeatable
 local verification commands for the embeddable host.
+
+[Repository host fifth-review verification](repository-host-review5.md) records
+heavy admission, uncached preparation, orphan/failure regressions and refreshed
+workerd memory/25k preparation measurements.

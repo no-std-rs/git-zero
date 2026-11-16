@@ -63,15 +63,29 @@ for (const [format, realistic] of [[0, false], [1, false], [0, true]]) test(`ref
         const file = directory.entries.find((entry) => entry.name === "analysis.py"), contents = await call(`api/v1/blob?oid=${file.oid}&proof=${file.proof}`);
         assert.equal(contents.status, 200); assert.deepEqual(Buffer.from(await contents.arrayBuffer()), git(fixture.dir, ["cat-file", "blob", `main:${filePath}`]));
         assert.deepEqual(db.prepare("SELECT objects,edges,phase FROM browse_progress").get(), indexBeforeBrowser, "browser links do not advance the index");
-        const measured = {};
+        // Independent oracle: Git chooses the exact objects this fixed page/path
+        // requires; SQLite supplies their immutable intake delta depths before
+        // the request. Extra work performed by ReadApi cannot increase this bound.
+        const oid = (revision) => git(fixture.dir, ["rev-parse", revision]).toString().trim();
+        const pathTrees = [oid("main^{tree}"), ...directoryPath.split("/").map((_, i, parts) => oid(`main:${parts.slice(0, i + 1).join("/")}`))];
+        const expected = [
+          [fixture.tip],
+          git(fixture.dir, ["rev-list", "--first-parent", "--max-count=20", "main"]).toString().trim().split("\n"),
+          pathTrees,
+          [...pathTrees, oid(`main:${filePath}`)],
+        ];
+        const referenceWork = expected.map((ids) => ids.reduce((sum, id) => sum + 1 + db.prepare("SELECT MIN(depth) n FROM stage_objects WHERE oid=? AND verified=1").get(id).n, 0));
+        const measured = {}; let operation = 0;
         for (const route of ["commit?rev=HEAD", "history?rev=main&limit=20", `tree?rev=release&path=${directoryPath}`, `blob?rev=main&path=${filePath}`]) {
           deltaWork = 0;
           const before = statements, changes = db.prepare("SELECT total_changes() n").get().n;
           const response = await call(`api/v1/${route}`); assert.equal(response.status, 200, await response.clone().text());
           const value = route.startsWith("blob") ? Buffer.from(await response.arrayBuffer()) : await response.json(); await host.queue;
-          measured[route] = { statements: statements - before, rowWrites: db.prepare("SELECT total_changes() n").get().n - changes, deltaWork };
+          measured[route] = { statements: statements - before, rowWrites: db.prepare("SELECT total_changes() n").get().n - changes, deltaWork, referenceWork: referenceWork[operation] };
           assert.equal(measured[route].rowWrites, 0, route);
-          assert.ok(measured[route].statements < 24 + 5 * deltaWork, JSON.stringify(measured));
+          assert.equal(deltaWork, referenceWork[operation], "only Git-selected page/path objects may be streamed");
+          assert.ok(measured[route].statements < 24 + 5 * referenceWork[operation], JSON.stringify(measured));
+          operation++;
           if (route.startsWith("commit")) assert.equal(value.oid, fixture.tip);
           if (route.startsWith("history")) assert.deepEqual(value.commits.map((c) => c.oid), git(fixture.dir, ["rev-list", "--first-parent", "--max-count=20", "main"]).toString().trim().split("\n"));
           if (route.startsWith("tree")) assert.equal(value.entries.find((entry) => entry.name === "analysis.py").oid, git(fixture.dir, ["rev-parse", `main:${filePath}`]).toString().trim());
@@ -116,7 +130,7 @@ for (const [format, realistic] of [[0, false], [1, false], [0, true]]) test(`ref
     if (!realistic) assert.deepEqual(costs[1], costs[0], "SQL statement and row-write counts must not depend on history size");
     else for (const route of Object.keys(costs[0])) {
       assert.equal(costs[1][route].rowWrites, 0);
-      assert.ok(costs[1][route].statements <= costs[0][route].statements + 32 + 5 * Math.max(0, costs[1][route].deltaWork - costs[0][route].deltaWork), `default-packed growth: ${JSON.stringify(costs)}`);
+      assert.ok(costs[1][route].statements <= costs[0][route].statements + 32 + 5 * Math.max(0, costs[1][route].referenceWork - costs[0][route].referenceWork), `default-packed growth: ${JSON.stringify(costs)}`);
     }
   } finally { ObjectSource.prototype.stream = stream; await rm(root, { recursive: true, force: true }); }
 });
