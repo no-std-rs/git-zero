@@ -1,0 +1,15 @@
+{
+  "commit": "9efd2f70da9247411feb6bd79d4b291cd618c6b6",
+  "sourceSha256": "d48751fbdffdb7805a1aaa7fc5c19bcd5193a882be16106485e25a86d667e4fc",
+  "inputs": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "src/",
+    "crates/git-zero-core/Cargo.toml",
+    "crates/git-zero-core/src/",
+    "crates/git-zero-server/Cargo.toml",
+    "crates/git-zero-server/src/",
+    "examples/repository-host/wasm/Cargo.toml",
+    "examples/repository-host/wasm/src/"
+  ]
+}

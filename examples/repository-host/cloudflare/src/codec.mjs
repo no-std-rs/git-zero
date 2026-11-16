@@ -13,6 +13,9 @@ const DEFAULTS = Object.freeze({
   maxCanonicalBytes: 1024 ** 4, maxTotalWorkBytes: 16 * 1024 ** 4, maxTemporaryBytes: 64 * 1024 ** 3,
   capabilities: 0,
 });
+// Embedders may lower resource budgets; capabilities and ABI sizes are fixed by
+// each operation, not configurable protocol features.
+export const CODEC_LIMITS = Object.freeze(Object.fromEntries(Object.entries(DEFAULTS).filter(([name]) => !["capabilities", "maxReadBytes", "nameScratch"].includes(name))));
 
 export class CodecError extends Error {
   constructor(code, operation) { super(`Rust codec ${operation} failed (${code})`); this.code = code; }
@@ -58,14 +61,18 @@ export function hex(bytes) {
 
 export class Codec {
   constructor(module, format = 0, limits = {}) {
-    if (![0, 1].includes(format)) throw new RangeError("unsupported object format");
     this.exports = new WebAssembly.Instance(module, {}).exports;
     this.memory = this.exports.memory.buffer;
-    this.format = format;
-    this.idBytes = format === 0 ? 20 : 32;
-    this.limits = { ...DEFAULTS, ...limits };
     if (this.exports.host_input_capacity() !== INPUT || this.exports.host_output_capacity() !== 131072) throw new Error("unexpected codec ABI capacities");
+    this.reset(format, limits);
+  }
+  reset(format = 0, limits = {}) {
+    if (![0, 1].includes(format)) throw new RangeError("unsupported object format");
+    for (const method of ["receiveCancel", "sourceCancel", "rangeCancel", "graphCancel", "uploadCancel", "packCancel"]) this[method]();
+    this.format = format; this.idBytes = format === 0 ? 20 : 32;
+    this.limits = { ...DEFAULTS, ...limits };
     this.invoke("host_budget_init", u64(this.limits.maxCanonicalBytes), u64(this.limits.maxTotalWorkBytes), u64(this.limits.maxTemporaryBytes));
+    return this;
   }
 
   charge(kind, bytes) { this.invoke("host_budget_charge", kind, u64(bytes)); }

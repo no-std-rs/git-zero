@@ -37,7 +37,7 @@ async function waitForHandler(directory, namespace, transport, server) {
   assert.fail(`partial POST never entered ${namespace}\n${server.logs()}`);
 }
 
-testRuntimes("{runtime} releases queues held by idle request bodies", { timeout: 120000 }, async (serve) => {
+testRuntimes("{runtime} serves browse during concurrent idle bodies and releases each at its input deadline", { timeout: 120000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-idle-body-"));
   const clients = []; let server;
   try {
@@ -50,14 +50,21 @@ testRuntimes("{runtime} releases queues held by idle request bodies", { timeout:
       client.write(prefix); // Leave the pkt-line or gzip header and HTTP body open.
       await waitForHandler(directory, namespace, transport, server);
       const waiting = Date.now();
-      let completed = false;
-      const queued = fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers(), signal: AbortSignal.timeout(75000) }).then(async (response) => {
-        assert.equal(response.status, 200); const state = await response.json(); completed = true; return state;
-      });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.equal(completed, false, "the open POST must actually hold the repository queue");
-      const state = await queued;
-      assert.ok(Date.now() - waiting >= 55000, "the configured input deadline, rather than a worker reload, must release the queue");
+      const inspect = async () => {
+        const response = await fetch(`${server.origin}/_test/${namespace}/state`, { headers: headers(), signal: AbortSignal.timeout(3000) });
+        assert.equal(response.status, 200); return response.json();
+      };
+      let state = await inspect();
+      assert.ok(Date.now() - waiting < 3000, "browse must run while the POST is still idle");
+      assert.equal(state.jobs.active, 2, "the open POST still owns its own job, beside this browse");
+      assert.equal(transport.status, null); assert.equal(transport.error, null);
+      await new Promise((resolve) => setTimeout(resolve, 55000));
+      state = await inspect();
+      assert.equal(state.jobs.active, 2, "the original 60-second input deadline must not be shortened");
+      const deadline = waiting + 75000;
+      while (state.jobs.active > 1 && Date.now() < deadline) { await new Promise((resolve) => setTimeout(resolve, 100)); state = await inspect(); }
+      assert.equal(state.jobs.active, 1, "idle input must release its own reservation/job");
+      assert.ok(Date.now() - waiting >= 55000, "the configured input deadline, rather than a worker reload, must end intake");
       assert.equal(state.refs, 0); assert.equal(state.objects, 0); assert.deepEqual(state.stages, []);
     }));
   } finally { for (const client of clients) client.destroy(); await server?.stop(); await rm(directory, { recursive: true, force: true }); }

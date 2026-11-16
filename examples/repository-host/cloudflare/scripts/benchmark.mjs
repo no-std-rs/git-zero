@@ -82,7 +82,7 @@ async function durableFootprint(directory) {
       if (entry.isDirectory()) { await visit(path); continue; }
       if (!entry.isFile()) continue;
       const group = runtime === "workerd"
-        ? (path.startsWith("r2/") ? "objectStorage" : path.startsWith("sqlite/") ? "repositoryMetadata" : "other")
+        ? (path.startsWith("r2/") ? (path.endsWith(".key") ? "storageFixtureMetadata" : "objectStorage") : path.startsWith("sqlite/") ? "repositoryMetadata" : "other")
         : path.includes("/r2/") ? (path.includes("/blobs/") ? "objectStorage" : "storageFixtureMetadata") : path.includes("/do/") ? "repositoryMetadata" : "other";
       const metadata = await stat(join(directory, path));
       groups[group].files++; groups[group].bytes += metadata.size; groups[group].allocatedBytes += metadata.blocks * 512;

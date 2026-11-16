@@ -13,7 +13,9 @@ test("inventory observation is separated from workload SQL", () => {
     context.storage.sql.exec = (...args) => Object.assign(execute(...args), { rowsRead: 1, rowsWritten: 0 });
     const store = new Store(context, { BLOBS: {} }, "accounting");
     store.initialize(0);
+    store.exec("UPDATE fetch_cache_metrics SET builds=7,generated_bytes=1024 WHERE id=1");
     const first = store.statistics(), second = store.statistics();
+    assert.deepEqual(first.packCache, { builds: 7, generatedBytes: 1024 });
     assert.ok(second.observerUsage.sqlCalls > first.observerUsage.sqlCalls);
     for (const field of ["sqlCalls", "sqlFailures", "sqlRowsRead", "sqlRowsWritten"]) {
       assert.equal(second.usage[field] - first.usage[field], second.observerUsage[field] - first.observerUsage[field]);

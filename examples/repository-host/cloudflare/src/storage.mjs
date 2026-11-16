@@ -2,12 +2,14 @@
 import { bucket } from "./r2-s3.mjs";
 import { hex } from "./codec.mjs";
 import { RequestError, storageFailure } from "./errors.mjs";
+import { PolicyError, repositoryPolicy } from "./policy.mjs";
+import { ApiError } from "./api.mjs";
 export const CHUNK_BYTES = 1024 * 1024;
 const MAX_STORED_CHUNK_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 65536;
 export const FETCH_TABLES = ["fetch_wants", "fetch_haves", "fetch_shallow", "fetch_probe", "fetch_common", "fetch_selected"];
 
-async function retryStorage(operation, usage) {
+export async function retryStorage(operation, usage) {
   for (let attempt = 0; ; attempt++) {
     try { return await operation(); }
     catch (error) {
@@ -71,6 +73,25 @@ export class ByteCache {
 }
 
 const SCHEMA = [
+  "CREATE TABLE IF NOT EXISTS host_storage_config (id INTEGER PRIMARY KEY, prefix TEXT NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS host_policy (id INTEGER PRIMARY KEY, allow_non_ff INTEGER, max_stored INTEGER, max_push INTEGER)",
+  "CREATE TABLE IF NOT EXISTS host_storage_usage (id INTEGER PRIMARY KEY, bytes INTEGER NOT NULL DEFAULT 0, phase INTEGER NOT NULL DEFAULT 0, last_stage TEXT NOT NULL DEFAULT '', last_object TEXT NOT NULL DEFAULT '', last_seq INTEGER NOT NULL DEFAULT -1)",
+  "CREATE TABLE IF NOT EXISTS host_chunk_sizes (key TEXT PRIMARY KEY, length INTEGER NOT NULL) WITHOUT ROWID",
+  "CREATE TRIGGER IF NOT EXISTS host_chunk_add AFTER INSERT ON host_chunk_sizes BEGIN UPDATE host_storage_usage SET bytes=bytes+NEW.length WHERE id=1; END",
+  "CREATE TRIGGER IF NOT EXISTS host_chunk_remove AFTER DELETE ON host_chunk_sizes BEGIN UPDATE host_storage_usage SET bytes=bytes-OLD.length WHERE id=1; END",
+  "CREATE TABLE IF NOT EXISTS publications (generation INTEGER PRIMARY KEY, time INTEGER NOT NULL, actor64 TEXT NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS publication_updates (generation INTEGER NOT NULL, seq INTEGER NOT NULL, name BLOB NOT NULL, old_oid TEXT NOT NULL, new_oid TEXT NOT NULL, PRIMARY KEY(generation,seq)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS publication_start (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS browse_visible (oid TEXT PRIMARY KEY, walked INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS browse_visible_work ON browse_visible(walked,oid)",
+  "CREATE TABLE IF NOT EXISTS browse_reachable (oid TEXT PRIMARY KEY, generation INTEGER NOT NULL, walked INTEGER NOT NULL DEFAULT 0, relation INTEGER NOT NULL DEFAULT -1, after_dst BLOB NOT NULL DEFAULT X'') WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS browse_reachable_work ON browse_reachable(generation,walked,oid)",
+  "CREATE TABLE IF NOT EXISTS browse_index (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, phase INTEGER NOT NULL DEFAULT 0, after_ref BLOB NOT NULL DEFAULT X'', objects INTEGER NOT NULL DEFAULT 0, edges INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS repository_security (id INTEGER PRIMARY KEY, epoch TEXT NOT NULL, proof_floor INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS browse_members (oid TEXT PRIMARY KEY, lineage INTEGER NOT NULL, depth INTEGER NOT NULL, proof_generation INTEGER NOT NULL, walked INTEGER NOT NULL DEFAULT 0, relation INTEGER NOT NULL DEFAULT -1, after_dst BLOB NOT NULL DEFAULT X'') WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS browse_members_work ON browse_members(lineage,walked,depth,oid)",
+  "CREATE TABLE IF NOT EXISTS browse_progress (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, lineage INTEGER NOT NULL, phase INTEGER NOT NULL DEFAULT 0, after_ref BLOB NOT NULL DEFAULT X'', objects INTEGER NOT NULL DEFAULT 0, edges INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS host_settings (id INTEGER PRIMARY KEY, default_branch BLOB, last_publication INTEGER)",
   "CREATE TABLE IF NOT EXISTS host_identity (id INTEGER PRIMARY KEY, namespace TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS repository (id INTEGER PRIMARY KEY, format INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0, object_count INTEGER NOT NULL DEFAULT 0, head BLOB NOT NULL)",
   "CREATE TABLE IF NOT EXISTS stages (id TEXT PRIMARY KEY, format INTEGER NOT NULL, phase TEXT NOT NULL, retained INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, pack TEXT, bytes INTEGER NOT NULL DEFAULT 0, selected INTEGER NOT NULL DEFAULT 0, expected INTEGER NOT NULL DEFAULT 0, reusable INTEGER NOT NULL DEFAULT 0, has_ofs INTEGER NOT NULL DEFAULT 1) WITHOUT ROWID",
@@ -95,8 +116,28 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS stage_blob_checks (stage TEXT NOT NULL, oid TEXT NOT NULL, checks INTEGER NOT NULL DEFAULT 2, PRIMARY KEY(stage,oid)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS temp_chunks (stage TEXT NOT NULL, object TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,object,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS temp_chunk_offsets ON temp_chunks(stage,object,start)",
+  "CREATE TABLE IF NOT EXISTS read_scratch (key TEXT PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS read_scratch_sizes (key TEXT PRIMARY KEY, length INTEGER NOT NULL) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS read_scratch_usage (id INTEGER PRIMARY KEY, bytes INTEGER NOT NULL DEFAULT 0)",
+  "INSERT OR IGNORE INTO read_scratch_usage(id) VALUES(1)",
+  "CREATE TRIGGER IF NOT EXISTS read_scratch_add AFTER INSERT ON read_scratch_sizes BEGIN UPDATE read_scratch_usage SET bytes=bytes+NEW.length WHERE id=1; END",
+  "CREATE TRIGGER IF NOT EXISTS read_scratch_remove AFTER DELETE ON read_scratch_sizes BEGIN UPDATE read_scratch_usage SET bytes=bytes-OLD.length WHERE id=1; END",
+  "CREATE TRIGGER IF NOT EXISTS read_scratch_cleanup AFTER DELETE ON read_scratch BEGIN DELETE FROM read_scratch_sizes WHERE key=OLD.key; END",
   "CREATE TABLE IF NOT EXISTS temp_objects (stage TEXT NOT NULL, object TEXT NOT NULL, oid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(stage,object)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS refs (name BLOB PRIMARY KEY, oid TEXT NOT NULL, peeled TEXT) WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS stage_chunks_length ON stage_chunks(length)",
+  "CREATE TABLE IF NOT EXISTS ref_names(name BLOB PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS ref_versions(name BLOB NOT NULL,first_generation INTEGER NOT NULL,last_generation INTEGER,oid TEXT NOT NULL,peeled TEXT,PRIMARY KEY(name,first_generation)) WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS ref_versions_live ON ref_versions(first_generation,last_generation,name)",
+  "CREATE INDEX IF NOT EXISTS ref_versions_oid ON ref_versions(oid,last_generation,first_generation)",
+  "CREATE INDEX IF NOT EXISTS ref_versions_peeled ON ref_versions(peeled,last_generation,first_generation)",
+  "CREATE INDEX IF NOT EXISTS ref_versions_retired ON ref_versions(last_generation,name,first_generation) WHERE last_generation IS NOT NULL",
+  "CREATE TABLE IF NOT EXISTS ref_versions_start(id INTEGER PRIMARY KEY,generation INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS fetch_cache_metrics(id INTEGER PRIMARY KEY CHECK(id=1),builds INTEGER NOT NULL DEFAULT 0,generated_bytes INTEGER NOT NULL DEFAULT 0)",
+  "INSERT OR IGNORE INTO fetch_cache_metrics(id) VALUES(1)",
+  "CREATE TABLE IF NOT EXISTS job_controls(job TEXT NOT NULL,seq INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(job,seq)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS fetch_cache(key TEXT PRIMARY KEY,generation INTEGER NOT NULL,state TEXT NOT NULL,bytes INTEGER NOT NULL DEFAULT 0,reserved INTEGER NOT NULL,created INTEGER NOT NULL) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS fetch_cache_chunks(cache TEXT NOT NULL,seq INTEGER NOT NULL,key TEXT NOT NULL,length INTEGER NOT NULL,sha TEXT NOT NULL,ready INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(cache,seq)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS proposed_refs (name BLOB PRIMARY KEY, seq INTEGER) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS receive_walk (oid TEXT PRIMARY KEY, depth INTEGER NOT NULL, walked INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS receive_walk_work ON receive_walk(depth,oid) WHERE walked=0",
@@ -112,14 +153,39 @@ const SCHEMA = [
 ];
 const STAGE_METADATA = ["stage_objects", "stage_edges", "stage_names", "stage_blob_checks", "stage_commands", "stage_options", "stage_shallow"];
 
+// Run before any schema/configuration writes, including alarm recovery and
+// direct Store construction. A legacy catalog always belongs to the empty root.
+export function assertStoragePrefix(ctx, prefix = "") {
+  const exec = (sql, ...args) => ctx.storage.sql.exec(sql, ...args).toArray();
+  const tables = exec("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('host_storage_config','host_identity','repository','stages')");
+  if (tables.some((row) => row.name === "host_storage_config")) {
+    const stored = exec("SELECT prefix FROM host_storage_config WHERE id=1")[0];
+    if (stored) { if (stored.prefix !== prefix) throw new ApiError("stored R2 key prefix differs from configuration", 409); return true; }
+  }
+  if (prefix && tables.some((row) => row.name !== "host_storage_config")) throw new ApiError("legacy repository requires the original empty R2 key prefix", 409);
+  return tables.length > 0;
+}
+
 export class Store {
   constructor(ctx, env, namespace) {
+    const existing = assertStoragePrefix(ctx, env.KEY_PREFIX ?? "");
     this.ctx = ctx; this.env = env; this.namespace = namespace; this.blobs = bucket(env);
-    this.usage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2Puts: 0, r2Deletes: 0, r2Failures: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
+    this.usage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2FenceGets: 0, r2Puts: 0, r2Deletes: 0, r2Failures: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
     this.observerUsage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0 };
     this.sqlKnown = true;
     this.edgeStages = new Map();
+    this.chunkOperations = new Map();
+    this.recoverySchedule = { version: 0 };
     for (const statement of SCHEMA) this.exec(statement);
+    this.exec("INSERT OR IGNORE INTO repository_security(id,epoch) SELECT 1,? WHERE EXISTS(SELECT 1 FROM repository WHERE id=1)", crypto.randomUUID());
+    this.exec("INSERT OR IGNORE INTO host_storage_config(id,prefix) VALUES(1,?)", env.KEY_PREFIX ?? "");
+    if (this.exec("SELECT prefix FROM host_storage_config WHERE id=1")[0].prefix !== (env.KEY_PREFIX ?? "")) throw new Error("stored R2 key prefix differs");
+    // Older publications cannot be reconstructed. Record the coverage boundary
+    // once, before the next publication; never fabricate historical actors.
+    this.exec("INSERT OR IGNORE INTO publication_start(id,generation) VALUES(1,COALESCE((SELECT generation FROM repository WHERE id=1),0))");
+    // Empty/new repositories are ready immediately. Existing ownership records
+    // are indexed in resumable pages, without rewriting or scanning old tables.
+    this.exec("INSERT OR IGNORE INTO host_storage_usage(id,phase) SELECT 1,CASE WHEN EXISTS(SELECT 1 FROM stage_chunks LIMIT 1) OR EXISTS(SELECT 1 FROM temp_chunks LIMIT 1) THEN 0 ELSE 2 END");
     // Existing text catalogs retain their layout. Fresh catalogs intern the
     // opaque stage handle once instead of repeating its UUID in every edge.
     const edges = this.exec("PRAGMA table_info(stage_edges)");
@@ -132,15 +198,26 @@ export class Store {
     if (this.binaryEdges) this.exec("CREATE TRIGGER IF NOT EXISTS stage_edge_id BEFORE INSERT ON stage_edges WHEN typeof(NEW.dst)<>'blob' OR length(NEW.dst) NOT IN (20,32) BEGIN SELECT RAISE(ABORT,'graph object ID is invalid'); END");
     // Earlier pending checks selected attributes only. Preserve that meaning.
     if (!this.exec("PRAGMA table_info(stage_blob_checks)").some((column) => column.name === "checks")) this.exec("ALTER TABLE stage_blob_checks ADD COLUMN checks INTEGER NOT NULL DEFAULT 2");
+    const stageColumns = this.exec("PRAGMA table_info(stages)");
     // Older stages have unknown entry kinds; conservatively disable raw OFS reuse.
-    if (!this.exec("PRAGMA table_info(stages)").some((column) => column.name === "has_ofs")) this.exec("ALTER TABLE stages ADD COLUMN has_ofs INTEGER NOT NULL DEFAULT 1");
-    if (!this.exec("PRAGMA table_info(stages)").some((column) => column.name === "reusable")) this.exec("ALTER TABLE stages ADD COLUMN reusable INTEGER NOT NULL DEFAULT 0");
+    if (!stageColumns.some((column) => column.name === "has_ofs")) this.exec("ALTER TABLE stages ADD COLUMN has_ofs INTEGER NOT NULL DEFAULT 1");
+    if (!stageColumns.some((column) => column.name === "reusable")) this.exec("ALTER TABLE stages ADD COLUMN reusable INTEGER NOT NULL DEFAULT 0");
+    if (!stageColumns.some((column) => column.name === "published_generation")) this.exec("ALTER TABLE stages ADD COLUMN published_generation INTEGER NOT NULL DEFAULT 0");
     if (!this.exec("PRAGMA table_info(refs)").some((column) => column.name === "peeled")) this.ctx.storage.transactionSync(() => {
       this.exec("ALTER TABLE refs ADD COLUMN peeled TEXT");
       for (const ref of this.references()) this.exec("UPDATE refs SET peeled=? WHERE name=?", this.peeled(ref.oid), blob(ref.name));
     });
     this.exec("CREATE INDEX IF NOT EXISTS refs_oid ON refs(oid)");
     this.exec("CREATE INDEX IF NOT EXISTS refs_peeled ON refs(peeled)");
+    // A genuinely new schema has no refs to backfill. Existing (including
+    // partially initialized) schemas still take the idempotent migration path.
+    if (!existing) this.exec("INSERT INTO ref_versions_start(id,generation) VALUES(1,0)");
+    else if (!this.exec("SELECT 1 FROM ref_versions_start WHERE id=1").length) this.ctx.storage.transactionSync(() => {
+      const generation = this.exec("SELECT generation FROM repository WHERE id=1")[0]?.generation ?? 0;
+      this.exec("INSERT INTO ref_versions(name,first_generation,oid,peeled) SELECT name,?,oid,peeled FROM refs", generation);
+      this.exec("INSERT OR IGNORE INTO ref_names(name) SELECT name FROM refs");
+      this.exec("INSERT INTO ref_versions_start(id,generation) VALUES(1,?)", generation);
+    });
     const frontier = this.exec("PRAGMA table_info(fetch_selected)");
     this.ctx.storage.transactionSync(() => {
       for (const [name, value] of [["depth", 1], ["included", 1], ["shallow", 0], ["unshallow", 0]]) {
@@ -172,7 +249,10 @@ export class Store {
     if (format !== 0 && format !== 1) throw new RangeError("unsupported object format");
     const current = this.exec("SELECT * FROM repository WHERE id=1")[0];
     if (current && current.format !== format) throw new RequestError("repository object format differs");
-    if (!current) this.exec("INSERT INTO repository(id,format,generation,head) VALUES(1,?,0,?)", format, blob(new TextEncoder().encode("refs/heads/main")));
+    if (!current) {
+      this.exec("INSERT INTO repository(id,format,generation,head) VALUES(1,?,0,?)", format, blob(new TextEncoder().encode("refs/heads/main")));
+      this.exec("INSERT INTO repository_security(id,epoch) VALUES(1,?)", crypto.randomUUID());
+    }
   }
   stage(format, retained = false) {
     this.initialize(format);
@@ -187,7 +267,9 @@ export class Store {
   }
   rememberEdgeStage(stage, id) {
     if (!Number.isSafeInteger(id) || id <= 0) throw new Error("invalid graph stage ID");
-    if (!this.edgeStages.has(stage) && this.edgeStages.size >= 256) this.edgeStages.delete(this.edgeStages.keys().next().value);
+    const limit = this.env.MEMORY?.metadataEntries ?? 256;
+    if (!limit) return;
+    if (!this.edgeStages.has(stage) && this.edgeStages.size >= limit) this.edgeStages.delete(this.edgeStages.keys().next().value);
     this.edgeStages.set(stage, id);
   }
   edgeStage(stage) {
@@ -232,7 +314,7 @@ export class Store {
   *references() {
     let after = new Uint8Array();
     for (;;) {
-      const rows = this.exec("SELECT name,oid,peeled FROM refs WHERE name>? ORDER BY name LIMIT 128", blob(after));
+      const rows = this.exec("SELECT name,oid,peeled FROM refs WHERE name>? ORDER BY name LIMIT ?", blob(after), this.env.MEMORY?.refPageRows ?? 128);
       if (!rows.length) return;
       for (const row of rows) { after = bytes(row.name); yield { ...row, name: after }; }
     }
@@ -252,8 +334,10 @@ export class Store {
     return result;
   }
   inventory() {
+    const totals = this.exec("SELECT (SELECT object_count FROM repository WHERE id=1) AS objects,builds,generated_bytes FROM fetch_cache_metrics WHERE id=1")[0];
     const result = {
-      objects: this.exec("SELECT object_count FROM repository WHERE id=1")[0]?.object_count ?? 0,
+      objects: totals?.objects ?? 0,
+      packCache: { builds: totals?.builds ?? 0, generatedBytes: totals?.generated_bytes ?? 0 },
       stagedObjects: this.exec("SELECT COUNT(*) AS count FROM stage_objects")[0].count,
       stagedChunks: this.exec("SELECT COUNT(*) AS count FROM stage_chunks")[0].count,
       temporaryChunks: this.exec("SELECT COUNT(*) AS count FROM temp_chunks")[0].count,
@@ -276,11 +360,55 @@ export class Store {
       await this.blobs.put(key, data);
     }, this.usage);
   }
+  async withChunkKeys(keys, operation) {
+    const unique = [...new Set(keys)], predecessors = unique.map((key) => this.chunkOperations.get(key)).filter(Boolean);
+    let release; const pending = new Promise((resolve) => { release = resolve; });
+    // Install the whole key set synchronously. Every dependency precedes this
+    // operation, so overlapping batches cannot acquire keys in a deadlock cycle.
+    for (const key of unique) this.chunkOperations.set(key, pending);
+    try { await Promise.all(predecessors); return await operation(); }
+    finally {
+      for (const key of unique) if (this.chunkOperations.get(key) === pending) this.chunkOperations.delete(key);
+      release();
+    }
+  }
   async delete(keys) {
     await retryStorage(async () => {
       this.usage.r2Deletes += Array.isArray(keys) ? keys.length : 1;
       await this.blobs.delete(keys);
     }, this.usage);
+    this.ctx.storage.transactionSync(() => {
+      for (const key of typeof keys === "string" ? [keys] : keys) this.exec("DELETE FROM host_chunk_sizes WHERE key=?", key);
+    });
+  }
+  storageAccounting() {
+    const row = this.exec("SELECT bytes,phase FROM host_storage_usage WHERE id=1")[0];
+    if (!Number.isSafeInteger(row.bytes) || row.bytes < 0) throw new Error("stored size exceeds safe integer range");
+    return { ready: row.phase === 2, knownBytes: row.bytes };
+  }
+  rememberChunk(key, length) {
+    const existing = this.exec("SELECT length FROM host_chunk_sizes WHERE key=?", key)[0];
+    if (existing && existing.length !== length) throw new Error("stored key length differs");
+    if (!existing) this.exec("INSERT INTO host_chunk_sizes(key,length) VALUES(?,?)", key, length);
+  }
+  advanceStorageAccounting() {
+    this.ctx.storage.transactionSync(() => {
+      const row = this.exec("SELECT * FROM host_storage_usage WHERE id=1")[0];
+      if (row.phase === 2) return;
+      const page = row.phase === 0
+        ? this.exec("SELECT stage,seq,key,length FROM stage_chunks WHERE (stage,seq)>(?,?) ORDER BY stage,seq LIMIT 64", row.last_stage, row.last_seq)
+        : this.exec("SELECT stage,object,seq,key,length FROM temp_chunks WHERE NOT EXISTS(SELECT 1 FROM read_scratch r WHERE r.key=temp_chunks.key) AND (stage,object,seq)>(?,?,?) ORDER BY stage,object,seq LIMIT 64", row.last_stage, row.last_object, row.last_seq);
+      for (const chunk of page) this.rememberChunk(chunk.key, chunk.length);
+      if (page.length < 64) this.exec("UPDATE host_storage_usage SET phase=phase+1,last_stage='',last_object='',last_seq=-1 WHERE id=1");
+      else { const last = page.at(-1); this.exec("UPDATE host_storage_usage SET last_stage=?,last_object=?,last_seq=? WHERE id=1", last.stage, last.object ?? "", last.seq); }
+    });
+  }
+  claimChunk(key, length) {
+    const { policy, storage } = repositoryPolicy(this);
+    const existing = this.exec("SELECT length FROM host_chunk_sizes WHERE key=?", key)[0];
+    if (policy.maxStoredBytes !== null && !storage.ready) throw new PolicyError("stored-size accounting pending; administrator must resume POST api/v1/policy");
+    if (!existing && policy.maxStoredBytes !== null && length > policy.maxStoredBytes - storage.knownBytes) throw new PolicyError("repository stored-size limit exceeded");
+    this.rememberChunk(key, length);
   }
   async get(chunk, cache) {
     const hit = cache.get(chunk.key);
@@ -302,7 +430,12 @@ export class Store {
       if (!rows.length) break;
       const batch = rows.map((row) => row.key);
       await this.delete(batch);
-      for (const row of rows) this.exec("DELETE FROM temp_chunks WHERE stage=? AND object=? AND seq=?", stage, row.object, row.seq);
+      this.ctx.storage.transactionSync(() => {
+        for (const row of rows) {
+          this.exec("DELETE FROM temp_chunks WHERE stage=? AND object=? AND seq=?", stage, row.object, row.seq);
+          this.exec("DELETE FROM read_scratch WHERE key=?", row.key);
+        }
+      });
     }
     this.exec("DELETE FROM temp_objects WHERE stage=?", stage);
     return true;
@@ -323,13 +456,18 @@ export class Store {
     this.exec("UPDATE stages SET phase='failed' WHERE id=?", stage);
       await this.clearTemporary(stage);
       for (;;) {
-        const rows = this.exec("SELECT c.seq,c.key,NOT EXISTS(SELECT 1 FROM stage_chunks other WHERE other.key=c.key AND other.stage<>c.stage) AS unshared FROM stage_chunks c WHERE c.stage=? LIMIT 128", stage);
+        const rows = this.exec("SELECT seq,key FROM stage_chunks WHERE stage=? LIMIT 128", stage);
         if (!rows.length) break;
         // Claims precede R2 puts. Keep the entire batch's ownership records
         // until deleting its unshared bytes succeeds, including on partial loss.
-        const keys = rows.filter((row) => row.unshared).map((row) => row.key);
-        if (keys.length) await this.delete(keys);
-        for (const row of rows) this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
+        await this.withChunkKeys(rows.map((row) => row.key), async () => {
+          // A preceding PUT may have added an owner while these keys waited.
+          // Recheck only the locked rows, never a later unlocked batch.
+          const locked = this.exec("SELECT c.seq,c.key,NOT EXISTS(SELECT 1 FROM stage_chunks other WHERE other.key=c.key AND other.stage<>c.stage) AS unshared FROM stage_chunks c WHERE c.stage=? AND c.seq IN (SELECT value FROM json_each(?))", stage, JSON.stringify(rows.map((row) => row.seq)));
+          const keys = locked.filter((row) => row.unshared).map((row) => row.key);
+          if (keys.length) await this.delete(keys);
+          for (const row of locked) this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
+        });
       }
       for (const table of STAGE_METADATA) {
         const statement = table === "stage_edges" && this.compactEdges
@@ -349,53 +487,90 @@ export class Store {
     }
   }
   async scheduleRecovery() {
-    try { await this.ctx.storage.setAlarm(Date.now() + 60000); }
+    this.recoverySchedule.version++;
+    this.recoveryDue = Date.now() + 60000;
+    try { await this.ctx.storage.setAlarm(this.recoveryDue); }
     catch (error) { throw storageFailure(error); }
   }
-  async recover() {
+  async recover(protectedStages = []) {
+    const scheduleVersion = this.recoverySchedule.version;
+    const current = typeof protectedStages === "function" ? protectedStages : () => protectedStages;
+    const unowned = (column) => `${column} NOT IN (SELECT value FROM json_each(?))`;
+    const binding = () => JSON.stringify(current());
+    const activeJobs = new Set(current().map((id) => id.replaceAll("-", "")));
+    for (const row of this.exec("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'job_*_fetch_*'")) {
+      const match = /^job_([0-9a-f]{32})_fetch_(wants|haves|shallow|probe|common|selected)$/.exec(row.name);
+      if (match && !activeJobs.has(match[1]) && !this.fetchFree?.includes(match[1]) && !this.fetchActive?.has(match[1])) this.exec(`DROP TABLE ${row.name}`);
+    }
+    this.exec(`DELETE FROM job_controls WHERE ${unowned("job")}`, binding());
+    if (!current().length) for (const row of this.exec("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'ancestry_*'")) {
+      if (/^ancestry_[0-9a-f]{32}$/.test(row.name)) this.exec(`DROP TABLE ${row.name}`);
+    }
     // Fetch frontiers belong to a single request. A crashed stream cannot run
     // its finally block, and advertisements must not retain that old work.
     for (const table of FETCH_TABLES) this.exec(`DELETE FROM ${table}`);
     // A new durable instance has no previous in-flight writer. Private decoded
     // stages can be abandoned; verified test fixtures and published packs stay.
     for (;;) {
-      const temporary = this.exec("SELECT stage FROM temp_chunks LIMIT 1")[0];
+      const temporary = this.exec(`SELECT stage FROM temp_chunks WHERE ${unowned("stage")} LIMIT 1`, binding())[0];
       if (!temporary) break;
       await this.clearTemporary(temporary.stage);
     }
-    this.exec("DELETE FROM temp_objects");
-    this.exec("UPDATE stages SET phase='failed' WHERE phase IN ('receiving','decoded') OR (phase='verified' AND retained=0)");
+    this.exec(`DELETE FROM temp_objects WHERE ${unowned("stage")}`, binding());
+    this.exec(`UPDATE stages SET phase='failed' WHERE (phase IN ('receiving','decoded') OR (phase='verified' AND retained=0)) AND ${unowned("id")}`, binding());
     for (;;) {
-      const pending = this.exec("SELECT id FROM stages WHERE phase='failed' LIMIT 1")[0];
-      if (!pending) return;
+      const pending = this.exec(`SELECT id FROM stages WHERE phase='failed' AND ${unowned("id")} LIMIT 1`, binding())[0];
+      if (!pending) {
+        // A protected job can defer cleanup while this pass awaits R2. The
+        // shared marker survives job views and even equal-clock reschedules.
+        if (this.recoverySchedule.version === scheduleVersion) this.recoveryDue = Infinity;
+        return;
+      }
       await this.abandon(pending.id);
     }
   }
 }
 
 export class ChunkWriter {
-  constructor(store, stage, temporary = null) {
-    this.store = store; this.stage = stage; this.temporary = temporary;
-    this.buffer = new Uint8Array(CHUNK_BYTES); this.used = 0; this.position = 0; this.seq = 0;
+  constructor(store, stage, temporary = null, readScratch = false) {
+    this.store = store; this.stage = stage; this.temporary = temporary; this.readScratch = readScratch;
+    if (readScratch && temporary === null) throw new Error("read scratch must be temporary");
+    this.chunkBytes = store.env?.MEMORY?.chunkBytes ?? CHUNK_BYTES;
+    this.buffer = new Uint8Array(this.chunkBytes); this.used = 0; this.position = 0; this.seq = 0;
   }
   async write(bytes) {
     let offset = 0;
     while (offset < bytes.length) {
-      const count = Math.min(bytes.length - offset, CHUNK_BYTES - this.used);
+      const count = Math.min(bytes.length - offset, this.chunkBytes - this.used);
       this.buffer.set(bytes.subarray(offset, offset + count), this.used); this.used += count; offset += count;
-      if (this.used === CHUNK_BYTES) await this.flush();
+      if (this.used === this.chunkBytes) await this.flush();
     }
   }
   async flush() {
     if (this.used === 0) return;
     const data = this.buffer.subarray(0, this.used);
     const sha = await sha256(data);
-    const prefix = `repositories/${this.store.namespace}`;
+    const prefix = `${this.store.env?.KEY_PREFIX ?? ""}repositories/${this.store.namespace}`;
     const key = this.temporary === null ? `${prefix}/chunks/${sha}` : `${prefix}/tmp/${this.stage}/${this.temporary}/${this.seq}`;
     const values = [this.stage, this.seq, key, this.position, this.used, sha];
-    if (this.temporary === null) this.store.exec("INSERT INTO stage_chunks(stage,seq,key,start,length,sha) VALUES(?,?,?,?,?,?)", ...values);
-    else this.store.exec("INSERT INTO temp_chunks(stage,object,seq,key,start,length,sha) VALUES(?,?,?,?,?,?,?)", this.stage, this.temporary, ...values.slice(1));
-    await this.store.put(key, data);
+    const persist = async () => {
+      this.store.ctx.storage.transactionSync(() => {
+        if (this.readScratch) {
+          const used = this.store.exec("SELECT bytes FROM read_scratch_usage WHERE id=1")[0].bytes;
+          if (used + this.used > (this.store.env.READ_SCRATCH_REPOSITORY_BYTES ?? Infinity)) throw new ApiError("repository read scratch budget busy; retry later", 503);
+          this.store.exec("INSERT INTO read_scratch(key) VALUES(?)", key);
+          this.store.exec("INSERT INTO read_scratch_sizes(key,length) VALUES(?,?)", key, this.used);
+        }
+        else this.store.claimChunk(key, this.used);
+        if (this.temporary === null) this.store.exec("INSERT INTO stage_chunks(stage,seq,key,start,length,sha) VALUES(?,?,?,?,?,?)", ...values);
+        else this.store.exec("INSERT INTO temp_chunks(stage,object,seq,key,start,length,sha) VALUES(?,?,?,?,?,?,?)", this.stage, this.temporary, ...values.slice(1));
+      });
+      await this.store.put(key, data);
+    };
+    // Shared encoded chunks need one claim/PUT/delete ordering across every
+    // job view. Temporary keys are already private to their owning job.
+    if (this.temporary === null) await this.store.withChunkKeys([key], persist);
+    else await persist();
     this.position += this.used; this.seq++; this.used = 0;
   }
   async finish() { await this.flush(); this.buffer = new Uint8Array(); return this.position; }

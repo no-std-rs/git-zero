@@ -1,6 +1,7 @@
 // Opaque storage adapter for the same Wasm host running directly in workerd.
 // Cloudflare deployments continue to use their native R2 binding. S3 requests
 // use AWS Signature V4; Git bytes and object metadata are never interpreted here.
+import { requestBody } from "./body.mjs";
 import { hex } from "./codec.mjs";
 const encode = (value) => new TextEncoder().encode(value);
 const hash = async (bytes) => hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
@@ -24,13 +25,14 @@ export class R2S3Bucket {
     for (const value of ["auto", "s3", "aws4_request"]) key = await hmac(key, value);
     this.signing = { date, key }; return key;
   }
-  async request(method, key, data = null, consume = null) {
+  async request(method, key, data = null, consume = null, query = null) {
     const url = new URL(this.url);
-    url.pathname = `${url.pathname.replace(/\/$/, "")}/${key.split("/").map(encodeURIComponent).join("/")}`;
+    if (key !== null) url.pathname = `${url.pathname.replace(/\/$/, "")}/${key.split("/").map(encodeURIComponent).join("/")}`;
+    if (query) url.search = Object.keys(query).sort().map((name) => `${encodeURIComponent(name)}=${encodeURIComponent(query[name])}`).join("&");
     const time = new Date().toISOString().replace(/[:-]|\.\d{3}/g, ""), date = time.slice(0, 8);
     const digest = await hash(data ?? new Uint8Array());
     const signed = "host;x-amz-content-sha256;x-amz-date";
-    const canonical = [method, url.pathname, "", `host:${url.host}\nx-amz-content-sha256:${digest}\nx-amz-date:${time}\n`, signed, digest].join("\n");
+    const canonical = [method, url.pathname, url.search.slice(1), `host:${url.host}\nx-amz-content-sha256:${digest}\nx-amz-date:${time}\n`, signed, digest].join("\n");
     const scope = `${date}/auto/s3/aws4_request`;
     const signature = hex(await hmac(await this.signingKey(date), `AWS4-HMAC-SHA256\n${time}\n${scope}\n${await hash(encode(canonical))}`));
     const controller = new AbortController();
@@ -63,6 +65,22 @@ export class R2S3Bucket {
       const data = await response.arrayBuffer();
       return { size, arrayBuffer: async () => data };
     });
+  }
+  async list({ prefix, limit }) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 64) throw new Error("invalid S3 list limit");
+    return this.request("GET", null, null, async (response) => {
+      if (response.status !== 200) throw new Error("S3 list failed");
+      const bytes = new Uint8Array(512 * 1024); let length = 0;
+      for await (const part of requestBody(response.body, 30000)) {
+        if (part.length > bytes.length - length) throw new Error("S3 list response exceeds byte limit");
+        bytes.set(part, length); length += part.length;
+      }
+      const xml = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length));
+      if (!/<EncodingType>url<\/EncodingType>/.test(xml) || !/<IsTruncated>(true|false)<\/IsTruncated>/.test(xml)) throw new Error("invalid S3 list response");
+      const objects = [...xml.matchAll(/<Key>([^<]*)<\/Key>/g)].map((match) => ({ key: decodeURIComponent(match[1]) }));
+      if (objects.length > limit || objects.some((object) => !object.key.startsWith(prefix))) throw new Error("invalid S3 list keys");
+      return { objects, truncated: xml.includes("<IsTruncated>true</IsTruncated>") };
+    }, { "encoding-type": "url", "list-type": "2", "max-keys": String(limit), prefix });
   }
   async delete(keys) {
     for (const key of typeof keys === "string" ? [keys] : keys) await this.request("DELETE", key);

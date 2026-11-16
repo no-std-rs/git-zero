@@ -14,6 +14,17 @@ const module = await WebAssembly.compile(await readFile(new URL("../build/git_ze
 const modulesReference = JSON.parse(await readFile(new URL("./fixtures/gitmodules.json", import.meta.url), "utf8"));
 const empty = new Uint8Array();
 const objectId = (format, kind, body) => createHash(format === 0 ? "sha1" : "sha256").update(`${kind} ${body.length}\0`).update(body).digest();
+
+test("reused codec drops frozen controls, partial graph state and budgets across object formats", () => {
+  const codec = new Codec(module, 0), packet = (text) => Buffer.from((Buffer.byteLength(text) + 4).toString(16).padStart(4, "0") + text);
+  codec.uploadInit(0); codec.uploadAppend(Buffer.concat([packet(`want ${"a".repeat(40)}\n`), Buffer.from("0000"), packet("done\n")])); codec.uploadParse();
+  codec.graphInit({ kind: 3, size: 3 }); codec.graphFeed(Buffer.from("a"), false); codec.charge(1, 1);
+  codec.reset(1); assert.equal(codec.idBytes, 32); assert.equal(codec.budgetUsage().workBytes, 0);
+  codec.uploadInit(0); codec.uploadAppend(Buffer.concat([packet(`want ${"b".repeat(64)} object-format=sha256\n`), Buffer.from("0000"), packet("done\n")])); codec.uploadParse();
+  assert.equal(hex(codec.uploadNext().id), "b".repeat(64)); assert.equal(codec.uploadNext().tag, 74);
+  codec.graphInit({ kind: 3, size: 3 }); const event = codec.graphFeed(Buffer.from("xyz"), true);
+  assert.equal(hex(event.id), objectId(1, "blob", Buffer.from("xyz")).toString("hex"));
+});
 const packet = (bytes) => { bytes = Buffer.from(bytes); return Buffer.concat([Buffer.from((bytes.length + 4).toString(16).padStart(4, "0")), bytes]); };
 
 test("canonical capture scans whole pages across tiny delta copies", async () => {

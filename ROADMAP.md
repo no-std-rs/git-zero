@@ -306,6 +306,32 @@ to every read-only repository adapter.
   stale IDs, multiple refs, force policy and atomic failures.
 - [x] Corrupt/truncated/disconnected input, denied updates, storage failure,
   concurrent writers, interruption and exact resource limits.
+- [x] Opt-in gateway HMAC-SHA-256 grants scoped to one opaque namespace,
+  read/write/admin levels, constant-time MAC/token verification, hidden invalid
+  grants and readable Git write refusals. Real-Git service-binding and plain-HTTP
+  local fixtures cover protocol v0/v1/v2 and gzip controls; the versioned HTTP
+  contract publishes an independent cross-language test vector.
+- [x] Explicit SHA-1/SHA-256 creation, pinned default branch and description;
+  bounded, resumable R2-prefix purge plus native SQLite clearing with a permanent
+  retirement fence. Explicit creation is mandatory in gateway mode. Local
+  Wrangler and signed-S3/workerd tests cover crash safety and namespace isolation.
+- [x] Bounded, reachability-restricted refs/history/tree/blob/commit HTTP reads,
+  incarnation-bound cursors/object proofs, additive proof carry and bounded
+  outward raw-ID indexing; real Git oracles in both formats and at 25k commits.
+- [x] Transactional generation/time/opaque-actor/ref-update records with bounded,
+  resumable catch-up pages and an explicit legacy coverage boundary.
+- [x] Per-repository force policy and deployment-ceiling push/stored-payload
+  caps, readable Git refusals and resumable legacy byte accounting.
+- [x] Configurable host factory for embedded or separate Workers, explicit
+  compiled codec input, direct-stub contract, renamed bindings/routes, isolated
+  shared-bucket prefixes and configurable byte reservations with cross-repository
+  namespace-fair bytes, reusable charged arenas, per-job scratch/ref snapshots, concurrent reads/private
+  pushes, short publication CAS and generation-keyed full-clone pack reuse;
+  separate body/throughput bounds and delete cancellation protect live I/O.
+- [x] Gateway wants restricted to current reachability by default, bounded memory
+  fallback pins/read scratch and pre-header fetch preparation deadlines.
+- [ ] LFS, SSH, application hooks, unreachable-object garbage collection and a
+  native push-capable host. Authentication and product identity stay host-owned.
 - [ ] Complete a full Linux push, clone, incremental fetch and strict fsck through
   Wrangler, and resolve the documented managed-Cloudflare ingress, isolate and
   SQLite catalog limits before claiming deployed Linux-scale compatibility.

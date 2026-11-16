@@ -189,6 +189,11 @@ linear-memory ceiling, including immutable upload controls. The read-only demo
 keeps its existing independent budget. The same suite drives ordinary Git
 push/clone/fetch against actual Wrangler R2/SQLite and direct workerd S3/SQLite,
 with atomic refs, graph validation, stale updates, cold restarts and reclamation.
+The gateway fixture adds a second Wrangler Worker with a Basic user table and
+a service binding, plus independent plain-HTTP grant requests. Real Git checks
+owner push/reader clone and fetch, readable denied pushes, hidden outsiders,
+v0/v1/v2 and gzip controls. Focused iteration: `node --test test/grants.test.mjs
+test/gateway.test.mjs` from the host Cloudflare directory after building Wasm.
 The former native Git hosting experiment and its tests have been replaced by
 these durable runtime tests; live deployment verification is outside this task.
 
@@ -1074,3 +1079,97 @@ The `native_http` libFuzzer target shares its parser driver with ordinary native
 admission tests. CI adds the same bounded 5,000-run ASan smoke budget used for the
 other nine targets. This is bounded regression coverage, not a sustained fuzzing
 or full concurrent-host-state claim.
+
+The repository-host suite also generates real-Git SHA-1/SHA-256 browse oracles,
+publication catch-up/rollback cases, resumable lifecycle and size-accounting
+fixtures, and force/size policy refusals. `test/embedded.test.mjs` uses a second
+Worker entry that re-exports the configurable Durable Object under renamed
+bindings and calls its stub directly (bypassing the host fetch entry). It checks
+shared-bucket neighbor survival, lower chunk/cache bounds and cold retirement.
+`test/host-module.test.mjs` verifies arrival-time grant admission, independent
+repository admission, starvation resistance, token-mode load compatibility, stalled
+reader deadlines, overload and prefix identity. These fixtures are generated and local; they do
+not build the embedding product's workers-rs router or claim deployed costs.
+
+
+Focused host regressions (after `npm run build:streamed`):
+
+```sh
+node --test test/browse.test.mjs test/browse-scale.test.mjs test/browse-blob-budget.test.mjs
+node --test test/host-module.test.mjs test/response.test.mjs test/grant-queue.test.mjs
+node --test test/fetch-quota.test.mjs test/temporary-cleanup.test.mjs
+node --test test/large-refusal.test.mjs test/refusal-drain.test.mjs test/policy.test.mjs
+node --test test/operability.test.mjs test/jurisdiction.test.mjs test/codec-source-pin.test.mjs
+node --test test/concurrent-git.test.mjs test/concurrent-jobs.test.mjs test/shared-pack.test.mjs
+node --test test/review-availability.test.mjs test/receive-controls.test.mjs test/legacy-memory.test.mjs
+node --test test/incremental-read.test.mjs test/body-runtime.test.mjs
+```
+
+The scale generator creates 1,000 and 25,000 commits (4,003 and 100,003 stored
+objects), multiple refs and a rewritten branch, separately in SHA-1/SHA-256.
+Real Git supplies the oracle; measured statement/row-write counts must remain
+identical for the four ref-rooted reads. Raw-ID proof work advances in bounded
+persistent batches, survives additive publication and rebuilds after rewrites
+or deletion. A default-packed 150,028-object wide/deep fixture completes its
+25k index in at most 70 requests; authenticated browser links need none.
+Concurrent Git tests require sixteen real clones to overlap, share one pack
+build, retain an old ref snapshot through publication, permit concurrent browse
+and push, resolve ref races, and cancel safely at deletion in both runtimes.
+Body-runtime tests retain their real 60-second idle deadline while requiring
+browse to run during three concurrent incomplete uploads; controls must not
+reserve full push caches. Byte reservations and lifetime-attached cleanup are
+tested independently of wall-clock clone timings. Quota tests use real Git to
+fetch a 9 MiB delta at a zero stored-size cap and with pending accounting;
+DELETE arrives while its stream remains open. Large refusal tests use 32 MiB
+incompressible packs with ordinary/gzip bodies against both local runtimes and
+require a Git-readable reason without broken-pipe/RPC diagnostics. EU identity
+uses scoped distinct IDs through actual local stubs: workerd itself does not
+implement jurisdiction placement, and no deployed-EU residency is claimed.
+
+`test/benchmark-maintenance.test.mjs` traces real Git CGI receives in both formats
+and verifies no automatic writer runs outside the benchmark's explicit measured
+MIDX/bitmap and split-graph phase. It verifies those indexes, all received packs,
+strict fsck and source object IDs. The generated reference disables automatic
+maintenance because newer Git may otherwise detach geometric repacks while the
+measured MIDX writer reads their inputs. Tracing is opt-in for this regression,
+not enabled in performance measurements. `GIT_ZERO_BENCH_TEST_GIT` can select an
+independently built Git binary; Git 2.56.1 was also exercised locally.
+
+
+For repository-host measurements, keep generated scratch under this checkout:
+from its root, create `.scratch/test-tmp` and set `TMPDIR` to that absolute path
+before running the commands in `examples/repository-host/cloudflare`. Remove
+generated repositories/packs after each run; retain small evidence logs only.
+
+Additional focused regressions:
+
+```sh
+node --test test/admission.test.mjs test/ref-scaling.test.mjs test/sql-rewrite.test.mjs
+node --test --test-concurrency=1 test/clone-scale.test.mjs test/workerd-memory.test.mjs
+node --test test/shared-pack.test.mjs test/shared-failure-git.test.mjs
+```
+
+The admission fixture checks 300 browse reads behind live clones, co-tenant
+latency, a larger waiter's fair admission, protected metadata capacity and body
+wait/throughput phases. Real Git also runs concurrent token-mode clones of two
+repositories. The 25k/150k default-packed clone is imported and compared with
+Git's complete reachable object set, including a rewritten branch. Job SQL
+compiles once per template, and private graph writes use bounded synchronous
+transactions. The inspector test reports route samples, two live generation
+streams, thirty cached readers and one hundred further cached-fetch admissions,
+with charged reusable arenas and a post-burst GC sample. No production Rust
+backend, deployed isolate RSS or WAN/CPU SLA is inferred from these fixtures.
+
+On an otherwise idle machine, build an archive of `origin/main` under `.scratch/`
+with its own codec, then run `scripts/review-tree-timings.mjs` with the absolute
+path to its `examples/repository-host/cloudflare` directory. It interleaves five
+main/head runs, records both runtimes and machine load, and reports medians.
+The original test deadlines are retained. Delete the archive after measurement.
+
+Fifth-review regressions hold one repository's maximum heavy leases while a
+co-tenant clones/pushes, count preparations for one/three uncacheable clones and
+a full cache, abandon every follower before output, and inject a mid-stream
+shared-build failure checked by real Git. Token clones use independent throttled
+links and pause the first upstream response until the second starts; the original
+30-second completion assertion is retained. Browse cost bounds use an independent
+Git-selected page/path walk and pre-request delta depths, not observed work.

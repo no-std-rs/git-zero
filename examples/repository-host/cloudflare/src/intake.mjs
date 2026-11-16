@@ -1,11 +1,12 @@
 import { hex, integer } from "./codec.mjs";
 import { ChunkWriter, blob } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
-import { requestBody, decodedBody } from "./body.mjs";
+import { requestBody, decodedBody, bodyBudget } from "./body.mjs";
 import { RequestError } from "./errors.mjs";
+import { PolicyError, repositoryPolicy } from "./policy.mjs";
+import { MEMORY_LIMITS } from "./resources.mjs";
 
 const EMPTY = new Uint8Array();
-const REPRESENTATION_LIMIT = 1024 * 1024;
 // Four complete records use 60 bindings, below the SQLite binding limit.
 const OBJECT_COLUMNS = "stage,node,wire_kind,packed_size,compressed_offset,wire_base_offset,wire_base_id,kind,size,depth,end_offset,crc,oid,verified,scanned";
 const OBJECT_VALUES = "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
@@ -18,6 +19,7 @@ export class Intake {
     this.commands = 0; this.options = 0; this.objects = 0; this.expected = 0;
     this.pendingObjects = []; this.hasOfs = false; this.hasRefs = false;
     this.current = null; this.lastEnd = 12; this.eof = false;
+    this.policy = repositoryPolicy(store).policy; this.receivedPackBytes = 0;
   }
   flushObjects() {
     if (!this.pendingObjects.length) return;
@@ -26,7 +28,11 @@ export class Intake {
   }
   async event(event, input) {
     if ((event.tag === 9 || event.tag === 10) && event.written) this.codec.charge(1, event.written);
-    if (this.inPack && event.consumed) await this.writer.write(input.subarray(0, event.consumed));
+    if (this.inPack && event.consumed) {
+      this.receivedPackBytes += event.consumed;
+      if (this.policy.maxPushBytes !== null && this.receivedPackBytes > this.policy.maxPushBytes) throw new PolicyError("single-push size limit exceeded");
+      await this.writer.write(input.subarray(0, event.consumed));
+    }
     if ((event.tag === 9 || event.tag === 10) && event.written) {
       if (!this.current) throw new Error("body has no staged object");
       if (this.current.body) this.current.body.set(event.data, this.current.written);
@@ -47,6 +53,7 @@ export class Intake {
       case 6:
         this.inPack = !!event.flags;
         this.store.exec("UPDATE stages SET selected=? WHERE id=?", this.codec.receiveCapabilities(), stage);
+        if (this.inPack && this.policy.maxStoredBytes !== null && !this.store.storageAccounting().ready) this.store.advanceStorageAccounting();
         if (this.inPack) this.writer = new ChunkWriter(this.store, stage);
         break;
       case 7:
@@ -56,7 +63,7 @@ export class Intake {
         if (kind < 5) this.codec.charge(0, size);
         this.hasOfs ||= kind === 6;
         this.hasRefs ||= kind === 7;
-        this.current = { node, size, kind, structural: kind < 5 && kind !== 3, digest: null, written: 0, body: size <= REPRESENTATION_LIMIT ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
+        this.current = { node, size, kind, structural: kind < 5 && kind !== 3, digest: null, written: 0, body: size <= (this.store.env?.MEMORY?.representationCaptureBytes ?? MEMORY_LIMITS.representationCaptureBytes) ? new Uint8Array(size) : null, fields: [stage, node, kind, size, integer(event.c), kind === 6 ? integer(event.d) : null, kind === 7 ? hex(event.id) : null, kind < 5 ? kind : null, kind < 5 ? size : null, kind < 5 ? 0 : null] };
         if (this.current.structural) this.source.beginScan(this.current);
         this.objects++; break;
       }
@@ -90,15 +97,44 @@ export class Intake {
     this.codec.receiveInit();
     // Allow gzip framing overhead while Rust retains its decoded byte quotas.
     const encodedLimit = 2n * (BigInt(this.codec.limits.maxPackBytes) + BigInt(this.codec.limits.maxControlBytes));
-    for await (const bytes of requestBody(decodedBody(request, encodedLimit, "receive bytes"))) {
-      let offset = 0;
-      while (offset < bytes.length) {
-        const input = bytes.subarray(offset, Math.min(offset + 65536, bytes.length));
-        const event = this.codec.receiveStep(input, false);
-        await this.event(event, input); offset += event.consumed;
-        if (event.consumed === 0 && event.written === 0 && event.tag === 1) throw new Error("input decoder made no progress");
+    const discardLimit = this.store.env.REJECTION_DRAIN_BYTES ?? 64 * 1024 * 1024;
+    const discardMs = this.store.env.REJECTION_DRAIN_MS ?? 30000;
+    const budget = bodyBudget(request), draining = new AbortController();
+    const signal = budget.signal ? AbortSignal.any([budget.signal, draining.signal]) : draining.signal;
+    const input = requestBody(decodedBody(request, encodedLimit, "receive bytes"), 60000, { ...budget, signal });
+    let handedOff = false;
+    try {
+      for (;;) {
+        const next = await input.next(); if (next.done) break;
+        const bytes = next.value; let offset = 0;
+        try {
+          while (offset < bytes.length) {
+            if (this.store.env.JOB_SIGNAL?.aborted) throw new RequestError("repository job cancelled");
+            const part = bytes.subarray(offset, Math.min(offset + 65536, bytes.length));
+            const event = this.codec.receiveStep(part, false);
+            await this.event(event, part); offset += event.consumed;
+            if (event.consumed === 0 && event.written === 0 && event.tag === 1) throw new Error("input decoder made no progress");
+          }
+        } catch (error) {
+          if (!(error instanceof PolicyError)) throw error;
+          handedOff = true;
+          error.cancelDrain = async () => { draining.abort(); await input.return(); };
+          error.drain = async () => {
+            const deadline = Date.now() + discardMs;
+            let discarded = bytes.length - offset;
+            try {
+              while (discarded < discardLimit && Date.now() < deadline) {
+                let timer;
+                const item = await Promise.race([input.next(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("discard deadline")), Math.max(1, deadline - Date.now())); })]).finally(() => clearTimeout(timer));
+                if (item.done) break; discarded += item.value.length;
+              }
+            } catch { /* Keep the original Git-visible policy refusal. */ }
+            finally { draining.abort(); await input.return().catch(() => {}); }
+          };
+          throw error;
+        }
       }
-    }
+    } finally { if (!handedOff) await input.return(); }
     for (let attempts = 0; !this.eof && attempts < 128; attempts++) await this.event(this.codec.receiveStep(EMPTY, true), EMPTY);
     if (!this.eof || this.current || this.objects !== this.expected) throw new RequestError("intake did not close exactly");
     this.flushObjects();
@@ -123,7 +159,7 @@ export class Intake {
     for (;;) {
       const rows = this.store.exec("SELECT * FROM stage_objects INDEXED BY stage_ready_work WHERE stage=? AND verified=0 AND ready=1 ORDER BY node LIMIT 128", this.stage);
       if (!rows.length) break;
-      for (const row of rows) await this.delta(row);
+      for (const row of rows) { if (this.store.env.JOB_SIGNAL?.aborted) throw new RequestError("repository job cancelled"); await this.delta(row); }
     }
     if (this.store.exec("SELECT node FROM stage_objects WHERE stage=? AND (verified=0 OR scanned=0) LIMIT 1", this.stage).length) throw new RequestError("unresolved or cyclic delta base");
     const target = this.store.edgeTargetSQL("e.dst");

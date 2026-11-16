@@ -10,7 +10,8 @@ import { ByteCache, Store, sha256 } from "../src/storage.mjs";
 
 const lost = () => new Error("Network connection lost.");
 function store(blobs) {
-  return Object.assign(Object.create(Store.prototype), { blobs, usage: { r2Puts: 0, r2WrittenBytes: 0, r2Deletes: 0, r2Gets: 0, r2ReadBytes: 0, r2Retries: 0, r2Failures: 0 } });
+  // Network-only fixture; the real SQLite accounting is covered in policy tests.
+  return Object.assign(Object.create(Store.prototype), { blobs, ctx: { storage: { transactionSync: (operation) => operation() } }, exec: () => [], usage: { r2Puts: 0, r2WrittenBytes: 0, r2Deletes: 0, r2Gets: 0, r2ReadBytes: 0, r2Retries: 0, r2Failures: 0 } });
 }
 
 test("idempotent chunk writes and deletes tolerate lost acknowledgments", async () => {

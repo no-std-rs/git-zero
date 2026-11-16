@@ -73,14 +73,16 @@ export async function verify(client, source, want, git) {
   }
 }
 
-export async function reference(directory, repositoryRoot, git, format) {
+export async function reference(directory, repositoryRoot, git, format, { trace2 = null } = {}) {
   await git.run(directory, ["init", "--bare", "--initial-branch=main", "--object-format=" + format, "repo.git"]);
-  for (const [key, value] of [["http.receivepack", "true"], ["receive.unpackLimit", "0"], ["pack.threads", "1"], ["pack.allowPackReuse", "multi"]]) {
+  // The measured MAINTENANCE phase owns every index/graph update. Detached
+  // automatic maintenance can repack/delete its inputs concurrently.
+  for (const [key, value] of [["maintenance.auto", "false"], ["http.receivepack", "true"], ["receive.unpackLimit", "0"], ["pack.threads", "1"], ["pack.allowPackReuse", "multi"]]) {
     await git.run(join(directory, "repo.git"), ["config", key, value]);
   }
   const log = openSync(join(directory, "reference.log"), "wx");
   let child;
-  try { child = spawn("python3", [join(repositoryRoot, "tests/hosting_reference.py"), directory, "--git", git.binary], { stdio: ["pipe", "pipe", log] }); }
+  try { child = spawn("python3", [join(repositoryRoot, "tests/hosting_reference.py"), directory, "--git", git.binary, ...(trace2 ? ["--trace2", trace2] : [])], { stdio: ["pipe", "pipe", log] }); }
   finally { closeSync(log); }
   const lines = createInterface({ input: child.stdout });
   let timeout;

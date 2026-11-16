@@ -21,7 +21,10 @@ async function frontierRows(directory) {
     const database = new DatabaseSync(path, { readOnly: true });
     try {
       if (database.prepare("SELECT 1 FROM sqlite_master WHERE name='fetch_selected'").get()) {
-        result = Object.fromEntries(TABLES.map((table) => [table, database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count]));
+        result = Object.fromEntries(TABLES.map((table) => {
+          const privateTables = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB ?").all(`job_*_${table}`);
+          return [table, [table, ...privateTables.map((row) => row.name)].reduce((total, name) => total + database.prepare(`SELECT COUNT(*) AS count FROM ${name}`).get().count, 0)];
+        }));
       }
     } finally { database.close(); }
   }
@@ -62,7 +65,7 @@ testRuntimes("{runtime} reclaims fetch frontiers after a hard process crash", { 
   } finally { response?.destroy(); client?.destroy(); await server?.stop(); await rm(directory, { recursive: true, force: true }); }
 });
 
-testRuntimes("{runtime} releases a repository held by an idle response reader", { timeout: 90000 }, async (serve) => {
+testRuntimes("{runtime} serves browse beside an idle response and reclaims its private frontier at the idle deadline", { timeout: 90000 }, async (serve) => {
   const directory = await mkdtemp(join(tmpdir(), "git-zero-idle-response-"));
   let server, client, response;
   try {
@@ -70,11 +73,20 @@ testRuntimes("{runtime} releases a repository held by an idle response reader", 
     ({ client, response } = await pausedFetch(server, "idle"));
     const pending = await frontierRows(directory);
     assert.ok(pending.fetch_selected > 0, "the unread response must retain an active frontier");
-    // Leave the client and socket open: only the server's idle deadline can
-    // finish this response and admit the queued read to the same repository.
-    const state = await fetch(`${server.origin}/_test/idle/state`, { headers: headers(), signal: AbortSignal.timeout(75000) });
-    assert.equal(state.status, 200);
-    const ready = await state.json(); assert.equal(ready.refs, 1); assert.equal(ready.objects, 1);
+    // Leave the socket open. Browse must complete immediately, while only the
+    // unchanged server idle deadline retires this job's private scratch.
+    const started = Date.now();
+    const inspect = async () => {
+      const state = await fetch(`${server.origin}/_test/idle/state`, { headers: headers(), signal: AbortSignal.timeout(3000) });
+      assert.equal(state.status, 200); return state.json();
+    };
+    const ready = await inspect(); assert.equal(ready.refs, 1); assert.equal(ready.objects, 1);
+    assert.ok(Date.now() - started < 3000, "browse cannot wait behind the paused fetch");
+    assert.ok((await frontierRows(directory)).fetch_selected > 0, "browse must not clear live scratch");
+    await new Promise((resolve) => setTimeout(resolve, 55000));
+    assert.ok((await frontierRows(directory)).fetch_selected > 0, "preserve the original 60-second reader idle deadline");
+    const deadline = started + 75000;
+    while ((await frontierRows(directory)).fetch_selected > 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
     assert.deepEqual(await frontierRows(directory), Object.fromEntries(TABLES.map((table) => [table, 0])));
   } finally { response?.destroy(); client?.destroy(); await server?.stop(); await rm(directory, { recursive: true, force: true }); }
 });

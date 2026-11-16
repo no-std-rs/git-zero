@@ -13,6 +13,7 @@ test("publication transaction failures await private-pack reclamation", async ()
   const failure = new Error("injected transaction failure");
   const events = [];
   const store = {
+    exec(query) { assert.match(query, /^SELECT \* FROM stage_commands/); return []; },
     ctx: { storage: { transactionSync() { events.push("rollback"); throw failure; } } },
     async abandon(stage) { events.push(stage); await Promise.resolve(); events.push("reclaimed"); },
   };
@@ -61,6 +62,22 @@ test("pending attributes checks retain their policy when the durable schema upgr
     const rows=store.exec("SELECT stage,oid,checks FROM stage_blob_checks");
     assert.deepEqual(rows.map((row)=>({...row})),[{stage:"legacy",oid:"pending-attributes",checks:2}]);
   } finally { database.close(); }
+});
+
+test("the journal records only accepted changes and omits rejected atomic transactions", async () => {
+  for (const atomic of [false, true]) {
+    const { database, store, stage, oid } = verifiedStage("refs/tags/accepted");
+    try {
+      store.exec("UPDATE stages SET selected=? WHERE id=?", atomic ? 16 : 0, stage);
+      store.exec("INSERT INTO stage_commands(stage,seq,name,old_oid,new_oid,branch,creation,deletion) VALUES(?,1,?,?,?,0,0,0)", stage, Buffer.from("refs/tags/stale"), "2".repeat(40), oid);
+      const outcomes = await publish(store, stage);
+      assert.equal(outcomes[1].error, "stale ref");
+      assert.equal(store.exec("SELECT COUNT(*) AS n FROM publications")[0].n, atomic ? 0 : 1);
+      const updates = store.exec("SELECT name,old_oid,new_oid FROM publication_updates");
+      assert.equal(updates.length, atomic ? 0 : 1);
+      if (!atomic) assert.equal(Buffer.from(updates[0].name).toString(), "refs/tags/accepted");
+    } finally { database.close(); }
+  }
 });
 
 test("branch ancestry follows merge parents in paged, deduplicated storage", async () => {

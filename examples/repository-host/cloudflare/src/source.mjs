@@ -1,11 +1,10 @@
-import { hex, integer } from "./codec.mjs";
+import { CodecError, hex, integer } from "./codec.mjs";
 import { ByteCache, CacheBuffers, ChunkWriter, PAGE_BYTES } from "./storage.mjs";
 import { RequestError } from "./errors.mjs";
+import { MEMORY_LIMITS } from "./resources.mjs";
 
-const CANONICAL_ENTRY_BYTES = 8 * 1024 * 1024;
-const REPRESENTATION_ENTRY_BYTES = 1024 * 1024;
-// At most 96 bindings for names, 80 for edges; never buffer a whole tree.
-const METADATA_BATCH = 16;
+// Share object ownership per batch: at most 94 name / 71 edge bindings.
+const METADATA_BATCH = 23;
 const rowKey = (row) => row.stage ? `s:${row.stage}:${row.node}` : `o:${row.oid}`;
 const info = (row) => ({ kind: row.kind, size: row.size });
 
@@ -13,16 +12,18 @@ const info = (row) => ({ kind: row.kind, size: row.size });
 // reconstruction queries. Keeping verified bases resolved avoids repeatedly
 // interpreting the same deep delta chain for each requested output fragment.
 export class ObjectSource {
-  constructor(store, codec, stage, { ownedBuffers = false } = {}) {
-    this.store = store; this.codec = codec; this.stage = stage; this.ownsBuffers = ownedBuffers;
+  constructor(store, codec, stage, { ownedBuffers = false, storageBytes = null, readScratch = false } = {}) {
+    this.store = store; this.codec = codec; this.stage = stage; this.ownsBuffers = ownedBuffers; this.readScratch = readScratch;
+    this.resources = { ...MEMORY_LIMITS, ...(store.env?.JOB_OWNER?.readMemory ?? store.env?.MEMORY) };
+    this.storageBytes = storageBytes;
     // Owned views cannot escape beyond the next cache mutation. Intake consumes
     // them synchronously; fetch copies them into codec frames before yielding.
     const ownership = ownedBuffers ? new CacheBuffers() : null;
-    this.canonical = new ByteCache(24 * 1024 * 1024, 8192, ownership);
-    this.representations = new ByteCache(8 * 1024 * 1024, 8192, ownership);
-    this.chunks = new ByteCache(16 * 1024 * 1024, 8192, ownership);
+    this.canonical = new ByteCache(this.resources.canonicalCacheBytes, this.resources.cacheEntries, ownership);
+    this.representations = new ByteCache(this.resources.representationCacheBytes, this.resources.cacheEntries, ownership);
+    this.chunks = new ByteCache(this.resources.chunkCacheBytes, this.resources.cacheEntries, ownership);
     this.reader = null; this.readBuffer = null;
-    this.temporary = new Map();
+    this.temporary = new Map(); this.pins = new Map(); this.pinnedBytes = 0;
     this.bases = new Map();
     this.names = []; this.edges = []; this.graphStage = null;
     this.queries = 0; this.storageReads = 0; this.historicalModes = 0;
@@ -32,9 +33,12 @@ export class ObjectSource {
     this.readBuffer?.buffer.transfer(0);
     this.reader = null; this.readBuffer = null;
     this.bases.clear();
+    for (const value of this.pins.values()) value.buffer.transfer(0);
+    this.pins.clear(); this.pinnedBytes = 0;
     for (const cache of [this.canonical, this.representations, this.chunks]) cache.clear();
   }
 
+  check() { if (this.store.env?.JOB_SIGNAL?.aborted) throw new RequestError("repository job cancelled"); }
   key(row) {
     const physical = rowKey(row);
     let index = this.queryKeys.get(physical);
@@ -65,8 +69,9 @@ export class ObjectSource {
     // Only authenticated, immutable rows survive a lookup. A missing or
     // unresolved base must remain visible when validation advances.
     if (row?.verified) {
+      if (!this.resources.metadataEntries) return row;
       for (const alias of [key, rowKey(row)]) {
-        if (!this.bases.has(alias) && this.bases.size >= 256) this.bases.delete(this.bases.keys().next().value);
+        if (!this.bases.has(alias) && this.bases.size >= this.resources.metadataEntries) this.bases.delete(this.bases.keys().next().value);
         this.bases.set(alias, row);
       }
     }
@@ -74,7 +79,7 @@ export class ObjectSource {
   }
   cachedTemporary(row) {
     // process() captures these bodies; only larger objects create temp rows.
-    if (row.size <= CANONICAL_ENTRY_BYTES) return undefined;
+    if (!this.readScratch && row.size <= this.resources.canonicalCaptureBytes) return undefined;
     const key = rowKey(row);
     if (this.temporary.has(key)) return this.temporary.get(key);
     const value = this.store.exec("SELECT * FROM temp_objects WHERE stage=? AND object=?", this.stage, key)[0];
@@ -85,7 +90,8 @@ export class ObjectSource {
     return value;
   }
   rememberTemporary(key, value) {
-    if (!this.temporary.has(key) && this.temporary.size >= 256) this.temporary.delete(this.temporary.keys().next().value);
+    if (!this.resources.metadataEntries) return;
+    if (!this.temporary.has(key) && this.temporary.size >= this.resources.metadataEntries) this.temporary.delete(this.temporary.keys().next().value);
     this.temporary.set(key, value);
   }
   seed(row, bytes) {
@@ -94,7 +100,7 @@ export class ObjectSource {
   }
   descriptor(row, nesting = 0) {
     if (nesting > this.codec.limits.maxDepth) throw new Error("metadata recursion budget exceeded");
-    if (this.canonical.get(row.oid) || this.cachedTemporary(row) || row.wire_kind < 5) return { info: info(row) };
+    if (this.pins.has(rowKey(row)) || this.canonical.get(row.oid) || this.cachedTemporary(row) || row.wire_kind < 5) return { info: info(row) };
     const base = this.base(row);
     if (!base?.verified) throw new Error("delta base is absent or unverified");
     const view = this.descriptor(base, nesting + 1);
@@ -102,13 +108,29 @@ export class ObjectSource {
   }
 
   async chunkAt(row, offset, temporary = false) {
+    this.check();
     let chunk;
     if (temporary) chunk = this.store.exec("SELECT * FROM temp_chunks WHERE stage=? AND object=? AND start<=? ORDER BY start DESC LIMIT 1", this.stage, rowKey(row), offset)[0];
     else if (row.stage) chunk = this.store.exec("SELECT * FROM stage_chunks WHERE stage=? AND start<=? ORDER BY start DESC LIMIT 1", row.stage, offset)[0];
     else chunk = this.store.exec("SELECT * FROM chunks WHERE pack=? AND start<=? ORDER BY start DESC LIMIT 1", row.pack, offset)[0];
     if (!chunk || offset >= chunk.start + chunk.length) throw new Error("encoded storage range is absent");
-    const data = await this.store.get(chunk, this.chunks);
-    return data.subarray(offset - chunk.start);
+    const cached = this.chunks.get(chunk.key);
+    if (!cached && this.storageBytes !== null) {
+      if (chunk.length > this.storageBytes) throw new CodecError(-14, "stored chunk read budget");
+      this.storageBytes -= chunk.length;
+    }
+    const legacy = !cached && chunk.length > this.resources.chunkBytes;
+    // Loan the empty chunk-cache allowance to the authenticated legacy read.
+    // This also keeps the token profile inside its pool with 8 MiB old extents.
+    if (legacy) this.chunks.clear();
+    const excess = legacy ? Math.max(0, 2 * chunk.length - 2 * this.resources.chunkBytes - this.resources.chunkCacheBytes) : 0;
+    const release = excess ? await this.store.env.JOB_OWNER?.extra?.(excess) : null;
+    try {
+      const data = cached ?? await this.store.get(chunk, this.chunks);
+      const range = data.subarray(offset - chunk.start);
+      // A legacy extent must not escape its temporary reservation.
+      return legacy ? range.slice(0, PAGE_BYTES) : range;
+    } finally { release?.(); }
   }
 
   async encoded(row, offset, length) {
@@ -122,6 +144,8 @@ export class ObjectSource {
     while (written < length) {
       const reader = this.reader;
       if (reader.cursor === reader.input.length) {
+        // Do not retain a consumed legacy extent while authenticating the next.
+        reader.input = new Uint8Array();
         const bytes = await this.chunkAt(row, reader.wire);
         reader.input = bytes.subarray(0, Math.min(bytes.length, row.end_offset - reader.wire, PAGE_BYTES));
         // The inflater can resume this page after other chunk-cache reads.
@@ -149,7 +173,7 @@ export class ObjectSource {
     const key = rowKey(row);
     const full = this.representations.get(key);
     if (full) return full.subarray(offset, Math.min(offset + length, full.length));
-    if (row.packed_size <= REPRESENTATION_ENTRY_BYTES) {
+    if (row.packed_size <= this.resources.representationCaptureBytes) {
       const bytes = await this.encoded(row, 0, row.packed_size);
       this.representations.put(key, bytes);
       return bytes.subarray(offset, Math.min(offset + length, bytes.length));
@@ -171,7 +195,7 @@ export class ObjectSource {
 
   async readRow(row, kind, offset, length) {
     if (kind === 0) {
-      const cached = this.canonical.get(row.oid);
+      const cached = this.pins.get(rowKey(row)) ?? this.canonical.get(row.oid);
       if (cached) return cached.subarray(offset, Math.min(offset + length, cached.length));
       if (this.cachedTemporary(row)) {
         const chunk = await this.chunkAt(row, offset, true);
@@ -192,11 +216,11 @@ export class ObjectSource {
   flushMetadata() {
     try {
       if (this.names.length) {
-        this.store.exec(`INSERT INTO stage_names(stage,node,name,mode,dst,kind) VALUES${Array(this.names.length).fill("(?,?,?,?,?,?)").join(",")}`, ...this.names.flat());
+        this.store.exec(`WITH owner(stage,node) AS (VALUES(?,?)),entries(name,mode,dst,kind) AS (VALUES${this.names.map(() => "(?,?,?,?)").join(",")}) INSERT INTO stage_names SELECT owner.stage,owner.node,entries.* FROM owner,entries`, ...this.names[0].slice(0, 2), ...this.names.flatMap((row) => row.slice(2)));
         this.names.length = 0;
       }
       if (this.edges.length) {
-        this.store.exec(`INSERT OR IGNORE INTO stage_edges(stage,node,dst,kind,relation) VALUES${Array(this.edges.length).fill("(?,?,?,?,?)").join(",")}`, ...this.edges.flat());
+        this.store.exec(`WITH owner(stage,node) AS (VALUES(?,?)),links(dst,kind,relation) AS (VALUES${this.edges.map(() => "(?,?,?)").join(",")}) INSERT OR IGNORE INTO stage_edges SELECT owner.stage,owner.node,links.* FROM owner,links`, ...this.edges[0].slice(0, 2), ...this.edges.flatMap((row) => row.slice(2)));
         this.edges.length = 0;
       }
     } catch (error) {
@@ -264,12 +288,45 @@ export class ObjectSource {
     return digest;
   }
 
-  async process(row, scan = true, checks = 0) {
+  // Stream a verified published object's complete body or bounded subrange.
+  // Nested bases are described/read by range: no canonical base warming or
+  // temporary reconstruction is required for the product read API.
+  async *stream(row, range = null, { canonicalReserved = false } = {}) {
+    if (!canonicalReserved) this.codec.charge(0, range?.length ?? row.size);
+    this.queryKeys = new Map(); this.queryRows = [];
+    const root = this.key(row), descriptor = this.descriptor(row);
+    this.codec.rangeInit(root, range);
+    let written = 0, request = this.codec.rangeRequest();
+    try {
+      for (;;) {
+        if (request.tag === 20) {
+          const current = request.key.staged !== undefined && integer(request.key.staged) === root.staged ? row : this.lookup(request.key);
+          this.codec.rangeDescribe(current === row ? descriptor : this.descriptor(current));
+          request = this.codec.rangeRequest();
+        } else if (request.tag === 21) {
+          const current = request.key.staged !== undefined && integer(request.key.staged) === root.staged ? row : this.lookup(request.key);
+          request = this.codec.rangeFeed(await this.readRow(current, request.flags, integer(request.a), integer(request.b)));
+          this.codec.charge(1, request.consumed); written += request.written;
+          if (request.data.length) yield request.data;
+        } else if (request.tag === 22) break;
+        else throw new Error("unexpected streaming range event");
+      }
+      if (written !== (range?.length ?? row.size)) throw new Error("streamed object length differs");
+    } finally { this.codec.rangeCancel(); this.codec.sourceCancel(); this.reader = null; }
+  }
+
+  async pinFallback(row) {
+    if (this.pins.has(rowKey(row)) || this.cachedTemporary(row)) return;
+    const pin = this.pins.size < (this.store.env.READ_PIN_ENTRIES ?? 4096) && row.size <= (this.store.env.READ_PIN_BYTES ?? 4 * 1024 * 1024) - this.pinnedBytes;
+    await this.process(row, false, 0, !pin, pin);
+  }
+  async process(row, scan = true, checks = 0, forceTemporary = false, pin = false) {
+    this.check();
     this.queries++;
     this.codec.charge(0, row.size);
     // Designated policies may rescan a body reconstructed earlier in this
     // request. Reuse its authenticated temporary object and reserve it once.
-    const createTemporary = row.size > CANONICAL_ENTRY_BYTES && !this.cachedTemporary(row);
+    const createTemporary = !pin && (forceTemporary || row.size > this.resources.canonicalCaptureBytes) && !this.cachedTemporary(row);
     if (createTemporary) this.codec.charge(2, row.size);
     // Keys identify physical immutable representations within one query. An
     // identity delta may have the same canonical ID as its external base;
@@ -278,10 +335,11 @@ export class ObjectSource {
     const rootKey = this.key(row);
     const descriptor = this.descriptor(row);
     this.codec.rangeInit(rootKey); this.beginScan(row, scan, checks);
-    const captured = row.size <= CANONICAL_ENTRY_BYTES ? new Uint8Array(row.size) : null;
-    const temporary = createTemporary ? new ChunkWriter(this.store, this.stage, rowKey(row)) : null;
+    const captured = pin || (!forceTemporary && row.size <= this.resources.canonicalCaptureBytes) ? new Uint8Array(row.size) : null;
+    const temporary = createTemporary ? new ChunkWriter(this.store, this.stage, rowKey(row), this.readScratch) : null;
     let written = 0, digest, request = this.codec.rangeRequest();
     for (;;) {
+      this.check();
       if (request.tag === 20) {
         // The root may be quarantined; every descended base must be verified.
         const current = request.key.staged !== undefined && integer(request.key.staged) === rootKey.staged ? row : this.lookup(request.key);
@@ -320,7 +378,8 @@ export class ObjectSource {
       this.store.exec("UPDATE stage_objects SET oid=?,kind=?,size=?,depth=?,base_stage=?,base_node=?,base_oid=?,verified=1,scanned=1 WHERE stage=? AND node=?", digest, row.kind, row.size, row.depth, row.base_stage, row.base_node, row.base_oid, this.stage, row.node);
       this.finishScan(row);
     }
-    if (captured) this.canonical.put(digest, captured);
+    if (pin) { this.pins.set(rowKey(row), captured); this.pinnedBytes += captured.length; }
+    else if (captured) this.canonical.put(digest, captured);
     return digest;
   }
 }

@@ -88,11 +88,14 @@ pack set before transport. Distributed coordination, larger host-backed provider
 and deployed resource measurements remain open. See the
 [cache contract](async-pack-cache.md) and [roadmap](../ROADMAP.md).
 
-The repository host uses its own codec by default at
+The repository host factory accepts a caller-supplied compiled codec and explicit
+bindings, routes, auth mode, shared-bucket key prefix and resource bounds. Its
+Durable Object independently verifies direct-stub requests without relying on
+the outer entry. The thin reference deployment uses its own codec at
 `examples/repository-host/cloudflare/wrangler.toml`. Its Rust Wasm
 module has fixed memory and no allocator/imports. Runtime glue streams incoming
-packs into 8 MiB authenticated R2 chunks and records private object metadata in
-SQLite. Rust resolves delta ranges, hashes canonical objects and scans typed
+packs into 1 MiB authenticated R2 chunks and records private object metadata in
+SQLite. Legacy chunks up to 8 MiB remain readable. Rust resolves delta ranges, hashes canonical objects and scans typed
 graph links before a SQLite transaction publishes refs. The catalog stays in
 place when published; refs and stage visibility change atomically. No Git
 executable or external codec service participates in this path.
@@ -110,7 +113,10 @@ atomic updates, push options, deletion, HTTP chunking, concurrent stale updates,
 invalid graphs and cold restarts. The config defaults to `TEST_MODE=false`;
 private fixture endpoints require both test mode and authentication. Public
 receive requests use `/<repository>.git/info/refs?service=git-receive-pack` and
-`/<repository>.git/git-receive-pack`, with `HOST_TOKEN` supplied as a secret.
+`/<repository>.git/git-receive-pack`, with `HOST_TOKEN` supplied as a secret,
+or scoped gateway grants in `AUTH_MODE=gateway`.
+See the [versioned host contract](repository-host-v1.md) for grant minting and
+the cross-language test vector.
 
 The own-codec path also serves full clone/fetch in protocols 0/1/2, including
 SHA-256, raw ref prefixes, symbolic HEAD, annotated-tag peeling, gzip control
@@ -118,9 +124,29 @@ bodies and incremental negotiation. The existing Rust request parsers and ACK
 encoder serve both repository adapters and the external catalog. A fixed 4 MiB
 control arena keeps validated packet storage immutable while iterating wants and
 haves. Total Wasm linear memory is bounded at 6 MiB; object bodies remain outside
-that arena and the runtime caches remain bounded at 48 MiB.
-Each byte cache also has an independent 8,192-entry cap, so empty or tiny
-representations cannot exhaust memory through map metadata.
+that arena. Token deployments retain 48 MiB default byte caches; gateway mode
+uses 1.75 MiB, bounded pins and namespace-fair byte reservations across instances
+(default 14 MiB/fetch plus up-front legacy copies, 64 MiB pool). Four reused
+codec arenas remain charged while idle; one arena/working allowance is protected
+for bounded metadata. Routes reserve different envelopes; waiters never preempt
+active streams. Token mode is exempt from byte admission unless explicitly configured. Each fetch has
+private SQL scratch and a generation snapshot; reads and private pushes overlap.
+Only the short ref compare-and-swap publishes exclusively. Identical full clones
+share an independent generation-keyed R2 pack build and 192 KiB reader
+buffers, outside processing-job slots. Pre-header builder failure permits fallback. Delete fences
+and cancels live jobs, then waits for their I/O before reclaiming bytes. There is no default absolute
+stream lifetime: idle, minimum-throughput pack transfers and control-prefix
+deadlines have separate purposes. Fetch preparation/builds use progress bounds. Embedders can lower caches, captures, chunks, page limits and
+the reservation pool to leave room for Rust and the surrounding product. Bounds
+exclude unrelated VM/runtime/SQL allocations; see the
+[v1 memory envelope](repository-host-v1.md#memory-and-shared-isolate-scheduling).
+Caches and pins have entry bounds as well as byte bounds, including tiny bodies.
+
+Browse results carry signed per-object capabilities derived with HKDF and tied
+to a random repository incarnation and current proof lineage. Normal browser
+navigation needs no global closure. An outward persisted index serves other raw
+selectors, survives additive publication and rebuilds after destructive ref
+changes. Commit tree/parent links use authenticated typed catalog edges.
 
 Fetch selection uses SQLite queues, not repository-sized JS arrays. Compressed
 entries are copied in physical pack order; OFS deltas become REF deltas. When a
@@ -137,7 +163,10 @@ preserves its internal OFS distances, and catalog coverage proves that every
 REF base is included. A single covering pack streams unchanged. This path is
 available only without known haves or shallow/filter extensions. It can include
 extra published objects from the same repository: `HOST_TOKEN` grants access to
-that entire repository. Otherwise fetch uses the per-object selection above.
+that entire repository in compatibility mode. Gateway mode defaults to current
+reachability and disables whole-catalog reuse; catalog wants remain an explicit
+option. Rewrites leave physical bytes until reclamation or repository deletion.
+Otherwise fetch uses the per-object selection above.
 
 The storage path supports depth-limited clone, relative deepening, unshallowing,
 and `blob:none`/`blob:limit` filters. Rust shares history and blob decisions with
@@ -222,3 +251,11 @@ The core and native adapter libraries never enable `std` or `alloc`. The native
 CLI uses `std` for startup arguments, stdout, and diagnostics. JavaScript and the
 test harnesses use their host runtimes' memory management; the no-allocation
 guarantee applies to Rust core/adapter operations, not the surrounding platform.
+
+The v1 product API adds explicit format/default-branch creation, description and
+bounded retirement/purge, current-ref-reachable browse reads, a transactional
+actor/ref-update journal and per-repository force/byte policy. New state is
+additive; legacy R2 payload accounting is resumable without rewriting catalogs.
+Every R2 content/tmp/fence key is under the configured host prefix; repository
+delete clears only its own content prefix and native database, preserving other
+product objects and a permanent retirement fence.

@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startStandalone } from "./standalone.mjs";
 
-const env = { HOST_TOKEN: "git-zero-local-storage-test", BLOBS: { async delete() {} } };
+const env = { HOST_TOKEN: "git-zero-local-storage-test", BLOBS: { async get() { return null; }, async delete() {} } };
 const request = (path = "/_test/errors/state") => new Request("http://fixture" + path, { headers: { ...headers(), "x-git-zero-namespace": "errors" } });
 
 test("SQLite initialization failures return a server error and can recover", async () => {
@@ -29,7 +29,7 @@ test("SQLite initialization failures return a server error and can recover", asy
 test("failed cold R2 recovery is retried before serving the same repository instance", async () => {
   const database = new DatabaseSync(":memory:"), ctx = sqliteContext(database);
   let deletes = 0, fail = true;
-  const settings = { ...env, TEST_MODE: "true", BLOBS: { async delete() { deletes++; if (fail) throw new Error("injected R2 unavailable"); } } };
+  const settings = { ...env, TEST_MODE: "true", BLOBS: { async get() { return null; }, async delete() { deletes++; if (fail) throw new Error("injected R2 unavailable"); } } };
   const store = new Store(ctx, settings, "errors"); store.initialize(0);
   const stage = store.stage(0); store.exec("INSERT INTO stage_chunks VALUES(?,0,'owned-chunk',0,1,'digest')", stage);
   const repository = new OwnRepository(ctx, settings);

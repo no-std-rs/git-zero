@@ -1,5 +1,5 @@
 // Instance-scoped resource measurements. Missing billing dimensions stay unknown.
-export const FIELDS = ["sqlCalls", "sqlFailures", "sqlRowsRead", "sqlRowsWritten", "r2Gets", "r2Puts", "r2Deletes", "r2Failures", "r2Retries", "r2ReadBytes", "r2WrittenBytes"];
+export const FIELDS = ["sqlCalls", "sqlFailures", "sqlRowsRead", "sqlRowsWritten", "r2Gets", "r2FenceGets", "r2Puts", "r2Deletes", "r2Failures", "r2Retries", "r2ReadBytes", "r2WrittenBytes"];
 const SQL = new Set(FIELDS.slice(0, 4));
 const ROWS = new Set(["sqlRowsRead", "sqlRowsWritten"]);
 const INVENTORY = ["objects", "refs", "stagedObjects", "stagedChunks", "temporaryObjects", "temporaryChunks"];
