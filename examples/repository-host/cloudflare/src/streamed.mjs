@@ -9,8 +9,9 @@ const host = createRepositoryHost({
   healthPath: "/health", testPrefix: "/_test", testEnabled: (env) => env.TEST_MODE === "true",
   implicitCreate: (env) => env.IMPLICIT_CREATE ?? true, objectFormat: (env) => Number(env.REPO_FORMAT ?? 0),
   policy: (env) => ({ allowNonFastForward: env.ALLOW_NON_FAST_FORWARD === "true", maxStoredBytes: env.MAX_STORED_BYTES || null, maxPushBytes: env.MAX_PUSH_BYTES || null }),
-  // Preserve the reference suite's independent concurrent idle-body requests.
-  // Embedded scripts default to one active job and should budget their isolate.
+  packCacheEnabled: (env) => env.PACK_CACHE_ENABLED ?? env.AUTH_MODE === "gateway",
+  // Token deployments preserve their uncapped admission defaults. Gateway mode
+  // reserves codec/cache bytes across repositories in this factory's isolate.
 });
 export const OwnRepository = host.Repository;
 export default { fetch: host.fetch };

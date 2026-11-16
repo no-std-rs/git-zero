@@ -17,7 +17,7 @@ function variable(value) { const out = []; do { const b = value & 127; value = M
 for (const format of [0, 1]) test(`real Git fetch ignores stored quota and pending accounting, preflights fallback format=${format}`, { timeout: 60000 }, async () => {
   const db = new DatabaseSync(":memory:"), ctx = sqliteContext(db), data = new Map(), dir = await mkdtemp(join(tmpdir(), "git-zero-fetch-quota-")); let host, observedScratch = false;
   const env = { TOKEN, BLOBS: { async get(key) { const value = data.get(key); return value ? { size: value.length, async arrayBuffer() { return value.slice().buffer; } } : null; }, async put(key, value) { data.set(key, new Uint8Array(value).slice()); if (key.includes("/tmp/") && host?.store?.exec("SELECT 1 FROM read_scratch WHERE key=?", key).length) observedScratch = true; }, async delete(keys) { for (const key of keys) data.delete(key); }, async list({ prefix, limit }) { const keys = [...data.keys()].filter((key) => key.startsWith(prefix)).sort(); return { objects: keys.slice(0, limit).map((key) => ({ key })), truncated: keys.length > limit }; } } };
-  function instance(codecLimits = {}) { const factory = createRepositoryHost({ codec, authMode: "token", bindings: { repositories: "REPOS", objects: "BLOBS", token: "TOKEN" }, routePrefix: "", keyPrefix: "", codecLimits }); return new factory.Repository(ctx, env); }
+  function instance(codecLimits = {}, extra = {}) { const factory = createRepositoryHost({ codec, authMode: "token", bindings: { repositories: "REPOS", objects: "BLOBS", token: "TOKEN" }, routePrefix: "", keyPrefix: "", codecLimits, ...extra }); return new factory.Repository(ctx, env); }
   host = instance();
   const call = (route, method = "GET", body, type = "application/json") => host.fetch(new Request(`http://host/quota.git/${route}`, { method, headers: { authorization: `Bearer ${TOKEN}`, "x-git-zero-namespace": "quota", "content-type": type }, ...(body === undefined ? {} : { body }) }));
   const server = createServer(async (request, response) => {
@@ -54,6 +54,7 @@ for (const format of [0, 1]) test(`real Git fetch ignores stored quota and pendi
       assert.equal((await git(["-C", client, "rev-parse", "refs/tags/large"])).trim(), target.id.toString("hex"));
       await host.queue;
       assert.equal(host.store.exec("SELECT COUNT(*) n FROM read_scratch")[0].n, 0);
+      assert.equal(host.store.exec("SELECT bytes FROM read_scratch_usage")[0].bytes, 0);
       assert.equal(host.store.exec("SELECT COUNT(*) n FROM temp_chunks")[0].n, 0);
       assert.equal(host.store.storageAccounting().ready, !pending, "fetch never forces or blocks on write accounting");
     }
@@ -64,16 +65,21 @@ for (const format of [0, 1]) test(`real Git fetch ignores stored quota and pendi
     assert.notEqual(refused.status, 200, "known reconstruction failure must precede streamed headers");
     assert.match(await refused.text(), /budget|codec/i); await host.queue;
     assert.equal(host.store.exec("SELECT COUNT(*) n FROM temp_chunks")[0].n, 0);
+    host = instance({}, { readScratchRepositoryBytes: 1 });
+    const scratch = await call("git-upload-pack", "POST", body, "application/x-git-upload-pack-request");
+    assert.equal(scratch.status, 413); assert.match(await scratch.text(), /read scratch budget/); await host.queue;
+    assert.equal(host.store.exec("SELECT bytes FROM read_scratch_usage")[0].bytes, 0);
+    host = instance({}, { fetchPrepareMs: 1 });
+    const timed = await call("git-upload-pack", "POST", body, "application/x-git-upload-pack-request");
+    assert.equal(timed.status, 504); assert.match(await timed.text(), /preparation deadline/); await host.queue;
     host = instance();
     const active = await call("git-upload-pack", "POST", body, "application/x-git-upload-pack-request");
     assert.equal(active.status, 200);
-    let deletionFinished = false;
-    const deleting = call("api/v1/repository", "DELETE").then((response) => { deletionFinished = true; return response; });
-    await delay(30);
-    assert.equal(deletionFinished, false, "DELETE must queue behind a live fetch stream");
-    assert.ok([...data.keys()].some((key) => key.includes("/chunks/")), "published chunks remain owned while the reader is active");
-    assert.ok((await active.arrayBuffer()).byteLength > SIZE); await host.queue;
-    let deleted = await deleting;
+    const deletedFirst = await call("api/v1/repository", "DELETE");
+    assert.equal(deletedFirst.status, 202, "DELETE fences immediately while live I/O settles");
+    await assert.rejects(active.arrayBuffer(), /deleted|cancelled/);
+    await host.queue;
+    let deleted = deletedFirst;
     while (deleted.status === 202) { await deleted.arrayBuffer(); deleted = await call("api/v1/repository", "DELETE"); }
     assert.equal(deleted.status, 200, await deleted.clone().text()); await deleted.arrayBuffer(); await host.queue;
     assert.equal([...data.keys()].some((key) => key.startsWith("repositories/quota/")), false);

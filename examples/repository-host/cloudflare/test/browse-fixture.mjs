@@ -36,6 +36,7 @@ export async function source(root, format) {
   const tree = git(directory, ["rev-parse", "HEAD^{tree}"]).toString().trim();
   const longCommit = git(directory, ["hash-object", "-t", "commit", "-w", "--stdin"], `tree ${tree}\nauthor A <a@b> 1 +0000\ncommitter B <b@c> 2 -0130\n\nlong subject\n\n${"body\n".repeat(20000)}`).toString().trim(); git(directory, ["tag", "long-message", longCommit]);
   const upper = git(directory, ["hash-object", "-t", "commit", "-w", "--stdin"], `tree ${tree.toUpperCase()}\nparent ${tip.toUpperCase()}\nauthor A <a@b> 1 +0000\ncommitter B <b@c> 2 -0130\n\nuppercase links\n`).toString().trim(); git(directory, ["tag", "upper-links", upper]);
+  const trailing = git(directory, ["hash-object", "--literally", "-t", "commit", "-w", "--stdin"], `tree ${tree}\nparent ${tip}\nauthor A <a@b> 1 +0000\ncommitter B <b@c> 2 -0130\nparent ${first}\ntree ${emptyTree}\n\nlate structural lookalikes\n`).toString().trim(); git(directory, ["tag", "late-headers", trailing]);
   git(directory, ["checkout", "--orphan", "other"]); git(directory, ["rm", "-rf", "."]);
   await writeFile(join(directory, "different"), "unrelated root\n"); git(directory, ["add", "."]); git(directory, ["commit", "-m", "other root"]);
   const other = git(directory, ["rev-parse", "HEAD"]).toString().trim(); git(directory, ["checkout", "main"]);
@@ -68,6 +69,10 @@ export async function compare(fixture, get) {
   const upper = await get("history?rev=upper-links&limit=3");
   assert.deepEqual(upper.commits.map((commit) => commit.oid), git(directory, ["rev-list", "--first-parent", "upper-links"]).toString().trim().split("\n"));
   assert.equal(upper.commits[0].tree, git(directory, ["rev-parse", "HEAD^{tree}"]).toString().trim()); assert.deepEqual(upper.commits[0].parents, [tip]);
+  const late = await get("commit?rev=late-headers");
+  assert.equal(late.tree, treeId(directory));
+  assert.deepEqual(late.parents, git(directory, ["show", "-s", "--format=%P", "late-headers"]).toString().trim().split(" "));
+  assert.deepEqual((await get("history?rev=late-headers&limit=3")).commits.map((c) => c.oid), git(directory, ["rev-list", "--first-parent", "--max-count=3", "late-headers"]).toString().trim().split("\n"));
   const commits = []; cursor = null;
   do { const page = await get(`history?limit=1${cursor ? `&cursor=${cursor}` : ""}`); commits.push(...page.commits); cursor = page.nextCursor; } while (cursor);
   assert.deepEqual(commits.map((entry) => entry.oid), git(directory, ["rev-list", "--first-parent", "HEAD"]).toString().trim().split("\n"));
@@ -79,3 +84,5 @@ export async function compare(fixture, get) {
   }
   return { entries, commits };
 }
+
+function treeId(directory) { return git(directory, ["rev-parse", "HEAD^{tree}"]).toString().trim(); }

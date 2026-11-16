@@ -1,7 +1,7 @@
 // Independent S3 signature verifier and durable opaque-byte fixture. This is
 // test storage only; production workerd connects directly to the real R2 API.
 import assert from "node:assert/strict";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
@@ -36,7 +36,7 @@ async function s3(directory, getFailure, deleteFailures) {
       assert.ok(timingSafeEqual(expected, Buffer.from(auth[4], "hex")));
       const path = join(directory, digest(request.url));
       if (request.method === "PUT") {
-        const temporary = `${path}.pending`; await writeFile(temporary, body); await rename(temporary, path);
+        const temporary = `${path}.${randomUUID()}.pending`; await writeFile(temporary, body); await rename(temporary, path);
         await writeFile(path + ".key", decodeURIComponent(url.pathname.slice("/bucket/".length)));
         response.writeHead(200); response.end();
       } else if (request.method === "DELETE") {
@@ -49,7 +49,8 @@ async function s3(directory, getFailure, deleteFailures) {
         assert.ok(limit >= 1 && limit <= 64);
         const keys = [];
         for (const file of await readdir(directory)) if (file.endsWith(".key")) {
-          const key = await readFile(join(directory, file), "utf8");
+          let key;
+          try { key = await readFile(join(directory, file), "utf8"); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
           if (key.startsWith(prefix)) keys.push(key);
         }
         keys.sort();
@@ -87,13 +88,13 @@ async function s3(directory, getFailure, deleteFailures) {
   return { faults, url: `http://127.0.0.1:${server.address().port}/bucket`, stop: async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 
-export async function startStandalone(persist, { format = 0, cwd = fileURLToPath(root), getFailure, deleteFailures = 0, hostToken = TOKEN } = {}) {
+export async function startStandalone(persist, { format = 0, cwd = fileURLToPath(root), getFailure, deleteFailures = 0, hostToken = TOKEN, authMode = "token", grantKey = "", packCache = false } = {}) {
   const state = join(persist, "sqlite"); await mkdir(state, { recursive: true });
   const storage = await s3(join(persist, "r2"), getFailure, deleteFailures);
   const child = spawn(fileURLToPath(new URL("node_modules/workerd/bin/workerd", root)), [
     "serve", "workerd.capnp", "--experimental", "--directory-path", `state=${state}`,
     "--socket-addr", "http=127.0.0.1:0", "--control-fd", "1",
-  ], { cwd, env: { ...process.env, HOST_TOKEN: hostToken ?? "", TEST_MODE: "true", REPO_FORMAT: String(format), R2_S3_URL: storage.url, R2_ACCESS_KEY_ID: ACCESS, R2_SECRET_ACCESS_KEY: SECRET }, stdio: ["ignore", "pipe", "pipe"] });
+  ], { cwd, env: { ...process.env, HOST_TOKEN: hostToken ?? "", AUTH_MODE: authMode, GRANT_KEY: grantKey, PACK_CACHE_ENABLED: String(packCache), TEST_MODE: "true", REPO_FORMAT: String(format), R2_S3_URL: storage.url, R2_ACCESS_KEY_ID: ACCESS, R2_SECRET_ACCESS_KEY: SECRET }, stdio: ["ignore", "pipe", "pipe"] });
   let logs = "", exited = false;
   child.once("exit", () => { exited = true; });
   const stop = async (signal = "SIGTERM") => {

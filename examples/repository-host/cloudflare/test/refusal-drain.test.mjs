@@ -19,7 +19,11 @@ test("hidden, read-only, mismatched-stub and busy POST refusals drain bounded bo
   let held;
   try {
     for (const [call, grant, namespace, status] of [[(req) => factory.fetch(req, env), "invalid", "repo", 404], [(req) => repo.fetch(req), mint("repo", "read"), "repo", 200], [(req) => repo.fetch(req), mint("other", "write"), "other", 404], [(req) => repo.fetch(req), mint("repo", "write"), "repo", 404]]) {
-      const body = upload(), response = await call(request(body.stream, grant, namespace)); assert.equal(response.status, status); assert.equal(body.state().ended, true); await response.arrayBuffer();
+      const body = upload(), response = await call(request(body.stream, grant, namespace)); assert.equal(response.status, status); if (status === 404 && (grant === "invalid" || namespace === "other")) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        assert.equal(body.state().cancelled, true); assert.ok(body.state().sent <= 18, `unauthenticated discard is bounded to 1 MiB plus crossing/lookahead chunks: ${JSON.stringify(body.state())}`);
+      } else assert.equal(body.state().ended, true);
+      await response.arrayBuffer();
       assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().length, 0, "refusal must not initialize a nonexistent repository");
     }
     const headers = { "x-git-zero-namespace": "repo", "x-git-zero-grant": mint("repo", "admin"), "content-type": "application/json" };

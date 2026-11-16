@@ -13,6 +13,7 @@ function request(path, expiry, init = {}) {
 
 test("a grant admitted before expiry survives the preceding response stream", { timeout: 15000 }, async () => {
   const database = new DatabaseSync(":memory:"), repository = new OwnRepository(sqliteContext(database), env);
+  repository.gate.limit = 1;
   let first;
   try {
     assert.equal((await repository.fetch(request("repo.git/api/v1/repository", undefined, { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201);
@@ -46,7 +47,9 @@ test("authorization precedes queued alarm recovery as well as response ownership
   const database = new DatabaseSync(":memory:"), repository = new OwnRepository(sqliteContext(database), env);
   await (await repository.fetch(request("_test/repo/state"))).json();
   repository.store.recover = async () => { started(); await held; };
-  const alarm = repository.alarm(); await recovering;
+  repository.store.recoveryDue = 0;
+  // Simulate cold activation recovery: warm maintenance never gates requests.
+  const alarm = repository.alarm(); repository.coldRecovery = alarm; await recovering;
   const before = repository.queue, expiry = Math.floor(Date.now() / 1000) + 2;
   const queued = repository.fetch(request("_test/repo/state", expiry));
   while (repository.queue === before) await tick();

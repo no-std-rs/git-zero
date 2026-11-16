@@ -54,14 +54,14 @@ for (const format of [0, 1]) test(`push record is atomic, actor-exact, resumable
   } finally { db.close(); }
 });
 
-test("old repositories expose a durable journal coverage boundary without rewriting history", () => {
+test("old repositories expose a durable journal coverage boundary without rewriting history", async () => {
   const db = new DatabaseSync(":memory:"), ctx = sqliteContext(db), env = { BLOBS: {} };
   try {
     db.exec("CREATE TABLE repository(id INTEGER PRIMARY KEY,format INTEGER NOT NULL,generation INTEGER NOT NULL DEFAULT 0,object_count INTEGER NOT NULL DEFAULT 0,head BLOB NOT NULL)");
     db.prepare("INSERT INTO repository VALUES(1,0,17,0,?)").run(Buffer.from("refs/heads/main"));
     const store = new Store(ctx, env, "legacy");
-    assert.equal(changes(store, new Request("http://host/legacy.git/api/v1/changes?after=0")).status, 409);
-    assert.equal(changes(store, new Request("http://host/legacy.git/api/v1/changes?after=17")).status, 200);
+    assert.equal((await changes(store, new Request("http://host/legacy.git/api/v1/changes?after=0"))).status, 409);
+    assert.equal((await changes(store, new Request("http://host/legacy.git/api/v1/changes?after=17"))).status, 200);
     store.exec("UPDATE repository SET generation=18"); new Store(ctx, env, "legacy");
     assert.equal(store.exec("SELECT generation FROM publication_start")[0].generation, 17);
   } finally { db.close(); }

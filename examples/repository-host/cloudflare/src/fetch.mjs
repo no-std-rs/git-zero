@@ -1,24 +1,29 @@
 import { hex, integer } from "./codec.mjs";
 import { bytes, FETCH_TABLES, PAGE_BYTES } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
-import { requestBody, decodedBody } from "./body.mjs";
+import { requestBody, decodedBody, bodyBudget } from "./body.mjs";
 import { ApiError } from "./api.mjs";
+import { proveRaw } from "./reachability.mjs";
 import { RequestError } from "./errors.mjs";
 
 const encode = (value) => new TextEncoder().encode(value);
 const fromHex = (value) => Uint8Array.from(value.match(/../g), (pair) => Number.parseInt(pair, 16));
+
+export class WantError extends RequestError {}
 
 // All Git framing/options arrive as typed Rust events. SQLite holds the work
 // queues; the host never loads a repository-sized object selection into memory.
 export class FetchJob {
   constructor(store, codec, version) {
     this.store = store; this.codec = codec; this.version = version;
-    this.temporary = crypto.randomUUID();
+    this.temporary = store.jobId ?? crypto.randomUUID();
     this.source = new ObjectSource(store, codec, this.temporary, { ownedBuffers: true, readScratch: true });
+    this.preparationDeadline = Infinity;
     this.steps = 0; this.allCommitWants = true;
   }
   reset() { for (const table of FETCH_TABLES) this.store.exec(`DELETE FROM ${table}`); }
-  tick() { if (++this.steps > this.codec.limits.maxObjects) throw new RequestError("fetch graph work budget exceeded"); }
+  checkPreparation() { if (this.store.env?.JOB_SIGNAL?.aborted) throw new RequestError("repository job cancelled"); if (Date.now() >= this.preparationDeadline) throw new ApiError("fetch preparation deadline exceeded", 504); }
+  tick() { this.checkPreparation(); if (++this.steps > this.codec.limits.maxObjects) throw new RequestError("fetch graph work budget exceeded"); }
   async *references(v2 = false) {
     this.codec.uploadInit(this.version);
     yield* this.refRows(v2);
@@ -39,6 +44,14 @@ export class FetchJob {
     yield this.codec.uploadFlush();
   }
   want(id) {
+    if (this.store.env?.WANT_POLICY === "reachable") {
+      const tip = this.store.exec("SELECT 1 FROM refs WHERE oid=? OR peeled=? LIMIT 1", id, id).length;
+      if (!tip) {
+        const generation = this.store.exec("SELECT generation FROM repository WHERE id=1")[0].generation;
+        try { if (!proveRaw(this.store, generation, id, this.store.env.READ_LIMITS)) throw new WantError("want is not reachable from current refs"); }
+        catch (error) { if (error.code === "reachability_index_building") throw new WantError(error.message); throw error; }
+      }
+    }
     // Freeze every explicit tag target before selection starts, so queue order
     // cannot hide filter exceptions for intermediate tags or the peeled object.
     for (;;) {
@@ -58,15 +71,19 @@ export class FetchJob {
     this.reset(); this.codec.uploadInit(this.version);
     const encodedLimit = 2n * BigInt(this.codec.limits.maxControlBytes) + 64n;
     const stream = decodedBody(request, encodedLimit, "fetch controls");
-    for await (const bytes of requestBody(stream)) {
+    for await (const bytes of requestBody(stream, 60000, bodyBudget(request))) {
       for (let offset = 0; offset < bytes.length; offset += PAGE_BYTES) this.codec.uploadAppend(bytes.subarray(offset, offset + PAGE_BYTES));
     }
-    const parsed = this.codec.uploadParse();
+    this.parseControls(); await this.selection();
+  }
+  parseControls() {
+    const parsed = this.codec.uploadParse(); this.parsedFlags = parsed.flags;
     this.command = parsed.flags & 255; this.band = (parsed.flags >> 8) & 255;
     this.done = !!(parsed.flags & (1 << 16));
     this.includeTags = !!(parsed.flags & (1 << 17));
     this.ofsDelta = !!(parsed.flags & (1 << 21));
     this.treeFiltered = !!(parsed.flags & (1 << 23));
+    this.preparationDeadline = this.store.env?.FETCH_PREPARE_MS ? Date.now() + this.store.env?.FETCH_PREPARE_MS : Infinity;
     if (this.command !== 2) return;
     for (;;) {
       const event = this.codec.uploadNext(); if (event.tag === 74) break;
@@ -84,11 +101,30 @@ export class FetchJob {
     }
     this.hasBoundaries = this.store.exec("SELECT 1 FROM fetch_shallow LIMIT 1").length > 0;
     this.history = this.codec.uploadHistory(this.hasBoundaries).flags;
-    if (this.done || ((this.history & 8) && (this.history & 1))) {
-      if (!(this.done && this.reusable())) this.select();
+  }
+  async selection() {
+    if (this.command === 2 && (this.done || ((this.history & 8) && (this.history & 1)))) {
+      if (!(this.done && this.reusable())) await this.select();
     }
   }
+  async decodeSaved() {
+    this.reset(); this.codec.uploadInit(this.version);
+    for (const row of this.store.exec("SELECT data FROM job_controls WHERE job=? ORDER BY seq", this.temporary)) this.codec.uploadAppend(bytes(row.data));
+    this.parseControls();
+  }
+  detach() { this.source?.releaseCaches(); this.source = null; this.codec = null; }
+  replay(codec) {
+    this.codec = codec; this.source = new ObjectSource(this.store, codec, this.temporary, { ownedBuffers: true, readScratch: true });
+    codec.uploadInit(this.version);
+    for (const row of this.store.exec("SELECT data FROM job_controls WHERE job=? ORDER BY seq", this.temporary)) codec.uploadAppend(bytes(row.data));
+    codec.uploadParse();
+    if (this.command === 2) { while (codec.uploadNext().tag !== 74) {} codec.uploadHistory(this.hasBoundaries); }
+    this.preparationDeadline = this.store.env?.FETCH_PREPARE_MS ? Date.now() + this.store.env.FETCH_PREPARE_MS : Infinity;
+  }
+  maximumWireBytes() { return this.packBytes + 16 * (Math.ceil(this.packBytes / 512) + 6 * this.outputObjects + 128); }
+  cacheable() { return this.command === 2 && this.done && (this.history & 4) && !this.hasBoundaries && !this.store.exec("SELECT 1 FROM fetch_haves LIMIT 1").length; }
   reusable() {
+    if (this.store.env?.WANT_POLICY === "reachable") return false;
     if (!(this.history & 4) || !this.allCommitWants) return false;
     if (this.store.exec("SELECT 1 FROM fetch_haves LIMIT 1").length) return false;
     if (!this.ofsDelta && this.store.exec("SELECT 1 FROM stages WHERE phase='published' AND reusable=1 AND expected>0 AND has_ofs<>0 LIMIT 1").length) return false;
@@ -97,13 +133,15 @@ export class FetchJob {
     if (!sources.count || sources.objects !== repository.object_count) return false;
     const length = sources.bytes - (sources.count - 1) * (12 + this.codec.idBytes);
     if (!Number.isSafeInteger(length) || length > this.codec.limits.maxPackBytes || sources.objects > this.codec.limits.maxObjects) return false;
+    this.packBytes = length; this.outputObjects = sources.objects;
     this.rawSources = sources; return true;
   }
-  walk(table, { excludeCommon = false, snapshots = false, nonCommit = false } = {}) {
+  async walk(table, { excludeCommon = false, snapshots = false, nonCommit = false } = {}) {
     const target = this.store.edgeTargetSQL("e.dst");
     for (;;) {
       const pending = this.store.exec(`SELECT oid FROM ${table} WHERE walked=0 ORDER BY oid LIMIT 128`);
       if (!pending.length) break;
+      await new Promise((resolve) => setTimeout(resolve, 0)); this.checkPreparation();
       for (const item of pending) {
         this.tick();
         const row = this.store.published(item.oid);
@@ -113,12 +151,13 @@ export class FetchJob {
       }
     }
   }
-  historyWalk(table, probe = false) {
+  async historyWalk(table, probe = false) {
     const exclude = !(this.history & 1) && !probe;
     const target = this.store.edgeTargetSQL("e.dst"), provided = this.treeFiltered && !probe;
     for (;;) {
       const rows = this.store.exec(`SELECT f.oid,f.depth,s.oid IS NOT NULL AS boundary,w.oid IS NOT NULL AS wanted,${provided ? "p.oid IS NOT NULL" : "0"} AS provided FROM ${table} f LEFT JOIN fetch_shallow s ON s.oid=f.oid LEFT JOIN fetch_wants w ON w.oid=f.oid${provided ? " LEFT JOIN fetch_probe p ON p.oid=f.oid" : ""} WHERE f.walked=0 AND f.depth=(SELECT MIN(depth) FROM ${table} WHERE walked=0) ORDER BY f.oid LIMIT 128`);
       if (!rows.length) return;
+      await new Promise((resolve) => setTimeout(resolve, 0)); this.checkPreparation();
       for (const item of rows) {
         this.tick();
         const row = this.store.published(item.oid);
@@ -131,18 +170,18 @@ export class FetchJob {
       }
     }
   }
-  select() {
+  async select() {
     // A have cuts wanted commit traversal. Its snapshot also proves trees and
     // blobs already present, without walking every historical parent merely
     // to send a small increment. Unlisted older common history may be resent;
     // this is a valid full pack and never assumes an absent object is present.
     if (!(this.history & 1)) {
       this.store.exec("INSERT OR IGNORE INTO fetch_common(oid) SELECT oid FROM fetch_haves");
-      this.walk("fetch_common", { snapshots: true });
+      await this.walk("fetch_common", { snapshots: true });
     }
     if (this.history & 2) {
       this.store.exec("INSERT INTO fetch_probe(oid) SELECT oid FROM fetch_wants");
-      this.historyWalk("fetch_probe", true);
+      await this.historyWalk("fetch_probe", true);
       const nearest = this.store.exec("SELECT MIN(p.depth) AS depth FROM fetch_probe p JOIN fetch_shallow s ON s.oid=p.oid")[0].depth;
       this.history = this.codec.uploadHistory(this.hasBoundaries, nearest ?? 0).flags;
     }
@@ -151,7 +190,7 @@ export class FetchJob {
       // reported commit references it. Common commits still cut tag history.
       this.store.exec("DELETE FROM fetch_probe");
       this.store.exec("INSERT INTO fetch_probe(oid) SELECT w.oid FROM fetch_wants w WHERE EXISTS(SELECT 1 FROM stage_objects o INDEXED BY published_object_ids JOIN stages s ON s.id=o.stage WHERE o.oid=w.oid AND o.kind<>1 AND s.phase='published')");
-      this.walk("fetch_probe", { nonCommit: true });
+      await this.walk("fetch_probe", { nonCommit: true });
       this.store.exec("DELETE FROM fetch_common WHERE oid IN(SELECT oid FROM fetch_probe)");
       this.store.exec("DELETE FROM fetch_probe");
     }
@@ -162,7 +201,7 @@ export class FetchJob {
       this.store.exec("INSERT INTO fetch_probe(oid) SELECT oid FROM fetch_wants");
     }
     this.store.exec("INSERT INTO fetch_selected(oid) SELECT w.oid FROM fetch_wants w WHERE NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=w.oid) OR EXISTS(SELECT 1 FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE o.oid=w.oid AND o.kind=3 AND s.phase='published')");
-    this.historyWalk("fetch_selected");
+    await this.historyWalk("fetch_selected");
     if (this.includeTags) {
       for (const ref of this.store.references()) {
         if (!ref.peeled) continue;
@@ -171,39 +210,45 @@ export class FetchJob {
         this.want(ref.oid);
         this.store.exec("INSERT INTO fetch_selected(oid,depth) VALUES(?,?) ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<fetch_selected.depth", ref.oid, selected.depth);
       }
-      this.historyWalk("fetch_selected");
+      await this.historyWalk("fetch_selected");
     }
   }
   async prepare() {
     if (this.command !== 2 || !this.done || this.rawSources) return;
+    this.fallbacks = 0;
     const count = this.store.exec("SELECT COUNT(*) AS count FROM fetch_selected WHERE included=1")[0].count;
     if (count > this.codec.limits.maxObjects || count > 0xffffffff) throw new ApiError("fetch object count exceeds budget", 413);
     let size = BigInt(12 + this.codec.idBytes), afterStage = "", afterNode = -1;
     for (;;) {
       const rows = this.store.exec("SELECT o.* FROM fetch_selected f JOIN stage_objects o ON o.stage=f.stage AND o.node=f.node WHERE f.included=1 AND (f.stage,f.node)>(?,?) ORDER BY f.stage,f.node LIMIT 128", afterStage, afterNode);
       if (!rows.length) break;
+      await new Promise((resolve) => setTimeout(resolve, 0)); this.checkPreparation();
       for (const row of rows) {
+        this.checkPreparation();
         afterStage = row.stage; afterNode = row.node;
         const delta = row.wire_kind >= 5;
         const baseSelected = delta && this.store.exec("SELECT 1 FROM fetch_selected WHERE oid=? AND included=1", row.base_oid).length > 0;
-        const fallback = delta && !baseSelected;
+        const fallback = delta && !baseSelected; if (fallback) this.fallbacks++;
         let inflated = BigInt(fallback ? row.size : row.packed_size), header = 1n;
         for (let rest = inflated >> 4n; rest; rest >>= 7n) header++;
         size += header + (delta && !fallback ? BigInt(this.codec.idBytes) : 0n) + (fallback ? inflated + ((inflated + 65534n) / 65535n) * 5n + 11n : BigInt(row.end_offset - row.compressed_offset));
         if (size > BigInt(this.codec.limits.maxPackBytes)) throw new ApiError("fetch pack exceeds byte budget", 413);
         if (fallback && !this.source.cachedTemporary(row)) {
-          await this.source.warm(this.source.base(row));
-          // Freeze every fallback before returning 200, even small objects that
-          // could otherwise be evicted from the byte cache during this stream.
-          await this.source.process(row, false, 0, true);
+          // Pinned small bodies are independent of LRU eviction. Larger bodies
+          // use read-only scratch, reserved before any streaming 200.
+          await this.source.pinFallback(row);
+          this.checkPreparation();
         }
       }
     }
+    this.packBytes = Number(size); this.outputObjects = count;
   }
   async cleanup() {
-    this.codec.uploadCancel(); this.codec.packCancel(); this.reset();
-    this.source.releaseCaches();
+    if (this.cleaned) return; this.cleaned = true;
+    this.codec?.uploadCancel(); this.codec?.packCancel(); this.reset();
+    this.source?.releaseCaches();
     await this.store.clearTemporary(this.temporary, { defer: true });
+    this.store.dropFetchTables?.();
   }
   async *pack() {
     if (this.rawSources) { yield* this.reusedPack(); return; }

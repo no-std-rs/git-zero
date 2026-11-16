@@ -1,5 +1,5 @@
 import { RequestError } from "./errors.mjs";
-import { requestBody } from "./body.mjs";
+import { requestBody, bodyBudget } from "./body.mjs";
 export const encode = (value) => new TextEncoder().encode(value);
 export const json = (value, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
 export const hidden = () => json({ error: "unknown route" }, 404);
@@ -10,7 +10,7 @@ export async function readJson(request, limit = 2048) {
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") throw new ApiError("application/json required", 415);
   if (request.headers.has("content-encoding") && request.headers.get("content-encoding").toLowerCase() !== "identity") throw new ApiError("JSON content encoding is unsupported", 415);
   const bytes = new Uint8Array(limit); let length = 0;
-  for await (const part of requestBody(request.body, 10000)) {
+  for await (const part of requestBody(request.body, 10000, bodyBudget(request))) {
     if (part.length > limit - length) throw new ApiError("JSON body exceeds byte limit", 413);
     bytes.set(part, length); length += part.length;
   }

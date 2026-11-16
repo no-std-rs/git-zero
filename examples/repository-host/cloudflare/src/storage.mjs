@@ -87,6 +87,10 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS browse_reachable (oid TEXT PRIMARY KEY, generation INTEGER NOT NULL, walked INTEGER NOT NULL DEFAULT 0, relation INTEGER NOT NULL DEFAULT -1, after_dst BLOB NOT NULL DEFAULT X'') WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS browse_reachable_work ON browse_reachable(generation,walked,oid)",
   "CREATE TABLE IF NOT EXISTS browse_index (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, phase INTEGER NOT NULL DEFAULT 0, after_ref BLOB NOT NULL DEFAULT X'', objects INTEGER NOT NULL DEFAULT 0, edges INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS repository_security (id INTEGER PRIMARY KEY, epoch TEXT NOT NULL, proof_floor INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS browse_members (oid TEXT PRIMARY KEY, lineage INTEGER NOT NULL, depth INTEGER NOT NULL, proof_generation INTEGER NOT NULL, walked INTEGER NOT NULL DEFAULT 0, relation INTEGER NOT NULL DEFAULT -1, after_dst BLOB NOT NULL DEFAULT X'') WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS browse_members_work ON browse_members(lineage,walked,depth,oid)",
+  "CREATE TABLE IF NOT EXISTS browse_progress (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, lineage INTEGER NOT NULL, phase INTEGER NOT NULL DEFAULT 0, after_ref BLOB NOT NULL DEFAULT X'', objects INTEGER NOT NULL DEFAULT 0, edges INTEGER NOT NULL DEFAULT 0)",
   "CREATE TABLE IF NOT EXISTS host_settings (id INTEGER PRIMARY KEY, default_branch BLOB, last_publication INTEGER)",
   "CREATE TABLE IF NOT EXISTS host_identity (id INTEGER PRIMARY KEY, namespace TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS repository (id INTEGER PRIMARY KEY, format INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0, object_count INTEGER NOT NULL DEFAULT 0, head BLOB NOT NULL)",
@@ -113,8 +117,23 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS temp_chunks (stage TEXT NOT NULL, object TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, start INTEGER NOT NULL, length INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY(stage,object,seq)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS temp_chunk_offsets ON temp_chunks(stage,object,start)",
   "CREATE TABLE IF NOT EXISTS read_scratch (key TEXT PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS read_scratch_sizes (key TEXT PRIMARY KEY, length INTEGER NOT NULL) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS read_scratch_usage (id INTEGER PRIMARY KEY, bytes INTEGER NOT NULL DEFAULT 0)",
+  "INSERT OR IGNORE INTO read_scratch_usage(id) VALUES(1)",
+  "CREATE TRIGGER IF NOT EXISTS read_scratch_add AFTER INSERT ON read_scratch_sizes BEGIN UPDATE read_scratch_usage SET bytes=bytes+NEW.length WHERE id=1; END",
+  "CREATE TRIGGER IF NOT EXISTS read_scratch_remove AFTER DELETE ON read_scratch_sizes BEGIN UPDATE read_scratch_usage SET bytes=bytes-OLD.length WHERE id=1; END",
+  "CREATE TRIGGER IF NOT EXISTS read_scratch_cleanup AFTER DELETE ON read_scratch BEGIN DELETE FROM read_scratch_sizes WHERE key=OLD.key; END",
   "CREATE TABLE IF NOT EXISTS temp_objects (stage TEXT NOT NULL, object TEXT NOT NULL, oid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(stage,object)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS refs (name BLOB PRIMARY KEY, oid TEXT NOT NULL, peeled TEXT) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS ref_names(name BLOB PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS ref_versions(name BLOB NOT NULL,first_generation INTEGER NOT NULL,last_generation INTEGER,oid TEXT NOT NULL,peeled TEXT,PRIMARY KEY(name,first_generation)) WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS ref_versions_live ON ref_versions(first_generation,last_generation,name)",
+  "CREATE TABLE IF NOT EXISTS ref_versions_start(id INTEGER PRIMARY KEY,generation INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS fetch_cache_metrics(id INTEGER PRIMARY KEY CHECK(id=1),builds INTEGER NOT NULL DEFAULT 0,generated_bytes INTEGER NOT NULL DEFAULT 0)",
+  "INSERT OR IGNORE INTO fetch_cache_metrics(id) VALUES(1)",
+  "CREATE TABLE IF NOT EXISTS job_controls(job TEXT NOT NULL,seq INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(job,seq)) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS fetch_cache(key TEXT PRIMARY KEY,generation INTEGER NOT NULL,state TEXT NOT NULL,bytes INTEGER NOT NULL DEFAULT 0,reserved INTEGER NOT NULL,created INTEGER NOT NULL) WITHOUT ROWID",
+  "CREATE TABLE IF NOT EXISTS fetch_cache_chunks(cache TEXT NOT NULL,seq INTEGER NOT NULL,key TEXT NOT NULL,length INTEGER NOT NULL,sha TEXT NOT NULL,ready INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(cache,seq)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS proposed_refs (name BLOB PRIMARY KEY, seq INTEGER) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS receive_walk (oid TEXT PRIMARY KEY, depth INTEGER NOT NULL, walked INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS receive_walk_work ON receive_walk(depth,oid) WHERE walked=0",
@@ -151,6 +170,7 @@ export class Store {
     this.sqlKnown = true;
     this.edgeStages = new Map();
     for (const statement of SCHEMA) this.exec(statement);
+    this.exec("INSERT OR IGNORE INTO repository_security(id,epoch) SELECT 1,? WHERE EXISTS(SELECT 1 FROM repository WHERE id=1)", crypto.randomUUID());
     this.exec("INSERT OR IGNORE INTO host_storage_config(id,prefix) VALUES(1,?)", env.KEY_PREFIX ?? "");
     if (this.exec("SELECT prefix FROM host_storage_config WHERE id=1")[0].prefix !== (env.KEY_PREFIX ?? "")) throw new Error("stored R2 key prefix differs");
     // Older publications cannot be reconstructed. Record the coverage boundary
@@ -171,15 +191,23 @@ export class Store {
     if (this.binaryEdges) this.exec("CREATE TRIGGER IF NOT EXISTS stage_edge_id BEFORE INSERT ON stage_edges WHEN typeof(NEW.dst)<>'blob' OR length(NEW.dst) NOT IN (20,32) BEGIN SELECT RAISE(ABORT,'graph object ID is invalid'); END");
     // Earlier pending checks selected attributes only. Preserve that meaning.
     if (!this.exec("PRAGMA table_info(stage_blob_checks)").some((column) => column.name === "checks")) this.exec("ALTER TABLE stage_blob_checks ADD COLUMN checks INTEGER NOT NULL DEFAULT 2");
+    const stageColumns = this.exec("PRAGMA table_info(stages)");
     // Older stages have unknown entry kinds; conservatively disable raw OFS reuse.
-    if (!this.exec("PRAGMA table_info(stages)").some((column) => column.name === "has_ofs")) this.exec("ALTER TABLE stages ADD COLUMN has_ofs INTEGER NOT NULL DEFAULT 1");
-    if (!this.exec("PRAGMA table_info(stages)").some((column) => column.name === "reusable")) this.exec("ALTER TABLE stages ADD COLUMN reusable INTEGER NOT NULL DEFAULT 0");
+    if (!stageColumns.some((column) => column.name === "has_ofs")) this.exec("ALTER TABLE stages ADD COLUMN has_ofs INTEGER NOT NULL DEFAULT 1");
+    if (!stageColumns.some((column) => column.name === "reusable")) this.exec("ALTER TABLE stages ADD COLUMN reusable INTEGER NOT NULL DEFAULT 0");
+    if (!stageColumns.some((column) => column.name === "published_generation")) this.exec("ALTER TABLE stages ADD COLUMN published_generation INTEGER NOT NULL DEFAULT 0");
     if (!this.exec("PRAGMA table_info(refs)").some((column) => column.name === "peeled")) this.ctx.storage.transactionSync(() => {
       this.exec("ALTER TABLE refs ADD COLUMN peeled TEXT");
       for (const ref of this.references()) this.exec("UPDATE refs SET peeled=? WHERE name=?", this.peeled(ref.oid), blob(ref.name));
     });
     this.exec("CREATE INDEX IF NOT EXISTS refs_oid ON refs(oid)");
     this.exec("CREATE INDEX IF NOT EXISTS refs_peeled ON refs(peeled)");
+    if (!this.exec("SELECT 1 FROM ref_versions_start WHERE id=1").length) this.ctx.storage.transactionSync(() => {
+      const generation = this.exec("SELECT generation FROM repository WHERE id=1")[0]?.generation ?? 0;
+      this.exec("INSERT INTO ref_versions(name,first_generation,oid,peeled) SELECT name,?,oid,peeled FROM refs", generation);
+      this.exec("INSERT OR IGNORE INTO ref_names(name) SELECT name FROM refs");
+      this.exec("INSERT INTO ref_versions_start(id,generation) VALUES(1,?)", generation);
+    });
     const frontier = this.exec("PRAGMA table_info(fetch_selected)");
     this.ctx.storage.transactionSync(() => {
       for (const [name, value] of [["depth", 1], ["included", 1], ["shallow", 0], ["unshallow", 0]]) {
@@ -211,7 +239,10 @@ export class Store {
     if (format !== 0 && format !== 1) throw new RangeError("unsupported object format");
     const current = this.exec("SELECT * FROM repository WHERE id=1")[0];
     if (current && current.format !== format) throw new RequestError("repository object format differs");
-    if (!current) this.exec("INSERT INTO repository(id,format,generation,head) VALUES(1,?,0,?)", format, blob(new TextEncoder().encode("refs/heads/main")));
+    if (!current) {
+      this.exec("INSERT INTO repository(id,format,generation,head) VALUES(1,?,0,?)", format, blob(new TextEncoder().encode("refs/heads/main")));
+      this.exec("INSERT INTO repository_security(id,epoch) VALUES(1,?)", crypto.randomUUID());
+    }
   }
   stage(format, retained = false) {
     this.initialize(format);
@@ -293,8 +324,10 @@ export class Store {
     return result;
   }
   inventory() {
+    const totals = this.exec("SELECT (SELECT object_count FROM repository WHERE id=1) AS objects,builds,generated_bytes FROM fetch_cache_metrics WHERE id=1")[0];
     const result = {
-      objects: this.exec("SELECT object_count FROM repository WHERE id=1")[0]?.object_count ?? 0,
+      objects: totals?.objects ?? 0,
+      packCache: { builds: totals?.builds ?? 0, generatedBytes: totals?.generated_bytes ?? 0 },
       stagedObjects: this.exec("SELECT COUNT(*) AS count FROM stage_objects")[0].count,
       stagedChunks: this.exec("SELECT COUNT(*) AS count FROM stage_chunks")[0].count,
       temporaryChunks: this.exec("SELECT COUNT(*) AS count FROM temp_chunks")[0].count,
@@ -427,25 +460,38 @@ export class Store {
     }
   }
   async scheduleRecovery() {
-    try { await this.ctx.storage.setAlarm(Date.now() + 60000); }
+    this.recoveryDue = Date.now() + 60000;
+    try { await this.ctx.storage.setAlarm(this.recoveryDue); }
     catch (error) { throw storageFailure(error); }
   }
-  async recover() {
+  async recover(protectedStages = []) {
+    const current = typeof protectedStages === "function" ? protectedStages : () => protectedStages;
+    const unowned = (column) => `${column} NOT IN (SELECT value FROM json_each(?))`;
+    const binding = () => JSON.stringify(current());
+    const activeJobs = new Set(current().map((id) => id.replaceAll("-", "")));
+    for (const row of this.exec("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'job_*_fetch_*'")) {
+      const match = /^job_([0-9a-f]{32})_fetch_(wants|haves|shallow|probe|common|selected)$/.exec(row.name);
+      if (match && !activeJobs.has(match[1]) && !this.fetchFree?.includes(match[1]) && !this.fetchActive?.has(match[1])) this.exec(`DROP TABLE ${row.name}`);
+    }
+    this.exec(`DELETE FROM job_controls WHERE ${unowned("job")}`, binding());
+    if (!current().length) for (const row of this.exec("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'ancestry_*'")) {
+      if (/^ancestry_[0-9a-f]{32}$/.test(row.name)) this.exec(`DROP TABLE ${row.name}`);
+    }
     // Fetch frontiers belong to a single request. A crashed stream cannot run
     // its finally block, and advertisements must not retain that old work.
     for (const table of FETCH_TABLES) this.exec(`DELETE FROM ${table}`);
     // A new durable instance has no previous in-flight writer. Private decoded
     // stages can be abandoned; verified test fixtures and published packs stay.
     for (;;) {
-      const temporary = this.exec("SELECT stage FROM temp_chunks LIMIT 1")[0];
+      const temporary = this.exec(`SELECT stage FROM temp_chunks WHERE ${unowned("stage")} LIMIT 1`, binding())[0];
       if (!temporary) break;
       await this.clearTemporary(temporary.stage);
     }
-    this.exec("DELETE FROM temp_objects");
-    this.exec("UPDATE stages SET phase='failed' WHERE phase IN ('receiving','decoded') OR (phase='verified' AND retained=0)");
+    this.exec(`DELETE FROM temp_objects WHERE ${unowned("stage")}`, binding());
+    this.exec(`UPDATE stages SET phase='failed' WHERE (phase IN ('receiving','decoded') OR (phase='verified' AND retained=0)) AND ${unowned("id")}`, binding());
     for (;;) {
-      const pending = this.exec("SELECT id FROM stages WHERE phase='failed' LIMIT 1")[0];
-      if (!pending) return;
+      const pending = this.exec(`SELECT id FROM stages WHERE phase='failed' AND ${unowned("id")} LIMIT 1`, binding())[0];
+      if (!pending) { this.recoveryDue = Infinity; return; }
       await this.abandon(pending.id);
     }
   }
@@ -474,7 +520,12 @@ export class ChunkWriter {
     const key = this.temporary === null ? `${prefix}/chunks/${sha}` : `${prefix}/tmp/${this.stage}/${this.temporary}/${this.seq}`;
     const values = [this.stage, this.seq, key, this.position, this.used, sha];
     this.store.ctx.storage.transactionSync(() => {
-      if (this.readScratch) this.store.exec("INSERT INTO read_scratch(key) VALUES(?)", key);
+      if (this.readScratch) {
+        const used = this.store.exec("SELECT bytes FROM read_scratch_usage WHERE id=1")[0].bytes;
+        if (used + this.used > (this.store.env.READ_SCRATCH_REPOSITORY_BYTES ?? Infinity)) throw new ApiError("repository read scratch budget exceeded", 413);
+        this.store.exec("INSERT INTO read_scratch(key) VALUES(?)", key);
+        this.store.exec("INSERT INTO read_scratch_sizes(key,length) VALUES(?,?)", key, this.used);
+      }
       else this.store.claimChunk(key, this.used);
       if (this.temporary === null) this.store.exec("INSERT INTO stage_chunks(stage,seq,key,start,length,sha) VALUES(?,?,?,?,?,?)", ...values);
       else this.store.exec("INSERT INTO temp_chunks(stage,object,seq,key,start,length,sha) VALUES(?,?,?,?,?,?,?)", this.stage, this.temporary, ...values.slice(1));

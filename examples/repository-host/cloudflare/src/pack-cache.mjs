@@ -1,0 +1,131 @@
+import { ApiError, encode } from "./api.mjs";
+import { requestBody, decodedBody, bodyBudget } from "./body.mjs";
+import { bytes, PAGE_BYTES, sha256 } from "./storage.mjs";
+import { RequestError } from "./errors.mjs";
+
+export async function collectControls(store, owner, request, maximum) {
+  let length = 0, seq = 0;
+  const stream = decodedBody(request, 2n * BigInt(maximum) + 64n, "fetch controls");
+  for await (const part of requestBody(stream, 60000, bodyBudget(request))) {
+    length += part.length; if (length > maximum) throw new RequestError("fetch controls exceed byte limit");
+    for (let at = 0; at < part.length; at += PAGE_BYTES) store.exec("INSERT INTO job_controls(job,seq,data) VALUES(?,?,?)", owner.id, seq++, part.slice(at, at + PAGE_BYTES).buffer);
+  }
+}
+
+const noCache = { get() {}, put() {} };
+export class PackCache {
+  constructor(store, env) { this.store = store; this.env = env; this.builds = new Map(); this.pins = new Map(); this.metrics = { builds: 0, hits: 0, served: 0, generatedBytes: 0 }; store.exec("UPDATE fetch_cache SET state='failed' WHERE state='building'"); }
+  async key(fetch) {
+    if (!fetch.cacheable()) return null;
+    let result = await sha256(encode(JSON.stringify(["git-zero-wire-pack-v1", fetch.store.snapshot.epoch, fetch.store.snapshot.generation, fetch.version, fetch.parsedFlags, this.env.WANT_POLICY, this.env.CODEC_LIMITS, this.env.READ_SCRATCH_BYTES])));
+    let after = "", page = 0;
+    for (;;) {
+      const rows = fetch.store.exec("SELECT oid FROM fetch_wants WHERE oid>? ORDER BY oid LIMIT 128", after);
+      if (!rows.length) break;
+      result = await sha256(encode(JSON.stringify([result, page++, rows.map((row) => row.oid)])));
+      after = rows.at(-1).oid;
+    }
+    return result;
+  }
+
+  entry(key) {
+    const active = this.builds.get(key); if (active) { this.metrics.hits++; return active; }
+    const row = this.store.exec("SELECT * FROM fetch_cache WHERE key=? AND state='complete'", key)[0];
+    if (!row) return null;
+    this.metrics.hits++; return { key, cache: true, complete: true, row };
+  }
+  begin(key) {
+    const entry = { key, cache: null, complete: false, error: null }; this.notify(entry);
+    this.builds.set(key, entry); return entry;
+  }
+  notify(entry) { entry.wake?.(); entry.changed = new Promise((resolve) => { entry.wake = resolve; }); }
+  async wait(entry, signal) {
+    if (signal.aborted) throw new RequestError("repository job cancelled");
+    let timer, abort;
+    try {
+      await Promise.race([entry.changed, new Promise((_, reject) => {
+        abort = () => reject(new RequestError("repository job cancelled")); signal.addEventListener("abort", abort, { once: true });
+        timer = setTimeout(() => reject(new ApiError("cached pack preparation timed out; retry", 503)), this.env.PACK_CACHE_BUILD_MS + this.env.FETCH_PREPARE_MS + this.env.MEMORY_WAIT_MS);
+      })]);
+    } finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
+  }
+  async decision(entry, signal) { while (entry.cache === null && !entry.error) await this.wait(entry, signal); if (entry.error) throw entry.error; return entry.cache; }
+  claim(entry, generation, maximum) {
+    const reserved = this.store.exec("SELECT COALESCE(SUM(reserved),0) n,COUNT(*) count FROM fetch_cache")[0];
+    if (!Number.isSafeInteger(maximum) || maximum > this.env.PACK_CACHE_BYTES || maximum > this.env.PACK_CACHE_TOTAL_BYTES - reserved.n || reserved.count >= this.env.PACK_CACHE_ENTRIES) return false;
+    if (this.store.exec("SELECT 1 FROM fetch_cache WHERE key=?", entry.key).length) return false;
+    this.store.exec("INSERT INTO fetch_cache(key,generation,state,reserved,created) VALUES(?,?,'building',?,?)", entry.key, generation, maximum, Date.now());
+    this.store.exec("UPDATE fetch_cache_metrics SET builds=builds+1 WHERE id=1"); entry.maximum = maximum; entry.cache = true; this.metrics.builds++; this.notify(entry); return true;
+  }
+  bypass(entry) { entry.cache = false; this.notify(entry); this.builds.delete(entry.key); }
+  fail(entry, error) {
+    entry.error = error; this.store.exec("UPDATE fetch_cache SET state='failed' WHERE key=?", entry.key);
+    this.notify(entry); this.builds.delete(entry.key);
+  }
+  pin(entry) { this.pins.set(entry.key, (this.pins.get(entry.key) ?? 0) + 1); return () => { const count = this.pins.get(entry.key) - 1; if (count) this.pins.set(entry.key, count); else {
+      this.pins.delete(entry.key);
+      const alarm = this.store.ctx.storage.setAlarm(Date.now() + 1000).catch(() => {}); this.store.ctx.waitUntil?.(alarm);
+    } }; }
+  async produce(entry, fetch, signal) {
+    let buffer = new Uint8Array(this.env.PACK_CACHE_CHUNK_BYTES), used = 0, seq = 0, total = 0;
+    const deadline = Date.now() + this.env.PACK_CACHE_BUILD_MS;
+    const flush = async () => {
+      if (!used) return;
+      if (signal.aborted) throw new RequestError("repository job cancelled");
+      if (Date.now() >= deadline) throw new ApiError("pack cache generation deadline exceeded", 504);
+      if (total + used > entry.maximum) throw new ApiError("pack cache size reservation exceeded", 413);
+      const part = buffer.subarray(0, used), digest = await sha256(part);
+      const key = `${this.env.KEY_PREFIX}repositories/${this.store.namespace}/fetch-cache/${entry.key}/${seq}`;
+      this.store.exec("INSERT INTO fetch_cache_chunks(cache,seq,key,length,sha) VALUES(?,?,?,?,?)", entry.key, seq, key, used, digest);
+      await this.store.put(key, part);
+      this.store.exec("UPDATE fetch_cache_chunks SET ready=1 WHERE cache=? AND seq=?", entry.key, seq);
+      total += used; seq++; used = 0; this.notify(entry);
+    };
+    try {
+      for await (const part of fetch.response()) {
+        for (let at = 0; at < part.length;) {
+          const count = Math.min(part.length - at, buffer.length - used); buffer.set(part.subarray(at, at + count), used); used += count; at += count;
+          if (used === buffer.length) await flush();
+        }
+      }
+      await flush(); buffer = null;
+      this.store.exec("UPDATE fetch_cache SET state='complete',bytes=?,reserved=? WHERE key=?", total, total, entry.key);
+      this.store.exec("UPDATE fetch_cache_metrics SET generated_bytes=generated_bytes+? WHERE id=1", total); entry.complete = true; this.metrics.generatedBytes += total; this.notify(entry); this.builds.delete(entry.key);
+    } catch (error) { this.fail(entry, error); throw error; }
+    finally { await fetch.cleanup(); }
+  }
+  async first(entry, signal) {
+    while (!entry.complete && !entry.error && !this.store.exec("SELECT 1 FROM fetch_cache_chunks WHERE cache=? AND ready=1 LIMIT 1", entry.key).length) await this.wait(entry, signal);
+    if (entry.error) throw entry.error;
+  }
+  async *read(entry, signal) {
+    this.metrics.served++; let seq = 0;
+    for (;;) {
+      if (signal.aborted) throw new RequestError("repository job cancelled");
+      const row = this.store.exec("SELECT * FROM fetch_cache_chunks WHERE cache=? AND seq=? AND ready=1", entry.key, seq)[0];
+      if (row) {
+        const data = await this.store.get(row, noCache); seq++;
+        for (let at = 0; at < data.length; at += PAGE_BYTES) { if (signal.aborted) throw new RequestError("repository job cancelled"); yield data.subarray(at, at + PAGE_BYTES); }
+      } else {
+        if (entry.error) throw entry.error;
+        if (entry.complete) return;
+        await this.wait(entry, signal);
+      }
+    }
+  }
+  async reclaim(currentGeneration) {
+    const candidates = this.store.exec("SELECT key FROM fetch_cache WHERE generation<? OR state IN ('failed','evicting') ORDER BY created LIMIT 8", currentGeneration);
+    for (const item of candidates) {
+      if (this.pins.has(item.key) || this.builds.has(item.key)) continue;
+      this.store.exec("UPDATE fetch_cache SET state='evicting' WHERE key=?", item.key);
+      const chunks = this.store.exec("SELECT seq,key FROM fetch_cache_chunks WHERE cache=? ORDER BY seq LIMIT 64", item.key);
+      if (chunks.length) {
+        await this.store.delete(chunks.map((row) => row.key));
+        for (const row of chunks) this.store.exec("DELETE FROM fetch_cache_chunks WHERE cache=? AND seq=?", item.key, row.seq);
+      }
+      if (!this.store.exec("SELECT 1 FROM fetch_cache_chunks WHERE cache=? LIMIT 1", item.key).length) this.store.exec("DELETE FROM fetch_cache WHERE key=?", item.key);
+      return true;
+    }
+    return false;
+  }
+}

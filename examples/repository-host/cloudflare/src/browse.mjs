@@ -3,9 +3,10 @@ import { ObjectSource } from "./source.mjs";
 import { bytes, PAGE_BYTES } from "./storage.mjs";
 import { ApiError, encode, json } from "./api.mjs";
 import { proveRaw } from "./reachability.mjs";
+import { Proofs } from "./proofs.mjs";
 
 export const READ_LIMITS = Object.freeze({
-  visibleObjects: 1000000, edges: 10000000, indexSteps: 256, refs: 1000000, pageSize: 100,
+  visibleObjects: 1000000, edges: 10000000, indexSteps: 8192, refs: 1000000, pageSize: 100,
   treeBytes: 1024 * 1024, headerBytes: 128 * 1024, messageBytes: 32 * 1024,
   metadataBytes: 8 * 1024 * 1024, blobBytes: 8 * 1024 * 1024,
   pathBytes: 4096, pathDepth: 64, tagDepth: 32, parents: 256,
@@ -13,7 +14,7 @@ export const READ_LIMITS = Object.freeze({
 });
 // Request budgets may be raised to these deployment-independent safety ceilings.
 export const READ_HARD_LIMITS = Object.freeze({
-  ...READ_LIMITS, visibleObjects: 100000000, edges: 1000000000, indexSteps: 8192,
+  ...READ_LIMITS, visibleObjects: 100000000, edges: 1000000000, indexSteps: 65536,
   refs: 10000000, pageSize: 1000, treeBytes: 16 * 1024 * 1024,
   headerBytes: 1024 * 1024, messageBytes: 1024 * 1024, metadataBytes: 32 * 1024 * 1024,
   blobBytes: 64 * 1024 * 1024, pathBytes: 65536, pathDepth: 1024, tagDepth: 256,
@@ -53,6 +54,7 @@ export class ReadApi {
     this.store = store; this.module = module; this.format = format;
     this.limits = { ...READ_LIMITS, ...limits }; this.generation = store.exec("SELECT generation FROM repository WHERE id=1")[0].generation;
     this.metadataBytes = 0; this.metadata = new Map(); this.proven = new Set();
+    this.proofs = new Proofs(store, this.generation);
   }
   source() {
     if (!this.objects) {
@@ -68,28 +70,9 @@ export class ReadApi {
     if (encode(JSON.stringify(value)).length > this.limits.jsonBytes) throw new ApiError("JSON response exceeds byte limit; lower page limit", 413);
     return json(value);
   }
-  async cursorKey() {
-    return this.key ??= crypto.subtle.importKey("raw", encode(this.store.env.AUTH_MODE === "gateway" ? this.store.env.GRANT_KEY : this.store.env.HOST_TOKEN), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
-  }
-  async cursor(op, value) {
-    const payload = b64(encode(JSON.stringify({ v: 2, op, namespace: this.store.namespace, generation: this.generation, ...value })));
-    return payload + "." + b64(new Uint8Array(await crypto.subtle.sign("HMAC", await this.cursorKey(), encode("git-zero-browse-cursor-v2\n" + payload))));
-  }
-  async decodeCursor(op, value) {
-    if (!value) return null;
-    if (value.length > 2048 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(value)) throw new ApiError("invalid cursor");
-    const [payload, signature] = value.split(".");
-    const decode = (input) => Uint8Array.from(atob(input.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
-    let cursor;
-    try {
-      const decoded = decode(payload), mac = decode(signature);
-      if (b64(decoded) !== payload || b64(mac) !== signature || !await crypto.subtle.verify("HMAC", await this.cursorKey(), mac, encode("git-zero-browse-cursor-v2\n" + payload))) throw new Error();
-      cursor = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(decoded));
-    } catch { throw new ApiError("invalid cursor"); }
-    if (!cursor || cursor.v !== 2 || cursor.op !== op || cursor.namespace !== this.store.namespace || !Number.isSafeInteger(cursor.generation) || cursor.generation < 0) throw new ApiError("invalid cursor");
-    if (cursor.generation !== this.generation) throw new ApiError("cursor is stale after ref publication; restart pagination", 409);
-    return cursor;
-  }
+  cursor(op, value) { return this.proofs.sign(op, value); }
+  decodeCursor(op, value) { return this.proofs.verify(op, value); }
+  proof(oid) { return this.proofs.sign("object", { oid }); }
   head() {
     const head = this.store.exec("SELECT head FROM repository WHERE id=1")[0].head;
     return { symbolic: utf8(bytes(head)), symbolic64: b64(bytes(head)), oid: this.store.exec("SELECT oid FROM refs WHERE name=?", head)[0]?.oid ?? null };
@@ -99,9 +82,12 @@ export class ReadApi {
     const offset = number(cursor?.offset, 0, this.limits.refs);
     const rows = this.store.exec("SELECT name,oid,peeled FROM refs ORDER BY name LIMIT ? OFFSET ?", limit + 1, offset);
     if (offset + rows.length > this.limits.refs) throw new ApiError("ref enumeration budget exceeded", 413);
-    const head = this.head(), refs = []; let size = encode(JSON.stringify(head)).length + 512;
+    const head = this.head(), refs = [];
+    if (head.oid) head.proof = await this.proof(head.oid); let size = encode(JSON.stringify(head)).length + 512;
     for (const row of rows.slice(0, limit)) {
       const entry = { ...named(row.name), oid: row.oid, peeled: row.peeled, kind: text(bytes(row.name)).startsWith("refs/heads/") ? "branch" : text(bytes(row.name)).startsWith("refs/tags/") ? "tag" : "other" };
+      entry.proof = await this.proof(row.oid);
+      if (row.peeled) entry.peeledProof = await this.proof(row.peeled);
       const cost = encode(JSON.stringify(entry)).length + 1;
       if (refs.length && size + cost > this.limits.jsonBytes) break;
       refs.push(entry); size += cost;
@@ -149,16 +135,28 @@ export class ReadApi {
     if (row.kind !== 1) throw new ApiError("revision is not a commit", 422);
     if (this.metadata.has(row.oid)) return this.metadata.get(row.oid);
     const data = await this.prefix(row, this.limits.headerBytes + this.limits.messageBytes);
-    const result = { oid: row.oid, parents: [], tree: null, author: null, committer: null };
+    const edges = this.store.exec(`SELECT relation,${this.store.edgeTargetSQL()} AS oid FROM stage_edges WHERE stage=? AND node=? AND relation IN (0,1) ORDER BY relation,dst LIMIT ?`, this.store.edgeStage(row.stage), row.node, this.limits.parents + 2);
+    const tree = edges.find((edge) => edge.relation === 0)?.oid;
+    const parents = new Set(edges.filter((edge) => edge.relation === 1).map((edge) => edge.oid));
+    if (parents.size > this.limits.parents) throw new ApiError("commit parent limit exceeded", 413);
+    const result = { oid: row.oid, parents: [], tree, author: null, committer: null };
+    let parentHeaders = true;
     let start = 0, messageStart = -1;
     while (start < data.length) {
       const end = data.indexOf(10, start);
       if (end < 0 || end > this.limits.headerBytes) throw new ApiError("commit headers exceed byte limit", 413);
       if (end === start) { messageStart = end + 1; break; }
       const line = data.subarray(start, end), header = text(line.subarray(0, 10));
-      if (header.startsWith("tree ")) result.tree = text(line.subarray(5)).toLowerCase();
-      else if (header.startsWith("parent ")) { if (result.parents.length >= this.limits.parents) throw new ApiError("commit parent limit exceeded", 413); result.parents.push(text(line.subarray(7)).toLowerCase()); }
-      else if (header.startsWith("author ")) result.author = identity(line, 7, this.limits.identityBytes);
+      // Git's structural parent block immediately follows the initial tree.
+      // Late lookalike headers are metadata, never authenticated graph links.
+      if (start === 0 && header.startsWith("tree ")) { /* tree comes from stage_edges */ }
+      else if (parentHeaders && header.startsWith("parent ")) {
+        const parent = text(line.subarray(7)).toLowerCase();
+        if (!parents.has(parent)) throw new ApiError("commit graph metadata differs", 422);
+        if (result.parents.length >= this.limits.parents) throw new ApiError("commit parent limit exceeded", 413);
+        result.parents.push(parent);
+      } else parentHeaders = false;
+      if (header.startsWith("author ")) result.author = identity(line, 7, this.limits.identityBytes);
       else if (header.startsWith("committer ")) result.committer = identity(line, 10, this.limits.identityBytes);
       else if (header.startsWith("encoding ")) result.encoding = text(line.subarray(9, Math.min(line.length, 137)));
       start = end + 1;
@@ -171,6 +169,8 @@ export class ReadApi {
     body = end; while (body < lines.length && /^[ \t\r]*$/.test(lines[body])) body++;
     result.message = { subject: lines.slice(begin, end).map((line) => line.replace(/^[ \t\r]+|[ \t\r]+$/g, "")).join(" "), body: lines.slice(body).join("\n"), truncated: row.size - messageStart > message.length, raw64: b64(message) };
     this.proven.add(result.tree); for (const parent of result.parents) this.proven.add(parent);
+    result.proof = await this.proof(row.oid); result.treeProof = await this.proof(result.tree);
+    result.parentProofs = await Promise.all(result.parents.map((oid) => this.proof(oid)));
     this.metadata.set(row.oid, result); return result;
   }
   path(value) {
@@ -252,7 +252,8 @@ export class ReadApi {
       if (entries.length && size + cost > this.limits.jsonBytes) { more = true; return; }
       entries.push(result); size += cost;
     });
-    return this.result({ generation: this.generation, oid: row.oid, entries, nextCursor: more ? await this.cursor("tree", { revision, directory: row.oid, offset: offset + entries.length }) : null });
+    for (const entry of entries) entry.proof = entry.kind === "submodule" ? null : await this.proof(entry.oid);
+    return this.result({ generation: this.generation, oid: row.oid, proof: await this.proof(row.oid), entries, nextCursor: more ? await this.cursor("tree", { revision, directory: row.oid, offset: offset + entries.length }) : null });
   }
   async handle(operation, request, stream) {
     let streaming = false;
@@ -261,6 +262,11 @@ export class ReadApi {
       const url = new URL(request.url);
       try { decodeURIComponent(url.search.replaceAll("+", "%20")); } catch { throw new ApiError("query must be valid UTF-8"); }
       const params = url.searchParams;
+      if (params.has("proof")) {
+        const proof = await this.proofs.verify("object", params.get("proof"));
+        if (!proof || typeof proof.oid !== "string") throw new ApiError("invalid object proof");
+        this.proven.add(proof.oid);
+      }
       if (operation === "refs") return await this.refsPage(params);
       if (operation === "history") return await this.history(params);
       if (operation === "tree") return await this.tree(params);

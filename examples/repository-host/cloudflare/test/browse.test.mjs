@@ -28,9 +28,23 @@ for (const format of [0, 1]) test(`bounded browse matches real Git and revokes u
     assert.equal((await call("api/v1/commit")).status, 404);
     const fixture = await source(root, format), all = refs(fixture), zero = "0".repeat(format ? 64 : 40);
     await push(receive(format, all.map((ref) => ({ name: ref.name, old: zero, new: ref.oid })), git(fixture.directory, ["pack-objects", "--stdout", "--all", "--delta-base-offset"])));
-    await assert.rejects(new ReadApi(host.store, module, format, { visibleObjects: 1 }).handle("commit", new Request(`http://host/browse.git/api/v1/commit?rev=oid:${fixture.first}`)), (error) => error.status === 503 && /configured budget/.test(error.message));
+    await assert.rejects(new ReadApi(host.store, module, format, { visibleObjects: 1 }).handle("blob", new Request(`http://host/browse.git/api/v1/blob?oid=${fixture.secret}`)), (error) => error.status === 503 && /configured budget/.test(error.message));
     // A larger deployment budget resumes the same persisted build.
     await compare(fixture, get);
+    // The browser follows signed object links without advancing a global index.
+    const browser = (await get("history?limit=1")).commits[0];
+    const proofReads = host.store.exec("SELECT objects FROM browse_progress")[0]?.objects;
+    const opened = await get(`commit?rev=oid:${browser.oid}&proof=${browser.proof}`);
+    const directory = await get(`tree?rev=oid:${opened.tree}&proof=${opened.treeProof}`);
+    const file = directory.entries.find((entry) => entry.kind === "blob");
+    const body = await call(`api/v1/blob?oid=${file.oid}&proof=${file.proof}`);
+    assert.equal(body.status, 200); await body.arrayBuffer();
+    assert.equal(host.store.exec("SELECT objects FROM browse_progress")[0]?.objects, proofReads);
+    assert.equal((await call(`api/v1/commit?rev=oid:${browser.oid}&proof=${browser.proof.slice(0, -1)}!`)).status, 400);
+    const epoch = host.store.exec("SELECT epoch FROM repository_security")[0].epoch;
+    host.store.exec("UPDATE repository_security SET epoch=?", crypto.randomUUID()); host.store.proofKey = null;
+    assert.equal((await call(`api/v1/commit?rev=oid:${browser.oid}&proof=${browser.proof}`)).status, 400);
+    host.store.exec("UPDATE repository_security SET epoch=?", epoch); host.store.proofKey = null;
     // Preserve historical bytes using Git's literal-object fixture writer.
     // Existing host policy accepts these with warnings; ls-tree normalizes them.
     const payload = git(fixture.directory, ["rev-parse", "HEAD:payload.html"]).toString().trim();
@@ -68,11 +82,13 @@ for (const format of [0, 1]) test(`bounded browse matches real Git and revokes u
     await push(receive(format, [{ name: "refs/tags/main", old: zero, new: fixture.first }], pack(format, [])));
     assert.equal((await call("api/v1/commit?rev=main")).status, 409);
     assert.equal((await get(`commit?rev=refs/heads/main`)).oid, fixture.tip);
+    assert.equal((await call(`api/v1/commit?rev=oid:${browser.oid}&proof=${browser.proof}`)).status, 200, "creation retains old object proofs");
     const page = await get("history?limit=1"); assert.ok(page.nextCursor);
     const oldRefs = [...all, { name: "refs/tags/main", oid: fixture.first }];
     await push(receive(format, oldRefs.filter((ref) => ref.name !== "refs/heads/other").map((ref) => ({ name: ref.name, old: ref.oid, new: zero })), pack(format, [])));
     await push(receive(format, [{ name: "refs/heads/main", old: zero, new: fixture.other }], pack(format, [])));
     assert.equal((await call(`api/v1/history?cursor=${page.nextCursor}`)).status, 409);
+    assert.equal((await call(`api/v1/commit?rev=oid:${browser.oid}&proof=${browser.proof}`)).status, 409, "deletions revoke old proofs");
     assert.ok(host.store.published(fixture.tip), "old published bytes are deliberately still stored");
     assert.equal((await call(`api/v1/commit?rev=${fixture.tip}`)).status, 404);
     assert.equal((await call(`api/v1/blob?oid=${fixture.secret}`)).status, 404);

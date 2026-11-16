@@ -30,6 +30,11 @@ export class Lifecycle {
   }
   async load() {
     if (this.loaded) return;
+    if (this.loading) return this.loading;
+    this.loading = this.loadState();
+    try { await this.loading; } finally { this.loading = null; }
+  }
+  async loadState() {
     this.state = await this.ctx.storage.get(STATE) ?? null;
     const fence = this.state ? null : await retryStorage(async () => { this.usage.r2FenceGets++; return this.blobs.get(this.fence); }, this.usage);
     if (fence) {
@@ -82,9 +87,10 @@ export class Lifecycle {
     }
     return json({ error: "method not allowed" }, 405);
   }
-  async beginDelete() {
+  async beginDelete({ defer = false } = {}) {
     this.state = { state: "deleting", namespace: this.namespace, retiredAt: Date.now() };
     await this.ctx.storage.put(STATE, this.state);
+    if (defer) { await this.blobs.put(this.fence, encode(JSON.stringify({ version: 1, ...this.state }))); return json({ state: "deleting", complete: false, waitingForJobs: true }, 202); }
     return this.purge();
   }
   async purge() {

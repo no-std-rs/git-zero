@@ -13,6 +13,7 @@ test("publication transaction failures await private-pack reclamation", async ()
   const failure = new Error("injected transaction failure");
   const events = [];
   const store = {
+    exec(query) { assert.match(query, /^SELECT \* FROM stage_commands/); return []; },
     ctx: { storage: { transactionSync() { events.push("rollback"); throw failure; } } },
     async abandon(stage) { events.push(stage); await Promise.resolve(); events.push("reclaimed"); },
   };

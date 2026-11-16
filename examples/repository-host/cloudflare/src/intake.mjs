@@ -1,7 +1,7 @@
 import { hex, integer } from "./codec.mjs";
 import { ChunkWriter, blob } from "./storage.mjs";
 import { ObjectSource } from "./source.mjs";
-import { requestBody, decodedBody } from "./body.mjs";
+import { requestBody, decodedBody, bodyBudget } from "./body.mjs";
 import { RequestError } from "./errors.mjs";
 import { PolicyError, repositoryPolicy } from "./policy.mjs";
 import { MEMORY_LIMITS } from "./resources.mjs";
@@ -97,34 +97,44 @@ export class Intake {
     this.codec.receiveInit();
     // Allow gzip framing overhead while Rust retains its decoded byte quotas.
     const encodedLimit = 2n * (BigInt(this.codec.limits.maxPackBytes) + BigInt(this.codec.limits.maxControlBytes));
-    let rejected = null, discarded = 0, deadline = 0;
     const discardLimit = this.store.env.REJECTION_DRAIN_BYTES ?? 64 * 1024 * 1024;
     const discardMs = this.store.env.REJECTION_DRAIN_MS ?? 30000;
+    const budget = bodyBudget(request), draining = new AbortController();
+    const signal = budget.signal ? AbortSignal.any([budget.signal, draining.signal]) : draining.signal;
+    const input = requestBody(decodedBody(request, encodedLimit, "receive bytes"), 60000, { ...budget, signal });
+    let handedOff = false;
     try {
-      for await (const bytes of requestBody(decodedBody(request, encodedLimit, "receive bytes"), () => rejected ? Math.max(1, Math.min(10000, deadline - Date.now())) : 60000)) {
-        let offset = 0;
-        if (!rejected) {
-          try {
-            while (offset < bytes.length) {
-              const input = bytes.subarray(offset, Math.min(offset + 65536, bytes.length));
-              const event = this.codec.receiveStep(input, false);
-              await this.event(event, input); offset += event.consumed;
-              if (event.consumed === 0 && event.written === 0 && event.tag === 1) throw new Error("input decoder made no progress");
-            }
-          } catch (error) {
-            if (!(error instanceof PolicyError)) throw error;
-            rejected = error; deadline = Date.now() + discardMs;
+      for (;;) {
+        const next = await input.next(); if (next.done) break;
+        const bytes = next.value; let offset = 0;
+        try {
+          while (offset < bytes.length) {
+            if (this.store.env.JOB_SIGNAL?.aborted) throw new RequestError("repository job cancelled");
+            const part = bytes.subarray(offset, Math.min(offset + 65536, bytes.length));
+            const event = this.codec.receiveStep(part, false);
+            await this.event(event, part); offset += event.consumed;
+            if (event.consumed === 0 && event.written === 0 && event.tag === 1) throw new Error("input decoder made no progress");
           }
-        }
-        if (rejected) {
-          // Stop all parsing, hashing and persistence. Only consume the upload
-          // tail, preserving the first policy error for Git's unpack report.
-          discarded += bytes.length - offset;
-          if (discarded > discardLimit || Date.now() >= deadline) break;
+        } catch (error) {
+          if (!(error instanceof PolicyError)) throw error;
+          handedOff = true;
+          error.cancelDrain = async () => { draining.abort(); await input.return(); };
+          error.drain = async () => {
+            const deadline = Date.now() + discardMs;
+            let discarded = bytes.length - offset;
+            try {
+              while (discarded < discardLimit && Date.now() < deadline) {
+                let timer;
+                const item = await Promise.race([input.next(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("discard deadline")), Math.max(1, deadline - Date.now())); })]).finally(() => clearTimeout(timer));
+                if (item.done) break; discarded += item.value.length;
+              }
+            } catch { /* Keep the original Git-visible policy refusal. */ }
+            finally { draining.abort(); await input.return().catch(() => {}); }
+          };
+          throw error;
         }
       }
-    } catch (error) { throw rejected ?? error; }
-    if (rejected) throw rejected;
+    } finally { if (!handedOff) await input.return(); }
     for (let attempts = 0; !this.eof && attempts < 128; attempts++) await this.event(this.codec.receiveStep(EMPTY, true), EMPTY);
     if (!this.eof || this.current || this.objects !== this.expected) throw new RequestError("intake did not close exactly");
     this.flushObjects();
@@ -149,7 +159,7 @@ export class Intake {
     for (;;) {
       const rows = this.store.exec("SELECT * FROM stage_objects INDEXED BY stage_ready_work WHERE stage=? AND verified=0 AND ready=1 ORDER BY node LIMIT 128", this.stage);
       if (!rows.length) break;
-      for (const row of rows) await this.delta(row);
+      for (const row of rows) { if (this.store.env.JOB_SIGNAL?.aborted) throw new RequestError("repository job cancelled"); await this.delta(row); }
     }
     if (this.store.exec("SELECT node FROM stage_objects WHERE stage=? AND (verified=0 OR scanned=0) LIMIT 1", this.stage).length) throw new RequestError("unresolved or cyclic delta base");
     const target = this.store.edgeTargetSQL("e.dst");

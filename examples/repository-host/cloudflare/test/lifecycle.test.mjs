@@ -118,7 +118,7 @@ test("failed R2 deletion retains the retired barrier and retry reclaims remainin
   } finally { f.database.close(); }
 });
 
-test("a push queued behind deletion cannot publish into the retired namespace", async () => {
+test("deletion cancels an active stream and prevents a concurrent push from publishing", async () => {
   const f = fixture();
   try {
     await value(await f.call("PUT", "api/v1/repository", {}), 201);
@@ -126,7 +126,9 @@ test("a push queued behind deletion cannot publish into the retired namespace", 
     const previous = f.repository.queue, deleting = f.call("DELETE");
     while (f.repository.queue === previous) await tick();
     const pushing = f.call("POST", "git-receive-pack", pushed(0).wire, "write");
-    await stream.arrayBuffer(); await value(await deleting);
+    await assert.rejects(stream.arrayBuffer(), /deleted|cancelled/); await value(await deleting, 202);
+    await f.repository.queue;
+    while (!(await value(await f.call("DELETE"), f.objects.size > 1 ? 202 : 200)).complete) {}
     assert.equal((await pushing).status, 404);
     assert.equal([...f.objects.keys()].some((key) => key.startsWith("repositories/repo/")), false);
   } finally { f.database.close(); }
@@ -154,4 +156,23 @@ test("cold retirement-fence reads use the same bounded transient retries as data
     assert.equal(f.repository.store.usage.r2Retries, 2);
     assert.equal(f.repository.store.usage.r2Failures, 2);
   } finally { f.database.close(); }
+});
+
+
+test("delete defers purge until in-flight alarm storage work settles", async () => {
+  const f = fixture(); let release, started;
+  const entered = new Promise((resolve) => { started = resolve; }), held = new Promise((resolve) => { release = resolve; });
+  try {
+    await value(await f.call("PUT", "api/v1/repository", {}), 201);
+    f.objects.set("repositories/repo/tmp/maintenance", Uint8Array.of(1));
+    f.repository.store.recoveryDue = 0;
+    f.repository.store.recover = async () => { started(); await held; };
+    const alarm = f.repository.alarm(); await entered;
+    const retired = await value(await f.call("DELETE"), 202); assert.equal(retired.waitingForJobs, true);
+    assert.equal(f.batches.length, 0, "no reclamation while maintenance has live I/O");
+    assert.equal((await f.call("GET", "info/refs?service=git-upload-pack")).status, 404);
+    release(); await alarm;
+    await value(await f.call("DELETE"), 202); await value(await f.call("DELETE"));
+    assert.equal(f.objects.has("repositories/repo/tmp/maintenance"), false);
+  } finally { release(); await f.repository.queue; f.database.close(); }
 });
