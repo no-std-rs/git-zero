@@ -2,8 +2,27 @@
 
 ## Unreleased
 
+- Repository browse results carry incarnation-bound, HKDF-derived object proofs
+  for immediate raw-ID navigation. Additive publications retain proof/index
+  progress; rewrites/deletions rebuild outward from current tips. Commit graph
+  links come from typed stored edges, including for late lookalike headers.
+- Gateway fetch wants default to current reachability; whole-catalog access is
+  explicit. Rewritten bytes still require repository deletion for reclamation.
+- Fetches, browse and private push intake/validation run concurrently with
+  per-job SQL scratch and ref snapshots. Only publication CAS is exclusive;
+  deletion fences/cancels jobs and waits for their storage I/O. Identical gateway
+  full clones coalesce into one bounded generation-keyed R2 pack build.
+- Browse runs alongside fetch streams/private intake. Gateway streams use a
+  throughput floor instead of a default five-minute cutoff; request bodies have
+  a configurable total deadline. Byte reservations bound live codecs/caches
+  across repositories with FIFO fairness and reader preemption under contention.
+- Small fetch fallbacks use bounded memory pins; gateway read scratch defaults
+  to 32 MiB per request/64 MiB per repository, with pre-header preparation bounds.
+  Refusal tails drain after releasing repository jobs, at most two per object;
+  unauthenticated tails are limited to 1 MiB/5 seconds.
+
 - Policy refusals drain bounded upload tails before Git status; early hidden,
-  read-only and busy POST replies also discard bounded transport bytes. Defaults
+  read-only and busy POST replies also discard bounded transport bytes. Authorized defaults
   allow 64 MiB/30 seconds; larger or stalled rejected uploads may still disconnect.
 
 - Fetch fallback reconstruction is prepared before response headers. Read
@@ -11,8 +30,9 @@
   pending legacy accounting; push-validation scratch retains write quotas.
 
 - Repository host: remove cross-repository admission blocking. Gateway jobs use
-  smaller default caches and bounded per-repository queues/response lifetimes.
-  Token deployments retain their previous uncapped queue, caches and idle limit;
+  smaller default caches and bounded per-repository queues/response throughput.
+  Token deployments retain their previous unlimited pending queue, caches and idle
+  limit, with byte accounting but no new admission timeout/contention preemption;
   the experimental isolate-wide four-job/64-request limits are removed.
 - Browse reads rooted at refs no longer rebuild repository-wide reachability.
   Raw IDs reuse an incremental generation index, returning a retryable building

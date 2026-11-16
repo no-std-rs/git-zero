@@ -316,14 +316,20 @@ to every read-only repository adapter.
   retirement fence. Explicit creation is mandatory in gateway mode. Local
   Wrangler and signed-S3/workerd tests cover crash safety and namespace isolation.
 - [x] Bounded, reachability-restricted refs/history/tree/blob/commit HTTP reads,
-  generation-bound cursors and raw-byte names; real Git oracles in both formats.
+  incarnation-bound cursors/object proofs, additive proof carry and bounded
+  outward raw-ID indexing; real Git oracles in both formats and at 25k commits.
 - [x] Transactional generation/time/opaque-actor/ref-update records with bounded,
   resumable catch-up pages and an explicit legacy coverage boundary.
 - [x] Per-repository force policy and deployment-ceiling push/stored-payload
   caps, readable Git refusals and resumable legacy byte accounting.
 - [x] Configurable host factory for embedded or separate Workers, explicit
   compiled codec input, direct-stub contract, renamed bindings/routes, isolated
-  shared-bucket prefixes and lowerable resource/isolate admission bounds.
+  shared-bucket prefixes and configurable byte reservations with cross-repository
+  FIFO byte fairness, per-job scratch/ref snapshots, concurrent reads/private
+  pushes, short publication CAS and generation-keyed full-clone pack reuse;
+  separate body/throughput bounds and delete cancellation protect live I/O.
+- [x] Gateway wants restricted to current reachability by default, bounded memory
+  fallback pins/read scratch and pre-header fetch preparation deadlines.
 - [ ] LFS, SSH, application hooks, unreachable-object garbage collection and a
   native push-capable host. Authentication and product identity stay host-owned.
 - [ ] Complete a full Linux push, clone, incremental fetch and strict fsck through

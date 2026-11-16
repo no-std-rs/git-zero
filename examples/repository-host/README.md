@@ -70,12 +70,31 @@ handler. The [v1 contract](../../docs/repository-host-v1.md#composing-the-host-i
 defines the exact forwarded URL/namespace/grant shape, shared-bucket purge,
 codec build pin, disabled-by-default health/test routes, memory controls and
 per-repository admission. The reference `streamed.mjs` is only a thin deployment.
-Repositories progress independently; a slow reader holds its own queue. Gateway
-mode defaults to 32 outstanding requests per repository, 10 seconds response
-idle, five minutes total stream lifetime and smaller caches. Token mode retains
-its prior uncapped queue, 60-second idle deadline and cache defaults. There is
-no isolate-wide semaphore: budget simultaneous namespaces within 128 MB,
-including the surrounding product. The contract states the limits explicitly.
+Clones, fetches, browse and private push stages run concurrently on one
+repository. Only the ref compare-and-swap transaction is exclusive. Reads retain
+consistent generation snapshots; delete fences, cancels live jobs and defers
+purging until their I/O settles. Gateway defaults allow 32 active jobs plus
+64 FIFO waiters (15-second admission wait). A 96 MiB isolate byte pool reserves
+33 MiB per heavy codec/cache job (up to 12 MiB extra for legacy chunk misses),
+12 MiB for gateway negotiation, 8 MiB for refs/log raw-name and JSON pages,
+and 1 MiB per cached-pack reader. Identical full clones
+share one generation-keyed R2 pack build, so a workshop does not encode the same
+pack 30 times. Lower caches/bounds and share a ByteBudget across host factories
+to leave room for the product's Rust Wasm. See the contract's full memory formula.
+Streams default to 10 seconds idle, a 16 KiB/s floor over 30-second windows and
+**no absolute lifetime**: a 300 MB clone at 5 Mbit/s can finish in about 480 s.
+Git/JSON bodies have a separate 120-second total deadline in gateway mode.
+Token mode retains unlimited queued admission, 60-second idle deadline, cache
+sizes and no new body/admission timeouts or contention preemption; it now
+accounts codec/cache bytes in the isolate pool. Enable PACK_CACHE_ENABLED=true
+for concurrent repeated clones in a token deployment (gateway default: enabled).
+
+Gateway fetches default to current-reachable wants. Rewritten objects remain
+physically stored; force-pushing does not erase data. `wantPolicy: "catalog"`
+opts into historic whole-catalog access (the token-mode default). There is no
+unreachable-object garbage collector: complete repository DELETE reclaims its
+content and permanently retires the namespace, including old packs and scratch.
+Product copies/backups need their own erasure policy.
 
 The current suite covers SHA-1/SHA-256 push, clone and fetch using Git protocol
 preferences 0/1/2, atomic updates, push options, deletes, thin pushes, annotated
@@ -203,8 +222,13 @@ partial failed response bytes are unmeasured. Worker CPU, Durable Object duratio
 and monthly SQLite storage remain unknown. These local measurements and the
 recorded database size do not establish a complete cloud bill or deployed latency.
 
-Ref-rooted browse reads scale with the requested page/path rather than total
-history. Raw-ID selectors reuse an incremental generation proof and may return
-503 with `reachability_index_building` until proof is available; retry advances
-the build. Read budgets can be raised within documented hard ceilings. The
-contract includes measured SQL costs at 25,000 commits in both object formats.
+Ref/proof-rooted browse costs depend on returned rows, visited paths, directory
+width and delta-chain depth, rather than unrelated history. Results carry
+signed per-object `proof` tokens (plus commit tree/parent and peeled-ref proofs)
+for immediate raw-ID navigation via `proof=`. They survive creations and verified
+fast-forwards; rewrites/deletions revoke them. Other raw IDs use a bounded outward
+index, advanced by requests and alarms; a rebuild may return a retryable 503
+until proof is available. Tokens/cursors bind a random repository incarnation
+and an HKDF-derived key. Read budgets can be raised within documented hard
+ceilings; the scale fixture drives a default-packed, wide/deep 25k repository's
+index to completion and compares results with Git.

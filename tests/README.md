@@ -1087,12 +1087,12 @@ Worker entry that re-exports the configurable Durable Object under renamed
 bindings and calls its stub directly (bypassing the host fetch entry). It checks
 shared-bucket neighbor survival, lower chunk/cache bounds and cold retirement.
 `test/host-module.test.mjs` verifies arrival-time grant admission, independent
-repository queues, starvation resistance, token-mode load compatibility, stalled
+repository admission, starvation resistance, token-mode load compatibility, stalled
 reader deadlines, overload and prefix identity. These fixtures are generated and local; they do
 not build the embedding product's workers-rs router or claim deployed costs.
 
 
-Focused second-review host regressions (after `npm run build:streamed`):
+Focused host regressions (after `npm run build:streamed`):
 
 ```sh
 node --test test/browse.test.mjs test/browse-scale.test.mjs test/browse-blob-budget.test.mjs
@@ -1100,13 +1100,25 @@ node --test test/host-module.test.mjs test/response.test.mjs test/grant-queue.te
 node --test test/fetch-quota.test.mjs test/temporary-cleanup.test.mjs
 node --test test/large-refusal.test.mjs test/refusal-drain.test.mjs test/policy.test.mjs
 node --test test/operability.test.mjs test/jurisdiction.test.mjs test/codec-source-pin.test.mjs
+node --test test/concurrent-git.test.mjs test/concurrent-jobs.test.mjs test/shared-pack.test.mjs
+node --test test/review-availability.test.mjs test/receive-controls.test.mjs test/legacy-memory.test.mjs
+node --test test/incremental-read.test.mjs test/body-runtime.test.mjs
 ```
 
 The scale generator creates 1,000 and 25,000 commits (4,003 and 100,003 stored
 objects), multiple refs and a rewritten branch, separately in SHA-1/SHA-256.
 Real Git supplies the oracle; measured statement/row-write counts must remain
 identical for the four ref-rooted reads. Raw-ID proof work advances in bounded
-persistent batches and is reused until publication. Quota tests use real Git to
+persistent batches, survives additive publication and rebuilds after rewrites
+or deletion. A default-packed 150,028-object wide/deep fixture completes its
+25k index in at most 70 requests; authenticated browser links need none.
+Concurrent Git tests require sixteen real clones to overlap, share one pack
+build, retain an old ref snapshot through publication, permit concurrent browse
+and push, resolve ref races, and cancel safely at deletion in both runtimes.
+Body-runtime tests retain their real 60-second idle deadline while requiring
+browse to run during three concurrent incomplete uploads; controls must not
+reserve full push caches. Byte reservations and lifetime-attached cleanup are
+tested independently of wall-clock clone timings. Quota tests use real Git to
 fetch a 9 MiB delta at a zero stored-size cap and with pending accounting;
 DELETE arrives while its stream remains open. Large refusal tests use 32 MiB
 incompressible packs with ordinary/gzip bodies against both local runtimes and

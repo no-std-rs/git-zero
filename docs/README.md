@@ -7,7 +7,7 @@
 - [Object formats and decoding](object-decoding.md)
 - [Development and validation](validation.md)
 - [Release bootstrap and package publishing](releases.md)
-- [Repository host v1: grants, lifecycle, browse, push records, policy and embedding](repository-host-v1.md)
+- [Repository host v1: grants, object proofs, lifecycle, browse, push records, policy and embedding](repository-host-v1.md)
 - [Durable Cloudflare repository hosting](../examples/repository-host/README.md)
 
 See the [test guide](../tests/README.md) for interoperability and decoder

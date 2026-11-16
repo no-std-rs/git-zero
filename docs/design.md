@@ -124,13 +124,25 @@ bodies and incremental negotiation. The existing Rust request parsers and ACK
 encoder serve both repository adapters and the external catalog. A fixed 4 MiB
 control arena keeps validated packet storage immutable while iterating wants and
 haves. Total Wasm linear memory is bounded at 6 MiB; object bodies remain outside
-that arena and the default runtime byte caches are bounded at 48 MiB per active
-job. Embedders can lower caches, capture thresholds, chunk writers and ref pages,
-and limit active/pending jobs (factory default: one active job). These payload
-bounds exclude VM/runtime/SQL/GC overhead and the surrounding product. See the
+that arena. Token deployments retain 48 MiB default byte caches; gateway mode
+uses 5 MiB, bounded pins and a FIFO byte reservation across repository instances
+(default 33 MiB/heavy job plus legacy-miss copies, 96 MiB pool). Each fetch has
+private SQL scratch and a generation snapshot; reads and private pushes overlap.
+Only the short ref compare-and-swap publishes exclusively. Identical full clones
+share one generation-keyed R2 pack build and small reader buffers. Delete fences
+and cancels live jobs, then waits for their I/O before reclaiming bytes. There is no default absolute
+stream lifetime: idle, minimum-throughput, body-total and contention bounds have
+separate purposes. Embedders can lower caches, captures, chunks, page limits and
+the reservation pool to leave room for Rust and the surrounding product. Bounds
+exclude unrelated VM/runtime/SQL allocations; see the
 [v1 memory envelope](repository-host-v1.md#memory-and-shared-isolate-scheduling).
-Each byte cache also has an independent 8,192-entry cap, so empty or tiny
-representations cannot exhaust memory through map metadata.
+Caches and pins have entry bounds as well as byte bounds, including tiny bodies.
+
+Browse results carry signed per-object capabilities derived with HKDF and tied
+to a random repository incarnation and current proof lineage. Normal browser
+navigation needs no global closure. An outward persisted index serves other raw
+selectors, survives additive publication and rebuilds after destructive ref
+changes. Commit tree/parent links use authenticated typed catalog edges.
 
 Fetch selection uses SQLite queues, not repository-sized JS arrays. Compressed
 entries are copied in physical pack order; OFS deltas become REF deltas. When a
@@ -147,7 +159,10 @@ preserves its internal OFS distances, and catalog coverage proves that every
 REF base is included. A single covering pack streams unchanged. This path is
 available only without known haves or shallow/filter extensions. It can include
 extra published objects from the same repository: `HOST_TOKEN` grants access to
-that entire repository. Otherwise fetch uses the per-object selection above.
+that entire repository in compatibility mode. Gateway mode defaults to current
+reachability and disables whole-catalog reuse; catalog wants remain an explicit
+option. Rewrites leave physical bytes until reclamation or repository deletion.
+Otherwise fetch uses the per-object selection above.
 
 The storage path supports depth-limited clone, relative deepening, unshallowing,
 and `blob:none`/`blob:limit` filters. Rust shares history and blob decisions with
