@@ -34,6 +34,7 @@ export function jobStore(base, owner, { read = false, fetch = false } = {}) {
   const view = Object.create(base), names = new Map(), state = read ? owner.snapshot : null;
   Object.defineProperty(view, "proofKey", { get: () => base.proofKey, set: (value) => { base.proofKey = value; } });
   Object.defineProperty(view, "lastIntakeBudget", { get: () => base.lastIntakeBudget, set: (value) => { base.lastIntakeBudget = value; } });
+  Object.defineProperty(view, "recoveryDue", { get: () => base.recoveryDue, set: (value) => { base.recoveryDue = value; } });
   view.base = base; view.jobId = owner.id; view.snapshot = state;
   view.env = { ...base.env, JOB_SIGNAL: owner.abort.signal, JOB_OWNER: owner };
   if (fetch) for (const table of FETCH_TABLES) names.set(table, `job_${owner.id.replaceAll("-", "")}_${table}`);

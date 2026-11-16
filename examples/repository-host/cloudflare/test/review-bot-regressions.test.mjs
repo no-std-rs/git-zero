@@ -1,0 +1,93 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Store, ChunkWriter } from "../src/storage.mjs";
+import { jobStore } from "../src/jobs.mjs";
+import { sqliteContext } from "./sqlite.mjs";
+import { fixture } from "./review4-fixture.mjs";
+import { git, receive } from "./browse-fixture.mjs";
+import { receiveReport } from "./fixture.mjs";
+const owner = () => ({ id: crypto.randomUUID(), abort: new AbortController() });
+
+test("a concurrent chunk claim survives an already-started deletion without blocking other keys", { timeout: 5000 }, async () => {
+  const database = new DatabaseSync(":memory:"), objects = new Map(), data = Uint8Array.of(1, 2, 3);
+  let entered, resume, paused = false;
+  const deleting = new Promise((r) => { entered = r; }), resumed = new Promise((r) => { resume = r; });
+  const store = new Store(sqliteContext(database), { BLOBS: {
+    async put(key, value) { objects.set(key, value.slice()); },
+    async delete(keys) { if (!paused) { paused = true; entered(); await resumed; } for (const key of keys) objects.delete(key); },
+  } }, "race");
+  try {
+    const a = jobStore(store, owner()), b = jobStore(store, owner()), c = jobStore(store, owner());
+    const first = store.stage(0), second = store.stage(0), other = store.stage(0);
+    const one = new ChunkWriter(a, first); await one.write(data); await one.finish();
+    const original = store.exec("SELECT key FROM stage_chunks WHERE stage=?", first)[0].key;
+    const cleanup = a.abandon(first); await deleting;
+    const two = new ChunkWriter(b, second); await two.write(data); const writing = two.finish();
+    // A different key must remain independent of the held DELETE.
+    const independent = new ChunkWriter(c, other); await independent.write(Uint8Array.of(8, 9));
+    await Promise.race([independent.finish(), delay(500).then(() => { throw new Error("unrelated key was serialized"); })]);
+    // Give the competing writer a turn while the storage DELETE is held.
+    await Promise.race([writing, delay(25)]); resume(); await Promise.all([cleanup, writing]);
+    const row = store.exec("SELECT key FROM stage_chunks WHERE stage=?", second)[0];
+    assert.equal(row.key, original, "content-addressed deduplication is retained");
+    assert.deepEqual(objects.get(row.key), data, "successful writer must retain its physical chunk");
+    assert.equal(store.storageAccounting().knownBytes, 5, "only live physical bytes are accounted");
+    await b.abandon(second); await c.abandon(other); assert.equal(objects.size, 0);
+    assert.equal(store.chunkOperations?.size ?? 0, 0);
+  } finally { resume(); database.close(); }
+});
+
+for (const temporary of [false, true]) test(`warm alarms observe job-view recovery deadlines temporary=${temporary}`, async () => {
+  const f = fixture(), repo = f.repo("recovery"), now = Date.now; let fail = true;
+  try {
+    const created = await repo.fetch(f.request("recovery", "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }));
+    assert.equal(created.status, 201); await repo.queue;
+    const remove = f.env.SHARED_DATA.delete.bind(f.env.SHARED_DATA);
+    f.env.SHARED_DATA.delete = async (keys) => { if (fail) throw new Error("injected cleanup failure"); return remove(keys); };
+    const view = jobStore(repo.store, owner()), stage = view.stage(0);
+    const writer = new ChunkWriter(view, stage, temporary ? "canonical" : null, temporary);
+    await writer.write(Uint8Array.of(1, 2, 3)); await writer.finish();
+    if (temporary) await view.clearTemporary(stage, { defer: true }); else await view.abandon(stage, { defer: true });
+    assert.equal(f.objects.size, 1);
+    const due = view.recoveryDue; assert.ok(Number.isFinite(due)); fail = false;
+    Date.now = () => due + 1; await repo.alarm(); Date.now = now;
+    assert.equal(repo.store.exec("SELECT 1 FROM stages WHERE id=?", stage).length, 0, "warm alarm must reclaim the deferred stage");
+    assert.equal(repo.store.exec("SELECT 1 FROM temp_chunks").length, 0);
+    assert.equal(repo.store.exec("SELECT bytes FROM read_scratch_usage WHERE id=1")[0].bytes, 0);
+    assert.equal(f.objects.size, 0); assert.equal(repo.store.storageAccounting().knownBytes, 0);
+  } finally { Date.now = now; await repo.queue; f.close(); }
+});
+
+for (const format of [0, 1]) test(`tree byte pagination includes proofs and cursor in an 8 KiB budget format=${format}`, { timeout: 10000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "git-zero-proof-pages-")), directory = join(root, "source");
+  const f = fixture({ readLimits: { jsonBytes: 8192 } }), ns = "n".repeat(80), repo = f.repo(ns);
+  try {
+    await mkdir(directory); git(directory, ["init", "--initial-branch=main", `--object-format=${format ? "sha256" : "sha1"}`]);
+    await Promise.all(Array.from({ length: 20 }, (_, i) => writeFile(join(directory, `file-${String(i).padStart(2, "0")}.py`), "# analysis\n")));
+    git(directory, ["add", "."]); git(directory, ["commit", "-m", "proof page fixture"]);
+    const tip = git(directory, ["rev-parse", "HEAD"]).toString().trim();
+    const create = await repo.fetch(f.request(ns, "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ objectFormat: format ? "sha256" : "sha1" }) }));
+    assert.equal(create.status, 201);
+    const pushed = await repo.fetch(f.request(ns, "git-receive-pack", "write", { method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" }, body: receive(format, [{ name: "refs/heads/main", old: "0".repeat(format ? 64 : 40), new: tip }], git(directory, ["pack-objects", "--stdout", "--all"])) }));
+    assert.equal(pushed.status, 200); assert.doesNotMatch(receiveReport(await pushed.arrayBuffer()), /ng /);
+    const names = []; let cursor, pages = 0;
+    do {
+      const response = await repo.fetch(f.request(ns, `api/v1/tree?${cursor ? `cursor=${cursor}` : "limit=20"}`));
+      const body = new Uint8Array(await response.arrayBuffer()); assert.equal(response.status, 200, new TextDecoder().decode(body)); assert.ok(body.length <= 8192);
+      const page = JSON.parse(new TextDecoder().decode(body)); assert.ok(page.entries.length > 0);
+      if (!pages) {
+        assert.ok(page.entries.length < 20); assert.ok(page.nextCursor);
+        const first = page.entries[0], blob = await repo.fetch(f.request(ns, `api/v1/blob?oid=${first.oid}&proof=${first.proof}`));
+        assert.equal(blob.status, 200); assert.equal(await blob.text(), "# analysis\n");
+      }
+      names.push(...page.entries.map((entry) => entry.name)); cursor = page.nextCursor; pages++;
+      assert.ok(pages <= 20, "pagination must always advance");
+    } while (cursor);
+    assert.deepEqual(names, git(directory, ["ls-tree", "--name-only", "HEAD"]).toString().trim().split("\n"));
+  } finally { await repo.queue; f.close(); await rm(root, { recursive: true, force: true }); }
+});

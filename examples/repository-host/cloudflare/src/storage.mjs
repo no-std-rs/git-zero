@@ -174,6 +174,7 @@ export class Store {
     this.observerUsage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0 };
     this.sqlKnown = true;
     this.edgeStages = new Map();
+    this.chunkOperations = new Map();
     for (const statement of SCHEMA) this.exec(statement);
     this.exec("INSERT OR IGNORE INTO repository_security(id,epoch) SELECT 1,? WHERE EXISTS(SELECT 1 FROM repository WHERE id=1)", crypto.randomUUID());
     this.exec("INSERT OR IGNORE INTO host_storage_config(id,prefix) VALUES(1,?)", env.KEY_PREFIX ?? "");
@@ -358,6 +359,18 @@ export class Store {
       await this.blobs.put(key, data);
     }, this.usage);
   }
+  async withChunkKeys(keys, operation) {
+    const unique = [...new Set(keys)], predecessors = unique.map((key) => this.chunkOperations.get(key)).filter(Boolean);
+    let release; const pending = new Promise((resolve) => { release = resolve; });
+    // Install the whole key set synchronously. Every dependency precedes this
+    // operation, so overlapping batches cannot acquire keys in a deadlock cycle.
+    for (const key of unique) this.chunkOperations.set(key, pending);
+    try { await Promise.all(predecessors); return await operation(); }
+    finally {
+      for (const key of unique) if (this.chunkOperations.get(key) === pending) this.chunkOperations.delete(key);
+      release();
+    }
+  }
   async delete(keys) {
     await retryStorage(async () => {
       this.usage.r2Deletes += Array.isArray(keys) ? keys.length : 1;
@@ -442,13 +455,18 @@ export class Store {
     this.exec("UPDATE stages SET phase='failed' WHERE id=?", stage);
       await this.clearTemporary(stage);
       for (;;) {
-        const rows = this.exec("SELECT c.seq,c.key,NOT EXISTS(SELECT 1 FROM stage_chunks other WHERE other.key=c.key AND other.stage<>c.stage) AS unshared FROM stage_chunks c WHERE c.stage=? LIMIT 128", stage);
+        const rows = this.exec("SELECT seq,key FROM stage_chunks WHERE stage=? LIMIT 128", stage);
         if (!rows.length) break;
         // Claims precede R2 puts. Keep the entire batch's ownership records
         // until deleting its unshared bytes succeeds, including on partial loss.
-        const keys = rows.filter((row) => row.unshared).map((row) => row.key);
-        if (keys.length) await this.delete(keys);
-        for (const row of rows) this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
+        await this.withChunkKeys(rows.map((row) => row.key), async () => {
+          // A preceding PUT may have added an owner while these keys waited.
+          // Recheck only the locked rows, never a later unlocked batch.
+          const locked = this.exec("SELECT c.seq,c.key,NOT EXISTS(SELECT 1 FROM stage_chunks other WHERE other.key=c.key AND other.stage<>c.stage) AS unshared FROM stage_chunks c WHERE c.stage=? AND c.seq IN (SELECT value FROM json_each(?))", stage, JSON.stringify(rows.map((row) => row.seq)));
+          const keys = locked.filter((row) => row.unshared).map((row) => row.key);
+          if (keys.length) await this.delete(keys);
+          for (const row of locked) this.exec("DELETE FROM stage_chunks WHERE stage=? AND seq=?", stage, row.seq);
+        });
       }
       for (const table of STAGE_METADATA) {
         const statement = table === "stage_edges" && this.compactEdges
@@ -527,18 +545,24 @@ export class ChunkWriter {
     const prefix = `${this.store.env?.KEY_PREFIX ?? ""}repositories/${this.store.namespace}`;
     const key = this.temporary === null ? `${prefix}/chunks/${sha}` : `${prefix}/tmp/${this.stage}/${this.temporary}/${this.seq}`;
     const values = [this.stage, this.seq, key, this.position, this.used, sha];
-    this.store.ctx.storage.transactionSync(() => {
-      if (this.readScratch) {
-        const used = this.store.exec("SELECT bytes FROM read_scratch_usage WHERE id=1")[0].bytes;
-        if (used + this.used > (this.store.env.READ_SCRATCH_REPOSITORY_BYTES ?? Infinity)) throw new ApiError("repository read scratch budget busy; retry later", 503);
-        this.store.exec("INSERT INTO read_scratch(key) VALUES(?)", key);
-        this.store.exec("INSERT INTO read_scratch_sizes(key,length) VALUES(?,?)", key, this.used);
-      }
-      else this.store.claimChunk(key, this.used);
-      if (this.temporary === null) this.store.exec("INSERT INTO stage_chunks(stage,seq,key,start,length,sha) VALUES(?,?,?,?,?,?)", ...values);
-      else this.store.exec("INSERT INTO temp_chunks(stage,object,seq,key,start,length,sha) VALUES(?,?,?,?,?,?,?)", this.stage, this.temporary, ...values.slice(1));
-    });
-    await this.store.put(key, data);
+    const persist = async () => {
+      this.store.ctx.storage.transactionSync(() => {
+        if (this.readScratch) {
+          const used = this.store.exec("SELECT bytes FROM read_scratch_usage WHERE id=1")[0].bytes;
+          if (used + this.used > (this.store.env.READ_SCRATCH_REPOSITORY_BYTES ?? Infinity)) throw new ApiError("repository read scratch budget busy; retry later", 503);
+          this.store.exec("INSERT INTO read_scratch(key) VALUES(?)", key);
+          this.store.exec("INSERT INTO read_scratch_sizes(key,length) VALUES(?,?)", key, this.used);
+        }
+        else this.store.claimChunk(key, this.used);
+        if (this.temporary === null) this.store.exec("INSERT INTO stage_chunks(stage,seq,key,start,length,sha) VALUES(?,?,?,?,?,?)", ...values);
+        else this.store.exec("INSERT INTO temp_chunks(stage,object,seq,key,start,length,sha) VALUES(?,?,?,?,?,?,?)", this.stage, this.temporary, ...values.slice(1));
+      });
+      await this.store.put(key, data);
+    };
+    // Shared encoded chunks need one claim/PUT/delete ordering across every
+    // job view. Temporary keys are already private to their owning job.
+    if (this.temporary === null) await this.store.withChunkKeys([key], persist);
+    else await persist();
     this.position += this.used; this.seq++; this.used = 0;
   }
   async finish() { await this.flush(); this.buffer = new Uint8Array(); return this.position; }

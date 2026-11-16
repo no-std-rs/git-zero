@@ -193,7 +193,10 @@ export class ReadApi {
     for (;;) {
       const end = Math.min(at + PAGE_BYTES, data.length);
       const event = codec.graphFeed(data.subarray(at, end), end === data.length); at += event.consumed;
-      if (event.tag === 32) visit({ name: event.data, oid: hex(event.id), mode: integer(event.a), kind: event.flags & 255 });
+      if (event.tag === 32) {
+        const visited = visit({ name: event.data, oid: hex(event.id), mode: integer(event.a), kind: event.flags & 255 });
+        if (visited?.then) await visited;
+      }
       if (event.tag === 33) { if (hex(event.id) !== row.oid) throw new Error("tree digest differs"); break; }
       if (event.tag === 30 && at === data.length) throw new Error("tree scan ended early");
     }
@@ -245,20 +248,22 @@ export class ReadApi {
       if (cursor && (cursor.directory !== row.oid || cursor.revision !== revision)) throw new ApiError("cursor path or revision differs");
     }
     const offset = number(cursor?.offset, 0, this.limits.treeBytes), entries = [];
-    let count = 0, more = false, size = 768;
-    await this.treeEntries(row, (entry) => {
+    const proof = await this.proof(row.oid);
+    const reserveCursor = await this.cursor("tree", { revision, directory: row.oid, offset: offset + limit });
+    let count = 0, more = false, size = encode(JSON.stringify({ generation: this.generation, oid: row.oid, proof, entries: [], nextCursor: reserveCursor })).length;
+    await this.treeEntries(row, async (entry) => {
       if (count++ < offset || more) return;
       if (entries.length >= limit) { more = true; return; }
       const child = entry.kind ? this.prove(entry.oid) : null;
       const type = entry.mode & 0o170000;
       const mode = type === 0o100000 ? 0o100644 | (entry.mode & 0o100 ? 0o111 : 0) : type;
       const result = { ...named(entry.name), mode: mode.toString(8).padStart(6, "0"), rawMode: entry.mode.toString(8).padStart(6, "0"), kind: entry.kind === 0 ? "submodule" : entry.kind === 2 ? "tree" : type === 0o120000 ? "symlink" : "blob", oid: entry.oid, size: child?.kind === 3 ? child.size : null };
+      result.proof = entry.kind === 0 ? null : await this.proof(entry.oid);
       const cost = encode(JSON.stringify(result)).length + 1;
       if (entries.length && size + cost > this.limits.jsonBytes) { more = true; return; }
       entries.push(result); size += cost;
     });
-    for (const entry of entries) entry.proof = entry.kind === "submodule" ? null : await this.proof(entry.oid);
-    return this.result({ generation: this.generation, oid: row.oid, proof: await this.proof(row.oid), entries, nextCursor: more ? await this.cursor("tree", { revision, directory: row.oid, offset: offset + entries.length }) : null });
+    return this.result({ generation: this.generation, oid: row.oid, proof, entries, nextCursor: more ? await this.cursor("tree", { revision, directory: row.oid, offset: offset + entries.length }) : null });
   }
   async handle(operation, request, stream) {
     let streaming = false;
