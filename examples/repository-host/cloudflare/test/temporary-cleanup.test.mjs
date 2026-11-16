@@ -38,6 +38,7 @@ test("temporary cleanup defers only after recovery is scheduled", async () => {
   const deletion = new Error("delete unavailable"), alarmFailure = new Error("alarm unavailable");
   let alarms = 0;
   const storage = Object.create(Store.prototype);
+  storage.recoverySchedule = { version: 0 };
   storage.exec = () => [{ object: "body", seq: 0, key: "chunk" }];
   storage.delete = async () => { throw deletion; };
   storage.ctx = { storage: { async setAlarm() { alarms++; } } };

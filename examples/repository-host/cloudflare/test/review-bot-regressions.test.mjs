@@ -121,3 +121,34 @@ test("SHA-256 history byte pagination budgets the signed cursor for long namespa
     assert.deepEqual(actual, expected);
   } finally { await repo.queue; f.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+for (const temporary of [false, true]) test(`recovery preserves cleanup scheduled by a protected job during R2 deletion temporary=${temporary}`, { timeout: 5000 }, async () => {
+  const f = fixture(), repo = f.repo("overlap"), now = Date.now; let entered, resume, live;
+  const deleting = new Promise((r) => { entered = r; }), resumed = new Promise((r) => { resume = r; });
+  try {
+    assert.equal((await repo.fetch(f.request("overlap", "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201); await repo.queue;
+    const store = repo.store, orphan = store.stage(0), protectedStage = store.stage(0);
+    const a = new ChunkWriter(store, orphan); await a.write(Uint8Array.of(1, 2, 3)); await a.finish();
+    const b = new ChunkWriter(store, protectedStage, temporary ? "canonical" : null, temporary); await b.write(Uint8Array.of(4, 5, 6)); await b.finish();
+    const orphanKey = store.exec("SELECT key FROM stage_chunks WHERE stage=?", orphan)[0].key;
+    const protectedKey = store.exec(`SELECT key FROM ${temporary ? "temp_chunks" : "stage_chunks"} WHERE stage=?`, protectedStage)[0].key;
+    live = { ...owner(), stages: new Set([protectedStage]), temporaries: new Set([protectedStage]), finished: Promise.resolve() };
+    repo.jobs.set(live.id, live); store.exec("UPDATE stages SET phase='failed' WHERE id=?", orphan); store.recoveryDue = 0;
+    const remove = f.env.SHARED_DATA.delete.bind(f.env.SHARED_DATA); let failProtected = true;
+    f.env.SHARED_DATA.delete = async (keys) => {
+      if (keys.includes(orphanKey)) { entered(); await resumed; }
+      if (keys.includes(protectedKey) && failProtected) throw new Error("protected cleanup failed during recovery");
+      return remove(keys);
+    };
+    const recovering = repo.alarm(); await deleting;
+    const view = jobStore(store, live);
+    if (temporary) await view.clearTemporary(protectedStage, { defer: true }); else await view.abandon(protectedStage, { defer: true });
+    const scheduled = store.recoveryDue; assert.ok(Number.isFinite(scheduled)); resume(); await recovering;
+    assert.equal(store.recoveryDue, scheduled, "recovery must not erase a concurrently scheduled retry");
+    assert.ok(f.objects.has(protectedKey), "a live job's storage remains protected");
+    repo.jobs.delete(live.id); failProtected = false; Date.now = () => scheduled + 1; await repo.alarm(); Date.now = now;
+    assert.equal(store.exec("SELECT 1 FROM stages WHERE id=?", protectedStage).length, 0);
+    assert.equal(f.objects.size, 0); assert.equal(store.storageAccounting().knownBytes, 0);
+    assert.equal(store.exec("SELECT bytes FROM read_scratch_usage WHERE id=1")[0].bytes, 0);
+  } finally { resume(); Date.now = now; if (live) repo.jobs.delete(live.id); await repo.queue; f.close(); }
+});

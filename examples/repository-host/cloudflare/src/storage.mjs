@@ -175,6 +175,7 @@ export class Store {
     this.sqlKnown = true;
     this.edgeStages = new Map();
     this.chunkOperations = new Map();
+    this.recoverySchedule = { version: 0 };
     for (const statement of SCHEMA) this.exec(statement);
     this.exec("INSERT OR IGNORE INTO repository_security(id,epoch) SELECT 1,? WHERE EXISTS(SELECT 1 FROM repository WHERE id=1)", crypto.randomUUID());
     this.exec("INSERT OR IGNORE INTO host_storage_config(id,prefix) VALUES(1,?)", env.KEY_PREFIX ?? "");
@@ -486,11 +487,13 @@ export class Store {
     }
   }
   async scheduleRecovery() {
+    this.recoverySchedule.version++;
     this.recoveryDue = Date.now() + 60000;
     try { await this.ctx.storage.setAlarm(this.recoveryDue); }
     catch (error) { throw storageFailure(error); }
   }
   async recover(protectedStages = []) {
+    const scheduleVersion = this.recoverySchedule.version;
     const current = typeof protectedStages === "function" ? protectedStages : () => protectedStages;
     const unowned = (column) => `${column} NOT IN (SELECT value FROM json_each(?))`;
     const binding = () => JSON.stringify(current());
@@ -517,7 +520,12 @@ export class Store {
     this.exec(`UPDATE stages SET phase='failed' WHERE (phase IN ('receiving','decoded') OR (phase='verified' AND retained=0)) AND ${unowned("id")}`, binding());
     for (;;) {
       const pending = this.exec(`SELECT id FROM stages WHERE phase='failed' AND ${unowned("id")} LIMIT 1`, binding())[0];
-      if (!pending) { this.recoveryDue = Infinity; return; }
+      if (!pending) {
+        // A protected job can defer cleanup while this pass awaits R2. The
+        // shared marker survives job views and even equal-clock reschedules.
+        if (this.recoverySchedule.version === scheduleVersion) this.recoveryDue = Infinity;
+        return;
+      }
       await this.abandon(pending.id);
     }
   }
