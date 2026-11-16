@@ -96,3 +96,66 @@ test("builder cleanup errors still retire its codec lease, gate and lifetime", {
     assert.equal(repo.gate.active, 0); assert.equal(repo.readerGate.active, 0); assert.equal(repo.jobs.size, 0);
   } finally { FetchJob.prototype.cleanup = cleanup; await repo.queue; f.close(); }
 });
+
+for (const count of [1, 3]) test(`${count} uncacheable clone(s) prepare exactly once each`, { timeout: 5000 }, async () => {
+  const f = deployment({ packCacheBytes: 1 }), repo = f.repo("repo");
+  try {
+    await repo.fetch(f.request("repo", "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }));
+    repo.env.PACK_CACHE_ENABLED = false; await (await holdFetch(f, "repo")).arrayBuffer(); await repo.queue; repo.env.PACK_CACHE_ENABLED = true;
+    let preparations = 0; const prepare = repo.prepareFetch.bind(repo);
+    repo.prepareFetch = async (...args) => { preparations++; await delay(10); return prepare(...args); };
+    await Promise.all(Array.from({ length: count }, async () => { const response = await holdFetch(f, "repo"); assert.equal(response.status, 200); assert.ok((await response.arrayBuffer()).byteLength > 0); }));
+    await repo.queue; assert.equal(preparations, count); assert.equal(repo.packCache.metrics.builds, 0);
+  } finally { await repo.queue; f.close(); }
+});
+
+test("abandoning every follower cancels a builder with no output within its window", { timeout: 5000 }, async () => {
+  const f = deployment({ responseThroughputWindowMs: 50 }), repo = f.repo("repo");
+  try {
+    await repo.fetch(f.request("repo", "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }));
+    repo.env.PACK_CACHE_ENABLED = false; await (await holdFetch(f, "repo")).arrayBuffer(); await repo.queue; repo.env.PACK_CACHE_ENABLED = true;
+    const prepare = repo.prepareFetch.bind(repo); let builder;
+    repo.prepareFetch = async (fetch, owner) => {
+      if (!owner.internal) return prepare(fetch, owner);
+      builder = owner;
+      await new Promise((resolve, reject) => { owner.abort.signal.addEventListener("abort", () => reject(owner.abort.signal.reason), { once: true }); });
+    };
+    const waiting = [holdFetch(f, "repo"), holdFetch(f, "repo")];
+    while (!builder || repo.packCache.pins.get([...repo.packCache.builds.keys()][0]) !== 2) await delay(1);
+    for (const owner of repo.jobs.values()) if (!owner.internal) owner.abort.abort(new Error("follower left"));
+    await Promise.all(waiting); const start = performance.now();
+    await Promise.race([repo.queue, delay(200).then(() => { throw new Error("abandoned builder retained its slot"); })]);
+    assert.ok(performance.now() - start < 150); assert.equal(builder.abort.signal.aborted, true);
+    assert.equal(repo.jobs.size, 0); assert.equal(repo.gate.active, 0); assert.equal(repo.env.BYTE_BUDGET.owners.size, 0);
+  } finally { for (const owner of repo.jobs.values()) owner.abort.abort(); await repo.queue; f.close(); }
+});
+
+test("shared failures after a partial cache chunk send a complete Git fatal sideband packet", async () => {
+  const f = deployment(), repo = f.repo("repo");
+  try {
+    await repo.fetch(f.request("repo", "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }));
+    const { PackCache } = await import("../src/pack-cache.mjs"), cache = new PackCache(repo.store, repo.env), entry = cache.begin("midstream"); entry.band = 2;
+    assert.equal(cache.claim(entry, 0, 65536), true);
+    const whole = packet("NAK\n"), partial = Buffer.concat([whole, Buffer.from("ffef\x01partial pack data")]);
+    const { sha256 } = await import("../src/storage.mjs"); const key = "midstream-chunk"; f.objects.set(key, Uint8Array.from(partial));
+    repo.store.exec("INSERT INTO fetch_cache_chunks(cache,seq,key,length,sha,ready) VALUES(?,0,?,?,?,1)", entry.key, key, partial.length, await sha256(partial));
+    const reading = cache.read(entry, new AbortController().signal); assert.deepEqual(Buffer.from((await reading.next()).value), whole);
+    cache.fail(entry, new Error("injected storage failure"));
+    const fatal = Buffer.from((await reading.next()).value); assert.equal(Number.parseInt(fatal.subarray(0, 4).toString(), 16), fatal.length); assert.equal(fatal[4], 3);
+    assert.match(fatal.subarray(5).toString(), /shared pack generation failed; retry fetch/); assert.equal((await reading.next()).done, true);
+  } finally { await repo.queue; f.close(); }
+});
+
+test("a full shared cache bypasses before preparing a second key", { timeout: 5000 }, async () => {
+  const f = deployment({ packCacheEntries: 1 }), repo = f.repo("repo");
+  try {
+    await repo.fetch(f.request("repo", "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }));
+    await (await holdFetch(f, "repo")).arrayBuffer(); await repo.queue;
+    assert.equal(repo.packCache.metrics.builds, 1);
+    const tip = repo.store.exec("SELECT oid FROM refs")[0].oid, prepare = repo.prepareFetch.bind(repo); let count = 0;
+    repo.prepareFetch = async (...args) => { count++; return prepare(...args); };
+    const response = await repo.fetch(f.request("repo", "git-upload-pack", "read", { method: "POST", headers: { "content-type": "application/x-git-upload-pack-request" }, body: Buffer.concat([packet(`want ${tip} side-band-64k ofs-delta\n`), Buffer.from("0000"), packet("done\n")]) }));
+    assert.equal(response.status, 200); assert.ok((await response.arrayBuffer()).byteLength > 0); await repo.queue;
+    assert.equal(count, 1); assert.equal(repo.packCache.metrics.builds, 1);
+  } finally { await repo.queue; f.close(); }
+});

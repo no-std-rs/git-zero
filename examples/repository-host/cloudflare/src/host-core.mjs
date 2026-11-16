@@ -114,6 +114,7 @@ export class RepositoryCore {
     // the builder, including selection/preparation before the first chunk.
     const builder = { id: crypto.randomUUID(), internal: true, snapshot: owner.snapshot, stages: new Set(), temporaries: new Set(), abort: new AbortController() };
     this.resources(builder, this.store.namespace);
+    cache.watch(entry, () => builder.abort.abort(new RequestError("shared pack abandoned without output; retry")));
     this.store.exec("INSERT INTO job_controls(job,seq,data) SELECT ?,seq,data FROM job_controls WHERE job=?", builder.id, owner.id);
     let finish; builder.finished = new Promise((resolve) => { finish = resolve; }); this.jobs.set(builder.id, builder);
     const scoped = jobStore(this.store, builder, { read: true, fetch: true }); let fetch, releaseSlot;
@@ -126,7 +127,7 @@ export class RepositoryCore {
         builder.temporaries.add(fetch.temporary);
         scoped.env.PROGRESS = () => cache.notify(entry);
         await this.prepareFetch(fetch, builder);
-        if (!cache.claim(entry, owner.snapshot.generation, fetch.maximumWireBytes())) { cache.bypass(entry); return; }
+        if (fetch.maximumWireBytes() > entry.maximum) throw new Error("cached pack exceeded catalog upper bound");
         await cache.produce(entry, fetch, builder.abort.signal);
       } catch (error) { cache.fail(entry, error); }
       finally {
@@ -220,9 +221,13 @@ export class RepositoryCore {
         let entry = cache.entry(key);
         if (!entry && cache.builds.size < 2) {
           entry = cache.begin(key);
-          this.buildShared(entry, cache, owner, request, format);
+          // Reserve from a conservative catalog bound before walking. A full
+          // cache or oversized pack goes straight to one ordinary preparation.
+          if (cache.claim(entry, owner.snapshot.generation, cache.maximum(fetch))) this.buildShared(entry, cache, owner, request, format);
+          else { cache.bypass(entry); entry = null; }
         }
         if (entry) {
+          entry.band = fetch.band;
           const unpin = cache.pin(entry); owner.finalizers.add(unpin); discardParsed();
           await owner.cachedReader();
           if (await cache.decision(entry, owner.abort.signal) && await cache.first(entry, owner.abort.signal)) {

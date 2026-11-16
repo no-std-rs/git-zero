@@ -26,7 +26,8 @@ const noCache = { get() {}, put() {} };
 export class PackCache {
   constructor(store, env) { this.store = store; this.env = env; this.builds = new Map(); this.pins = new Map(); this.metrics = { builds: 0, hits: 0, served: 0, generatedBytes: 0 }; store.exec("UPDATE fetch_cache SET state='failed' WHERE state='building'"); }
   async key(fetch) {
-    if (!fetch.cacheable()) return null;
+    // Shared failures can be reported in-band only with negotiated sideband.
+    if (!fetch.band || !fetch.cacheable()) return null;
     let result = await sha256(encode(JSON.stringify(["git-zero-wire-pack-v1", fetch.store.snapshot.epoch, fetch.store.snapshot.generation, fetch.version, fetch.parsedFlags, this.env.WANT_POLICY, this.env.CODEC_LIMITS, this.env.READ_SCRATCH_BYTES])));
     let after = "", page = 0;
     for (;;) {
@@ -38,6 +39,19 @@ export class PackCache {
     return result;
   }
 
+  maximum(fetch) {
+    const generation = fetch.store.snapshot.generation;
+    if (this.bound?.generation === generation) return this.bound.bytes;
+    // One aggregate per snapshot generation, no graph walk or object reads.
+    // Include duplicate/unreachable published representations conservatively;
+    // each output is at most its stored stream or a stored-block canonical
+    // fallback, plus header/base/framing allowance. Never under-reserve.
+    const row = fetch.store.exec("SELECT COUNT(*) n,COALESCE(SUM(MAX(o.end_offset-o.compressed_offset,o.size+5*((o.size+65534)/65535)+11)+64),0) bytes FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE s.phase='published' AND o.verified=1")[0];
+    const pack = 12 + fetch.codec.idBytes + row.bytes;
+    const bytes = pack + 16 * (Math.ceil(pack / 512) + 6 * row.n + 128);
+    this.bound = { generation, bytes }; return bytes;
+  }
+
   entry(key) {
     const active = this.builds.get(key); if (active) { this.metrics.hits++; return active; }
     const row = this.store.exec("SELECT * FROM fetch_cache WHERE key=? AND state='complete'", key)[0];
@@ -45,7 +59,7 @@ export class PackCache {
     this.metrics.hits++; return { key, cache: true, complete: true, row };
   }
   begin(key) {
-    const entry = { key, cache: null, complete: false, error: null }; this.notify(entry);
+    const entry = { key, cache: null, complete: false, error: null, lastOutput: Date.now() }; this.notify(entry);
     this.builds.set(key, entry); return entry;
   }
   notify(entry) { entry.wake?.(); entry.changed = new Promise((resolve) => { entry.wake = resolve; }); }
@@ -69,11 +83,24 @@ export class PackCache {
   }
   bypass(entry) { entry.cache = false; this.notify(entry); this.builds.delete(entry.key); }
   fail(entry, error) {
+    clearTimeout(entry.orphanTimer);
     entry.error = error; this.store.exec("UPDATE fetch_cache SET state='failed' WHERE key=?", entry.key);
     this.notify(entry); this.builds.delete(entry.key);
   }
-  pin(entry) { this.pins.set(entry.key, (this.pins.get(entry.key) ?? 0) + 1); return () => { const count = this.pins.get(entry.key) - 1; if (count) this.pins.set(entry.key, count); else {
+  watch(entry, cancel) { entry.cancel = cancel; this.orphan(entry); }
+  orphan(entry) {
+    clearTimeout(entry.orphanTimer);
+    if (!entry.cancel || entry.complete || entry.error || this.pins.has(entry.key)) return;
+    const window = this.env.RESPONSE_RATE_WINDOW_MS ?? 30000;
+    entry.orphanTimer = setTimeout(() => {
+      if (this.pins.has(entry.key) || entry.complete || entry.error) return;
+      if (entry.cache === false || Date.now() - entry.lastOutput >= window) entry.cancel();
+      else this.orphan(entry);
+    }, Math.max(1, entry.lastOutput + window - Date.now()));
+  }
+  pin(entry) { clearTimeout(entry.orphanTimer); this.pins.set(entry.key, (this.pins.get(entry.key) ?? 0) + 1); let released = false; return () => { if (released) return; released = true; const count = this.pins.get(entry.key) - 1; if (count) this.pins.set(entry.key, count); else {
       this.pins.delete(entry.key);
+      this.orphan(entry);
       const alarm = this.store.ctx.storage.setAlarm(Date.now() + 1000).catch(() => {}); this.store.ctx.waitUntil?.(alarm);
     } }; }
   async produce(entry, fetch, signal) {
@@ -91,7 +118,7 @@ export class PackCache {
       this.store.exec("INSERT INTO fetch_cache_chunks(cache,seq,key,length,sha) VALUES(?,?,?,?,?)", entry.key, seq, key, used, digest);
       await this.store.put(key, part);
       this.store.exec("UPDATE fetch_cache_chunks SET ready=1 WHERE cache=? AND seq=?", entry.key, seq);
-      total += used; seq++; used = 0; this.notify(entry);
+      total += used; seq++; used = 0; entry.lastOutput = Date.now(); this.notify(entry);
     };
     try {
       for await (const part of fetch.response()) {
@@ -102,7 +129,7 @@ export class PackCache {
       }
       await flush(); buffer = null;
       this.store.exec("UPDATE fetch_cache SET state='complete',bytes=?,reserved=? WHERE key=?", total, total, entry.key);
-      this.store.exec("UPDATE fetch_cache_metrics SET generated_bytes=generated_bytes+? WHERE id=1", total); entry.complete = true; this.metrics.generatedBytes += total; this.notify(entry); this.builds.delete(entry.key);
+      this.store.exec("UPDATE fetch_cache_metrics SET generated_bytes=generated_bytes+? WHERE id=1", total); entry.complete = true; clearTimeout(entry.orphanTimer); this.metrics.generatedBytes += total; this.notify(entry); this.builds.delete(entry.key);
     } catch (error) { this.fail(entry, error); throw error; }
     finally { await fetch.cleanup(); }
   }
@@ -112,17 +139,36 @@ export class PackCache {
   }
   async *read(entry, signal) {
     this.metrics.served++; let seq = 0;
+    // Never expose a partial pkt-line: an eventual fatal sideband packet must
+    // start at a framing boundary even if an R2 chunk ends inside pack data.
+    const packet = entry.band ? new Uint8Array(65536) : null; let used = 0, expected = 4;
+    try {
     for (;;) {
       if (signal.aborted) throw new RequestError("repository job cancelled");
       const row = this.store.exec("SELECT * FROM fetch_cache_chunks WHERE cache=? AND seq=? AND ready=1", entry.key, seq)[0];
       if (row) {
         const data = await this.store.get(row, noCache); seq++;
-        for (let at = 0; at < data.length; at += PAGE_BYTES) { if (signal.aborted) throw new RequestError("repository job cancelled"); yield data.subarray(at, at + PAGE_BYTES); }
+        if (!packet) { for (let at = 0; at < data.length; at += PAGE_BYTES) { if (signal.aborted) throw new RequestError("repository job cancelled"); yield data.subarray(at, at + PAGE_BYTES); } }
+        else for (let at = 0; at < data.length;) {
+          if (signal.aborted) throw new RequestError("repository job cancelled");
+          const count = Math.min(expected - used, data.length - at); packet.set(data.subarray(at, at + count), used); at += count; used += count;
+          if (used === 4 && expected === 4) {
+            const header = new TextDecoder().decode(packet.subarray(0, 4));
+            if (!/^[0-9a-f]{4}$/.test(header)) throw new Error("cached pack framing invalid");
+            expected = Math.max(4, Number.parseInt(header, 16));
+          }
+          if (used === expected) { yield packet.slice(0, used); used = 0; expected = 4; }
+        }
       } else {
         if (entry.error) throw entry.error;
-        if (entry.complete) return;
+        if (entry.complete) { if (used) throw new Error("cached pack frame truncated"); return; }
         await this.wait(entry, signal);
       }
+    }
+    } catch (error) {
+      if (!packet || signal.aborted) throw error;
+      const fatal = encode("\x03git-zero: shared pack generation failed; retry fetch\n");
+      const framed = new Uint8Array(fatal.length + 4); framed.set(encode(framed.length.toString(16).padStart(4, "0"))); framed.set(fatal, 4); yield framed;
     }
   }
   async reclaim(currentGeneration) {
