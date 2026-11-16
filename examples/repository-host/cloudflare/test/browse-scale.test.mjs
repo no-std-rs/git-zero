@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { OwnRepository } from "./host.mjs";
@@ -11,33 +10,14 @@ import { GRANT_KEY, mint } from "./grant-fixture.mjs";
 import { receive } from "./browse-fixture.mjs";
 import { pack, receiveReport } from "./fixture.mjs";
 import { ReadApi } from "../src/browse.mjs";
+import { ObjectSource } from "../src/source.mjs";
 import { createRepositoryHost } from "../src/host.mjs";
 const codec = await WebAssembly.compile(await readFile(new URL("../build/git_zero_host_wasm.wasm", import.meta.url)));
-function git(dir, args, input) {
-  const result = spawnSync("git", args, { cwd: dir, input, maxBuffer: 256 * 1024 * 1024, timeout: 120000, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" } });
-  assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}`); return result.stdout;
-}
-async function generated(root, count, format, realistic) {
-  const dir = join(root, `${count}-${format}-${realistic}`); await mkdir(dir);
-  git(dir, ["init", "--initial-branch=main", `--object-format=${format ? "sha256" : "sha1"}`]);
-  const commands = [];
-  for (let i = 1; i <= count; i++) {
-    if (realistic && i === 1) for (let n = 0; n < 24; n++) {
-      const module = `# framework module ${n}\n`;
-      commands.push(`blob\nmark :${1000000 + n}\ndata ${Buffer.byteLength(module)}\n${module}`);
-    }
-    const body = `${realistic ? "# analysis framework\n".repeat(30) : ""}analysis revision ${i}\n`;
-    const extra = realistic && i === 1 ? Array.from({ length: 24 }, (_, n) => `M 100644 :${1000000 + n} src/framework/${n < 12 ? "models" : "data"}/module-${n}.py\n`).join("") : "";
-    commands.push(`blob\nmark :${i * 2}\ndata ${Buffer.byteLength(body)}\n${body}commit refs/heads/main\nmark :${i * 2 + 1}\nauthor Author <a@example.test> ${i} +0000\ncommitter Committer <c@example.test> ${i} +0000\ndata ${String(i).length + 8}\ncommit ${i}\nM 100644 :${i * 2} ${realistic ? "src/framework/models/analysis.py" : "src/analysis.py"}\n${extra}\n`);
-  }
-  // A distinct branch is published and then rewritten, retaining its old bytes.
-  commands.push(`reset refs/heads/other\nfrom :${Math.floor(count / 2) * 2 + 1}\n\nreset refs/tags/release\nfrom :${count * 2 + 1}\n\nblob\nmark :${count * 2 + 2}\ndata 7\nsecret\ncommit refs/heads/rewritten\nmark :${count * 2 + 3}\ncommitter Old <o@example.test> 1 +0000\ndata 9\nold fork\nfrom :3\nM 100644 :${count * 2 + 2} secret\n\ndone\n`);
-  git(dir, ["fast-import", "--quiet", "--done"], commands.join(""));
-  const id = (name) => git(dir, ["rev-parse", name]).toString().trim();
-  return { dir, tip: id("refs/heads/main"), old: id("refs/heads/rewritten"), secret: id("refs/heads/rewritten:secret"), refs: git(dir, ["for-each-ref", "--format=%(refname) %(objectname)"]).toString().trim().split("\n").map((line) => { const [name, oid] = line.split(" "); return { name, oid }; }) };
-}
+import { git, generated } from "./browse-scale-fixture.mjs";
 for (const [format, realistic] of [[0, false], [1, false], [0, true]]) test(`ref-rooted reads stay bounded at 25000 real Git commits format=${format} defaultPacked=${realistic}`, { timeout: 240000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "git-zero-browse-scale-")), costs = [];
+  let deltaWork = 0; const stream = ObjectSource.prototype.stream;
+  ObjectSource.prototype.stream = async function* (row, ...args) { deltaWork += 1 + row.depth; yield* stream.call(this, row, ...args); };
   try {
     for (const count of [1000, 25000]) {
       const fixture = await generated(root, count, format, realistic), db = new DatabaseSync(":memory:"), ctx = sqliteContext(db), objects = new Map();
@@ -85,12 +65,13 @@ for (const [format, realistic] of [[0, false], [1, false], [0, true]]) test(`ref
         assert.deepEqual(db.prepare("SELECT objects,edges,phase FROM browse_progress").get(), indexBeforeBrowser, "browser links do not advance the index");
         const measured = {};
         for (const route of ["commit?rev=HEAD", "history?rev=main&limit=20", `tree?rev=release&path=${directoryPath}`, `blob?rev=main&path=${filePath}`]) {
+          deltaWork = 0;
           const before = statements, changes = db.prepare("SELECT total_changes() n").get().n;
           const response = await call(`api/v1/${route}`); assert.equal(response.status, 200, await response.clone().text());
           const value = route.startsWith("blob") ? Buffer.from(await response.arrayBuffer()) : await response.json(); await host.queue;
-          measured[route] = { statements: statements - before, rowWrites: db.prepare("SELECT total_changes() n").get().n - changes };
+          measured[route] = { statements: statements - before, rowWrites: db.prepare("SELECT total_changes() n").get().n - changes, deltaWork };
           assert.equal(measured[route].rowWrites, 0, route);
-          assert.ok(measured[route].statements < (realistic ? 64 * (1 + maxDeltaDepth) * (route.startsWith("history") ? 20 : 4) : 300), JSON.stringify(measured));
+          assert.ok(measured[route].statements < 24 + 5 * deltaWork, JSON.stringify(measured));
           if (route.startsWith("commit")) assert.equal(value.oid, fixture.tip);
           if (route.startsWith("history")) assert.deepEqual(value.commits.map((c) => c.oid), git(fixture.dir, ["rev-list", "--first-parent", "--max-count=20", "main"]).toString().trim().split("\n"));
           if (route.startsWith("tree")) assert.equal(value.entries.find((entry) => entry.name === "analysis.py").oid, git(fixture.dir, ["rev-parse", `main:${filePath}`]).toString().trim());
@@ -114,6 +95,7 @@ for (const [format, realistic] of [[0, false], [1, false], [0, true]]) test(`ref
         {
           while (response.status === 503 && attempts < 70) { attempts++; response = await call(`api/v1/commit?rev=oid:${fixture.old}`); }
           assert.equal(response.status, 404); assert.ok(attempts > 2 && attempts <= (realistic ? 70 : 20)); t.diagnostic(JSON.stringify({ commits: count, format, requestsToProof: attempts }));
+          deltaWork = 0;
           const before = statements, changes = db.prepare("SELECT total_changes() n").get().n;
           assert.equal((await call(`api/v1/commit?rev=oid:${fixture.old}`)).status, 404);
           assert.equal(db.prepare("SELECT total_changes() n").get().n, changes);
@@ -132,10 +114,14 @@ for (const [format, realistic] of [[0, false], [1, false], [0, true]]) test(`ref
       } finally { db.close(); }
     }
     if (!realistic) assert.deepEqual(costs[1], costs[0], "SQL statement and row-write counts must not depend on history size");
-  } finally { await rm(root, { recursive: true, force: true }); }
+    else for (const route of Object.keys(costs[0])) {
+      assert.equal(costs[1][route].rowWrites, 0);
+      assert.ok(costs[1][route].statements <= costs[0][route].statements + 32 + 5 * Math.max(0, costs[1][route].deltaWork - costs[0][route].deltaWork), `default-packed growth: ${JSON.stringify(costs)}`);
+    }
+  } finally { ObjectSource.prototype.stream = stream; await rm(root, { recursive: true, force: true }); }
 });
 test("embedders can raise read budgets, with documented hard ceilings", () => {
   const options = { codec, bindings: { repositories: "R", objects: "B", grantKey: "K" }, authMode: "gateway", routePrefix: "", keyPrefix: "" };
-  assert.doesNotThrow(() => createRepositoryHost({ ...options, readLimits: { visibleObjects: 100000000, edges: 1000000000, pageSize: 1000, blobBytes: 64 * 1024 * 1024 } }));
+  assert.doesNotThrow(() => createRepositoryHost({ ...options, isolateMemoryBytes: 112 * 1048576, readLimits: { visibleObjects: 100000000, edges: 1000000000, pageSize: 1000, blobBytes: 64 * 1024 * 1024 } }));
   assert.throws(() => createRepositoryHost({ ...options, readLimits: { visibleObjects: 100000001 } }));
 });

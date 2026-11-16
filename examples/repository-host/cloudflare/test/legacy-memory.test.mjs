@@ -13,7 +13,7 @@ test("legacy 8 MiB misses reuse the empty chunk-cache allowance within token and
     const source = new ObjectSource(store, {}, "job"); source.chunks.put("old", new Uint8Array(1024));
     const bytes = await source.chunkAt({ stage: "published" }, 0);
     assert.equal(bytes.length, 65536); assert.equal(source.chunks.get("old"), undefined);
-    assert.equal(extras, memory === MEMORY_LIMITS ? 0 : 12 * 1024 * 1024);
+    assert.equal(extras, memory === MEMORY_LIMITS ? 0 : 13 * 1024 * 1024);
     assert.ok(pool.peak <= pool.limit); assert.equal(pool.used, reserved); release(); source.releaseCaches(); assert.equal(pool.used, 0);
   }
 });

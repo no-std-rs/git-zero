@@ -56,9 +56,9 @@ test("an actively drained response still has a configurable total lifetime", asy
   await done; assert.equal(cleaned, true);
 });
 
-test("preempted before first pull still runs generator ownership cleanup", async () => {
+test("cancelled before first pull still runs generator ownership cleanup", async () => {
   const abort = new AbortController(); abort.abort(); let cleaned = false;
   async function* chunks() { try { yield Uint8Array.of(1); } finally { cleaned = true; } }
   const { response, done } = streamResponse(chunks(), "application/octet-stream", 1000, undefined, 0, { signal: abort.signal });
-  await assert.rejects(response.arrayBuffer(), /memory contention/); await done; assert.equal(cleaned, true);
+  await assert.rejects(response.arrayBuffer(), /cancelled/); await done; assert.equal(cleaned, true);
 });

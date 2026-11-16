@@ -125,9 +125,13 @@ const SCHEMA = [
   "CREATE TRIGGER IF NOT EXISTS read_scratch_cleanup AFTER DELETE ON read_scratch BEGIN DELETE FROM read_scratch_sizes WHERE key=OLD.key; END",
   "CREATE TABLE IF NOT EXISTS temp_objects (stage TEXT NOT NULL, object TEXT NOT NULL, oid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(stage,object)) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS refs (name BLOB PRIMARY KEY, oid TEXT NOT NULL, peeled TEXT) WITHOUT ROWID",
+  "CREATE INDEX IF NOT EXISTS stage_chunks_length ON stage_chunks(length)",
   "CREATE TABLE IF NOT EXISTS ref_names(name BLOB PRIMARY KEY) WITHOUT ROWID",
   "CREATE TABLE IF NOT EXISTS ref_versions(name BLOB NOT NULL,first_generation INTEGER NOT NULL,last_generation INTEGER,oid TEXT NOT NULL,peeled TEXT,PRIMARY KEY(name,first_generation)) WITHOUT ROWID",
   "CREATE INDEX IF NOT EXISTS ref_versions_live ON ref_versions(first_generation,last_generation,name)",
+  "CREATE INDEX IF NOT EXISTS ref_versions_oid ON ref_versions(oid,last_generation,first_generation)",
+  "CREATE INDEX IF NOT EXISTS ref_versions_peeled ON ref_versions(peeled,last_generation,first_generation)",
+  "CREATE INDEX IF NOT EXISTS ref_versions_retired ON ref_versions(last_generation,name,first_generation) WHERE last_generation IS NOT NULL",
   "CREATE TABLE IF NOT EXISTS ref_versions_start(id INTEGER PRIMARY KEY,generation INTEGER NOT NULL)",
   "CREATE TABLE IF NOT EXISTS fetch_cache_metrics(id INTEGER PRIMARY KEY CHECK(id=1),builds INTEGER NOT NULL DEFAULT 0,generated_bytes INTEGER NOT NULL DEFAULT 0)",
   "INSERT OR IGNORE INTO fetch_cache_metrics(id) VALUES(1)",
@@ -156,14 +160,15 @@ export function assertStoragePrefix(ctx, prefix = "") {
   const tables = exec("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('host_storage_config','host_identity','repository','stages')");
   if (tables.some((row) => row.name === "host_storage_config")) {
     const stored = exec("SELECT prefix FROM host_storage_config WHERE id=1")[0];
-    if (stored) { if (stored.prefix !== prefix) throw new ApiError("stored R2 key prefix differs from configuration", 409); return; }
+    if (stored) { if (stored.prefix !== prefix) throw new ApiError("stored R2 key prefix differs from configuration", 409); return true; }
   }
   if (prefix && tables.some((row) => row.name !== "host_storage_config")) throw new ApiError("legacy repository requires the original empty R2 key prefix", 409);
+  return tables.length > 0;
 }
 
 export class Store {
   constructor(ctx, env, namespace) {
-    assertStoragePrefix(ctx, env.KEY_PREFIX ?? "");
+    const existing = assertStoragePrefix(ctx, env.KEY_PREFIX ?? "");
     this.ctx = ctx; this.env = env; this.namespace = namespace; this.blobs = bucket(env);
     this.usage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0, r2Gets: 0, r2FenceGets: 0, r2Puts: 0, r2Deletes: 0, r2Failures: 0, r2Retries: 0, r2ReadBytes: 0, r2WrittenBytes: 0 };
     this.observerUsage = { sqlCalls: 0, sqlFailures: 0, sqlRowsRead: 0, sqlRowsWritten: 0 };
@@ -202,7 +207,10 @@ export class Store {
     });
     this.exec("CREATE INDEX IF NOT EXISTS refs_oid ON refs(oid)");
     this.exec("CREATE INDEX IF NOT EXISTS refs_peeled ON refs(peeled)");
-    if (!this.exec("SELECT 1 FROM ref_versions_start WHERE id=1").length) this.ctx.storage.transactionSync(() => {
+    // A genuinely new schema has no refs to backfill. Existing (including
+    // partially initialized) schemas still take the idempotent migration path.
+    if (!existing) this.exec("INSERT INTO ref_versions_start(id,generation) VALUES(1,0)");
+    else if (!this.exec("SELECT 1 FROM ref_versions_start WHERE id=1").length) this.ctx.storage.transactionSync(() => {
       const generation = this.exec("SELECT generation FROM repository WHERE id=1")[0]?.generation ?? 0;
       this.exec("INSERT INTO ref_versions(name,first_generation,oid,peeled) SELECT name,?,oid,peeled FROM refs", generation);
       this.exec("INSERT OR IGNORE INTO ref_names(name) SELECT name FROM refs");
@@ -522,7 +530,7 @@ export class ChunkWriter {
     this.store.ctx.storage.transactionSync(() => {
       if (this.readScratch) {
         const used = this.store.exec("SELECT bytes FROM read_scratch_usage WHERE id=1")[0].bytes;
-        if (used + this.used > (this.store.env.READ_SCRATCH_REPOSITORY_BYTES ?? Infinity)) throw new ApiError("repository read scratch budget exceeded", 413);
+        if (used + this.used > (this.store.env.READ_SCRATCH_REPOSITORY_BYTES ?? Infinity)) throw new ApiError("repository read scratch budget busy; retry later", 503);
         this.store.exec("INSERT INTO read_scratch(key) VALUES(?)", key);
         this.store.exec("INSERT INTO read_scratch_sizes(key,length) VALUES(?,?)", key, this.used);
       }

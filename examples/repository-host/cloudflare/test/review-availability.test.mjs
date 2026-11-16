@@ -21,8 +21,8 @@ function fixture(extra = {}) {
   return { host, env, db, factory, call, push, async create() { assert.equal((await call("api/v1/repository", "PUT", "{}", "admin")).status, 201); }, async close() { await host.queue; await host.browseQueue; db.close(); } };
 }
 
-test("trickling upload-pack and JSON bodies hit a total deadline and release the repository", { timeout: 5000 }, async () => {
-  const f = fixture({ requestBodyTotalMs: 60 });
+test("trickling controls hit a total deadline, pack data hits minimum throughput, and both release the repository", { timeout: 5000 }, async () => {
+  const f = fixture({ requestBodyTotalMs: 60, requestBodyMinimumBytesPerSecond: 1024, requestBodyThroughputWindowMs: 30 });
   try {
     await f.create();
     for (const route of ["git-upload-pack", "git-receive-pack", "api/v1/policy"]) {
@@ -39,7 +39,7 @@ test("trickling upload-pack and JSON bodies hit a total deadline and release the
       const before = Date.now(), uploading = f.call(route, route.startsWith("git-") ? "POST" : "PATCH", body, "admin");
       await delay(20); const queued = f.call("api/v1/refs");
       const response = await uploading; assert.equal(response.status, route === "git-receive-pack" ? 200 : 400);
-      const message = route === "git-receive-pack" ? receiveReport(await response.arrayBuffer()) : await response.text(); assert.match(message, /total deadline/);
+      const message = route === "git-receive-pack" ? receiveReport(await response.arrayBuffer()) : await response.text(); assert.match(message, route === "git-receive-pack" ? /minimum throughput/ : /total deadline/);
       assert.equal((await queued).status, 200); assert.ok(Date.now() - before < 1000); assert.equal(cancelled, true);
     }
   } finally { await f.close(); }
@@ -59,7 +59,7 @@ test("immutable commit, tree and blob browse run during a fetch; publication com
     const publication = f.push([{ name: "refs/tags/later", old: zero, new: tip }], pack(0, [])).then(() => { published = true; });
     await publication; assert.equal(published, true, "publication is independent of the live fetch");
     await held.arrayBuffer(); held = null; await publication;
-    assert.equal(f.host.env.BYTE_BUDGET.used, 0);
+    assert.equal(f.host.env.BYTE_BUDGET.used, f.host.env.BYTE_BUDGET.residentBytes);
   } finally { await held?.body.cancel().catch(() => {}); await f.close(); }
 });
 
@@ -72,14 +72,14 @@ test("minimum throughput permits a slow active stream for unlimited windows, but
   await assert.rejects(failing.response.arrayBuffer(), /minimum throughput/); await failing.done;
 });
 
-test("byte reservations are FIFO across namespaces and bounded until actual cleanup", async () => {
+test("byte reservations admit a fitting namespace without preempting a larger live lease", async () => {
   const budget = new ByteBudget(100, 1000, 10), order = []; let preempted = false;
   const releaseA = await budget.acquire("a", 60, () => { preempted = true; });
   const waitingB = budget.acquire("b", 60, () => {}).then((release) => { order.push("b"); return release; });
   const waitingC = budget.acquire("c", 20, () => {}).then((release) => { order.push("c"); return release; });
-  await delay(20); assert.equal(preempted, true); assert.equal(budget.used, 60); assert.deepEqual(order, []);
+  await delay(20); assert.equal(preempted, false); assert.equal(budget.used, 80); assert.deepEqual(order, ["c"]);
   releaseA(); const [releaseB, releaseC] = await Promise.all([waitingB, waitingC]);
-  assert.deepEqual(order, ["b", "c"]); assert.equal(budget.used, 80); assert.ok(budget.peak <= 100);
+  assert.deepEqual(order, ["c", "b"]); assert.equal(budget.used, 80); assert.ok(budget.peak <= 100);
   assert.equal(budget.owners.size, 2); releaseB(); releaseC(); assert.equal(budget.used, 0);
 });
 

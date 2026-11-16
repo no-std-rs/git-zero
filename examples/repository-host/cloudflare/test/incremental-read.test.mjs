@@ -82,6 +82,6 @@ for (const format of [0, 1]) test(`real Git incremental pull pins many small fal
     const denied = await git("-C", "denied.git", "fetch", remote, first); assert.notEqual(denied.status, 0); assert.match(denied.stderr, /not reachable from current refs/);
     const log = await (await call("api/v1/changes", "GET")).json(); assert.ok(log.publications.some((event) => event.updates.some((update) => update.oldId === second)));
     assert.ok(host.store.published(first), "physical bytes remain until explicit reclamation/deletion");
-    assert.equal(host.env.BYTE_BUDGET.used, 0);
+    assert.equal(host.env.BYTE_BUDGET.used, host.env.BYTE_BUDGET.residentBytes);
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); await host.queue; db.close(); await rm(directory, { recursive: true, force: true }); }
 });

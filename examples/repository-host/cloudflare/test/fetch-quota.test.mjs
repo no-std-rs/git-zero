@@ -67,11 +67,11 @@ for (const format of [0, 1]) test(`real Git fetch ignores stored quota and pendi
     assert.equal(host.store.exec("SELECT COUNT(*) n FROM temp_chunks")[0].n, 0);
     host = instance({}, { readScratchRepositoryBytes: 1 });
     const scratch = await call("git-upload-pack", "POST", body, "application/x-git-upload-pack-request");
-    assert.equal(scratch.status, 413); assert.match(await scratch.text(), /read scratch budget/); await host.queue;
+    assert.equal(scratch.status, 503); assert.equal(scratch.headers.get("retry-after"), "1"); assert.match(await scratch.text(), /read scratch budget/); await host.queue;
     assert.equal(host.store.exec("SELECT bytes FROM read_scratch_usage")[0].bytes, 0);
     host = instance({}, { fetchPrepareMs: 1 });
     const timed = await call("git-upload-pack", "POST", body, "application/x-git-upload-pack-request");
-    assert.equal(timed.status, 504); assert.match(await timed.text(), /preparation deadline/); await host.queue;
+    assert.equal(timed.status, 504); assert.match(await timed.text(), /preparation.*deadline/); await host.queue;
     host = instance();
     const active = await call("git-upload-pack", "POST", body, "application/x-git-upload-pack-request");
     assert.equal(active.status, 200);

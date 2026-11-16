@@ -59,7 +59,7 @@ export class PackCache {
       })]);
     } finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
   }
-  async decision(entry, signal) { while (entry.cache === null && !entry.error) await this.wait(entry, signal); if (entry.error) throw entry.error; return entry.cache; }
+  async decision(entry, signal) { while (entry.cache === null && !entry.error) await this.wait(entry, signal); if (entry.error) return false; return entry.cache; }
   claim(entry, generation, maximum) {
     const reserved = this.store.exec("SELECT COALESCE(SUM(reserved),0) n,COUNT(*) count FROM fetch_cache")[0];
     if (!Number.isSafeInteger(maximum) || maximum > this.env.PACK_CACHE_BYTES || maximum > this.env.PACK_CACHE_TOTAL_BYTES - reserved.n || reserved.count >= this.env.PACK_CACHE_ENTRIES) return false;
@@ -78,11 +78,13 @@ export class PackCache {
     } }; }
   async produce(entry, fetch, signal) {
     let buffer = new Uint8Array(this.env.PACK_CACHE_CHUNK_BYTES), used = 0, seq = 0, total = 0;
-    const deadline = Date.now() + this.env.PACK_CACHE_BUILD_MS;
+    // Credit grows with useful output. A 300 MiB pack may take 4800 s at
+    // 64 KiB/s; only stalls/below-rate builds are stopped, never its age alone.
+    const started = Date.now(), rate = this.env.PACK_CACHE_MINIMUM_RATE ?? 65536;
     const flush = async () => {
       if (!used) return;
       if (signal.aborted) throw new RequestError("repository job cancelled");
-      if (Date.now() >= deadline) throw new ApiError("pack cache generation deadline exceeded", 504);
+      if (Date.now() - started > this.env.PACK_CACHE_BUILD_MS + total / rate * 1000) throw new ApiError("pack cache generation deadline exceeded", 504);
       if (total + used > entry.maximum) throw new ApiError("pack cache size reservation exceeded", 413);
       const part = buffer.subarray(0, used), digest = await sha256(part);
       const key = `${this.env.KEY_PREFIX}repositories/${this.store.namespace}/fetch-cache/${entry.key}/${seq}`;
@@ -106,7 +108,7 @@ export class PackCache {
   }
   async first(entry, signal) {
     while (!entry.complete && !entry.error && !this.store.exec("SELECT 1 FROM fetch_cache_chunks WHERE cache=? AND ready=1 LIMIT 1", entry.key).length) await this.wait(entry, signal);
-    if (entry.error) throw entry.error;
+    return !entry.error;
   }
   async *read(entry, signal) {
     this.metrics.served++; let seq = 0;

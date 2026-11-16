@@ -88,11 +88,11 @@ async function s3(directory, getFailure, deleteFailures) {
   return { faults, url: `http://127.0.0.1:${server.address().port}/bucket`, stop: async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 
-export async function startStandalone(persist, { format = 0, cwd = fileURLToPath(root), getFailure, deleteFailures = 0, hostToken = TOKEN, authMode = "token", grantKey = "", packCache = false } = {}) {
+export async function startStandalone(persist, { format = 0, cwd = fileURLToPath(root), getFailure, deleteFailures = 0, hostToken = TOKEN, authMode = "token", grantKey = "", packCache = false, inspectorPort = null } = {}) {
   const state = join(persist, "sqlite"); await mkdir(state, { recursive: true });
   const storage = await s3(join(persist, "r2"), getFailure, deleteFailures);
   const child = spawn(fileURLToPath(new URL("node_modules/workerd/bin/workerd", root)), [
-    "serve", "workerd.capnp", "--experimental", "--directory-path", `state=${state}`,
+    "serve", "workerd.capnp", ...(inspectorPort ? ["--inspector-addr", `127.0.0.1:${inspectorPort}`] : []), "--experimental", "--directory-path", `state=${state}`,
     "--socket-addr", "http=127.0.0.1:0", "--control-fd", "1",
   ], { cwd, env: { ...process.env, HOST_TOKEN: hostToken ?? "", AUTH_MODE: authMode, GRANT_KEY: grantKey, PACK_CACHE_ENABLED: String(packCache), TEST_MODE: "true", REPO_FORMAT: String(format), R2_S3_URL: storage.url, R2_ACCESS_KEY_ID: ACCESS, R2_SECRET_ACCESS_KEY: SECRET }, stdio: ["ignore", "pipe", "pipe"] });
   let logs = "", exited = false;

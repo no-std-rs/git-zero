@@ -38,13 +38,13 @@ test("multiple host classes can share a smaller byte pool budgeted for a Rust wr
   try {
     for (const [f, name] of [[a, "a"], [b, "b"]]) {
       assert.equal((await f.repo(name).fetch(f.request(name, "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201);
-      assert.equal(f.repo(name).env.JOB_MEMORY_BYTES, 13 * 1024 * 1024);
+      assert.equal(f.repo(name).env.JOB_MEMORY_BYTES, 9 * 1024 * 1024);
       held.push(await holdFetch(f, name));
     }
-    assert.equal(budget.used, 26 * 1024 * 1024); assert.equal(budget.owners.size, 2);
+    assert.equal(budget.used, 18 * 1024 * 1024); assert.equal(budget.owners.size, 2);
     for (const response of held) await response.arrayBuffer(); held.length = 0;
     for (const f of [a, b]) for (const repo of f.instances.values()) await repo.queue;
-    assert.equal(budget.used, 0);
+    assert.equal(budget.used, budget.residentBytes);
   } finally { for (const response of held) await response.body.cancel().catch(() => {}); a.close(); b.close(); }
 });
 
@@ -115,7 +115,7 @@ test("token defaults preserve an uncapped queue and independent repository progr
   } finally { await held?.body.cancel().catch(() => {}); f.close(); }
 });
 
-test("contended byte budget preempts a reader and admits a co-tenant without exceeding reserved memory", { timeout: 5000 }, async () => {
+test("byte budget admits a co-tenant without aborting existing readers or exceeding reserved memory", { timeout: 5000 }, async () => {
   const f = fixture({ packCacheEnabled: false, isolateMemoryBytes: 80 * 1024 * 1024, memoryContentionMs: 30, memoryWaitMs: 2000, responseIdleMs: 10000 }), held = [];
   try {
     for (const name of ["a", "b", "c"]) assert.equal((await f.repo(name).fetch(f.request(name, "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201);
@@ -125,9 +125,9 @@ test("contended byte budget preempts a reader and admits a co-tenant without exc
     const started = Date.now(), next = await holdFetch(f, "c");
     assert.equal(next.status, 200); assert.ok(Date.now() - started < 1500); await next.arrayBuffer();
     const results = await Promise.allSettled(held.map((response) => response.arrayBuffer())); held.length = 0;
-    assert.ok(results.some((result) => result.status === "rejected" && /memory contention/.test(result.reason.message)));
+    assert.ok(results.every((result) => result.status === "fulfilled"));
     for (const repo of f.instances.values()) await repo.queue;
-    assert.ok(budget.peak <= 96 * 1024 * 1024); assert.equal(budget.used, 0); assert.equal(budget.owners.size, 0);
+    assert.ok(budget.peak <= 96 * 1024 * 1024); assert.equal(budget.used, budget.residentBytes); assert.equal(budget.owners.size, 0);
   } finally { for (const response of held) await response.body.cancel().catch(() => {}); for (const repo of f.instances.values()) await repo.queue; f.close(); }
 });
 
@@ -141,7 +141,7 @@ test("a stalled reader times out and releases only its repository's scratch", { 
     await delay(40); await assert.rejects(held.arrayBuffer(), /response reader idle/); held = null;
     assert.equal(f.repo("a").env.RESPONSE_TOTAL_MS, 0);
     assert.equal(f.repo("a").env.RESPONSE_MINIMUM_RATE, 16384);
-    assert.equal(f.repo("a").env.MEMORY.canonicalCacheBytes, 2 * 1024 * 1024);
+    assert.equal(f.repo("a").env.MEMORY.canonicalCacheBytes, 512 * 1024);
     await f.repo("a").queue;
   } finally { await held?.body.cancel().catch(() => {}); f.close(); }
 });
@@ -156,7 +156,7 @@ test("stream cleanup remains attached to the Durable Object lifetime until lease
     let retired = false; tasks.at(-1).then(() => { retired = true; }); await delay(1);
     assert.ok(tasks.length >= 2); assert.equal(retired, false); assert.ok(repo.env.BYTE_BUDGET.used > 0);
     await held.arrayBuffer(); held = null; await Promise.all(tasks);
-    assert.equal(retired, true); assert.equal(repo.env.BYTE_BUDGET.used, 0);
+    assert.equal(retired, true); assert.equal(repo.env.BYTE_BUDGET.used, repo.env.BYTE_BUDGET.residentBytes);
   } finally { await held?.body.cancel().catch(() => {}); await Promise.allSettled(tasks); f.close(); }
 });
 
@@ -171,7 +171,7 @@ test("token byte admission preserves more than 1024 FIFO waiters while gateway a
       if (!unlimited) await assert.rejects(budget.acquire("overflow", 1, () => {}), /admission budget/);
       releaseFirst();
       for (const item of pending) { const result = await item; assert.ifError(result.error); result.release(); }
-      assert.equal(budget.used, 0); assert.equal(budget.peak, 1);
+      assert.equal(budget.used, budget.residentBytes); assert.equal(budget.peak, 1);
     } finally { releaseFirst(); for (const item of pending) (await item).release?.(); }
   }
 });
@@ -181,13 +181,13 @@ test("metadata reservations include worst-case raw ref-name pages as well as JSO
   const f = fixture();
   try {
     assert.equal(f.repo("repo").env.JSON_MEMORY_BYTES, 8 * 1048576);
-    assert.equal(f.repo("repo").env.METADATA_MEMORY_BYTES, 12 * 1048576);
+    assert.equal(f.repo("repo").env.METADATA_MEMORY_BYTES, 11 * 1048576);
     const repo = f.repo("repo");
     assert.equal((await repo.fetch(f.request("repo", "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201);
     for (const route of ["refs", "changes"]) {
       repo.env.BYTE_BUDGET.peak = 0;
       const response = await repo.fetch(f.request("repo", `api/v1/${route}`)); assert.equal(response.status, 200); await response.json(); await repo.queue;
-      assert.equal(repo.env.BYTE_BUDGET.peak, repo.env.JSON_MEMORY_BYTES);
+      assert.equal(repo.env.BYTE_BUDGET.peak, repo.env.BYTE_BUDGET.residentBytes + repo.env.JSON_MEMORY_BYTES);
     }
     assert.throws(() => createRepositoryHost({ ...options, isolateMemoryBytes: 64 * 1048576, readLimits: { pageSize: 1000 } }), /cannot fit/);
   } finally { f.close(); }

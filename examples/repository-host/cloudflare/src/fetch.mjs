@@ -19,11 +19,19 @@ export class FetchJob {
     this.temporary = store.jobId ?? crypto.randomUUID();
     this.source = new ObjectSource(store, codec, this.temporary, { ownedBuffers: true, readScratch: true });
     this.preparationDeadline = Infinity;
-    this.steps = 0; this.allCommitWants = true;
+    this.steps = 0; this.sinceYield = 0; this.progress = 0; this.lastProgress = 0; this.allCommitWants = true;
   }
   reset() { for (const table of FETCH_TABLES) this.store.exec(`DELETE FROM ${table}`); }
-  checkPreparation() { if (this.store.env?.JOB_SIGNAL?.aborted) throw new RequestError("repository job cancelled"); if (Date.now() >= this.preparationDeadline) throw new ApiError("fetch preparation deadline exceeded", 504); }
-  tick() { this.checkPreparation(); if (++this.steps > this.codec.limits.maxObjects) throw new RequestError("fetch graph work budget exceeded"); }
+  checkPreparation() {
+    if (this.store.env?.JOB_SIGNAL?.aborted) throw new RequestError("repository job cancelled");
+    if (Date.now() >= this.preparationDeadline) throw new ApiError("fetch preparation made no progress before deadline", 504);
+    if (this.progress !== this.lastProgress) {
+      this.lastProgress = this.progress;
+      this.preparationDeadline = this.store.env?.FETCH_PREPARE_MS ? Date.now() + this.store.env.FETCH_PREPARE_MS : Infinity;
+      if (this.progress - (this.notifiedProgress ?? 0) >= 128) { this.notifiedProgress = this.progress; this.store.env?.PROGRESS?.(); }
+    }
+  }
+  tick() { this.progress++; this.checkPreparation(); if (++this.steps > this.codec.limits.maxObjects) throw new RequestError("fetch graph work budget exceeded"); }
   async *references(v2 = false) {
     this.codec.uploadInit(this.version);
     yield* this.refRows(v2);
@@ -45,7 +53,7 @@ export class FetchJob {
   }
   want(id) {
     if (this.store.env?.WANT_POLICY === "reachable") {
-      const tip = this.store.exec("SELECT 1 FROM refs WHERE oid=? OR peeled=? LIMIT 1", id, id).length;
+      const tip = this.store.isTip ? this.store.isTip(id) : this.store.exec("SELECT 1 FROM refs WHERE oid=? OR peeled=? LIMIT 1", id, id).length;
       if (!tip) {
         const generation = this.store.exec("SELECT generation FROM repository WHERE id=1")[0].generation;
         try { if (!proveRaw(this.store, generation, id, this.store.env.READ_LIMITS)) throw new WantError("want is not reachable from current refs"); }
@@ -74,9 +82,9 @@ export class FetchJob {
     for await (const bytes of requestBody(stream, 60000, bodyBudget(request))) {
       for (let offset = 0; offset < bytes.length; offset += PAGE_BYTES) this.codec.uploadAppend(bytes.subarray(offset, offset + PAGE_BYTES));
     }
-    this.parseControls(); await this.selection();
+    await this.parseControls(); await this.selection();
   }
-  parseControls() {
+  async parseControls() {
     const parsed = this.codec.uploadParse(); this.parsedFlags = parsed.flags;
     this.command = parsed.flags & 255; this.band = (parsed.flags >> 8) & 255;
     this.done = !!(parsed.flags & (1 << 16));
@@ -85,8 +93,10 @@ export class FetchJob {
     this.treeFiltered = !!(parsed.flags & (1 << 23));
     this.preparationDeadline = this.store.env?.FETCH_PREPARE_MS ? Date.now() + this.store.env?.FETCH_PREPARE_MS : Infinity;
     if (this.command !== 2) return;
+    let controls = 0;
     for (;;) {
-      const event = this.codec.uploadNext(); if (event.tag === 74) break;
+      if (++controls % 128 === 0) { await new Promise((resolve) => setTimeout(resolve, 0)); this.checkPreparation(); }
+      const event = this.codec.uploadNext(); if (event.tag === 74) break; this.progress++;
       const id = hex(event.id);
       if (event.tag === 71) {
         this.want(id);
@@ -110,7 +120,7 @@ export class FetchJob {
   async decodeSaved() {
     this.reset(); this.codec.uploadInit(this.version);
     for (const row of this.store.exec("SELECT data FROM job_controls WHERE job=? ORDER BY seq", this.temporary)) this.codec.uploadAppend(bytes(row.data));
-    this.parseControls();
+    await this.parseControls();
   }
   detach() { this.source?.releaseCaches(); this.source = null; this.codec = null; }
   replay(codec) {
@@ -136,30 +146,42 @@ export class FetchJob {
     this.packBytes = length; this.outputObjects = sources.objects;
     this.rawSources = sources; return true;
   }
+  async graphPages(next, visit) {
+    for (;;) {
+      let count = 0; const maximum = 128 - this.sinceYield;
+      const batch = () => {
+        while (count < maximum) {
+          const pending = next(maximum - count); if (!pending.length) break;
+          for (const item of pending) { this.tick(); visit(item); count++; }
+        }
+      };
+      // Scratch is private to this job. Batch its writes, including a narrow
+      // newly discovered frontier, without extending the CPU slice or holding
+      // a transaction across an await. Publication can interleave at each yield.
+      if (this.store.ctx?.storage.transactionSync) this.store.ctx.storage.transactionSync(batch); else batch();
+      this.sinceYield += count;
+      if (this.sinceYield === 128) { this.sinceYield = 0; await new Promise((resolve) => setTimeout(resolve, 0)); this.checkPreparation(); }
+      if (count < maximum) return;
+    }
+  }
   async walk(table, { excludeCommon = false, snapshots = false, nonCommit = false } = {}) {
     const target = this.store.edgeTargetSQL("e.dst");
-    for (;;) {
-      const pending = this.store.exec(`SELECT oid FROM ${table} WHERE walked=0 ORDER BY oid LIMIT 128`);
-      if (!pending.length) break;
-      await new Promise((resolve) => setTimeout(resolve, 0)); this.checkPreparation();
-      for (const item of pending) {
-        this.tick();
+    await this.graphPages(
+      (limit) => this.store.exec(`SELECT oid FROM ${table} WHERE walked=0 ORDER BY ${table === "fetch_selected" ? "depth,oid" : "oid"} LIMIT ?`, limit),
+      (item) => {
         const row = this.store.published(item.oid);
         if (!row) throw new Error("published closure is incomplete");
         this.store.exec(`UPDATE ${table} SET stage=?,node=?,walked=1 WHERE oid=?`, row.stage, row.node, row.oid);
         this.store.exec(`INSERT OR IGNORE INTO ${table}(oid) SELECT ${target} FROM stage_edges e WHERE e.stage=? AND e.node=?${snapshots ? " AND e.relation<>1" : ""}${nonCommit ? " AND e.kind<>1" : ""}${excludeCommon ? ` AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=${target})` : ""}`, this.store.edgeStage(row.stage), row.node);
-      }
-    }
+      },
+    );
   }
   async historyWalk(table, probe = false) {
     const exclude = !(this.history & 1) && !probe;
     const target = this.store.edgeTargetSQL("e.dst"), provided = this.treeFiltered && !probe;
-    for (;;) {
-      const rows = this.store.exec(`SELECT f.oid,f.depth,s.oid IS NOT NULL AS boundary,w.oid IS NOT NULL AS wanted,${provided ? "p.oid IS NOT NULL" : "0"} AS provided FROM ${table} f LEFT JOIN fetch_shallow s ON s.oid=f.oid LEFT JOIN fetch_wants w ON w.oid=f.oid${provided ? " LEFT JOIN fetch_probe p ON p.oid=f.oid" : ""} WHERE f.walked=0 AND f.depth=(SELECT MIN(depth) FROM ${table} WHERE walked=0) ORDER BY f.oid LIMIT 128`);
-      if (!rows.length) return;
-      await new Promise((resolve) => setTimeout(resolve, 0)); this.checkPreparation();
-      for (const item of rows) {
-        this.tick();
+    await this.graphPages(
+      (limit) => this.store.exec(`SELECT f.oid,f.depth,s.oid IS NOT NULL AS boundary,w.oid IS NOT NULL AS wanted,${provided ? "p.oid IS NOT NULL" : "0"} AS provided FROM ${table} f LEFT JOIN fetch_shallow s ON s.oid=f.oid LEFT JOIN fetch_wants w ON w.oid=f.oid${provided ? " LEFT JOIN fetch_probe p ON p.oid=f.oid" : ""} WHERE f.walked=0 AND f.depth=(SELECT MIN(depth) FROM ${table} WHERE walked=0) ORDER BY f.oid LIMIT ?`, limit),
+      (item) => {
         const row = this.store.published(item.oid);
         if (!row) throw new Error("published closure is incomplete");
         const step = this.codec.uploadSelect(row, item.depth, { clientBoundary: !!item.boundary, wanted: !!item.wanted, probe, providedTree: !!item.provided && row.kind === 2 });
@@ -167,8 +189,8 @@ export class FetchJob {
         if (!probe) this.store.exec("UPDATE fetch_selected SET included=?,shallow=?,unshallow=? WHERE oid=?", step.flags & 1, (step.flags >> 2) & 1, (step.flags >> 3) & 1, row.oid);
         const edgeDepth = this.treeFiltered ? "CASE WHEN e.relation=0 THEN 1 ELSE ? END" : "?";
         this.store.exec(`INSERT INTO ${table}(oid,depth) SELECT ${target},CASE WHEN e.relation=1 THEN ? ELSE ${edgeDepth} END FROM stage_edges e WHERE e.stage=? AND e.node=? AND (e.relation<>1 OR ?) AND ?${probe ? " AND e.kind IN (1,4)" : ""}${exclude ? ` AND NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=${target})` : ""} ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<${table}.depth`, integer(step.a), this.treeFiltered ? integer(step.b) : item.depth, this.store.edgeStage(row.stage), row.node, (step.flags >> 1) & 1, (step.flags & 16) ? 0 : 1);
-      }
-    }
+      },
+    );
   }
   async select() {
     // A have cuts wanted commit traversal. Its snapshot also proves trees and
@@ -201,16 +223,24 @@ export class FetchJob {
       this.store.exec("INSERT INTO fetch_probe(oid) SELECT oid FROM fetch_wants");
     }
     this.store.exec("INSERT INTO fetch_selected(oid) SELECT w.oid FROM fetch_wants w WHERE NOT EXISTS(SELECT 1 FROM fetch_common c WHERE c.oid=w.oid) OR EXISTS(SELECT 1 FROM stage_objects o JOIN stages s ON s.id=o.stage WHERE o.oid=w.oid AND o.kind=3 AND s.phase='published')");
-    await this.historyWalk("fetch_selected");
+    // Rust permits complete-pack reuse only for an unfiltered full-history
+    // request. Its closure needs no shortest-distance layers: walking a whole
+    // 128-node frontier avoids one timer/SQL page per historical commit/tree.
+    if (this.cacheable()) await this.walk("fetch_selected");
+    else await this.historyWalk("fetch_selected");
     if (this.includeTags) {
+      let tags = 0;
       for (const ref of this.store.references()) {
+        this.progress++;
+        if (++tags % 128 === 0) { await new Promise((resolve) => setTimeout(resolve, 0)); this.checkPreparation(); }
         if (!ref.peeled) continue;
         const selected = this.store.exec("SELECT depth FROM fetch_selected WHERE oid=? AND included=1", ref.peeled)[0];
         if (!selected) continue;
         this.want(ref.oid);
         this.store.exec("INSERT INTO fetch_selected(oid,depth) VALUES(?,?) ON CONFLICT(oid) DO UPDATE SET depth=excluded.depth,walked=0 WHERE excluded.depth<fetch_selected.depth", ref.oid, selected.depth);
       }
-      await this.historyWalk("fetch_selected");
+      if (this.cacheable()) await this.walk("fetch_selected");
+      else await this.historyWalk("fetch_selected");
     }
   }
   async prepare() {
@@ -222,9 +252,10 @@ export class FetchJob {
     for (;;) {
       const rows = this.store.exec("SELECT o.* FROM fetch_selected f JOIN stage_objects o ON o.stage=f.stage AND o.node=f.node WHERE f.included=1 AND (f.stage,f.node)>(?,?) ORDER BY f.stage,f.node LIMIT 128", afterStage, afterNode);
       if (!rows.length) break;
-      await new Promise((resolve) => setTimeout(resolve, 0)); this.checkPreparation();
       for (const row of rows) {
+        if (++this.sinceYield === 128) { this.sinceYield = 0; await new Promise((resolve) => setTimeout(resolve, 0)); }
         this.checkPreparation();
+        this.progress++;
         afterStage = row.stage; afterNode = row.node;
         const delta = row.wire_kind >= 5;
         const baseSelected = delta && this.store.exec("SELECT 1 FROM fetch_selected WHERE oid=? AND included=1", row.base_oid).length > 0;
@@ -245,10 +276,12 @@ export class FetchJob {
   }
   async cleanup() {
     if (this.cleaned) return; this.cleaned = true;
-    this.codec?.uploadCancel(); this.codec?.packCancel(); this.reset();
-    this.source?.releaseCaches();
-    await this.store.clearTemporary(this.temporary, { defer: true });
-    this.store.dropFetchTables?.();
+    try { this.codec?.uploadCancel(); this.codec?.packCancel(); this.reset(); }
+    finally {
+      this.source?.releaseCaches();
+      try { await this.store.clearTemporary(this.temporary, { defer: true }); }
+      finally { this.store.dropFetchTables?.(); }
+    }
   }
   async *pack() {
     if (this.rawSources) { yield* this.reusedPack(); return; }
@@ -261,6 +294,7 @@ export class FetchJob {
       const rows = this.store.exec("SELECT o.* FROM fetch_selected f JOIN stage_objects o ON o.stage=f.stage AND o.node=f.node WHERE f.included=1 AND (f.stage,f.node)>(?,?) ORDER BY f.stage,f.node LIMIT 128", afterStage, afterNode);
       if (!rows.length) break;
       for (const row of rows) {
+        this.progress++;
         afterStage = row.stage; afterNode = row.node;
         const delta = row.wire_kind >= 5;
         const baseSelected = delta && this.store.exec("SELECT 1 FROM fetch_selected WHERE oid=? AND included=1", row.base_oid).length > 0;

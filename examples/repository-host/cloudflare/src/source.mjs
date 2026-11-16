@@ -14,7 +14,7 @@ const info = (row) => ({ kind: row.kind, size: row.size });
 export class ObjectSource {
   constructor(store, codec, stage, { ownedBuffers = false, storageBytes = null, readScratch = false } = {}) {
     this.store = store; this.codec = codec; this.stage = stage; this.ownsBuffers = ownedBuffers; this.readScratch = readScratch;
-    this.resources = { ...MEMORY_LIMITS, ...store.env?.MEMORY };
+    this.resources = { ...MEMORY_LIMITS, ...(store.env?.JOB_OWNER?.readMemory ?? store.env?.MEMORY) };
     this.storageBytes = storageBytes;
     // Owned views cannot escape beyond the next cache mutation. Intake consumes
     // them synchronously; fetch copies them into codec frames before yielding.

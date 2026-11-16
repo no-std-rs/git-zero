@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { start } from "./wrangler.mjs";
+import { start, TOKEN } from "./wrangler.mjs";
 import { startStandalone } from "./standalone.mjs";
 import { GRANT_KEY, mint } from "./grant-fixture.mjs";
 const credentials = "Basic " + Buffer.from("owner:workshop-fixture").toString("base64");
@@ -18,7 +18,7 @@ async function git(args, { input, allowFailure = false } = {}) {
   const [code] = await once(child, "exit"); if (!allowFailure) assert.equal(code, 0, `${args.join(" ")}\n${stderr}`);
   return { code, stdout: stdout.trim(), stderr };
 }
-async function gateway(origin) {
+async function gateway(origin, { namespace = "workshop", token } = {}) {
   let barrier = null;
   const server = createServer(async (incoming, outgoing) => {
     let reader;
@@ -28,8 +28,9 @@ async function gateway(origin) {
       const route = incoming.url.slice("/team/framework.git/".length);
       if (barrier && route === "git-receive-pack") { const b = barrier; if (++b.count === 2) { barrier = null; b.release(); } await b.ready; }
       const headers = new Headers(); for (const field of ["content-type", "content-encoding", "git-protocol"]) if (incoming.headers[field]) headers.set(field, incoming.headers[field]);
-      headers.set("x-git-zero-grant", mint("workshop", "admin"));
-      const result = await fetch(`${origin}/workshop.git/${route}`, { method: incoming.method, headers, ...(incoming.method === "GET" ? {} : { body: incoming, duplex: "half" }) });
+      headers.set("x-git-zero-grant", mint(namespace, "admin"));
+      if (token) headers.set("authorization", `Bearer ${token}`);
+      const result = await fetch(`${origin}/${namespace}.git/${route}`, { method: incoming.method, headers, ...(incoming.method === "GET" ? {} : { body: incoming, duplex: "half" }) });
       outgoing.writeHead(result.status, Object.fromEntries(result.headers));
       if (!result.body) { outgoing.end(); return; }
       reader = result.body.getReader(); outgoing.on("close", () => { if (!outgoing.writableEnded) reader.cancel().catch(() => {}); });
@@ -112,3 +113,25 @@ for (const [runtime, boot] of [["Wrangler R2/SQLite", (path) => start(path, { va
     } catch (error) { console.error(error.stack); console.error(worker?.logs()); throw error; } finally { await proxy?.close(); await worker?.stop(); await rm(dir, { recursive: true, force: true }); }
   });
 }
+
+
+test("token mode: two repositories clone concurrently with real Git and independent slow links", { timeout: 120000 }, async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "git-zero-token-workshop-")); let worker, a, b;
+  try {
+    const source = join(dir, "source"); await mkdir(source); await git(["init", "--quiet", "-b", "main", source]);
+    await git(["-C", source, "config", "user.name", "Token"]); await git(["-C", source, "config", "user.email", "token@example.test"]);
+    await writeFile(join(source, "data.bin"), randomBytes(8 * 1048576)); await git(["-C", source, "add", "."]); await git(["-C", source, "commit", "--quiet", "-m", "token clone"]);
+    worker = await startStandalone(join(dir, "state")); a = await gateway(worker.origin, { namespace: "token-a", token: TOKEN }); b = await gateway(worker.origin, { namespace: "token-b", token: TOKEN });
+    await git(["-C", source, "push", "--quiet", a.url, "main"]); await git(["-C", source, "push", "--quiet", b.url, "main"]);
+    let done = 0; const started = performance.now();
+    const clones = [a, b].map((proxy, i) => git(["clone", "--quiet", proxy.url, join(dir, `clone-${i}`)]).then(() => { done++; }));
+    const state = async (ns) => (await fetch(`${worker.origin}/_test/${ns}/state`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+    let overlapping = false;
+    for (let tries = 0; tries < 100 && !done; tries++) { const [aa, bb] = await Promise.all([state("token-a"), state("token-b")]); if (aa.jobs.active >= 2 && bb.jobs.active >= 2) { overlapping = true; break; } await delay(20); }
+    assert.equal(overlapping, true, "both token fetch streams must be live at once");
+    await Promise.all(clones); assert.equal(done, 2);
+    const elapsedMs = performance.now() - started; assert.ok(elapsedMs < 30000, `two clones took ${elapsedMs}ms`);
+    for (let i = 0; i < 2; i++) await git(["-C", join(dir, `clone-${i}`), "fsck", "--no-dangling"]);
+    t.diagnostic(JSON.stringify({ tokenConcurrentClones: 2, elapsedMs }));
+  } finally { await a?.close(); await b?.close(); await worker?.stop(); await rm(dir, { recursive: true, force: true }); }
+});

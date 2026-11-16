@@ -1,13 +1,13 @@
 import { receiveControls } from "./receive-controls.mjs";
 import { PackCache, collectControls } from "./pack-cache.mjs";
-import { JobGate, jobStore, snapshot } from "./jobs.mjs";
+import { JobGate, jobStore, snapshot, pruneRefVersions } from "./jobs.mjs";
 import { Codec, CodecError } from "./codec.mjs";
 import { Intake } from "./intake.mjs";
 import { ObjectSource } from "./source.mjs";
 import { Store, assertStoragePrefix } from "./storage.mjs";
 import { bytes } from "./storage.mjs";
 import { publish } from "./publication.mjs";
-import { refusal, bindBodyBudget } from "./body.mjs";
+import { refusal, bindBodyBudget, startPackBody } from "./body.mjs";
 import { FetchJob, WantError } from "./fetch.mjs";
 import { streamResponse } from "./response.mjs";
 import { RequestError, isStorageFailure } from "./errors.mjs";
@@ -38,6 +38,8 @@ export class RepositoryCore {
     this.ctx = ctx; this.env = env; this.module = module; this.maxRequests = env.MAX_REQUESTS; this.pendingRequests = 0; this.store = null;
     this.queue = Promise.resolve(); this.opening = null; this.recovery = Promise.resolve(); this.coldRecovery = Promise.resolve(); this.streamDone = null; this.epoch = crypto.randomUUID();
     this.gate = new JobGate(env.MAX_CONCURRENT ?? 32, env.MAX_PENDING ?? 64, env.ADMISSION_WAIT_MS ?? 15000);
+    this.readerGate = new JobGate(env.MAX_CACHED_READERS ?? 64, env.MAX_PENDING ?? 64, env.ADMISSION_WAIT_MS ?? 15000);
+    this.tokenCodecs = env.TOKEN_CODECS ?? [];
     this.jobs = new Map(); this.deleting = false; this.deletions = Promise.resolve();
   }
   async fetch(request) {
@@ -51,19 +53,21 @@ export class RepositoryCore {
       const response = json({ error: "repository host busy; retry later" }, 503);
       response.headers.set("Retry-After", "1"); return refusal(request, response, this.env, true);
     }
-    const owner = { destructive: request.method === "DELETE" && apiRoute(request) === "repository", id: crypto.randomUUID(), done: null, abort: new AbortController(), preemptible: request.method === "GET", stages: new Set(), temporaries: new Set() };
+    const owner = { destructive: request.method === "DELETE" && apiRoute(request) === "repository", id: crypto.randomUUID(), done: null, abort: new AbortController(), stages: new Set(), temporaries: new Set() };
     let finish; owner.finished = new Promise((resolve) => { finish = resolve; });
     this.jobs.set(owner.id, owner); this.pendingRequests++;
     this.queue = Promise.allSettled([...this.jobs.values()].map((job) => job.finished)).then(() => {});
     this.resources(owner, namespace);
     bindBodyBudget(request, { ...this.env, BODY_SIGNAL: owner.abort.signal });
-    let releaseSlot, response;
+    let response;
     const complete = async () => {
       await Promise.resolve(owner.done).catch(() => {});
-      owner.release?.(); for (const finalizer of owner.finalizers ?? []) await finalizer(); releaseSlot?.(); this.jobs.delete(owner.id); this.pendingRequests--; finish();
+      owner.releaseMemory?.();
+      try { for (const finalizer of owner.finalizers ?? []) await finalizer(); }
+      finally { owner.releaseSlot?.(); this.jobs.delete(owner.id); this.pendingRequests--; finish(); }
     };
     try {
-      if (!owner.destructive) { await this.coldRecovery; releaseSlot = await this.gate.enter(owner.abort.signal); }
+      if (!owner.destructive) { await this.coldRecovery; owner.releaseSlot = await this.gate.enter(owner.abort.signal); }
       response = await this.handle(request, access, owner);
     } catch (error) {
       response = json({ error: this.deleting && !owner.destructive ? "unknown route" : String(error.message ?? error) }, this.deleting && !owner.destructive ? 404 : error.status ?? 500);
@@ -79,24 +83,59 @@ export class RepositoryCore {
   }
   resources(owner, namespace) {
     owner.finalizers = new Set();
-    owner.releaseMemory = () => { owner.release?.(); owner.release = null; owner.leaseState = null; };
-    const acquire = (bytes, claim) => this.env.BYTE_BUDGET?.acquire(namespace, bytes, () => { const job = claim.owner; if (job.preemptible && this.env.AUTH_MODE !== "token") job.abort.abort(new Error("response preempted for memory contention")); }, { signal: claim.owner.abort.signal, waitMs: this.env.AUTH_MODE === "token" ? 0 : undefined });
-    owner.reserve = async (bytes = this.env.JOB_MEMORY_BYTES) => {
-      if (!owner.release && this.env.BYTE_BUDGET) { const claim = { owner }; owner.release = await acquire(bytes, claim); owner.leaseState = claim; }
+    owner.releaseMemory = () => { owner.release?.(); owner.release = null; };
+    owner.reserve = async (bytes = this.env.JOB_MEMORY_BYTES, { codec = true, heavy = bytes === this.env.JOB_MEMORY_BYTES, headroom = heavy, legacy = false } = {}) => {
+      if (owner.release) return;
+      let extra = 0;
+      if (legacy && this.store) {
+        const length = this.store.exec("SELECT MAX(length) n FROM stage_chunks")[0].n ?? 0;
+        const memory = owner.readMemory ?? this.env.MEMORY;
+        extra = Math.max(0, 2 * length - 2 * memory.chunkBytes - memory.chunkCacheBytes);
+      }
+      owner.legacyBytes = extra;
+      if (this.env.BYTE_BUDGET) owner.release = await this.env.BYTE_BUDGET.acquire(namespace, bytes + extra, null, { signal: owner.abort.signal, codec, heavy, headroom, fair: true });
     };
-    owner.extra = async (bytes) => await acquire(bytes, { owner });
+    // Legacy extents were reserved before acquiring a codec, never by topping
+    // up a live lease behind new admissions (which can deadlock a full pool).
+    owner.extra = (bytes) => { if (bytes > (owner.legacyBytes ?? 0) && this.env.BYTE_BUDGET) throw Object.assign(new Error("legacy chunk exceeds reservation; retry"), { status: 503 }); return () => {}; };
+    owner.codec = (format, limits) => {
+      if (owner.release?.codec) return owner.release.codec(this.module, format, limits);
+      owner.tokenCodec ??= this.tokenCodecs.pop() ?? new Codec(this.module, format, limits);
+      return owner.tokenCodec.reset(format, limits);
+    };
+    const release = owner.releaseMemory;
+    owner.releaseMemory = () => { release(); if (owner.tokenCodec) { if (this.tokenCodecs.length < 4) this.tokenCodecs.push(owner.tokenCodec); owner.tokenCodec = null; } };
+    owner.cachedReader = async () => { owner.releaseSlot?.(); owner.releaseSlot = null; owner.releaseSlot = await this.readerGate.enter(owner.abort.signal); };
   }
-  promote(owner, fetch, operation) {
-    if (this.deleting || owner.abort.signal.aborted) throw new RequestError("repository job cancelled");
-    const builder = { id: crypto.randomUUID(), internal: true, snapshot: owner.snapshot, stages: new Set(), temporaries: new Set([fetch.temporary]), abort: new AbortController(), preemptible: true };
-    this.resources(builder, this.store.namespace); builder.release = owner.release; builder.leaseState = owner.leaseState;
-    if (builder.leaseState) builder.leaseState.owner = builder;
-    owner.release = null; owner.leaseState = null; owner.temporaries.delete(fetch.temporary);
-    fetch.store.env.JOB_SIGNAL = builder.abort.signal; fetch.store.env.JOB_OWNER = builder;
+
+  buildShared(entry, cache, owner, request, format) {
+    // The first client contributes only immutable controls and its snapshot.
+    // Its connection, deadline, memory wait and cancellation own no part of
+    // the builder, including selection/preparation before the first chunk.
+    const builder = { id: crypto.randomUUID(), internal: true, snapshot: owner.snapshot, stages: new Set(), temporaries: new Set(), abort: new AbortController() };
+    this.resources(builder, this.store.namespace);
+    this.store.exec("INSERT INTO job_controls(job,seq,data) SELECT ?,seq,data FROM job_controls WHERE job=?", builder.id, owner.id);
     let finish; builder.finished = new Promise((resolve) => { finish = resolve; }); this.jobs.set(builder.id, builder);
+    const scoped = jobStore(this.store, builder, { read: true, fetch: true }); let fetch, releaseSlot;
+    const running = (async () => {
+      try {
+        releaseSlot = await this.gate.enter(builder.abort.signal);
+        await builder.reserve(this.env.JOB_MEMORY_BYTES, { legacy: true });
+        scoped.createFetchTables();
+        fetch = this.parsedUpload(scoped, request, format, builder); await fetch.decodeSaved();
+        builder.temporaries.add(fetch.temporary);
+        scoped.env.PROGRESS = () => cache.notify(entry);
+        await this.prepareFetch(fetch, builder);
+        if (!cache.claim(entry, owner.snapshot.generation, fetch.maximumWireBytes())) { cache.bypass(entry); return; }
+        await cache.produce(entry, fetch, builder.abort.signal);
+      } catch (error) { cache.fail(entry, error); }
+      finally {
+        try { if (fetch) await fetch.cleanup(); else this.store.exec("DELETE FROM job_controls WHERE job=?", builder.id); }
+        finally { builder.releaseMemory(); releaseSlot?.(); this.jobs.delete(builder.id); finish(); }
+      }
+    })();
+    this.ctx.waitUntil?.(running); running.catch(() => {});
     this.queue = Promise.allSettled([...this.jobs.values()].map((job) => job.finished)).then(() => {});
-    const running = operation(builder).catch((error) => { console.error(JSON.stringify({ event: "pack-cache-build-failed", error: String(error.message ?? error) })); }).finally(() => { builder.release?.(); this.jobs.delete(builder.id); finish(); });
-    this.ctx.waitUntil?.(running); return running;
   }
   retire(owner) {
     const work = this.deletions.then(async () => {
@@ -130,6 +169,8 @@ export class RepositoryCore {
       const repository = this.store.exec("SELECT generation FROM repository WHERE id=1")[0];
       let nextAlarm = this.store.recoveryDue ?? Infinity;
       if (repository) {
+        const oldest = Math.min(repository.generation, ...[...this.jobs.values()].flatMap((job) => job.snapshot ? [job.snapshot.generation] : []));
+        if (pruneRefVersions(this.store, oldest) === 512) nextAlarm = Math.min(nextAlarm, Date.now() + 1000);
         const reclaiming = await this.packCache.reclaim(repository.generation);
         if (maintenance.abort.signal.aborted) return;
         if (reclaiming) nextAlarm = Math.min(nextAlarm, Date.now() + 1000);
@@ -146,66 +187,65 @@ export class RepositoryCore {
     if (owner) owner.done = result.done; else this.streamDone = result.done;
     return result.response;
   }
-  codecForUpload(format) {
-    return new Codec(this.module, format, { ...this.env.CODEC_LIMITS, maxTemporaryBytes: Math.min(this.env.CODEC_LIMITS.maxTemporaryBytes, this.env.READ_SCRATCH_BYTES) });
+  async prepareFetch(fetch, owner) {
+    const started = Date.now(), calls = this.store.usage.sqlCalls;
+    await fetch.selection(); const selected = Date.now(); await fetch.prepare();
+    this.lastPreparation = { selectionMs: selected - started, prepareMs: Date.now() - selected, totalMs: Date.now() - started, objects: fetch.outputObjects, sqlCalls: this.store.usage.sqlCalls - calls, ...fetch.store.sqlMetrics };
+    owner.preparedFallbacks = fetch.fallbacks ?? 0;
+  }
+  codecForUpload(format, owner) {
+    return owner.codec(format, { ...this.env.CODEC_LIMITS, maxTemporaryBytes: Math.min(this.env.CODEC_LIMITS.maxTemporaryBytes, this.env.READ_SCRATCH_BYTES) });
   }
   async upload(request, owner, format, stream) {
     const scoped = jobStore(this.store, owner, { read: true, fetch: true }); owner.temporaries.add(owner.id);
-    owner.preemptible = true;
-    let fetch, tables = false, shared = false, ownedEntry;
+    let fetch, tables = false;
     const discardParsed = () => { fetch?.detach(); owner.releaseMemory(); };
     try {
-      await owner.reserve(this.env.CODEC_LIMITS.maxControlBytes + 1280 * 1024);
+      await owner.reserve(this.env.CODEC_LIMITS.maxControlBytes + 1280 * 1024, { codec: false, heavy: false });
       await collectControls(this.store, owner, request, this.env.CODEC_LIMITS.maxControlBytes);
       owner.releaseMemory();
       const useCache = this.env.PACK_CACHE_ENABLED && this.env.PACK_CACHE_BYTES;
-      await owner.reserve(useCache ? this.env.METADATA_MEMORY_BYTES : this.env.JOB_MEMORY_BYTES);
+      await owner.reserve(useCache ? this.env.METADATA_MEMORY_BYTES : this.env.JOB_MEMORY_BYTES, { heavy: true, headroom: !useCache, legacy: !useCache });
       scoped.createFetchTables(); tables = true;
-      fetch = this.parsedUpload(scoped, request, format); await fetch.decodeSaved();
+      fetch = this.parsedUpload(scoped, request, format, owner); await fetch.decodeSaved();
       if (fetch.command !== 2) { owner.release?.resize?.(this.env.METADATA_MEMORY_BYTES); return stream(fetch.response(), "application/x-git-upload-pack-result"); }
       if (!useCache) {
-        await fetch.selection(); await fetch.prepare(); owner.preparedFallbacks = fetch.fallbacks ?? 0;
+        await this.prepareFetch(fetch, owner);
         return stream(fetch.response(), "application/x-git-upload-pack-result");
       }
       const cache = this.packCache ??= new PackCache(this.store, this.env);
       const key = this.env.PACK_CACHE_ENABLED && this.env.PACK_CACHE_BYTES ? await cache.key(fetch) : null;
       if (owner.abort.signal.aborted) throw new RequestError("repository job cancelled");
       if (key) {
-        const entry = cache.entry(key);
+        let entry = cache.entry(key);
+        if (!entry && cache.builds.size < 2) {
+          entry = cache.begin(key);
+          this.buildShared(entry, cache, owner, request, format);
+        }
         if (entry) {
           const unpin = cache.pin(entry); owner.finalizers.add(unpin); discardParsed();
-          if (await cache.decision(entry, owner.abort.signal)) {
+          await owner.cachedReader();
+          if (await cache.decision(entry, owner.abort.signal) && await cache.first(entry, owner.abort.signal)) {
             scoped.dropFetchTables(); tables = false;
-            await cache.first(entry, owner.abort.signal); await owner.reserve(this.env.CACHE_READER_MEMORY_BYTES);
-            owner.preemptible = true; return stream(cache.read(entry, owner.abort.signal), "application/x-git-upload-pack-result");
+            await owner.reserve(this.env.CACHE_READER_MEMORY_BYTES, { codec: false, heavy: false });
+            return stream(cache.read(entry, owner.abort.signal), "application/x-git-upload-pack-result");
           }
-        } else if (cache.builds.size < 2) {
-          const building = ownedEntry = cache.begin(key); discardParsed(); await owner.reserve();
-          fetch.replay(this.codecForUpload(format));
-          try { await fetch.selection(); await fetch.prepare(); owner.preparedFallbacks = fetch.fallbacks ?? 0; }
-          catch (error) { cache.fail(building, error); throw error; }
-          if (cache.claim(building, owner.snapshot.generation, fetch.maximumWireBytes())) {
-            const unpin = cache.pin(building); owner.finalizers.add(unpin);
-            this.promote(owner, fetch, (builder) => cache.produce(building, fetch, builder.abort.signal)); shared = true; tables = false;
-            await cache.first(building, owner.abort.signal); await owner.reserve(this.env.CACHE_READER_MEMORY_BYTES);
-            owner.preemptible = true; return stream(cache.read(building, owner.abort.signal), "application/x-git-upload-pack-result");
-          }
-          cache.bypass(building);
-          owner.preemptible = true; return stream(fetch.response(), "application/x-git-upload-pack-result");
+          // A failed builder cannot poison followers before their 200. Keep
+          // their controls/scratch so each may generate its original snapshot.
+          owner.releaseSlot?.(); owner.releaseSlot = await this.gate.enter(owner.abort.signal);
         }
       }
-      discardParsed(); await owner.reserve(); fetch.replay(this.codecForUpload(format));
-      await fetch.selection(); await fetch.prepare(); owner.preparedFallbacks = fetch.fallbacks ?? 0; owner.preemptible = true;
+      discardParsed(); await owner.reserve(this.env.JOB_MEMORY_BYTES, { legacy: true }); fetch.replay(this.codecForUpload(format, owner));
+      await this.prepareFetch(fetch, owner);
       return stream(fetch.response(), "application/x-git-upload-pack-result");
     } catch (error) {
-      if (ownedEntry && this.packCache.builds.get(ownedEntry.key) === ownedEntry && !shared) this.packCache.fail(ownedEntry, error);
-      if (!shared) { if (fetch && tables) await fetch.cleanup(); else if (tables) scoped.dropFetchTables(); else this.store.exec("DELETE FROM job_controls WHERE job=?", owner.id); }
+      if (fetch && tables) await fetch.cleanup(); else if (tables) scoped.dropFetchTables(); else this.store.exec("DELETE FROM job_controls WHERE job=?", owner.id);
       if (error instanceof WantError) { const message = `ERR ${error.message}\n`; return new Response((encode(message).length + 4).toString(16).padStart(4, "0") + message, { headers: { "Content-Type": "application/x-git-upload-pack-result", "Cache-Control": "no-store" } }); }
       throw error;
     }
   }
-  parsedUpload(scoped, request, format) {
-    const codec = this.codecForUpload(format), version = codec.uploadVersion(request.headers.get("git-protocol")); return new FetchJob(scoped, codec, version);
+  parsedUpload(scoped, request, format, owner) {
+    const codec = this.codecForUpload(format, owner), version = codec.uploadVersion(request.headers.get("git-protocol")); return new FetchJob(scoped, codec, version);
   }
   async advertisement(generator, type, owner, stream) {
     const parts = []; let length = 0;
@@ -336,9 +376,10 @@ export class RepositoryCore {
       if (READ_ROUTES.has(apiRoute(request))) {
         const state = this.store.exec("SELECT format FROM repository WHERE id=1")[0];
         if (!state) return json({ error: "unknown route" }, 404);
-        if (apiRoute(request) === "changes") { await owner.reserve?.(this.env.JSON_MEMORY_BYTES); return await changes(this.store, request); }
-        await owner.reserve?.(apiRoute(request) === "refs" ? this.env.JSON_MEMORY_BYTES : this.env.JOB_MEMORY_BYTES);
-        owner.preemptible = true;
+        if (apiRoute(request) === "changes") { await owner.reserve?.(this.env.JSON_MEMORY_BYTES, { codec: false, heavy: false }); return await changes(this.store, request); }
+        const readRoute = apiRoute(request);
+        owner.readMemory = this.env.AUTH_MODE === "gateway" ? this.env.BROWSE_MEMORY : this.env.MEMORY;
+        await owner.reserve?.(readRoute === "refs" ? this.env.JSON_MEMORY_BYTES : this.env.AUTH_MODE === "gateway" ? this.env.BROWSE_MEMORY_BYTES[readRoute === "blob" && url.searchParams.has("oid") ? "blobOid" : readRoute] : this.env.JOB_MEMORY_BYTES, { codec: readRoute !== "refs", heavy: readRoute === "blob", legacy: readRoute !== "refs" });
         return await new ReadApi(jobStore(this.store, owner, { read: true }), this.module, state.format, this.env.READ_LIMITS).handle(apiRoute(request), request, stream);
       }
       if (apiRoute(request)) return json({ error: "unknown route" }, 404);
@@ -350,20 +391,21 @@ export class RepositoryCore {
         const contentType = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
         if (request.method === "POST" && parts[2] === "git-upload-pack" && parts.length === 3 && contentType === "application/x-git-upload-pack-request") return await this.upload(request, owner, format, stream);
         if (request.method === "POST" && parts[2] === "git-receive-pack" && parts.length === 3 && contentType === "application/x-git-receive-pack-request") {
-          await owner.reserve(this.env.METADATA_MEMORY_BYTES);
+          await owner.reserve(this.env.METADATA_MEMORY_BYTES, { heavy: true, headroom: false });
           const replay = await receiveControls(jobStore(this.store, owner), this.module, format, request, owner, RECEIVE_CAPABILITIES);
-          owner.releaseMemory(); await owner.reserve();
-          return await this.receive(replay, new Codec(this.module, format, { ...this.env.CODEC_LIMITS, capabilities: RECEIVE_CAPABILITIES }), access.actor, stream, owner);
+          owner.releaseMemory(); await owner.reserve(this.env.JOB_MEMORY_BYTES + 4 * owner.controlBytes, { heavy: true, legacy: true });
+          startPackBody(replay);
+          return await this.receive(replay, owner.codec(format, { ...this.env.CODEC_LIMITS, capabilities: RECEIVE_CAPABILITIES }), access.actor, stream, owner);
         }
-        await owner.reserve?.(request.method === "GET" ? this.env.METADATA_MEMORY_BYTES : this.env.JOB_MEMORY_BYTES);
-        let codec = new Codec(this.module, format, { ...this.env.CODEC_LIMITS, capabilities: RECEIVE_CAPABILITIES });
-        if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-receive-pack") { owner.preemptible = true; const generator = this.advertise(codec, jobStore(this.store, owner, { read: true })); codec = null; return this.advertisement(generator, "application/x-git-receive-pack-advertisement", owner, stream); }
+        await owner.reserve?.(request.method === "GET" ? this.env.METADATA_MEMORY_BYTES : this.env.JOB_MEMORY_BYTES, { heavy: true, headroom: false });
+        let codec = owner.codec(format, { ...this.env.CODEC_LIMITS, capabilities: RECEIVE_CAPABILITIES });
+        if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-receive-pack") { const generator = this.advertise(codec, jobStore(this.store, owner, { read: true })); codec = null; return this.advertisement(generator, "application/x-git-receive-pack-advertisement", owner, stream); }
         const version = codec.uploadVersion(request.headers.get("git-protocol"));
-        if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-upload-pack") { owner.preemptible = true; const generator = this.uploadAdvertisement(codec, version, jobStore(this.store, owner, { read: true })); codec = null; return this.advertisement(generator, "application/x-git-upload-pack-advertisement", owner, stream); }
+        if (request.method === "GET" && parts[2] === "info" && parts[3] === "refs" && url.searchParams.get("service") === "git-upload-pack") { const generator = this.uploadAdvertisement(codec, version, jobStore(this.store, owner, { read: true })); codec = null; return this.advertisement(generator, "application/x-git-upload-pack-advertisement", owner, stream); }
         return json({ error: "unknown Git route" }, 404);
       }
       if (this.env.TEST_MODE !== "true") return json({ error: "unknown route" }, 404);
-      if (request.method === "GET" && parts[3] === "state") { const statistics = this.store.statistics(); return json({ ...statistics, epoch: this.epoch, jobs: { active: this.gate.active, pending: this.gate.waiters.length, cachedReaders: [...(this.packCache?.pins.values() ?? [])].reduce((a, b) => a + b, 0), memoryUsed: this.env.BYTE_BUDGET.used, memoryPeak: this.env.BYTE_BUDGET.peak }, packCache: { ...this.packCache?.metrics, ...statistics.packCache } }); }
+      if (request.method === "GET" && parts[3] === "state") { const statistics = this.store.statistics(); return json({ ...statistics, epoch: this.epoch, preparation: this.lastPreparation, jobs: { active: this.gate.active, pending: this.gate.waiters.length, cachedReaders: [...(this.packCache?.pins.values() ?? [])].reduce((a, b) => a + b, 0), memoryUsed: (this.env.BYTE_BUDGET?.used ?? 0), memoryPeak: (this.env.BYTE_BUDGET?.peak ?? 0), codecArenas: this.env.BYTE_BUDGET?.arenas.length ?? 0, memoryResident: this.env.BYTE_BUDGET?.residentBytes ?? 0, wasmLinearBytes: this.env.BYTE_BUDGET?.arenas.reduce((sum, arena) => sum + (arena.instance?.memory.byteLength ?? 0), 0) ?? 0 }, packCache: { ...this.packCache?.metrics, ...statistics.packCache } }); }
       if (request.method === "POST" && parts[3] === "initialize") { this.store.initialize(testFormat(request)); return json({ ready: true }); }
       if (request.method === "GET" && parts[3] === "refs") return json({ refs: this.store.exec("SELECT name,oid FROM refs ORDER BY name").map((row) => ({ name: Array.from(bytes(row.name)), oid: row.oid })) });
       if (request.method === "POST" && parts[3] === "intake") {
@@ -374,7 +416,7 @@ export class RepositoryCore {
           if (value !== null) limits[field] = BigInt(value) < BigInt(this.env.CODEC_LIMITS[field]) ? BigInt(value) : this.env.CODEC_LIMITS[field];
         }
         await owner.reserve?.();
-        const codec = new Codec(this.module, format, { ...this.env.CODEC_LIMITS, ...limits });
+        const codec = owner.codec(format, { ...this.env.CODEC_LIMITS, ...limits });
         const stage = this.store.stage(format, true); owner.stages.add(stage);
         const result = await new Intake(this.store, codec, stage).run(request);
         return json({ ...result, epoch: this.epoch, usage: this.store.statistics().usage });
@@ -401,7 +443,7 @@ export class RepositoryCore {
         const row = this.store.node(stage.id, node);
         if (!row?.verified || !row.scanned) return json({ error: "verified staged object not found" }, 404);
         await owner.reserve?.();
-        const codec = new Codec(this.module, stage.format, this.env.CODEC_LIMITS);
+        const codec = owner.codec(stage.format, this.env.CODEC_LIMITS);
         const source = new ObjectSource(this.store, codec, stage.id);
         try {
           if (row.wire_kind >= 5) await source.warm(source.base(row));
@@ -413,7 +455,7 @@ export class RepositoryCore {
       }
       return json({ error: "unknown route" }, 404);
     } catch (error) {
-      const response = json({ error: String(error.message ?? error), codecError: error.code ?? null }, error instanceof ApiError ? error.status : error instanceof RequestError || error instanceof CodecError ? 400 : 500);
+      const response = json({ error: String(error.message ?? error), codecError: error.code ?? null }, (error instanceof ApiError || error.status === 503) ? error.status : error instanceof RequestError || error instanceof CodecError ? 400 : 500);
       if (response.status === 503) response.headers.set("Retry-After", "1");
       return response;
     }

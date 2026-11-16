@@ -7,12 +7,12 @@ import { PAGE_BYTES, bytes } from "./storage.mjs";
 // bounded wire prefix, release that codec, then replay into an independently
 // admitted heavy intake. No idle prefix owns maximum push caches or a stage.
 export async function receiveControls(store, module, format, request, owner, capabilities) {
-  let codec = new Codec(module, format, { ...store.env.CODEC_LIMITS, capabilities });
+  let codec = owner.codec?.(format, { ...store.env.CODEC_LIMITS, capabilities }) ?? new Codec(module, format, { ...store.env.CODEC_LIMITS, capabilities });
   codec.receiveInit();
   const limits = store.env.CODEC_LIMITS, budget = bodyBudget(request);
   const maximum = 2n * (BigInt(limits.maxPackBytes) + BigInt(limits.maxControlBytes));
   const input = requestBody(decodedBody(request, maximum, "receive bytes"), 60000, budget);
-  let seq = 0, tail, ready = false;
+  let seq = 0, tail, ready = false; owner.controlBytes = 0;
   try {
     while (!ready) {
       const next = await input.next(); if (next.done) throw new RequestError("incomplete receive controls");
@@ -20,7 +20,7 @@ export async function receiveControls(store, module, format, request, owner, cap
       while (offset < next.value.length) {
         const part = next.value.subarray(offset, offset + PAGE_BYTES), event = codec.receiveStep(part, false);
         if (event.consumed) store.exec("INSERT INTO job_controls(job,seq,data) VALUES(?,?,?)", owner.id, seq++, new Uint8Array(part.subarray(0, event.consumed)).buffer);
-        offset += event.consumed;
+        offset += event.consumed; owner.controlBytes += event.consumed;
         if (event.tag === 6) { tail = next.value.subarray(offset); ready = true; break; }
         if (!event.consumed && !event.written && event.tag === 1) throw new RequestError("receive controls made no progress");
       }
@@ -49,6 +49,6 @@ export async function receiveControls(store, module, format, request, owner, cap
   });
   const headers = new Headers(request.headers); headers.delete("content-encoding"); headers.delete("content-length");
   const replay = new Request(request.url, { method: request.method, headers, body, duplex: "half" });
-  bindBodyBudget(replay, { BODY_TOTAL_MS: budget.totalMs, BODY_DEADLINE: budget.deadline, BODY_SIGNAL: budget.signal });
+  bindBodyBudget(replay, { BODY_TOTAL_MS: 0, BODY_SIGNAL: budget.signal, BODY_PHASE: budget.phase, BODY_MANAGED: true });
   return replay;
 }

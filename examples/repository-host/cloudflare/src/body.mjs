@@ -2,7 +2,14 @@
 // decoded control/pack limits; this bound also caps compressed transport input.
 import { RequestError } from "./errors.mjs";
 const budgets = new WeakMap();
-export function bindBodyBudget(request, env) { budgets.set(request, { totalMs: env.BODY_TOTAL_MS ?? 0, deadline: env.BODY_DEADLINE ?? (env.BODY_TOTAL_MS ? Date.now() + env.BODY_TOTAL_MS : Infinity), signal: env.BODY_SIGNAL }); }
+export function bindBodyBudget(request, env) {
+  budgets.set(request, { totalMs: env.BODY_TOTAL_MS ?? 0, signal: env.BODY_SIGNAL,
+    phase: env.BODY_PHASE ?? { mode: "prefix", deadline: Infinity, rate: env.BODY_MINIMUM_RATE ?? 0, windowMs: env.BODY_RATE_WINDOW_MS ?? 30000 }, managed: env.BODY_MANAGED ?? false });
+}
+export function startPackBody(request) {
+  const phase = budgets.get(request)?.phase;
+  if (phase) { phase.mode = "pack"; phase.credit = phase.rate * phase.windowMs / 1000; }
+}
 export function bodyBudget(request) { return budgets.get(request) ?? {}; }
 export function decodedBody(request, maximum, label) {
   const coding = request.headers.get("content-encoding")?.toLowerCase();
@@ -19,29 +26,38 @@ export function decodedBody(request, maximum, label) {
 }
 
 // The deadline covers waiting for input, not time spent processing a chunk.
-export async function* requestBody(stream, idleMs = 60000, { totalMs = 0, deadline: absoluteDeadline = Infinity, preserve = false, signal } = {}) {
+export async function* requestBody(stream, idleMs = 60000, { totalMs = 0, deadline: absoluteDeadline = Infinity, preserve = false, signal, phase, managed = false } = {}) {
   if (!stream) return;
   const reader = stream.getReader(), deadline = Math.min(absoluteDeadline, totalMs ? Date.now() + totalMs : Infinity);
+  if (phase && !managed && phase.mode === "prefix" && phase.deadline === Infinity && totalMs) phase.deadline = Date.now() + totalMs;
+  const remainingTime = () => {
+    if (!phase) return deadline - Date.now();
+    if (managed) return Infinity;
+    if (phase.mode === "prefix") return phase.deadline - Date.now();
+    return phase.rate ? phase.credit / phase.rate * 1000 : Infinity;
+  };
+  const failure = () => phase?.mode === "pack" ? "request body minimum throughput exceeded" : "request body total deadline exceeded";
   let finished = false;
   const abort = () => { reader.cancel().catch(() => {}); };
   signal?.addEventListener("abort", abort, { once: true });
   try {
     for (;;) {
       if (signal?.aborted) throw new RequestError("request body cancelled");
-      if (Date.now() >= deadline) throw new RequestError("request body total deadline exceeded");
+      if (remainingTime() <= 0) throw new RequestError(failure());
       let timer, item;
-      const remaining = deadline - Date.now(), idle = typeof idleMs === "function" ? idleMs() : idleMs;
+      const remaining = remainingTime(), began = Date.now(), idle = typeof idleMs === "function" ? idleMs() : idleMs;
       const totalFirst = remaining <= idle;
       try {
         item = await Promise.race([
           reader.read(),
-          new Promise((_, reject) => { timer = setTimeout(() => reject(new RequestError(totalFirst ? "request body total deadline exceeded" : "request body idle")), Math.max(0, Math.min(idle, remaining))); }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new RequestError(totalFirst ? failure() : "request body idle")), Math.max(0, Math.min(idle, remaining))); }),
         ]);
       } catch (error) {
         throw error instanceof RequestError ? error : new RequestError(String(error.message ?? error), { cause: error });
       } finally { clearTimeout(timer); }
       if (signal?.aborted) throw new RequestError("request body cancelled");
       if (item.done) { finished = true; return; }
+      if (phase?.mode === "pack" && !managed && phase.rate) phase.credit = Math.min(phase.rate * phase.windowMs / 1000, phase.credit - (Date.now() - began) * phase.rate / 1000 + item.value.byteLength);
       yield item.value;
     }
   } finally {

@@ -2,7 +2,7 @@
 // Bound idle backpressure, while allowing an actively drained pack to run long.
 export function streamResponse(generator, type, idleMs = 60000, length, totalMs = 0, { minimumBytesPerSecond = 0, throughputWindowMs = 30000, signal, onStop } = {}) {
   let finish, controller, timer, totalTimer, rateTimer, stopping, closed = false, sent = 0, sampled = 0;
-  const abort = () => { stop(signal?.reason?.name !== "AbortError" && signal?.reason?.message ? signal.reason : new Error("response preempted for memory contention")).catch(() => {}); };
+  const abort = () => { stop(signal?.reason?.name !== "AbortError" && signal?.reason?.message ? signal.reason : new Error("repository response cancelled")).catch(() => {}); };
   // Enter the generator before cancellation can arrive: return() on an
   // unstarted generator does not execute its finally/ownership cleanup.
   let first = generator.next(); first.catch(() => {});

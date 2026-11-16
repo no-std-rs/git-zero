@@ -20,7 +20,7 @@ export class Proofs {
     return this.store.proofKey;
   }
   async sign(op, value) {
-    const payload = b64(encode(JSON.stringify({ v: 3, op, namespace: this.store.namespace, epoch: this.epoch, generation: this.generation, ...value })));
+    const payload = b64(encode(JSON.stringify({ ...value, v: 3, op, namespace: this.store.namespace, epoch: this.epoch, generation: this.generation })));
     return payload + "." + b64(new Uint8Array(await crypto.subtle.sign("HMAC", await this.key(), encode("git-zero-browse-v3\n" + payload))));
   }
   async verify(op, token) {

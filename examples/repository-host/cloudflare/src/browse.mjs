@@ -60,8 +60,8 @@ export class ReadApi {
     if (!this.objects) {
       const limits = { maxObjectBytes: 64 * 1024 * 1024, maxCanonicalBytes: Math.max(32 * 1024 * 1024, this.limits.metadataBytes + this.limits.blobBytes), maxTemporaryBytes: 0, maxWorkBytes: this.limits.workBytes, maxTotalWorkBytes: this.limits.workBytes, maxLinks: this.limits.edges };
       for (const [key, value] of Object.entries(this.store.env?.CODEC_LIMITS ?? {})) limits[key] = key in limits ? Math.min(limits[key], value) : value;
-      this.codec = new Codec(this.module, this.format, limits);
-      this.objects = new ObjectSource(this.store, this.codec, `browse:${crypto.randomUUID()}`, { storageBytes: this.limits.storageBytes });
+      this.codec = this.store.env?.JOB_OWNER?.codec?.(this.format, limits) ?? new Codec(this.module, this.format, limits);
+      this.objects = new ObjectSource(this.store, this.codec, `browse:${crypto.randomUUID()}`, { ownedBuffers: true, storageBytes: this.limits.storageBytes });
     }
     return this.objects;
   }
@@ -135,6 +135,7 @@ export class ReadApi {
     if (row.kind !== 1) throw new ApiError("revision is not a commit", 422);
     if (this.metadata.has(row.oid)) return this.metadata.get(row.oid);
     const data = await this.prefix(row, this.limits.headerBytes + this.limits.messageBytes);
+    try {
     const edges = this.store.exec(`SELECT relation,${this.store.edgeTargetSQL()} AS oid FROM stage_edges WHERE stage=? AND node=? AND relation IN (0,1) ORDER BY relation,dst LIMIT ?`, this.store.edgeStage(row.stage), row.node, this.limits.parents + 2);
     const tree = edges.find((edge) => edge.relation === 0)?.oid;
     const parents = new Set(edges.filter((edge) => edge.relation === 1).map((edge) => edge.oid));
@@ -168,10 +169,12 @@ export class ReadApi {
     end = begin; while (end < lines.length && !/^[ \t\r]*$/.test(lines[end])) end++;
     body = end; while (body < lines.length && /^[ \t\r]*$/.test(lines[body])) body++;
     result.message = { subject: lines.slice(begin, end).map((line) => line.replace(/^[ \t\r]+|[ \t\r]+$/g, "")).join(" "), body: lines.slice(body).join("\n"), truncated: row.size - messageStart > message.length, raw64: b64(message) };
+    data.buffer.transfer(0);
     this.proven.add(result.tree); for (const parent of result.parents) this.proven.add(parent);
     result.proof = await this.proof(row.oid); result.treeProof = await this.proof(result.tree);
     result.parentProofs = await Promise.all(result.parents.map((oid) => this.proof(oid)));
     this.metadata.set(row.oid, result); return result;
+    } finally { if (data.byteLength) data.buffer.transfer(0); }
   }
   path(value) {
     value ??= "";
@@ -184,6 +187,7 @@ export class ReadApi {
     if (row.kind !== 2) throw new ApiError("revision or path is not a tree", 422);
     if (row.size > this.limits.treeBytes) throw new ApiError("tree exceeds metadata byte limit", 413);
     const data = await this.prefix(row, row.size), codec = this.codec;
+    try {
     codec.graphInit({ kind: 2, size: row.size });
     let at = 0;
     for (;;) {
@@ -193,6 +197,7 @@ export class ReadApi {
       if (event.tag === 33) { if (hex(event.id) !== row.oid) throw new Error("tree digest differs"); break; }
       if (event.tag === 30 && at === data.length) throw new Error("tree scan ended early");
     }
+    } finally { data.buffer.transfer(0); }
   }
   async atPath(revision, path) {
     let row = this.peel(this.resolve(revision));
