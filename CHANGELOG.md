@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/no-std-rs/git-zero/compare/v0.2.0...v0.3.0) (2026-11-16)
+
+
+### Features
+
+* **hosting:** embed concurrent repository hosts behind gateways ([0f98b35](https://github.com/no-std-rs/git-zero/commit/0f98b35a2059ecc345833e09f7dcbd2c8d5e5085))
+
 ## Unreleased
 
 - Gateway heavy work reserves a co-tenant slot; namespaces without a heavy lease
