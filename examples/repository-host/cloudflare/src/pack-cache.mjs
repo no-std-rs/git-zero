@@ -5,11 +5,21 @@ import { RequestError } from "./errors.mjs";
 
 export async function collectControls(store, owner, request, maximum) {
   let length = 0, seq = 0;
-  const stream = decodedBody(request, 2n * BigInt(maximum) + 64n, "fetch controls");
-  for await (const part of requestBody(stream, 60000, bodyBudget(request))) {
-    length += part.length; if (length > maximum) throw new RequestError("fetch controls exceed byte limit");
-    for (let at = 0; at < part.length; at += PAGE_BYTES) store.exec("INSERT INTO job_controls(job,seq,data) VALUES(?,?,?)", owner.id, seq++, part.slice(at, at + PAGE_BYTES).buffer);
-  }
+  const data = new Uint8Array(maximum), stream = decodedBody(request, 2n * BigInt(maximum) + 64n, "fetch controls");
+  try {
+    for await (const part of requestBody(stream, 60000, bodyBudget(request))) {
+      if (part.length > maximum - length) throw new RequestError("fetch controls exceed byte limit");
+      data.set(part, length); length += part.length;
+    }
+    // At most 1 MiB of bind copies and 48 bindings. Persist after EOF, so
+    // transport fragmentation cannot force a durable write/flush per chunk.
+    for (let offset = 0; offset < length;) {
+      const page = [];
+      while (page.length < 16 && offset < length) { const end = Math.min(length, offset + PAGE_BYTES); page.push([owner.id, seq++, data.slice(offset, end).buffer]); offset = end; }
+      try { store.exec(`INSERT INTO job_controls(job,seq,data) VALUES${page.map(() => "(?,?,?)").join(",")}`, ...page.flat()); }
+      finally { for (const row of page) row[2].transfer(0); }
+    }
+  } finally { data.buffer.transfer(0); }
 }
 
 const noCache = { get() {}, put() {} };

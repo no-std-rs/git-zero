@@ -77,20 +77,22 @@ export function createRepositoryHost(options) {
   const memoryWaitMs = bounded(options.memoryWaitMs ?? 15000, 1, 600000, "memoryWaitMs");
   const contentionMs = bounded(options.memoryContentionMs ?? 10000, 1, 600000, "memoryContentionMs");
   const byteBudget = options.memoryBudget ?? new ByteBudget(memoryBytes, memoryWaitMs, contentionMs);
+  const metadataBytes = (m) => Math.ceil((6 * 1048576 + Math.max(codecLimits.maxControlBytes, m.refPageRows * 65536) + 2 * 1048576) / 1048576) * 1048576;
+  const jsonBytes = Math.ceil(((readLimits.pageSize + 2) * 65536 + 3 * readLimits.jsonBytes) / 1048576) * 1048576;
   const gatewayJobBytes = jobMemoryBytes(gatewayMemory, codecLimits, readLimits, pinBytes, pinEntries);
   const tokenJobBytes = jobMemoryBytes(memory, codecLimits, readLimits, pinBytes, pinEntries);
   const legacyExtra = (m) => Math.max(0, 2 * 8 * 1024 * 1024 - 2 * m.chunkBytes - m.chunkCacheBytes);
-  if ((typeof authMode === "function" || authMode === "gateway") && gatewayJobBytes + legacyExtra(gatewayMemory) > memoryBytes) throw new TypeError("isolateMemoryBytes cannot fit one configured codec job");
+  if ((typeof authMode === "function" || authMode === "gateway") && Math.max(gatewayJobBytes + legacyExtra(gatewayMemory), metadataBytes(gatewayMemory), jsonBytes) > memoryBytes) throw new TypeError("isolateMemoryBytes cannot fit one configured host job");
   const entryDrains = { active: 0 };
   function environment(env) {
     const mode = resolve(authMode, env), policy = resolve(options.policy, env) ?? {};
-    if ((options.isolateMemoryBytes !== undefined || options.memoryBudget !== undefined) && (mode === "gateway" ? gatewayJobBytes + legacyExtra(gatewayMemory) : tokenJobBytes + legacyExtra(memory)) > memoryBytes) throw new TypeError("isolateMemoryBytes cannot fit one configured codec job");
+    if ((options.isolateMemoryBytes !== undefined || options.memoryBudget !== undefined) && Math.max(mode === "gateway" ? gatewayJobBytes + legacyExtra(gatewayMemory) : tokenJobBytes + legacyExtra(memory), metadataBytes(mode === "gateway" ? gatewayMemory : memory), jsonBytes) > memoryBytes) throw new TypeError("isolateMemoryBytes cannot fit one configured host job");
     const internal = { WANT_POLICY: options.wantPolicy ?? (mode === "gateway" ? "reachable" : "catalog"), AUTH_MODE: mode, HOST_TOKEN: bindings.token ? env[bindings.token] : undefined, GRANT_KEY: bindings.grantKey ? env[bindings.grantKey] : undefined,
       RESPONSE_MINIMUM_RATE: minimumRate ?? (mode === "gateway" ? 16384 : 0), RESPONSE_RATE_WINDOW_MS: rateWindow,
       READ_PIN_BYTES: pinBytes, READ_PIN_ENTRIES: pinEntries, READ_SCRATCH_BYTES: scratchBytes ?? (mode === "gateway" ? 32 * 1024 * 1024 : codecLimits.maxTemporaryBytes), READ_SCRATCH_REPOSITORY_BYTES: repoScratch ?? (mode === "gateway" ? 64 * 1024 * 1024 : Infinity), FETCH_PREPARE_MS: prepareMs ?? (mode === "gateway" ? 30000 : 0),
       BYTE_BUDGET: byteBudget, JOB_MEMORY_BYTES: mode === "gateway" ? gatewayJobBytes : tokenJobBytes,
       PACK_CACHE_ENABLED: options.packCacheEnabled === undefined ? mode === "gateway" : enabled(resolve(options.packCacheEnabled, env)), PACK_CACHE_BYTES: cacheBytes, PACK_CACHE_TOTAL_BYTES: cacheTotal, PACK_CACHE_CHUNK_BYTES: cacheChunk, PACK_CACHE_ENTRIES: cacheEntries, PACK_CACHE_BUILD_MS: cacheBuildMs, MEMORY_WAIT_MS: memoryWaitMs,
-      METADATA_MEMORY_BYTES: Math.ceil((6 * 1024 * 1024 + codecLimits.maxControlBytes + 2 * 1024 * 1024) / 1048576) * 1048576, CACHE_READER_MEMORY_BYTES: 4 * cacheChunk,
+      METADATA_MEMORY_BYTES: metadataBytes(mode === "gateway" ? gatewayMemory : memory), JSON_MEMORY_BYTES: jsonBytes, CACHE_READER_MEMORY_BYTES: 4 * cacheChunk,
       MAX_CONCURRENT: Math.min(concurrent, maxRequests ?? Infinity), MAX_PENDING: maxPending ?? (mode === "gateway" ? 64 : Infinity), ADMISSION_WAIT_MS: admissionMs ?? (mode === "gateway" ? 15000 : 0),
       BODY_TOTAL_MS: bodyMs ?? (mode === "gateway" ? 120000 : 0),
       SIGNING_CONTEXT: options.signingContext ?? "", KEY_PREFIX: options.keyPrefix, TEST_MODE: tests && enabled(resolve(Object.hasOwn(options, "testEnabled") ? options.testEnabled : true, env)) ? "true" : "false",

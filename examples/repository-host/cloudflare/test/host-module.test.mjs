@@ -175,3 +175,20 @@ test("token byte admission preserves more than 1024 FIFO waiters while gateway a
     } finally { releaseFirst(); for (const item of pending) (await item).release?.(); }
   }
 });
+
+
+test("metadata reservations include worst-case raw ref-name pages as well as JSON", async () => {
+  const f = fixture();
+  try {
+    assert.equal(f.repo("repo").env.JSON_MEMORY_BYTES, 8 * 1048576);
+    assert.equal(f.repo("repo").env.METADATA_MEMORY_BYTES, 12 * 1048576);
+    const repo = f.repo("repo");
+    assert.equal((await repo.fetch(f.request("repo", "api/v1/repository", "admin", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status, 201);
+    for (const route of ["refs", "changes"]) {
+      repo.env.BYTE_BUDGET.peak = 0;
+      const response = await repo.fetch(f.request("repo", `api/v1/${route}`)); assert.equal(response.status, 200); await response.json(); await repo.queue;
+      assert.equal(repo.env.BYTE_BUDGET.peak, repo.env.JSON_MEMORY_BYTES);
+    }
+    assert.throws(() => createRepositoryHost({ ...options, isolateMemoryBytes: 64 * 1048576, readLimits: { pageSize: 1000 } }), /cannot fit/);
+  } finally { f.close(); }
+});

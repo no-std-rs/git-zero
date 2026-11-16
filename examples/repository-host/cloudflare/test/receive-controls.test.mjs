@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { gzipSync } from "node:zlib";
+import { collectControls } from "../src/pack-cache.mjs";
 import { receiveControls } from "../src/receive-controls.mjs";
 import { CODEC_LIMITS } from "../src/codec.mjs";
 import { Store } from "../src/storage.mjs";
@@ -22,5 +23,22 @@ for (const format of [0, 1]) test(`receive controls replay exact bytes across fr
       assert.deepEqual(Buffer.from(await replay.arrayBuffer()), wire, `fragment=${fragment} gzip=${gzip}`);
       assert.equal(store.exec("SELECT COUNT(*) n FROM job_controls")[0].n, 0);
     } finally { for (const fn of owner.finalizers) await fn(); db.close(); }
+  }
+});
+
+
+test("bounded upload controls batch SQL independently of transport fragmentation", async () => {
+  for (const fragment of [3, 65536]) {
+    const db = new DatabaseSync(":memory:"), store = new Store(sqliteContext(db), { CODEC_LIMITS, BLOBS: {} }, "repo");
+    const owner = { id: crypto.randomUUID() }, maximum = fragment === 3 ? 4096 : 4 * 1024 * 1024;
+    const input = Buffer.alloc(maximum, 97); let offset = 0;
+    const body = new ReadableStream({ pull(c) { if (offset === input.length) { c.close(); return; } c.enqueue(input.subarray(offset, offset + fragment)); offset = Math.min(input.length, offset + fragment); } });
+    try {
+      const before = store.usage.sqlCalls;
+      await collectControls(store, owner, new Request("http://host/repo.git/git-upload-pack", { method: "POST", body, duplex: "half" }), maximum);
+      assert.ok(store.usage.sqlCalls - before <= 4, "no per-transport-chunk SQL writes");
+      const rows = store.exec("SELECT data FROM job_controls WHERE job=? ORDER BY seq", owner.id);
+      assert.deepEqual(Buffer.concat(rows.map((row) => Buffer.from(row.data))), input);
+    } finally { db.close(); }
   }
 });

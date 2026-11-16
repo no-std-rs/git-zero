@@ -30,10 +30,12 @@ export async function* requestBody(stream, idleMs = 60000, { totalMs = 0, deadli
       if (signal?.aborted) throw new RequestError("request body cancelled");
       if (Date.now() >= deadline) throw new RequestError("request body total deadline exceeded");
       let timer, item;
+      const remaining = deadline - Date.now(), idle = typeof idleMs === "function" ? idleMs() : idleMs;
+      const totalFirst = remaining <= idle;
       try {
         item = await Promise.race([
           reader.read(),
-          new Promise((_, reject) => { timer = setTimeout(() => reject(new RequestError(Date.now() >= deadline ? "request body total deadline exceeded" : "request body idle")), Math.min(typeof idleMs === "function" ? idleMs() : idleMs, deadline - Date.now())); }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new RequestError(totalFirst ? "request body total deadline exceeded" : "request body idle")), Math.max(0, Math.min(idle, remaining))); }),
         ]);
       } catch (error) {
         throw error instanceof RequestError ? error : new RequestError(String(error.message ?? error), { cause: error });

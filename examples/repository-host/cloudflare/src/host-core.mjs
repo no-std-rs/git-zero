@@ -155,7 +155,7 @@ export class RepositoryCore {
     let fetch, tables = false, shared = false, ownedEntry;
     const discardParsed = () => { fetch?.detach(); owner.releaseMemory(); };
     try {
-      await owner.reserve(this.env.CODEC_LIMITS.maxControlBytes + 256 * 1024);
+      await owner.reserve(this.env.CODEC_LIMITS.maxControlBytes + 1280 * 1024);
       await collectControls(this.store, owner, request, this.env.CODEC_LIMITS.maxControlBytes);
       owner.releaseMemory();
       const useCache = this.env.PACK_CACHE_ENABLED && this.env.PACK_CACHE_BYTES;
@@ -336,8 +336,8 @@ export class RepositoryCore {
       if (READ_ROUTES.has(apiRoute(request))) {
         const state = this.store.exec("SELECT format FROM repository WHERE id=1")[0];
         if (!state) return json({ error: "unknown route" }, 404);
-        if (apiRoute(request) === "changes") { await owner.reserve?.(3 * this.env.READ_LIMITS.jsonBytes); return await changes(this.store, request); }
-        await owner.reserve?.(apiRoute(request) === "refs" ? 3 * this.env.READ_LIMITS.jsonBytes : this.env.JOB_MEMORY_BYTES);
+        if (apiRoute(request) === "changes") { await owner.reserve?.(this.env.JSON_MEMORY_BYTES); return await changes(this.store, request); }
+        await owner.reserve?.(apiRoute(request) === "refs" ? this.env.JSON_MEMORY_BYTES : this.env.JOB_MEMORY_BYTES);
         owner.preemptible = true;
         return await new ReadApi(jobStore(this.store, owner, { read: true }), this.module, state.format, this.env.READ_LIMITS).handle(apiRoute(request), request, stream);
       }
